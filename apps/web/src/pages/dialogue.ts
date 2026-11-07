@@ -5,16 +5,26 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
 import { confirmDialog } from '../components/confirm';
+import { renderMarkdown } from '../utils/markdown';
+import '../styles/prompt-preview.css';
 
-export function mountDialoguePage(container: HTMLElement): () => void {
- const api = createInstanceAPI();
+export function mountDialoguePage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
+  let identityLoaded = false;
+  let identitySaving = false;
+  let savedName = '';
+  let savedAliases = '';
+  const identityController = new AbortController();
+  let systemPrompt = '';
+  let systemPromptLoaded = false;
+  let systemPromptEditing = false;
+  let systemPromptSaving = false;
+  let systemPromptLoadSeq = 0;
   let loading = false;
   let dialogues: DialogueItem[] = [];
-  let filePath = 'dialogue.yml';
+  let filePath = '当前实例 · 数据库存储';
   let promptPreview = '';
   let searchQuery = '';
-  let selectedRelation = '';
   let viewMode: 'visual' | 'raw' = 'visual';
   let rawYaml = '';
   let rawLoading = false;
@@ -25,10 +35,9 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <div class="flex items-center gap-2">
-            <h1 class="page-title">人设对话</h1>
+            <h1 class="page-title">人格设定</h1>
             <span class="badge badge-outline text-xs font-mono" id="dialogue-filepath">${escapeHtml(filePath)}</span>
           </div>
-          <p class="page-description">管理当前实例的 Few-shot 示例库，让智能体在特定场景与人物关系下展现精准细腻的语气与性格</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <div class="tabs">
@@ -38,7 +47,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
             </button>
             <button class="tab-item" id="mode-raw-btn">
               ${icon('code', 'w-3.5 h-3.5')}
-              <span>原始 YAML</span>
+              <span>YAML 编辑</span>
             </button>
           </div>
           <button class="btn btn-outline btn-sm" id="dialogue-export-btn">
@@ -55,6 +64,37 @@ export function mountDialoguePage(container: HTMLElement): () => void {
           </button>
         </div>
       </header>
+
+      <article class="card p-4 flex flex-col gap-3">
+        <h2 class="card-title text-sm font-semibold">名称与唤醒别名</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="flex flex-col gap-1.5 text-xs font-semibold">机器人名称
+            <input id="persona-bot-name" class="input text-sm" type="text" disabled />
+          </label>
+          <label class="flex flex-col gap-1.5 text-xs font-semibold">唤醒别名
+            <input id="persona-bot-aliases" class="input text-sm" type="text" placeholder="多个名称用英文逗号分隔" disabled />
+            <span class="text-xs font-normal text-muted-foreground">含英文的名称或别名忽略大小写和空格</span>
+          </label>
+        </div>
+        <div class="flex justify-end"><button id="persona-identity-save" type="button" class="btn btn-primary btn-sm" disabled>保存名称与别名</button></div>
+      </article>
+
+      <article class="card p-4 flex flex-col gap-3">
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="card-title text-sm font-semibold">系统提示词 (System Prompt)</h2>
+          <button type="button" class="btn btn-ghost btn-icon-sm" id="system-prompt-edit-btn" title="编辑系统提示词" aria-label="编辑系统提示词" disabled>
+            ${icon('pencil', 'w-3.5 h-3.5')}
+          </button>
+        </div>
+        <div id="system-prompt-display" class="system-prompt-viewport markdown-preview rounded-md bg-muted p-3 text-sm text-muted select-text" tabindex="0" role="region" aria-label="系统提示词 Markdown 预览">加载中...</div>
+        <div id="system-prompt-editor" class="flex flex-col gap-3" style="display: none;">
+          <textarea id="system-prompt-input" class="textarea system-prompt-viewport text-sm" rows="15" aria-label="系统提示词 Markdown 编辑"></textarea>
+          <div class="flex items-center justify-end gap-2">
+            <button type="button" class="btn btn-outline btn-sm" id="system-prompt-cancel-btn">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" id="system-prompt-save-btn">保存并生效</button>
+          </div>
+        </div>
+      </article>
 
       <!-- Prompt Preview Collapsible -->
       <details class="card prompt-preview-card overflow-hidden" id="prompt-preview-details" open>
@@ -88,7 +128,6 @@ export function mountDialoguePage(container: HTMLElement): () => void {
                 placeholder="搜索示例对话..."
               />
             </div>
-            <div id="relation-filters" class="flex items-center gap-1.5 flex-wrap"></div>
           </div>
           <button class="btn btn-primary btn-sm" id="dialogue-add-btn">
             ${icon('plus', 'w-3.5 h-3.5')}
@@ -108,7 +147,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       <div id="raw-mode-container" class="flex flex-col gap-3" style="display: none;">
         <div class="card p-4 flex flex-col gap-3">
           <div class="flex items-center justify-between">
-            <label class="form-label" for="raw-yaml-textarea">原始 YAML 内容编辑</label>
+            <label class="form-label" for="raw-yaml-textarea">YAML 内容编辑</label>
             <div class="flex items-center gap-2">
               <button class="btn btn-outline btn-sm" id="raw-reload-btn">
                 ${icon('refresh', 'w-3.5 h-3.5')}
@@ -120,6 +159,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
               </button>
             </div>
           </div>
+          <p class="text-xs text-muted">保存或导入将替换当前实例的全部对话示例，并即时生效。数据保存在数据库中，YAML 用于编辑和导入导出。</p>
           <textarea
             id="raw-yaml-textarea"
             class="textarea font-mono text-xs leading-relaxed"
@@ -133,6 +173,12 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   `;
 
   // Element references
+  const systemPromptDisplay = container.querySelector<HTMLElement>('#system-prompt-display')!;
+  const systemPromptEditor = container.querySelector<HTMLElement>('#system-prompt-editor')!;
+  const systemPromptInput = container.querySelector<HTMLTextAreaElement>('#system-prompt-input')!;
+  const systemPromptEditBtn = container.querySelector<HTMLButtonElement>('#system-prompt-edit-btn')!;
+  const systemPromptCancelBtn = container.querySelector<HTMLButtonElement>('#system-prompt-cancel-btn')!;
+  const systemPromptSaveBtn = container.querySelector<HTMLButtonElement>('#system-prompt-save-btn')!;
   const filepathEl = container.querySelector<HTMLElement>('#dialogue-filepath')!;
   const modeVisualBtn = container.querySelector<HTMLButtonElement>('#mode-visual-btn')!;
   const modeRawBtn = container.querySelector<HTMLButtonElement>('#mode-raw-btn')!;
@@ -141,7 +187,6 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   const promptPreviewContent = container.querySelector<HTMLElement>('#prompt-preview-content')!;
   const copyPromptBtn = container.querySelector<HTMLButtonElement>('#copy-prompt-btn')!;
   const searchInput = container.querySelector<HTMLInputElement>('#dialogue-search-input')!;
-  const relationFiltersEl = container.querySelector<HTMLElement>('#relation-filters')!;
   const addBtn = container.querySelector<HTMLButtonElement>('#dialogue-add-btn')!;
   const cardsContainer = container.querySelector<HTMLElement>('#dialogue-cards-container')!;
   const rawTextarea = container.querySelector<HTMLTextAreaElement>('#raw-yaml-textarea')!;
@@ -150,6 +195,115 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   const exportBtn = container.querySelector<HTMLButtonElement>('#dialogue-export-btn')!;
   const importInput = container.querySelector<HTMLInputElement>('#dialogue-import-input')!;
   const refreshBtn = container.querySelector<HTMLButtonElement>('#dialogue-refresh-btn')!;
+  const nameInput = container.querySelector<HTMLInputElement>('#persona-bot-name')!;
+  const aliasesInput = container.querySelector<HTMLInputElement>('#persona-bot-aliases')!;
+  const identitySave = container.querySelector<HTMLButtonElement>('#persona-identity-save')!;
+
+  function renderIdentity(): void {
+    nameInput.disabled = aliasesInput.disabled = !identityLoaded || identitySaving;
+    identitySave.disabled = !identityLoaded || identitySaving || (nameInput.value === savedName && aliasesInput.value === savedAliases);
+    identitySave.textContent = identitySaving ? '保存中…' : '保存名称与别名';
+  }
+
+  async function saveIdentity(): Promise<void> {
+    if (!identityLoaded || identitySaving) return;
+    const name = nameInput.value;
+    const aliases = aliasesInput.value;
+    const changes = [
+      { key: 'BOT_NAME', value: name, isSecret: false },
+      { key: 'BOT_ALIASES', value: aliases, isSecret: false },
+    ].filter(({ key, value }) => value !== (key === 'BOT_NAME' ? savedName : savedAliases));
+    if (!changes.length) return;
+    identitySaving = true;
+    refreshBtn.disabled = true;
+    renderIdentity();
+    renderSystemPrompt();
+    try {
+      const response = await api.updateEnvVars(changes, identityController.signal);
+      if (isUnmounted) return;
+      if (!response.success) throw new Error(response.error);
+      savedName = name;
+      savedAliases = aliases;
+      toast.success('名称与别名已保存并生效');
+    } catch (error) {
+      if (!isUnmounted) toast.error('保存名称与别名失败: ' + String(error));
+    } finally {
+      identitySaving = false;
+      if (!isUnmounted) {
+        refreshBtn.disabled = systemPromptSaving;
+        renderIdentity();
+        renderSystemPrompt();
+      }
+    }
+  }
+  nameInput.addEventListener('input', renderIdentity);
+  aliasesInput.addEventListener('input', renderIdentity);
+  identitySave.addEventListener('click', () => void saveIdentity());
+
+  function renderSystemPrompt() {
+    systemPromptDisplay.style.display = systemPromptEditing ? 'none' : 'block';
+    systemPromptEditor.style.display = systemPromptEditing ? 'flex' : 'none';
+    systemPromptEditBtn.disabled = !systemPromptLoaded || systemPromptEditing || systemPromptSaving || identitySaving;
+    systemPromptInput.disabled = systemPromptSaving || identitySaving;
+    systemPromptCancelBtn.disabled = systemPromptSaving || identitySaving;
+    systemPromptSaveBtn.disabled = systemPromptSaving || identitySaving;
+    if (!systemPromptEditing) {
+      systemPromptDisplay.innerHTML = renderMarkdown(systemPromptLoaded ? systemPrompt || '（未设置）' : '加载中...');
+    }
+  }
+
+  async function loadSystemPrompt() {
+    const loadSeq = ++systemPromptLoadSeq;
+    systemPromptLoaded = false;
+    systemPromptEditing = false;
+    renderSystemPrompt();
+    try {
+      const vars = await api.listEnvVars();
+      if (isUnmounted || loadSeq !== systemPromptLoadSeq) return;
+      systemPrompt = vars.find((item) => item.key === 'SYSTEM_PROMPT')?.value ?? '';
+      if (!identitySaving && (!identityLoaded || (nameInput.value === savedName && aliasesInput.value === savedAliases))) {
+        savedName = vars.find((item) => item.key === 'BOT_NAME')?.value ?? '';
+        savedAliases = vars.find((item) => item.key === 'BOT_ALIASES')?.value ?? '';
+        nameInput.value = savedName;
+        aliasesInput.value = savedAliases;
+      }
+      identityLoaded = true;
+      renderIdentity();
+      systemPromptLoaded = true;
+      renderSystemPrompt();
+    } catch (err) {
+      if (isUnmounted || loadSeq !== systemPromptLoadSeq) return;
+      systemPromptDisplay.textContent = '加载失败';
+      toast.error('加载系统提示词失败: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function saveSystemPrompt() {
+    if (systemPromptSaving) return;
+    const value = systemPromptInput.value;
+    systemPromptSaving = true;
+    refreshBtn.disabled = true;
+    renderSystemPrompt();
+    try {
+      const result = await api.updateEnvVar({ key: 'SYSTEM_PROMPT', value, isSecret: false });
+      if (isUnmounted) return;
+      if (!result.success) {
+        toast.error('保存系统提示词失败: ' + result.error);
+        return;
+      }
+      systemPrompt = value;
+      systemPromptEditing = false;
+      toast.success('系统提示词已保存并生效');
+    } catch (err) {
+      if (!isUnmounted) {
+        toast.error('保存系统提示词失败: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    } finally {
+      systemPromptSaving = false;
+      refreshBtn.disabled = identitySaving;
+      if (!isUnmounted) renderSystemPrompt();
+    }
+  }
 
   async function loadData() {
     if (isUnmounted) return;
@@ -159,10 +313,8 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       if (isUnmounted) return;
       dialogues = resp.dialogues || [];
       promptPreview = resp.promptPreview || '（无提示词预览）';
-      if (resp.filePath) {
-        filePath = resp.filePath;
-        filepathEl.textContent = filePath;
-      }
+      filePath = resp.filePath || '当前实例 · 数据库存储';
+      filepathEl.textContent = filePath;
       promptPreviewContent.textContent = promptPreview;
     } catch (err) {
       if (isUnmounted) return;
@@ -177,48 +329,13 @@ export function mountDialoguePage(container: HTMLElement): () => void {
     }
   }
 
-  function getAvailableRelations(): string[] {
-    const set = new Set<string>();
-    for (const d of dialogues) {
-      if (d.relation) set.add(d.relation.trim());
-    }
-    return Array.from(set);
-  }
-
   function renderVisual() {
-    // Render relation filter chips
-    const relations = getAvailableRelations();
-    relationFiltersEl.innerHTML = `
-      <button class="btn ${selectedRelation === '' ? 'btn-secondary' : 'btn-outline'} btn-sm" data-rel="" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
-        全部 (${dialogues.length})
-      </button>
-      ${relations
-        .map(
-          (rel) => `
-        <button class="btn ${selectedRelation === rel ? 'btn-secondary' : 'btn-outline'} btn-sm" data-rel="${escapeHtml(rel)}" style="height: 1.75rem; padding: 0 0.5rem; font-size: 0.75rem;">
-          ${escapeHtml(rel)}
-        </button>
-      `,
-        )
-        .join('')}
-    `;
-
-    relationFiltersEl.querySelectorAll<HTMLButtonElement>('button[data-rel]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        selectedRelation = btn.dataset.rel ?? '';
-        renderVisual();
-      });
-    });
-
     const query = searchQuery.trim().toLowerCase();
     const filtered = dialogues.filter((item) => {
-      if (selectedRelation && item.relation !== selectedRelation) return false;
       if (!query) return true;
       return (
         item.user.toLowerCase().includes(query) ||
         item.preferred.toLowerCase().includes(query) ||
-        item.scene.toLowerCase().includes(query) ||
-        item.relation.toLowerCase().includes(query) ||
         item.id.toLowerCase().includes(query)
       );
     });
@@ -253,8 +370,6 @@ export function mountDialoguePage(container: HTMLElement): () => void {
             <header class="flex items-center justify-between gap-2 border-b border-border pb-2.5 flex-wrap">
               <div class="flex items-center gap-2">
                 <span class="badge badge-outline font-mono text-xs">#${escapeHtml(item.id)}</span>
-                <span class="badge badge-secondary text-xs">${escapeHtml(item.relation || '默认')}</span>
-                ${item.scene ? `<span class="badge badge-outline text-xs text-muted">${escapeHtml(item.scene)}</span>` : ''}
               </div>
               <div class="flex items-center gap-1">
                 <button class="btn btn-ghost btn-icon-sm" data-action="move-up" data-index="${originalIndex}" ${isFirst ? 'disabled' : ''} title="上移">
@@ -375,43 +490,17 @@ export function mountDialoguePage(container: HTMLElement): () => void {
     }
 
     const currentId = item ? item.id : nextId;
-    const currentScene = item ? item.scene : '';
-    const currentRelation = item ? item.relation : '熟人';
     const currentUser = item ? item.user : '';
     const currentPreferred = item ? item.preferred : '';
-
-    const presetRelations = ['熟人', '朋友', '群友', '主人', '陌生人'];
 
     openDialog({
       title: isEdit ? '编辑示例对话' : '添加示例对话',
       maxWidth: '36rem',
       bodyHtml: `
         <div class="flex flex-col gap-3.5">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div class="form-group">
-              <label class="form-label" for="dlg-id">编号 (ID)</label>
-              <input id="dlg-id" class="input text-xs" value="${escapeHtml(currentId)}" placeholder="如 1, 2" />
-            </div>
-            <div class="form-group sm:col-span-2">
-              <label class="form-label" for="dlg-relation">关系 (Relation)</label>
-              <input id="dlg-relation" class="input text-xs" value="${escapeHtml(currentRelation)}" placeholder="如：熟人、朋友、主人" />
-              <div class="flex flex-wrap gap-1 mt-1.5" id="preset-relation-btns">
-                ${presetRelations
-                  .map(
-                    (p) => `
-                  <button type="button" class="badge badge-outline cursor-pointer hover-bg text-xs" data-preset="${p}">
-                    ${p}
-                  </button>
-                `,
-                  )
-                  .join('')}
-              </div>
-            </div>
-          </div>
-
           <div class="form-group">
-            <label class="form-label" for="dlg-scene">场景描述 (Scene，选填)</label>
-            <input id="dlg-scene" class="input text-xs" value="${escapeHtml(currentScene)}" placeholder="如：日常问候、被夸奖、情绪安抚" />
+            <label class="form-label" for="dlg-id">编号 (ID)</label>
+            <input id="dlg-id" class="input text-xs" value="${escapeHtml(currentId)}" placeholder="如 1, 2" />
           </div>
 
           <div class="form-group">
@@ -431,18 +520,10 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       `,
       onMount: (dialogEl, close) => {
         const idInput = dialogEl.querySelector<HTMLInputElement>('#dlg-id')!;
-        const relationInput = dialogEl.querySelector<HTMLInputElement>('#dlg-relation')!;
-        const sceneInput = dialogEl.querySelector<HTMLInputElement>('#dlg-scene')!;
         const userInput = dialogEl.querySelector<HTMLTextAreaElement>('#dlg-user')!;
         const preferredInput = dialogEl.querySelector<HTMLTextAreaElement>('#dlg-preferred')!;
         const saveBtn = dialogEl.querySelector<HTMLButtonElement>('#dlg-save-btn')!;
         const cancelBtn = dialogEl.querySelector<HTMLButtonElement>('#dlg-cancel-btn')!;
-
-        dialogEl.querySelectorAll<HTMLButtonElement>('button[data-preset]').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            if (btn.dataset.preset) relationInput.value = btn.dataset.preset;
-          });
-        });
 
         cancelBtn.addEventListener('click', () => close());
         saveBtn.addEventListener('click', async () => {
@@ -455,8 +536,6 @@ export function mountDialoguePage(container: HTMLElement): () => void {
 
           const newItem: DialogueItem = {
             id: idInput.value.trim() || '1',
-            scene: sceneInput.value.trim(),
-            relation: relationInput.value.trim() || '熟人',
             user: userVal,
             preferred: prefVal,
           } as DialogueItem;
@@ -488,7 +567,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       rawYaml = resp.content || '';
       rawTextarea.value = rawYaml;
     } catch (err) {
-      toast.error('加载原始 YAML 失败: ' + (err instanceof Error ? err.message : String(err)));
+      toast.error('加载 YAML 失败: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       rawLoading = false;
       rawReloadBtn.disabled = false;
@@ -503,11 +582,9 @@ export function mountDialoguePage(container: HTMLElement): () => void {
       const content = rawTextarea.value;
       const resp = await api.updateRawDialogueFile(content);
       if (resp.success) {
-        if (resp.promptPreview) {
-          promptPreview = resp.promptPreview;
-          promptPreviewContent.textContent = promptPreview;
-        }
-        toast.success('原始 YAML 保存成功并已实时生效！');
+        promptPreview = resp.promptPreview || '（无提示词预览）';
+        promptPreviewContent.textContent = promptPreview;
+        toast.success('YAML 保存成功并已实时生效！');
         void loadData();
       } else {
         toast.error('保存失败: ' + resp.error);
@@ -538,6 +615,27 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   }
 
   // Event handlers
+  systemPromptEditBtn.addEventListener('click', () => {
+    if (!systemPromptLoaded) return;
+    systemPromptInput.value = systemPrompt;
+    systemPromptEditing = true;
+    renderSystemPrompt();
+    systemPromptInput.focus();
+  });
+  systemPromptCancelBtn.addEventListener('click', () => {
+    systemPromptEditing = false;
+    renderSystemPrompt();
+  });
+  systemPromptSaveBtn.addEventListener('click', () => void saveSystemPrompt());
+  systemPromptInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      systemPromptCancelBtn.click();
+    } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      systemPromptSaveBtn.click();
+    }
+  });
   modeVisualBtn.addEventListener('click', () => setMode('visual'));
   modeRawBtn.addEventListener('click', () => setMode('raw'));
 
@@ -562,7 +660,7 @@ export function mountDialoguePage(container: HTMLElement): () => void {
   exportBtn.addEventListener('click', async () => {
     try {
       const resp = await api.getRawDialogueFile();
-      const content = resp.content || promptPreview;
+      const content = resp.content;
       const blob = new Blob([content], { type: 'text/yaml;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -603,12 +701,16 @@ export function mountDialoguePage(container: HTMLElement): () => void {
 
   refreshBtn.addEventListener('click', () => {
     void loadData();
+    if (!systemPromptEditing) void loadSystemPrompt();
     if (viewMode === 'raw') void loadRawYaml();
   });
 
   void loadData();
+  void loadSystemPrompt();
 
   return () => {
     isUnmounted = true;
+    identityController.abort();
+    systemPromptLoadSeq++;
   };
 }

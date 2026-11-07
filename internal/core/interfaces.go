@@ -12,6 +12,11 @@ type LLMProvider interface {
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 }
 
+// EmbeddingProvider vectorizes text without using the chat API.
+type EmbeddingProvider interface {
+	Embed(ctx context.Context, req EmbeddingRequest) (*EmbeddingResponse, error)
+}
+
 // AgentService defines the interface for agent message handling.
 // - 输入：一条平台无关的 IncomingMessage（用户来的消息）
 // - 输出：一个或多个 OutgoingMessage(返回 slice 是关键设计——支持分条回复、图文混合、流式分段等)
@@ -57,4 +62,31 @@ type SessionStore interface {
 	Get(sessionID string) (Session, bool) // 按 ID 查会话，返回值表示"是否存在"
 	Create(sessionID string) Session
 	Delete(sessionID string)
+}
+
+// ExtractionCommitBarrier coordinates memory extraction persistence commits with session lifecycle.
+type ExtractionCommitBarrier interface {
+	// IsValid returns true if the extraction commit is still permitted to persist.
+	IsValid() bool
+	// TryBeginCommit atomically verifies the barrier is valid and transitions to the writing state.
+	// Returns true if writing may proceed, or false if the extraction has been invalidated or aborted.
+	TryBeginCommit() bool
+	// EndCommit signals that disk persistence has completed.
+	EndCommit()
+}
+
+type extractionBarrierKey struct{}
+
+// WithExtractionBarrier attaches an ExtractionCommitBarrier to the context.
+func WithExtractionBarrier(ctx context.Context, barrier ExtractionCommitBarrier) context.Context {
+	return context.WithValue(ctx, extractionBarrierKey{}, barrier)
+}
+
+// ExtractionBarrierFromContext retrieves the ExtractionCommitBarrier from the context.
+func ExtractionBarrierFromContext(ctx context.Context) ExtractionCommitBarrier {
+	if ctx == nil {
+		return nil
+	}
+	b, _ := ctx.Value(extractionBarrierKey{}).(ExtractionCommitBarrier)
+	return b
 }

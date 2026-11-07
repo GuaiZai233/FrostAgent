@@ -23,4 +23,5 @@ message SessionInfo {
   string created_at = 4;
   string last_active = 5;
   string group_summary = 6;
+  string group_name = 7;
 }

@@ -1,21 +1,23 @@
 package llm
 
 import (
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/security"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/poke"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,18 +34,25 @@ type ToolExecutor interface {
 	Execute(args string) (string, error)
 }
 
-type contextualToolExecutor interface {
-	ExecuteContext(ctx context.Context, args string) (string, error)
-}
-
 const (
 	StaySilentToolName    = "stay_silent"
 	AssistantSilentMarker = "<assistant_silent />"
+
+	// DefaultMaxIterations is the fallback loop iteration limit for LLM execution.
+	DefaultMaxIterations = 35
 
 	MaxSingleInputTokens = 32000
 	MaxContextTokens     = 128000
 	MaxToolOutputBytes   = 65536 // 64KB
 )
+
+// ErrMaxIterationsReached indicates the agent exhausted its allowed iterations without a final response.
+var ErrMaxIterationsReached = errors.New("达到最大迭代次数，未能得出最终答案")
+
+// IsStaySilentTool reports whether the tool name matches stay_silent.
+func IsStaySilentTool(name string) bool {
+	return name == StaySilentToolName
+}
 
 func truncateRunes(value string, limit int) string {
 	if limit <= 0 {
@@ -59,17 +68,56 @@ func truncateRunes(value string, limit int) string {
 // AgentRunResult carries the final content and side-effect decisions from one
 // agent loop. Silent is true when the model successfully invokes the terminal
 // stay_silent tool or returns the standalone internal silence marker. Provider
-// failures never set it.
+// failures never set it. Banned is true when the turn was terminated by an
+// autonomous ban action (ban_user tool). OutputBlocked is true when the final
+// answer was blocked or failed-closed by the security watchdog.
 type AgentRunResult struct {
-	Content       string
-	MemoryWritten bool
-	Silent        bool
-	Usage         core.Usage
-	Error         error
+	Content          string
+	MemoryWritten    bool
+	Silent           bool
+	StaySilentCalled bool
+	SilenceReason    string // "stay_silent", "security_block", "route_disabled", "canceled", "epoch_changed", "provider_fallback"
+	Banned           bool
+	OutputBlocked    bool
+	Usage            core.Usage
+	Error            error
+	LLMFailed        bool          // Dialogue route resolution or provider call failed; excludes security, billing, and tool errors.
+	Transcript       []ChatMessage // Request-private checkpoint; never committed as public history.
+}
+
+// IsProactiveAllowedTool reports whether a tool is safe to invoke during an unaddressed proactive turn.
+// Proactive turns allow terminal silence and memory. Sticker delivery and
+// other external or privileged tools remain disallowed.
+func IsProactiveAllowedTool(name string) bool {
+	switch name {
+	case StaySilentToolName:
+		return true
+	case "memory":
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) isToolAllowedForProactive(name string) bool {
+	// The sticker ban cannot be overridden by a tool's proactive opt-in.
+	if name == "send_sticker" {
+		return false
+	}
+	if IsProactiveAllowedTool(name) {
+		return true
+	}
+	if tool, exists := e.findToolExecutor(name); exists {
+		if pa, ok := tool.(interface{ IsProactiveAllowed() bool }); ok {
+			return pa.IsProactiveAllowed()
+		}
+	}
+	return false
 }
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
+	PokeGate poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
@@ -90,11 +138,13 @@ type Engine struct {
 	BillingConfig billing.Config
 
 	// Memory components (optional, nil = memory disabled)
+	MemoryEmbeddings  *memory.Embeddings
 	MemoryReader      *memory.Reader
 	MemoryWriter      *memory.Writer
 	MemoryGateway     *memory.Gateway
 	MemoryCatalog     *memory.CatalogStore
 	MemoryReflections *memory.ReflectionManager
+	GroupManager      *memory.GroupManager
 	GroupCompactor    *GroupCompactor
 	GroupSummaryStore *groupsummary.Store
 
@@ -104,10 +154,59 @@ type Engine struct {
 
 	// MCP Manager (optional, nil = MCP disabled)
 	MCPManager *mcp.Manager
+	Skills     *skills.Store
+
+	// Sandbox integration (optional, nil = sandbox disabled)
+	SandboxBackend sandbox.Backend
 
 	// Security is shared by every runtime owned by the Control Plane.
-	Security   *security.Controller
-	InstanceID string
+	Security        *security.Controller
+	InstanceID      string
+	stickerActivity stickerActivityState
+}
+
+// DropRejectedGroupMessage keeps a failed SQL purge from being ignored by the
+// adapter. Canceling the runtime scope stops new work until it is rebuilt.
+func (e *Engine) DropRejectedGroupMessage(session *SessionContext, guard *StagedGroupCompactGuard, messageID, senderID string) {
+	if session == nil {
+		return
+	}
+	var err error
+	if guard != nil {
+		_, err = guard.DropChecked()
+	} else {
+		_, err = session.DropGroupCompactMessageChecked(messageID, senderID)
+	}
+	e.PauseOnStorageError(err)
+}
+
+func (e *Engine) PauseOnStorageError(err error) {
+	if err == nil {
+		return
+	}
+	e.Log().Error(logs.SYSTEM, fmt.Sprintf("数据库状态更新失败，实例已暂停: %v", err))
+	if e.Scope != nil {
+		e.Scope.Cancel()
+	}
+}
+
+func (e *Engine) memoryFailure(operation string, err error) AgentRunResult {
+	wrapped := fmt.Errorf("%s: %w", operation, err)
+	if e.Scope != nil && e.Scope.Config != nil && e.Scope.Config.IsDatabase() {
+		e.PauseOnStorageError(wrapped)
+	}
+	return AgentRunResult{Error: wrapped}
+}
+
+// EffectiveMaxIterations resolves the effective iteration limit captured
+// on Engine.MaxIterations, falling back to DefaultMaxIterations (35) if unset.
+// It preserves restart-required semantics so running engines do not mutate
+// mid-flight before an instance restart.
+func (e *Engine) EffectiveMaxIterations() int {
+	if e != nil && e.MaxIterations > 0 {
+		return e.MaxIterations
+	}
+	return DefaultMaxIterations
 }
 
 // Run 执行智能体的主循环（单次无状态调用）
@@ -170,14 +269,35 @@ func (e *Engine) RunMessagesWithUser(
 	})
 }
 
+// buildContextSystemPrompt keeps stable instructions before request-local data
+// so minute-level time changes do not invalidate their prompt-cache prefix.
+func buildContextSystemPrompt(systemPrompt, dialoguePrompt string, now time.Time) string {
+	var parts []string
+	if systemPrompt != "" {
+		parts = append(parts, systemPrompt)
+	}
+	if dialoguePrompt != "" {
+		parts = append(parts, dialoguePrompt)
+	}
+	// Keep the current time available for relative dates (today/tomorrow/this week).
+	parts = append(parts, "当前系统时间："+memory.CurrentTimeLabel(now))
+	return strings.Join(parts, "\n\n")
+}
+
 // RunMessagesWithContext runs one agent request with owner and transport hooks
 // scoped to that request instead of mutable Engine fields.
 func (e *Engine) RunMessagesWithContext(
 	messages []ChatMessage,
 	runContext RunContext,
 ) AgentRunResult {
+	if runContext.Turn != nil {
+		runContext.SkillState = runContext.Turn.SkillSession()
+	}
+	if !runContext.Mock {
+		e.RecordBotTurn()
+	}
 	if err := e.securityAccess(runContext); err != nil {
-		return AgentRunResult{Silent: true, Error: err}
+		return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err}
 	}
 	owner := runContext.Owner
 	if owner != "" && e.MemoryWriter != nil {
@@ -187,6 +307,23 @@ func (e *Engine) RunMessagesWithContext(
 		})
 	}
 	ctx := e.Context()
+	if runContext.Context != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(runContext.Context, cancel)
+		defer stop()
+	}
+	if runContext.Turn != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		stop := context.AfterFunc(runContext.Turn.Context(), cancel)
+		defer stop()
+		if runContext.Turn.Interrupted() {
+			cancel()
+		}
+	}
 	if e.ModelRouter != nil {
 		if runContext.RouteSnapshot == nil {
 			runContext.RouteSnapshot = e.ModelRouter.Snapshot()
@@ -194,37 +331,120 @@ func (e *Engine) RunMessagesWithContext(
 		ctx = e.ModelRouter.WithSnapshot(ctx, runContext.RouteSnapshot)
 	}
 	ctx = withRunContext(ctx, runContext)
+	if runContext.Proactive && runContext.ProactiveStickerOnly {
+		return e.staySilentForInboundSticker(ctx, messages, runContext)
+	}
 
 	if len(messages) == 0 || messages[0].Role != "system" {
-		systemPrompt := e.Getenv("SYSTEM_PROMPT")
-		// 注入当前系统时间，让模型能判断对话中的相对时间（今天/明天/本周）
-		systemPrompt = "当前系统时间：" + memory.CurrentTimeLabel(time.Now()) + "\n\n" + systemPrompt
+		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue(), time.Now())
 
-		if e.PersonaDialogue() != "" {
-			systemPrompt += "\n\n" + e.PersonaDialogue()
-		}
-
-		if owner != "" && e.MemoryCatalog != nil {
-			catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
-			if err != nil {
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("读取记忆主题索引失败: %v", err))
-			} else if catalogContext != "" {
-				systemPrompt += "\n\n" + catalogContext
+		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
+		if isGroupChat {
+			groupID := runContext.RouteScope.GroupID
+			if groupID == "" && strings.HasPrefix(owner, "group:") {
+				groupID = strings.TrimPrefix(owner, "group:")
 			}
-		}
+			senderID := runContext.ActorUserID
 
-		// 召回 → 网关过滤 → 注入
-		if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
-			lastUserMsg := extractLastUserMessage(messages)
-			raw, err := e.MemoryReader.Recall(e.Context(), lastUserMsg)
-			if err == nil {
-				filtered := e.MemoryGateway.Filter(raw, owner)
+			if e.GroupManager != nil && groupID != "" {
+				groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
+				if gErr != nil {
+					return e.memoryFailure("open group memory", gErr)
+				}
+				if groupStore != nil {
+					profile, pErr := groupStore.GetProfile()
+					if pErr != nil {
+						return e.memoryFailure("read group profile", pErr)
+					}
+					var senderProfile *memory.MemberProfile
+					if profile != nil {
+						senderProfile = profile.GetMember(senderID)
+						if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
+							systemPrompt += "\n\n" + memberPrompt
+						}
+					}
+
+					if groupStore.CatalogStore() != nil {
+						catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
+						if cErr != nil {
+							return e.memoryFailure("read group memory catalog", cErr)
+						} else if catalogContext != "" {
+							systemPrompt += "\n\n" + catalogContext
+						}
+					}
+
+					if e.MemoryGateway != nil {
+						lastUserMsg := extractLastUserMessage(messages)
+						var raw []memory.MemoryEntry
+						var sErr error
+						if e.MemoryEmbeddings != nil {
+							raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
+						} else {
+							raw, sErr = groupStore.Search(lastUserMsg, 0)
+						}
+						if sErr != nil {
+							if e.MemoryEmbeddings != nil {
+								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
+								raw = nil
+							} else {
+								return e.memoryFailure("search group memory", sErr)
+							}
+						}
+						if len(raw) > 0 {
+							filtered := e.MemoryGateway.FilterGroup(raw)
+							if len(filtered) > 20 {
+								filtered = filtered[:20]
+							}
+							if len(filtered) > 0 {
+								groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
+								systemPrompt += "\n\n" + groupMemContext
+								if !runContext.Mock {
+									if err := groupStore.RecordRecall(filtered); err != nil {
+										return e.memoryFailure("record group memory recall", err)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			if owner != "" && e.MemoryCatalog != nil {
+				catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
+				if err != nil {
+					return e.memoryFailure("read memory catalog", err)
+				} else if catalogContext != "" {
+					systemPrompt += "\n\n" + catalogContext
+				}
+			}
+
+			// 召回 → 网关过滤 → 注入
+			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+				lastUserMsg := extractLastUserMessage(messages)
+				var raw []memory.MemoryEntry
+				var err error
+				if e.MemoryEmbeddings != nil {
+					raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
+				} else {
+					raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
+				}
+				if err != nil {
+					if e.MemoryEmbeddings != nil {
+						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
+						raw = nil
+					} else {
+						return e.memoryFailure("recall memory", err)
+					}
+				}
+				filtered := e.MemoryGateway.FilterPrivate(raw, owner)
 				filtered = e.MemoryReader.Limit(filtered)
 				if len(filtered) > 0 {
-					memoryContext := e.MemoryGateway.FormatForContext(filtered, owner)
+					memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
 					systemPrompt += "\n\n" + memoryContext
-					if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记录主动召回记忆次数失败: %v", err))
+					if !runContext.Mock {
+						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+							return e.memoryFailure("record memory recall", err)
+						}
 					}
 				}
 			}
@@ -236,7 +456,7 @@ func (e *Engine) RunMessagesWithContext(
 	}
 
 	// Persist the assembled system prompt so Session Context Inspector can show
-	// the real dynamically-built prompt (time + dialogue + memory) rather than a
+	// the real dynamically-built prompt (instructions + dialogue + time + memory) rather than a
 	// static reconstruction. SessionID is intentionally separate from the memory
 	// owner namespace (for example private:123 versus owner 123).
 	sessionID := strings.TrimSpace(runContext.SessionID)
@@ -257,10 +477,35 @@ func (e *Engine) RunMessagesWithContext(
 					}
 					sess.SetLastPromptTrace(sysContent, modelName)
 				}
+				var cancelRun func()
+				var currentEpoch uint64
+				if runContext.Turn == nil {
+					ctx, currentEpoch, cancelRun = sess.BeginRun(ctx)
+					defer cancelRun()
+				} else {
+					currentEpoch = sess.Epoch()
+				}
+				if runContext.Epoch == 0 {
+					runContext.Epoch = currentEpoch
+				}
+				ctx = withRunContext(ctx, runContext)
 			}
 		}
 	}
 
+	if !runContext.Mock && !runContext.Proactive {
+		if notice := e.stickerActivityPrompt(); notice != "" {
+			messages = append([]ChatMessage(nil), messages...)
+			for i := len(messages) - 1; i >= 0; i-- {
+				if messages[i].Role == "user" {
+					if content, ok := messages[i].Content.(string); ok {
+						messages[i].Content = notice + "\n\n" + content
+					}
+					break
+				}
+			}
+		}
+	}
 	return e.runLoopWithResult(ctx, messages)
 }
 
@@ -283,36 +528,114 @@ func (e *Engine) EnqueueExtractionTurn(
 	e.Go(func() { e.extractPendingBatch(batch) })
 }
 
-func (e *Engine) extractPendingBatch(batch []memory.PendingExtractionItem) {
-	type ownerBatch struct {
-		owner     string
-		ownerType memory.OwnerType
-		route     core.RouteContext
-		messages  []core.ChatMessage
+func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
+	if batch.Session == nil || len(batch.Items) == 0 {
+		return
 	}
-	groups := make(map[string]*ownerBatch)
+	ctx, _, cleanup := batch.Session.BeginExtraction(e.Context())
+	defer cleanup()
+
+	validator := func() bool {
+		return ctx.Err() == nil && batch.Session.Epoch() == batch.Epoch
+	}
+
+	if !validator() {
+		return
+	}
+
+	type itemBatch struct {
+		isGroup       bool
+		groupID       string
+		speakerID     string
+		speakerName   string
+		owner         string
+		ownerType     memory.OwnerType
+		route         core.RouteContext
+		messages      []core.ChatMessage
+		groupMessages []memory.GroupMessage
+	}
+	groups := make(map[string]*itemBatch)
 	order := make([]string, 0)
-	for _, item := range batch {
-		if item.Owner == "" {
-			continue
-		}
-		key := string(item.OwnerType) + "\x00" + item.Owner + "\x00" + item.Route.Platform + "\x00" + item.Route.GroupID
-		group := groups[key]
-		if group == nil {
-			group = &ownerBatch{
-				owner:     item.Owner,
-				ownerType: memory.NormalizeOwnerType(item.OwnerType),
-				route:     item.Route,
+	for _, item := range batch.Items {
+		if item.ScopeType == memory.ScopeGroup || item.GroupID != "" {
+			groupID := item.GroupID
+			if groupID == "" && strings.HasPrefix(item.Owner, "group:") {
+				groupID = strings.TrimPrefix(item.Owner, "group:")
 			}
-			groups[key] = group
-			order = append(order, key)
+			key := "group\x00" + groupID + "\x00" + item.SpeakerID + "\x00" + item.Route.Platform
+			group := groups[key]
+			if group == nil {
+				group = &itemBatch{
+					isGroup:     true,
+					groupID:     groupID,
+					speakerID:   item.SpeakerID,
+					speakerName: item.SpeakerName,
+					route:       item.Route,
+				}
+				groups[key] = group
+				order = append(order, key)
+			}
+			group.messages = append(group.messages, item.Message)
+			sID := ""
+			sName := ""
+			if item.Message.Role == core.RoleUser {
+				sID = item.SpeakerID
+				sName = item.SpeakerName
+			}
+			group.groupMessages = append(group.groupMessages, memory.GroupMessage{
+				MessageID:        item.MessageID,
+				SenderID:         sID,
+				Sender:           sName,
+				Role:             string(item.Message.Role),
+				Content:          fmt.Sprintf("%v", item.Message.Content),
+				ImageDescription: item.ImageDescription,
+			})
+		} else {
+			if item.Owner == "" {
+				continue
+			}
+			key := "private\x00" + string(item.OwnerType) + "\x00" + item.Owner + "\x00" + item.Route.Platform + "\x00" + item.Route.GroupID
+			group := groups[key]
+			if group == nil {
+				group = &itemBatch{
+					isGroup:   false,
+					owner:     item.Owner,
+					ownerType: memory.NormalizeOwnerType(item.OwnerType),
+					route:     item.Route,
+				}
+				groups[key] = group
+				order = append(order, key)
+			}
+			group.messages = append(group.messages, item.Message)
 		}
-		group.messages = append(group.messages, item.Message)
 	}
 	for _, key := range order {
+		if !validator() {
+			return
+		}
 		group := groups[key]
-		if err := e.MemoryWriter.ExtractByOwnerWithRoute(group.owner, group.ownerType, group.route, group.messages); err != nil {
-			e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
+		if group.isGroup {
+			if err := e.MemoryWriter.ExtractGroupMemories(ctx, group.groupID, group.route, group.groupMessages, memory.SourceExtract, validator); err != nil {
+				if errors.Is(err, context.Canceled) || !validator() {
+					return
+				}
+				if errors.Is(err, memory.ErrStorageUnavailable) {
+					e.PauseOnStorageError(err)
+					return
+				}
+				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊批量提取记忆失败 (群: %s): %v", group.groupID, err))
+			}
+		} else {
+			if err := e.MemoryWriter.ExtractByOwnerWithRouteContext(ctx, group.owner, group.ownerType, group.route, group.messages, validator); err != nil {
+				if errors.Is(err, context.Canceled) || !validator() {
+					return
+				}
+				if errors.Is(err, memory.ErrStorageUnavailable) {
+					e.PauseOnStorageError(err)
+					return
+				}
+				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
+			}
 		}
 	}
 }
@@ -434,12 +757,33 @@ func (e *Engine) runLoop(ctx context.Context, messages []ChatMessage) string {
 // runLoopWithResult executes the agent loop and reports terminal decisions and
 // memory side effects. A stay_silent call must be the only tool call in its
 // assistant response; conflicts are returned to the model for another choice.
-func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) AgentRunResult {
+func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) (result AgentRunResult) {
 	memoryWritten := false
 	var totalUsage core.Usage
 
 	runCtx, hasRunCtx := RunContextFromContext(ctx)
-	billingActive := hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+	billingActive := hasRunCtx && !runCtx.Mock && runCtx.Billing != nil && runCtx.Billing.BillingActive && e.BillingClient != nil && e.BillingConfig.Enabled
+	startedTools := make(map[string]bool)
+	defer func() {
+		result.MemoryWritten = runCtx.Turn.memoryState(result.MemoryWritten || memoryWritten)
+		if runCtx.Turn != nil {
+			result.Transcript = completeInterruptedTranscript(messages, startedTools)
+			runCtx.Turn.saveTranscript(result.Transcript)
+		}
+		if billingActive {
+			if e.waitBilling(ctx, runCtx.Billing) {
+				result.Usage = runCtx.Billing.Usage()
+			}
+		}
+		if runCanceled(ctx) {
+			result.Content = ""
+			result.Silent = true
+			result.SilenceReason = "canceled"
+			result.Error = context.Canceled
+			result.LLMFailed = false
+		}
+	}()
+	memoryWritten = runCtx.Turn.memoryState(false)
 	modelName := e.ModelName
 	if e.ModelRouter != nil {
 		var snapshot *modelrouter.Snapshot
@@ -452,32 +796,107 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, runCtx.RouteScope)
 		if err != nil {
 			if errors.Is(err, modelrouter.ErrDisabled) {
-				return AgentRunResult{Silent: true}
+				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
-				Content: fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
-				Error:   err,
+				Content:   fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Error:     err,
+				LLMFailed: true,
 			}
 		}
 		modelName = target.UpstreamModel
 	}
 
+	if err := e.activateRequestedSkill(ctx, messages); err != nil {
+		return AgentRunResult{Content: err.Error(), Error: err}
+	}
+
 	// 主循环
-	for i := 0; i < e.MaxIterations; i++ {
-		if err := e.securityAccess(runCtx); err != nil {
-			return AgentRunResult{Silent: true, Error: err, Usage: totalUsage}
+	maxIterations := e.EffectiveMaxIterations()
+	baseMaxIterations := maxIterations
+	addStickerIteration := func() {
+		if maxIterations-baseMaxIterations < 4 {
+			maxIterations++
 		}
-		if err := ctx.Err(); err != nil {
-			return AgentRunResult{Silent: true, Error: err}
+	}
+	stickerEnforcing := false
+	stickerAttempts := 0
+	enforceStickerActivity := hasRunCtx && !runCtx.Mock && !runCtx.Proactive
+	if interval, remaining, grace := e.stickerActivitySnapshot(); enforceStickerActivity && interval > 0 && remaining == 0 && grace == 0 {
+		stickerEnforcing = true
+		messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+	}
+	var specificReplyEchoes proactive.ReplyEchoGuard
+	specificReplyDelivered := false
+	for i := 0; i < maxIterations; i++ {
+		if runCanceled(ctx) {
+			return AgentRunResult{Silent: true, Error: context.Canceled}
+		}
+		if err := e.securityAccess(runCtx); err != nil {
+			return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err, Usage: totalUsage}
+		}
+		if runCanceled(ctx) {
+			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
+		}
+		if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
+			if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
+				if sess, isSess := sessCore.(*SessionContext); isSess {
+					if sess.Epoch() != runCtx.Epoch {
+						return AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated")}
+					}
+				}
+			}
 		}
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
 		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
 
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
+		if e.Skills != nil {
+			skillMessages, skillErr := e.skillMessages(ctx, messages)
+			if skillErr != nil {
+				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
+			}
+			messages = skillMessages
+			if sess := e.promptTraceSession(ctx); sess != nil {
+				var system []string
+				for _, message := range messages {
+					if message.Role == "system" {
+						if content, ok := message.Content.(string); ok {
+							system = append(system, content)
+						}
+					}
+				}
+				sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
+			}
+		}
 		modelTools := e.EffectiveTools()
+		if hasRunCtx && runCtx.Proactive {
+			var proactiveTools []core.Tool
+			for _, t := range modelTools {
+				if e.isToolAllowedForProactive(t.Name) {
+					if t.Name == "send_message" {
+						t.Description = proactive.SpecificReplyDescription
+						t.Parameters = proactive.SpecificReplyParameters()
+					}
+					proactiveTools = append(proactiveTools, t)
+				}
+			}
+			modelTools = proactiveTools
+		}
 
 		coreMsgs := convertToCoreMessages(messages)
+		if hasRunCtx && runCtx.SecurityNotice != "" {
+			noticeMsg := core.ChatMessage{
+				Role:    core.RoleSystem,
+				Content: runCtx.SecurityNotice,
+			}
+			if len(coreMsgs) > 0 && coreMsgs[0].Role == core.RoleSystem {
+				coreMsgs = append([]core.ChatMessage{coreMsgs[0], noticeMsg}, coreMsgs[1:]...)
+			} else {
+				coreMsgs = append([]core.ChatMessage{noticeMsg}, coreMsgs...)
+			}
+		}
 
 		// 检查上下文总 Token 是否超出模型硬上限 (包含 tools 定义开销)
 		contextTokens, err := billing.EstimateMessagesTokens(coreMsgs, modelTools)
@@ -530,8 +949,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					taskID = fmt.Sprintf("%s_anon_%d", platform, time.Now().UnixNano())
 				}
 			}
-			callID := fmt.Sprintf("call_%s_%d", taskID, i)
-			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", platform, taskID, i)
+			callIndex := runCtx.Billing.NextCall()
+			callID := fmt.Sprintf("call_%s_%d", taskID, callIndex)
+			idempotencyKey := fmt.Sprintf("res_%s_%s_%d", platform, taskID, callIndex)
 
 			reserveReq := billing.LLMReserveRequest{
 				Platform:       platform,
@@ -557,7 +977,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						}
 						cCancel()
 					}
-					runCtx.Billing.LastBalanceMinor = balMinor
+					runCtx.Billing.setBalance(balMinor, false)
 					var replyMsg string
 					if i == 0 {
 						replyMsg = billing.FormatInsufficientFundsMessage(balMinor)
@@ -600,10 +1020,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				reservationID = res.ReservationID
 			}
 			if res.Decision == billing.DecisionWelcome {
-				runCtx.Billing.WelcomeGranted = true
 				reservationID = ""
 			}
-			runCtx.Billing.LastBalanceMinor = res.BalanceMinor
+			runCtx.Billing.setBalance(res.BalanceMinor, res.Decision == billing.DecisionWelcome)
 		}
 
 		// 调用 internal/llm 包向大模型发送 HTTP 请求
@@ -616,23 +1035,25 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				Platform: runCtx.RouteScope.Platform,
 				GroupID:  runCtx.RouteScope.GroupID,
 			},
+			TraceID: runCtx.SessionID,
 		}
-		resp, err := e.Provider.Chat(ctx, chatReq)
+		var callBilling *BillingRunState
+		if billingActive {
+			callBilling = runCtx.Billing
+		}
+		resp, err, commitErr := e.chatAndSettle(ctx, chatReq, reservationID, callBilling)
 		if err != nil {
 			e.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
-			if billingActive && reservationID != "" {
-				rCtx, rCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout)
-				if _, relErr := e.BillingClient.ReleaseLLM(rCtx, reservationID, billing.ReasonModelFailed); relErr != nil {
-					e.Log().Error(logs.SYSTEM, fmt.Sprintf("释放预扣款失败 (iter %d): %v", i+1, relErr))
-				}
-				rCancel()
-			}
 			return AgentRunResult{
 				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				LLMFailed:     true,
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
 				Error:         err,
 			}
+		}
+		if runCanceled(ctx) {
+			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 		}
 
 		if resp.Usage != nil {
@@ -660,62 +1081,121 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 		}
 
-		// 结算本轮调用
-		if billingActive && reservationID != "" {
-			promptTok := 0
-			compTok := 0
-			if resp.Usage != nil {
-				promptTok = resp.Usage.PromptTokens
-				compTok = resp.Usage.CompletionTokens
-			}
-			price := e.BillingConfig.Price(modelName)
-			actualMinor := billing.CalculateMinorUnits(promptTok, compTok, price)
-
-			cCtx, cCancel := context.WithTimeout(context.WithoutCancel(e.Context()), e.BillingConfig.Timeout)
-			commitRes, commitErr := e.BillingClient.CommitLLM(cCtx, reservationID, actualMinor)
-			cCancel()
-
-			if commitErr != nil {
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费结算提交失败 (reservation %s, iter %d): %v", reservationID, i+1, commitErr))
-				// 如果是 Tool Call 且 commit 失败，禁止执行工具以防止免费副作用
-				if len(responseMsg.ToolCalls) > 0 {
-					e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Tool Call 阶段 commit 失败，终止本轮工具执行", "Tool Call 阶段 commit 失败，终止本轮工具执行")
-					return AgentRunResult{
-						Content:       "FrostAgent错误：计费结算失败，已终止后续工具执行。",
-						MemoryWritten: memoryWritten,
-						Usage:         totalUsage,
-						Error:         commitErr,
-					}
-				}
-				// 若是最终回答且 commit 失败，本轮按免费处理，不影响回复输出
-			} else if commitRes != nil {
-				runCtx.Billing.TotalBilledMinor += actualMinor
-				runCtx.Billing.LastBalanceMinor = commitRes.BalanceMinor
-				runCtx.Billing.IterationsBilled++
-			}
+		if commitErr != nil && len(responseMsg.ToolCalls) > 0 {
+			return AgentRunResult{Content: "FrostAgent错误：计费结算失败，已终止后续工具执行。", MemoryWritten: memoryWritten, Usage: totalUsage, Error: commitErr}
 		}
 
 		messages = append(messages, *responseMsg)
+		startedTools = make(map[string]bool)
+		if stickerEnforcing {
+			if interval, remaining, grace := e.stickerActivitySnapshot(); interval == 0 || grace > 0 || remaining == interval {
+				stickerEnforcing = false
+				stickerAttempts = 0
+			}
+		}
 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
-			if e.securityBlocks(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, "") {
-				contentStr = "FrostAgent安全控制：模型输出已拦截。"
+			outputBlocked := false
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
+				if decision.IsFailure {
+					contentStr = "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出因安全审查服务异常被拦截: eval_id=%s", decision.EvaluationID))
+					outputBlocked = true
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					contentStr = decision.SanitizedContent
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制过滤脱敏: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
+				} else {
+					contentStr = "FrostAgent安全控制：模型输出已拦截。"
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
+					outputBlocked = true
+				}
+			}
+			if hasRunCtx && runCtx.Proactive {
+				contentStr, _ = filterStickerMessages(contentStr)
+				comparisonText, comparable := contentStr, true
+				if runCtx.FinalReplyText != nil {
+					comparisonText, comparable = runCtx.FinalReplyText(contentStr)
+				}
+				if !outputBlocked && comparable && specificReplyEchoes.IsDuplicate(comparisonText) {
+					// Keep the successful tool delivery as the public answer. Both
+					// adapters already finalize tool-only replies without resending.
+					contentStr = ""
+				}
+			}
+			messages[len(messages)-1].Content = contentStr
+			if runCanceled(ctx) {
+				messages = messages[:len(messages)-1]
+				return AgentRunResult{Silent: true, Error: context.Canceled}
 			}
 			if isStandaloneAssistantSilentMarker(contentStr) {
-				e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
-				return AgentRunResult{
-					MemoryWritten: memoryWritten,
-					Silent:        true,
-					Usage:         totalUsage,
+				if stickerEnforcing {
+					// Treat an internal silence marker like any other missed enforcement attempt.
+					contentStr = ""
+				} else {
+					e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型以纯文本返回内部静默标记，已按保持沉默处理", "模型以纯文本返回内部静默标记，已按保持沉默处理")
+					return AgentRunResult{
+						MemoryWritten:    memoryWritten,
+						Silent:           true,
+						StaySilentCalled: false,
+						SilenceReason:    "provider_fallback",
+						Usage:            totalUsage,
+					}
+				}
+			}
+			finalSticker := hasRunCtx && runCtx.AdapterID == "onebot" && hasStickerImage(contentStr)
+			willSendFinalMessage := contentStr != "" || (hasRunCtx && runCtx.Billing != nil && runCtx.Billing.BillingActive)
+			if enforceStickerActivity && !outputBlocked {
+				if strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
+					messages = messages[:len(messages)-1]
+					messages = appendStickerForgiveness(messages, i)
+					e.grantStickerGrace()
+					stickerEnforcing = false
+					stickerAttempts = 0
+					addStickerIteration()
+					continue
+				}
+				if !finalSticker && (stickerEnforcing || (willSendFinalMessage && e.stickerNeededBeforeReply())) {
+					stickerEnforcing = true
+					stickerAttempts++
+					if stickerAttempts >= 3 {
+						messages = messages[:len(messages)-1]
+						messages = appendStickerForgiveness(messages, i)
+						e.grantStickerGrace()
+						stickerEnforcing = false
+						stickerAttempts = 0
+					} else {
+						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+					}
+					addStickerIteration()
+					continue
 				}
 			}
 			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
 			return AgentRunResult{
 				Content:       contentStr,
 				MemoryWritten: memoryWritten,
+				OutputBlocked: outputBlocked,
 				Usage:         totalUsage,
+			}
+		}
+
+		// Check the entire batch before any executor can persist data or send
+		// messages. A later forbidden call must not leave an earlier partial send.
+		if hasRunCtx && runCtx.Proactive {
+			specificReplyCalls := 0
+			for _, tc := range responseMsg.ToolCalls {
+				if tc.Function.Name == "send_message" {
+					specificReplyCalls++
+				}
+				if !e.isToolAllowedForProactive(tc.Function.Name) ||
+					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactive.IsSpecificReply(tc.Function.Arguments))) {
+					e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复批次包含禁止的工具调用 [%s]，整批静默终止", tc.Function.Name), "主动回复禁止副作用工具")
+					// After a confirmed send, finish as a tool-only answer so the
+					// adapters retain public history without sending anything else.
+					return AgentRunResult{MemoryWritten: memoryWritten, Silent: !specificReplyDelivered, Usage: totalUsage}
+				}
 			}
 		}
 
@@ -728,42 +1208,123 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					ToolCallID: tc.ID,
 				})
 			}
+			if stickerEnforcing {
+				stickerAttempts++
+				if stickerAttempts >= 3 {
+					messages = appendStickerForgiveness(messages, i)
+					e.grantStickerGrace()
+					stickerEnforcing = false
+					stickerAttempts = 0
+				} else {
+					messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+				}
+				addStickerIteration()
+			}
 			continue
 		}
 
-		for _, tc := range responseMsg.ToolCalls {
-			if e.securityBlocks(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name) {
-				messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
+		for tcIndex := 0; tcIndex < len(responseMsg.ToolCalls); tcIndex++ {
+			tc := responseMsg.ToolCalls[tcIndex]
+			if runCanceled(ctx) {
+				return AgentRunResult{Silent: true, Error: context.Canceled}
+			}
+			if err := ctx.Err(); err != nil {
+				return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: err, Usage: totalUsage}
+			}
+			if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
+				if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
+					if sess, isSess := sessCore.(*SessionContext); isSess {
+						if sess.Epoch() != runCtx.Epoch {
+							return AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated"), Usage: totalUsage}
+						}
+					}
+				}
+			}
+			if enforceStickerActivity && tc.Function.Name == "send_message" && tcIndex+1 < len(responseMsg.ToolCalls) && responseMsg.ToolCalls[tcIndex+1].Function.Name == "send_sticker" {
+				if e.stickerNeededBeforeReply() {
+					stickerCall := responseMsg.ToolCalls[tcIndex+1]
+					startedTools[tc.ID], startedTools[stickerCall.ID] = true, true
+					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					if runCanceled(ctx) {
+						return AgentRunResult{Silent: true, Error: context.Canceled}
+					}
+					messages = append(messages,
+						ChatMessage{Role: "tool", Content: textResult, ToolCallID: tc.ID},
+						ChatMessage{Role: "tool", Content: stickerResult, ToolCallID: stickerCall.ID},
+					)
+					tcIndex++
+					continue
+				}
+			}
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
+				if decision.IsFailure {
+					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：安全审查服务暂时不可用，该工具调用已被阻止。", ToolCallID: tc.ID})
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参因安全审查服务异常被阻止: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
+				} else {
+					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
+				}
 				continue
+			} else if decision.Action == security.WatchdogWarn && hasRunCtx {
+				mergeSecurityNotice(&runCtx, decision.WarningNotice)
 			}
 			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
 
 			var toolResult string
+			var execution core.ToolExecutionResult
 			toolSucceeded := false
 			// 从 map 或 MCP Manager 中找到工具执行
 			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
-				var res string
 				var err error
-				if contextualTool, ok := tool.(contextualToolExecutor); ok {
-					res, err = contextualTool.ExecuteContext(ctx, tc.Function.Arguments)
-				} else {
-					res, err = tool.Execute(tc.Function.Arguments)
+				startedTools[tc.ID] = true
+				execution, err = executeInterruptibleTool(ctx, tool, tc)
+				if runCanceled(ctx) {
+					if isMemoryWriteRequest(tc) {
+						memoryWritten = true
+					}
+					return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: ctx.Err(), Usage: totalUsage}
 				}
 				if err != nil {
-					toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
-				} else {
-					toolSucceeded = true
-					toolResult = res
-					if tc.Function.Name == StaySilentToolName {
-						e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
+					if errors.Is(err, security.ErrBanUserSuccess) {
+						if hasRunCtx && runCtx.Proactive {
+							return AgentRunResult{
+								MemoryWritten: memoryWritten,
+								Silent:        true,
+								Usage:         totalUsage,
+							}
+						}
+						e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Bot 自主封禁用户成功，终止思考循环", "Bot 封禁用户")
 						return AgentRunResult{
+							Content:       security.RejectGatewayMsg,
 							MemoryWritten: memoryWritten,
-							Silent:        true,
+							Banned:        true,
 							Usage:         totalUsage,
 						}
 					}
-					if isMemoryWriteAction(tc, res) {
+					if errors.Is(err, actionscat.ErrDisabled) {
+						toolResult = err.Error()
+					} else {
+						toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+					}
+				} else {
+					toolSucceeded = true
+					toolResult = execution.Content
+					if IsStaySilentTool(tc.Function.Name) {
+						if stickerEnforcing {
+							toolResult = stickerEnforcementPrompt
+						} else {
+							e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
+							return AgentRunResult{
+								MemoryWritten:    memoryWritten,
+								Silent:           true,
+								StaySilentCalled: true,
+								SilenceReason:    "stay_silent",
+								Usage:            totalUsage,
+							}
+						}
+					}
+					if execution.MemoryWritten {
 						memoryWritten = true
 					}
 				}
@@ -782,27 +1343,83 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
-			if e.securityBlocks(runCtx, security.StageToolResult, security.SourceToolResult, toolResult, tc.Function.Name) {
-				toolResult = "FrostAgent安全控制：外部工具结果已隔离。"
+			securityContent := toolResult
+			if execution.MessagePayload != "" && execution.MessagePayload != toolResult && len(execution.MessagePayload) <= MaxToolOutputBytes {
+				securityContent += "\n" + execution.MessagePayload
+			}
+			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, securityContent, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
+				if decision.IsFailure {
+					toolResult = "FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果因安全审查服务异常被隔离: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
+				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+					toolResult = decision.SanitizedContent
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制过滤脱敏: tool=%s category=%s eval_id=%s", tc.Function.Name, decision.Classification.Category, decision.EvaluationID))
+				} else {
+					toolResult = "FrostAgent安全控制：外部工具结果已隔离。"
+					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
+				}
 				toolSucceeded = false
+			} else if decision.Action == security.WatchdogWarn && hasRunCtx {
+				mergeSecurityNotice(&runCtx, decision.WarningNotice)
 			}
 			toolResultLog := formatToolResultLog(tc.Function.Name, toolResult)
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
-			if runContext, ok := RunContextFromContext(ctx); toolSucceeded && ok && runContext.SendHook != nil && looksLikeMessagePayload(toolResult) {
-				if err := runContext.SendHook(toolResult); err != nil {
-					toolResult = fmt.Sprintf("消息发送失败：%v", err)
-				} else {
-					toolResult = "消息已发送"
+			if toolSucceeded {
+				deliverySticker := hasStickerImage(execution.MessagePayload)
+				if enforceStickerActivity && execution.MessagePayload != "" && !deliverySticker {
+					if e.stickerNeededBeforeReply() {
+						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
+						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
+						continue
+					}
+				}
+				var delivered bool
+				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
+				if delivered && hasRunCtx && runCtx.Proactive && tc.Function.Name == "send_message" {
+					specificReplyDelivered = true
+					specificReplyEchoes.Record(execution.MessagePayload)
 				}
 			}
 
+			if runCanceled(ctx) {
+				return AgentRunResult{Silent: true, Error: context.Canceled}
+			}
 			toolMsg := ChatMessage{
 				Role:       "tool",
 				Content:    toolResult,
 				ToolCallID: tc.ID,
 			}
 			messages = append(messages, toolMsg)
+		}
+		if enforceStickerActivity && (stickerEnforcing || e.stickerNeededBeforeReply()) {
+			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {
+				if remaining == interval {
+					// A sticker was sent in this batch; the quota is satisfied.
+					stickerEnforcing = false
+					stickerAttempts = 0
+				} else if grace == 0 {
+					stickerEnforcing = true
+					stickerAttempts++
+					if stickerAttempts >= 3 {
+						messages = appendStickerForgiveness(messages, i)
+						e.grantStickerGrace()
+						stickerEnforcing = false
+						stickerAttempts = 0
+					} else {
+						messages = append(messages, ChatMessage{Role: "user", Content: stickerEnforcementPrompt})
+					}
+					addStickerIteration()
+				}
+			}
+		}
+	}
+	if hasRunCtx && runCtx.Proactive {
+		return AgentRunResult{
+			MemoryWritten: memoryWritten,
+			Silent:        true,
+			Error:         ErrMaxIterationsReached,
+			Usage:         totalUsage,
 		}
 	}
 	return AgentRunResult{
@@ -819,13 +1436,6 @@ func isStandaloneAssistantSilentMarker(content string) bool {
 	return strings.TrimSpace(content) == AssistantSilentMarker
 }
 
-func looksLikeMessagePayload(toolResult string) bool {
-	var probe struct {
-		Messages []json.RawMessage `json:"messages"`
-	}
-	return json.Unmarshal([]byte(toolResult), &probe) == nil && len(probe.Messages) > 0
-}
-
 // staySilentConflict rejects ambiguous parallel tool batches before any tool
 // executes. The terminal decision must be exclusive so the model cannot both
 // request side effects and terminate the same assistant response.
@@ -834,27 +1444,11 @@ func staySilentConflict(toolCalls []ToolCall) string {
 		return ""
 	}
 	for _, toolCall := range toolCalls {
-		if toolCall.Function.Name == StaySilentToolName {
+		if IsStaySilentTool(toolCall.Function.Name) {
 			return "工具调用冲突：stay_silent 必须单独调用，不能与其他工具同时使用；请重新选择要执行的动作"
 		}
 	}
 	return ""
-}
-
-// isMemoryWriteAction identifies explicit writes that must not be extracted a
-// second time. Background reflection does not count as handling this turn.
-func isMemoryWriteAction(toolCall ToolCall, result string) bool {
-	if toolCall.Function.Name != "memory" {
-		return false
-	}
-
-	var params struct {
-		Action string `json:"action"`
-	}
-	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &params); err != nil {
-		return false
-	}
-	return params.Action == "write" && result == "记忆已写入"
 }
 
 // effectiveMaxHistory 返回当前生效的历史消息上限：
@@ -923,6 +1517,9 @@ func (e *Engine) EffectiveTools() []core.Tool {
 	var modelTools []core.Tool
 	if len(e.ToolRegistry) > 0 {
 		for _, t := range e.ToolRegistry {
+			if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
+				continue
+			}
 			modelTools = append(modelTools, core.Tool{
 				Name:        t.Name(),
 				Description: t.Description(),
@@ -1010,57 +1607,23 @@ func (e *Engine) PersonaDialogue() string {
 }
 
 func formatToolCallLog(name string, args string) string {
-	if name == "execute_command" {
-		var p struct {
-			Command string   `json:"command"`
-			Cwd     string   `json:"cwd"`
-			Timeout *float64 `json:"timeout"`
-		}
-		if err := json.Unmarshal([]byte(args), &p); err == nil {
-			cmdHash := sha256.Sum256([]byte(p.Command))
-			hashPrefix := hex.EncodeToString(cmdHash[:8])
-			cwd := p.Cwd
-			if cwd == "" {
-				cwd = "/sandbox"
-			}
-			timeoutStr := "default"
-			if p.Timeout != nil {
-				timeoutStr = fmt.Sprintf("%.1fs", *p.Timeout)
-			}
-			return fmt.Sprintf("【智能体调用工具】execute_command，参数: [REDACTED command: len=%d, sha256_prefix=%s, cwd=%s, timeout=%s]",
-				len(p.Command), hashPrefix, cwd, timeoutStr)
-		}
-		return fmt.Sprintf("【智能体调用工具】execute_command，参数: [REDACTED command: raw_len=%d]", len(args))
-	}
 	return fmt.Sprintf("【智能体调用工具】%s，参数: %s", name, args)
 }
 
-func formatToolResultLog(name string, result string) string {
-	if name == "execute_command" {
-		var r struct {
-			ExitCode                  *int   `json:"exit_code"`
-			TimedOut                  bool   `json:"timed_out"`
-			Stdout                    string `json:"stdout"`
-			Stderr                    string `json:"stderr"`
-			StdoutTruncated           bool   `json:"stdout_truncated"`
-			StderrTruncated           bool   `json:"stderr_truncated"`
-			FrostAgentStdoutTruncated bool   `json:"frostagent_stdout_truncated"`
-			FrostAgentStderrTruncated bool   `json:"frostagent_stderr_truncated"`
-			DurationMs                int64  `json:"duration_ms"`
-		}
-		if err := json.Unmarshal([]byte(result), &r); err == nil {
-			exitCodeStr := "null"
-			if r.ExitCode != nil {
-				exitCodeStr = strconv.Itoa(*r.ExitCode)
-			}
-			return fmt.Sprintf(
-				"【工具执行结果】execute_command: [REDACTED output: exit_code=%s, timed_out=%t, stdout_len=%d, stderr_len=%d, duration_ms=%d, stdout_truncated=%t, stderr_truncated=%t]",
-				exitCodeStr, r.TimedOut, len(r.Stdout), len(r.Stderr), r.DurationMs,
-				r.StdoutTruncated || r.FrostAgentStdoutTruncated,
-				r.StderrTruncated || r.FrostAgentStderrTruncated,
-			)
-		}
-		return fmt.Sprintf("【工具执行结果】execute_command: [REDACTED output: raw_len=%d]", len(result))
-	}
+func formatToolResultLog(_ string, result string) string {
 	return fmt.Sprintf("【工具执行结果】%s", result)
+}
+
+func mergeSecurityNotice(runCtx *RunContext, notice string) {
+	if runCtx == nil || strings.TrimSpace(notice) == "" {
+		return
+	}
+	notice = strings.TrimSpace(notice)
+	if runCtx.SecurityNotice == "" {
+		runCtx.SecurityNotice = notice
+		return
+	}
+	if !strings.Contains(runCtx.SecurityNotice, notice) {
+		runCtx.SecurityNotice = runCtx.SecurityNotice + "\n\n" + notice
+	}
 }

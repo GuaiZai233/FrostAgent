@@ -11,27 +11,128 @@ permissions:
   contents: read
 
 jobs:
+  postgres-migrations:
+    name: PostgreSQL Migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_USER: frostagent
+          POSTGRES_PASSWORD: synthetic-test-password
+          POSTGRES_DB: frostagent_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U frostagent -d frostagent_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: 'go.sum'
+      - name: Test PostgreSQL startup without pgvector
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/storage -run '^TestPostgresMigrationEmbeddingDiscoveryDoesNotCreateStorage$' -count=1 -v
+      - name: Enable pgvector for compatibility fixtures
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: psql "$FROSTAGENT_TEST_POSTGRES_DSN" -c "CREATE EXTENSION IF NOT EXISTS vector"
+      - name: Test PostgreSQL migrations
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic)' -count=1 -v -coverprofile=coverage-postgres.out
+      - name: Test shared providers on PostgreSQL
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/modelrouter -run '^(TestSharedCatalogAndIsolatedRoutes|TestCatalogDraftOwnerKeepsEndpointAndSecretTogether|TestRoutePublicationGuardKeepsScopesIsolated)$' -count=1 -v
+      - name: Generate Go proto for restore test
+        run: |
+          go install github.com/bufbuild/buf/cmd/buf@v1.75.0
+          make proto-generate-go
+      - name: Test PostgreSQL dialogue compatibility
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/service/dialogue -run '^TestPostgresDialogueCompatibility' -count=1 -v
+      - name: Test PostgreSQL restore rollback
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/instance -run '^TestPostgresRestoreFailureRollsBackSharedCatalog$' -count=1 -v
+      - name: Test Skills on PostgreSQL
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/instance -run '^TestSkillsZIPRestore$' -count=1 -v
+      - name: Test PostgreSQL settings draft transaction and rollback
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/instance -run '^TestPostgresSettingsDraftCommitAndRollback$' -count=1 -v
+      - name: Set up pnpm for management test assets
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Set up Node.js for management test assets
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      - name: Build management test assets
+        run: |
+          pnpm install --frozen-lockfile
+          make build-web
+      - name: Test Docker control token initialization on database switch
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./cmd/app -run '^TestDockerControlTokenDatabaseSwitch$' -count=1 -v
+      - name: Test PostgreSQL memory writes
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/memory -run '^TestPostgresMemoryHotpaths$' -count=1 -v
+
+      - name: Test PostgreSQL vector storage
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: |
+          psql "$FROSTAGENT_TEST_POSTGRES_DSN" -c "CREATE EXTENSION IF NOT EXISTS vector"
+          go test ./internal/memory -run '^TestPostgresEmbedding' -count=1 -v
+
+      - name: Upload PostgreSQL coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ./coverage-postgres.out
+          fail_ci_if_error: false
+
   ci:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check dependency pins
+        run: python3 -m unittest discover -s scripts -p 'test_dependency_pins.py' -v
+
+      - name: Test GHCR retention
+        run: python3 -m unittest discover -s scripts -p 'test_ghcr_cleanup.py' -v
 
       # pnpm must be set up before setup-node can use its cache
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: 'pnpm'
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: 'go.mod'
+          go-version: '1.27.3'
           cache-dependency-path: 'go.sum'
 
       - name: Install dependencies
@@ -39,10 +140,15 @@ jobs:
 
       # buf compiles protobuf schemas into Go and TypeScript code as part of Makefile targets
       - name: Install buf
-        run: go install github.com/bufbuild/buf/cmd/buf@latest
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 
       - name: Run AstrBot plugin unit tests
-        run: python3 -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
+        run: |
+          python3 -m venv "$RUNNER_TEMP/astrbot-ws-tests"
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m pip install websockets==12.0
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m pip install websockets==15.0.1
+          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m unittest adapters.astrbot_plugin_frostagent.tests.test_websocket_transport -v
 
       - name: Run frontend instance isolation regression
         run: pnpm --filter @frostagent/web test
@@ -50,8 +156,18 @@ jobs:
       - name: Run checks
         run: make ci
 
-      - name: Run instance lifecycle race regression
-        run: go test -race ./internal/instance/... -timeout 120s
+      - name: Run concurrency and race regressions
+        run: go test -race ./internal/instance/... ./internal/service/security/... ./internal/llm/... ./internal/memory/... ./internal/groupsummary/... ./internal/modelrouter/... ./internal/adapter/onebot/... ./internal/adapter/astrbot/... -timeout 300s
+
+      - name: Run WebSocket heartbeat race regression
+        run: go test -race ./internal/adapter/heartbeat/... ./internal/adapter/wsclient/... -timeout 60s
+
+      - name: Upload Go coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ./coverage.out
+          fail_ci_if_error: false
 
   windows-smoke:
     name: Windows Smoke
@@ -59,21 +175,21 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: 'pnpm'
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: 'go.mod'
+          go-version: '1.27.3'
           cache-dependency-path: 'go.sum'
 
       - name: Install dependencies
@@ -84,7 +200,7 @@ jobs:
 
       - name: Install proto tools
         run: |
-          go install github.com/bufbuild/buf/cmd/buf@latest
+          go install github.com/bufbuild/buf/cmd/buf@v1.75.0
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
 

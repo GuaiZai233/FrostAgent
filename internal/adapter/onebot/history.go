@@ -3,7 +3,7 @@ package onebot
 import (
 	"sync"
 
-	"FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 )
 
 type messageHistory struct {

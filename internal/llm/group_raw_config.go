@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"strconv"
 	"strings"
 )

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"FrostAgent/internal/memory"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"os"
 )
 

@@ -1,0 +1,177 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Preview GHCR cleanup without deleting images
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: Docker Build and Smoke
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+      commit: ${{ steps.build.outputs.commit }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Test local panel smoke guardrails
+        run: python3 -m unittest discover -s scripts -p 'test_local_panel.py' -v
+      - name: Test WebSocket smoke assertions
+        run: python3 -m unittest discover -s scripts -p 'test_docker_ws_smoke.py' -v
+      - name: Test deployment smoke guardrails
+        run: python3 -m unittest discover -s scripts -p 'test_docker_deployment_smoke.py' -v
+      - name: Test build metadata
+        run: python3 -m unittest discover -s scripts -p 'test_build_metadata.py' -v
+      - name: Resolve build metadata
+        id: build
+        run: python3 scripts/build_metadata.py >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: frostagent:local
+          build-args: |
+            FROSTAGENT_VERSION=${{ steps.build.outputs.version }}
+            FROSTAGENT_COMMIT=${{ steps.build.outputs.commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build opt-in host-network image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: frostagent:host
+          build-args: |
+            DOCKER_LISTEN_ADDR=127.0.0.1:8080
+            DOCKER_MANAGEMENT_LOOPBACK_ONLY=true
+            DOCKER_WS_LISTEN_ADDR=127.0.0.1:11023
+            FROSTAGENT_VERSION=${{ steps.build.outputs.version }}
+            FROSTAGENT_COMMIT=${{ steps.build.outputs.commit }}
+          cache-from: type=gha
+      - name: Test Compose deployment
+        env:
+          FROSTAGENT_EXPECTED_VERSION: ${{ steps.build.outputs.display_version }}
+        run: python3 scripts/docker-smoke.py --host-network
+      - name: Test opt-in local panel deployment
+        run: python3 scripts/docker_local_panel_smoke.py
+
+  publish:
+    name: Publish to GHCR
+    if: github.event_name == 'push' && github.repository == 'GuaiZai233/FrostAgent'
+    needs: docker
+    runs-on: ubuntu-latest
+    # Hold the same lock through both push and cleanup, including tag builds.
+    concurrency:
+      group: ghcr-frostagent-maintenance
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.docker.outputs.commit }}
+      - name: Check main is still current
+        id: current
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == 'refs/heads/main' ]]; then
+            head=$(git ls-remote origin refs/heads/main | cut -f1)
+            if [[ "$head" != "$GITHUB_SHA" ]]; then
+              echo 'publish=false' >> "$GITHUB_OUTPUT"
+              echo 'Skipping superseded main build.'
+              exit 0
+            fi
+          fi
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        if: steps.current.outputs.publish == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Log in to GitHub Container Registry
+        if: steps.current.outputs.publish == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract Docker metadata
+        if: steps.current.outputs.publish == 'true'
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/guaizai233/frostagent
+          flavor: latest=false
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,prefix=sha-,enable=${{ github.ref_type != 'tag' }}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build and push image
+        if: steps.current.outputs.publish == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FROSTAGENT_VERSION=${{ needs.docker.outputs.version }}
+            FROSTAGENT_COMMIT=${{ needs.docker.outputs.commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Clean up old GHCR images
+        if: steps.current.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/ghcr_cleanup.py --apply
+
+  cleanup:
+    name: GHCR retention
+    if: >-
+      github.repository == 'GuaiZai233/FrostAgent' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ghcr-frostagent-maintenance
+      queue: max
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Clean up old GHCR images
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLY_CLEANUP: ${{ github.event_name == 'schedule' || !inputs.dry_run }}
+        shell: bash
+        run: |
+          if [[ "$APPLY_CLEANUP" == 'true' ]]; then
+            python3 scripts/ghcr_cleanup.py --apply
+          else
+            python3 scripts/ghcr_cleanup.py
+          fi

@@ -1,65 +1,53 @@
-# FrostAgent
+<h1 align="center">
+  <img src="assets/logo.png" alt="FrostAgent Logo" width="150">
+  <br>
+  FrostAgent
+</h1>
 
+<p align="center">
 FrostAgent 是一个基于 Golang 编写的 AI 角色扮演、智能体调度框架，支持适配 Onebot 等多种协议，可以接入即时通信软件使用。
+</p>
 
-[English](README.md) | [中文](README_zh_CN.md)
+<p align="center">
+  <a href="README.md">English</a> |
+  <a href="README_zh_CN.md">简体中文</a>
+</p>
 
-[![Go Version](https://img.shields.io/badge/Go-1.25.3+-blue.svg)](https://go.dev)
-[![CI Status](https://img.shields.io/badge/CI-Passing-brightgreen.svg)](https://github.com/GuaiZai233/FrostAgent/actions)
-[![License](https://img.shields.io/badge/License-MPL%202.0-orange.svg)](https://github.com/GuaiZai233/FrostAgent/LICENSE)
-
-# 适配器
-
-## Websocket
-
-在本地上游启用一个反向 Websocket 客户端，URL 填 `ws://127.0.0.1:1234/instances/<实例ID>/ws/onebot` (端口取决于环境变量中的`WS_LISTEN_ADDR`)。
-
-## 与 ActionsCat 协同
-
-[ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。
-
-在 ActionsCat 接入适配器后，您可以二者并行，智能体将发挥优秀的能力。
-
-注意，由于 ActionsCat 项目暂缓维护，您可以选择其他方案实现 Bot 的插件生态。
-
-## 与 AstrBot 等框架协同
-
-在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
-
-可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters\astrbot_plugin_frostagent) 进行连接。FrostAgent 默认地址为 `ws://127.0.0.1:1234/instances/<实例ID>/ws/astrbot`。配置好 AstrBot 和上游的通信即可。之后，FrostAgent 就可以接管消息了。注意：请关闭 AstrBot 自带的 LLM 功能！
+<p align="center">
+  <a href="https://go.dev">
+    <img src="https://img.shields.io/badge/Go-1.27.0+-blue.svg" alt="Go Version">
+  </a>
+  <a href="https://github.com/GuaiZai233/FrostAgent/actions">
+    <img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status">
+  </a>
+  <a href="LICENCE">
+    <img src="https://img.shields.io/badge/License-MPL%202.0-orange.svg" alt="License">
+  </a>
+  <a href="https://pkg.go.dev/github.com/GuaiZai233/FrostAgent"><img src="https://pkg.go.dev/badge/github.com/GuaiZai233/FrostAgent.svg" alt="Go Reference"></a>
+  <a href="https://codecov.io/gh/GuaiZai233/FrostAgent"><img src="https://codecov.io/gh/GuaiZai233/FrostAgent/branch/main/graph/badge.svg" alt="测试覆盖率"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/GuaiZai233/FrostAgent"><img src="https://api.scorecard.dev/projects/github.com/GuaiZai233/FrostAgent/badge" alt="OpenSSF Scorecard 安全评分"></a>
+  </a>
+</p>
 
 ## 快速开始
 
 ### 1. 构建项目
 
-本项目使用根目录 `Makefile` 进行构建编排。
+本项目使用根目录 `Makefile` 进行构建编排。本地开发与验证命令见[开发指南](docs/development.md)。
 
 ```bash
-# 安装 Node.js 依赖（Angular 工具链等）
-# 本项目使用 pnpm 作为包管理器
 pnpm install
-
-# 安装 buf 用于 protobuf 代码生成
-go install github.com/bufbuild/buf/cmd/buf@latest
-
-# 构建全部 - 后端 Go 二进制文件 + 前端 Angular 应用
+go install github.com/bufbuild/buf/cmd/buf@v1.75.0
 make build
 ```
 
-编译后的后端二进制文件位于 `./bin/`，前端静态资源位于 `internal/frontend/dist/`。
+CI Actions 与 Docker 基础镜像已固定到不可变引用，并由 Dependabot 每周提交更新 PR。
+请定期审查并合并更新，避免固定版本长期失修；Go 工具版本及更新验证方式见
+[依赖维护说明](.github/dependency-maintenance.md)。
 
-也可以单独构建：
+### 2. 选择数据库
 
-```bash
-make build-api    # 构建后端和嵌入的前端
-make build-web    # 仅构建前端
-```
-
-### 2. 配置环境变量
-
-复制 `.env.example` 为 `.env`，其中只保存 Control Plane 的监听地址、允许的 Origin 和共享 Alcyone 上游。Bot 配置与系统提示词独立保存于 `data/instance_<实例ID>/.env`。
-
-> **升级与兼容性说明（破坏性变更）**：早期版本中 `SYSTEM_PROMPT` 曾定义在根目录 `.env` 中全局共享。本次更新已将系统提示词彻底下沉为实例级配置（`data/instance_<实例ID>/.env`）。存量根级 `.env` 或进程环境变量中的 `SYSTEM_PROMPT` 将被主动忽略，且**不会**隐式迁移或回填至存量实例中；已有实例升级后若未在自身配置中指定 `SYSTEM_PROMPT`，将不再回退到旧的全局提示词，需在控制台「设置」或对应实例的 `.env` 中单独配置。新建实例将由模板自动赋予默认系统提示词。
+默认使用 SQLite，首次启动会创建 `data/frostagent.db`，也可选择 PostgreSQL。切换时不自动迁移数据；需要迁移时请手动备份还原。同一个 PostgreSQL 数据库只允许一个 FrostAgent 进程使用。
 
 ### 3. 启动服务
 
@@ -67,8 +55,84 @@ make build-web    # 仅构建前端
 go run ./cmd/app
 ```
 
-打开 `http://localhost:8080`。首次启动不创建实例；在侧边栏底部的「实例管理」中创建并选择实例，配置模型路由器，再打开概览中的「是否启用」。刷新页面后需要重新选择实例。各实例的配置（含系统提示词）、记忆、会话、表情包、日志和人设预设示例对话彼此完全隔离（新建实例时从 `eval/dialogue/dialogue.yml` 模板初始化，之后独立保存于 `data/instance_<实例ID>/dialogue.yml` 并支持热更新与克隆）。
+打开 `http://localhost:8080`。首次启动不创建实例，需手动创建。
+
+没有实例时，会话、记忆、表情包与直接对话页面保留空框架，不发送实例请求；
+实例配置页仍提示选择实例。概览保留实例提示，版本号与右侧的「检查更新」按钮独立可用，检查结果在弹框中展示：
+Stable 查看 GitHub 仓库最新正式 Release 的 tag，Latest 查看默认分支最新提交的完整
+hash。仅手动查询，不自动升级；没有 Release、查询失败或缺少构建元数据会明确提示。
+比较和缓存规则见[构建版本信息](.github/build-version.md)。
+
+Linux 若限制非 root 进程绑定低于 1024 的端口，请先构建，再执行 `sudo setcap cap_net_bind_service=+ep ./bin/app`，使用 `./bin/app` 代替 `go run ./cmd/app` 启动。重新构建后需重新授权；Docker 镜像已配置此能力，仍以非 root 用户运行。
+
+## Docker 部署
+
+首次部署先复制 `docker.env.example` 为 `.env`，将其中
+`FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 填为至少 32 位的随机 ASCII 令牌，再启动：
+
+```
+docker compose up -d --build
+```
+
+打开 **http://127.0.0.1:8080/#/settings/frontend**，在「API / 控制平面访问凭据」中
+填写同一令牌并保存，刷新页面后创建或选择实例。镜像默认监听容器内
+`0.0.0.0:8080`，Compose 仅发布宿主机 `127.0.0.1:8080`，无需 socat。
+经端口映射或网桥访问管理 API 必须提供正确令牌，伪造本地 Host 不能跳过认证。
+
+首次输入只在 SQL 中没有管理令牌时初始化，已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN`
+优先，更新不会被环境变量覆盖。首次成功后可移除该初始化输入。更新时保留原项目名、
+数据卷和必要覆盖文件。旧 SQL 回环监听、旧 socat 入口退役、`docker run` 和镜像更新命令见
+[Docker 部署与更新](docs/docker.md)。公网访问仍使用 Cloudflare Access。
+
+GHCR 保留所有版本号镜像、当前 `main` / `latest` 镜像，以及最近 10 个带 SHA 标签的提交镜像；
+更早的历史提交镜像会自动清理。清理预览、依赖保留和恢复说明见[镜像保留策略](.github/ghcr-retention.md)。
+
+
+## 适配器
+
+### WebSocket 连接模式
+
+创建实例后，在侧边栏「概览」下方的「连接」页配置 OneBot 和 AstrBot；原概览页的两个地址复制入口已移至此页。每个适配器各有一个「启用」勾选，默认启用；启用后正向／反向仍然二选一，默认保持已有的反向连接：
+
+- **反向 WebSocket（FA 作为服务端）**：上游主动连接 FA。在 NapCat 等 OneBot 实现中启用反向 WebSocket 客户端，将「连接」页复制的 OneBot 地址填入，例如 `ws://127.0.0.1:11023/instances/<实例ID>/ws/onebot`。地址使用实际适配器监听端口，容器部署时需根据端口映射调整可达主机和端口。
+- **正向 WebSocket（FA 作为客户端）**：上游提供 WebSocket 服务端。在 FA「连接」页填写上游的 `ws://` 或 `wss://` 地址及可选访问令牌；FA 通过 `Authorization: Bearer <令牌>` 发起连接，并在断线后自动重试。不要在 URL 中填写用户名、密码或令牌。
+
+反向模式可分别设置每个适配器的「入站认证令牌」（`ONEBOT_WS_INBOUND_TOKEN` / `ASTRBOT_WS_INBOUND_TOKEN`，保存在当前实例的 SQL 设置中）。配置后，专用 WS 端口和管理端口上的每次真实握手均须发送 `Authorization: Bearer <令牌>`，不接受 URL／查询参数里的令牌。请使用不含空格的可打印 ASCII 强随机令牌，在上游客户端设置相同值，跨非受信网络使用 `wss://`。入站令牌与正向 `ONEBOT_WS_TOKEN` / `ASTRBOT_WS_TOKEN`、管理控制令牌各自独立。
+
+留空时，专用 `WS_LISTEN_ADDR` 监听保留无令牌兼容行为；**Docker 网桥镜像的管理端口（默认 8080）始终拒绝匿名真实适配器连接**，经回环连接器访问或 `WS_LISTEN_ADDR` 仅监听回环也不例外，必须设置入站令牌才能使用该入口。强制回环的 Linux host 镜像和原生构建在未设置入站令牌时保留原有行为。网页「直接对话」仍使用管理认证，不接受入站令牌代替管理凭据。默认 Compose 的两个端口仍仅发布至宿主机 `127.0.0.1`；手动对外开放适配器端口前，应先设置入站令牌并配置网络／TLS 防护。
+
+保存仅影响当前实例，自动应用并断开旧连接；停用实例会停止拨号和重连。取消某个适配器的「启用」勾选并保存，会关闭它的真实上游连接、停止拨号和重连，并拒绝新的普通反向连接，但保留方向、地址和令牌，网页「直接对话」仍可使用。两项可全部取消，已有配置缺少 `ONEBOT_WS_ENABLED` / `ASTRBOT_WS_ENABLED` 时仍按启用处理。正向模式不会同时接受该适配器的普通反向连接。两种模式建立连接后均为双向收发；不要将同一上游重复接入多个实例，否则可能重复回复。
+
+Docker 内的 `127.0.0.1` 指容器自身，不是 Windows 宿主机。正向连接宿主机服务时，Docker Desktop 可使用 `host.docker.internal`，但上游监听与防火墙仍必须允许容器访问；同一 Compose 网络中的服务可使用服务名。远程连接应使用 `wss://` 和访问令牌；正向／反向只改变适配器的连接方向，**不会改变 HTTP 管理面板的监听与认证设置**。
+
+### 接入 AstrBot 等框架
+
+插件 0.2.1 起，反向模式可设置 `ws_reverse_token`，值与 FA 的 AstrBot 入站认证令牌一致；首次连接和重连均仅通过 Authorization 请求头发送。它与插件正向模式的 `ws_access_token` 独立。
+
+在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。
+
+可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) 进行连接。反向模式下，把 FA「连接」页复制的 AstrBot 地址填入插件的 `ws_url`。正向模式需要插件 0.2.0 或更新版本：将插件 `ws_mode` 设为 `forward`，配置监听地址／端口及令牌，再将插件的可达地址（例如 `ws://插件主机:1244/`）和相同令牌填入 FA。插件默认只监听本机；非回环监听必须配置令牌，且同一插件只接受一个活跃 FA 连接。配置好 AstrBot 和上游的通信即可。注意：请关闭 AstrBot 自带的 LLM 功能！
+
+## 附加功能
+### 按群配置主动回复概率
+
+在「Bot 服务端设置 → 主动回复」中，点击已添加的群聊名称即可单独输入触发概率，群名后的小方框会显示已配置的概率。弹框确认后，点击页面上方「保存」生效；可在弹框内「恢复统一概率」。
+
+负数或非法输入自动设为 `0.01`，大于 `1` 自动设为 `1`，`0` 表示该群不触发主动回复。未单独配置的群沿用统一概率，总开关和白名单限制仍然适用；正常被唤醒的回复不受单群概率影响。移除群聊时会一并移除其概率覆盖。
+
+### 与 ActionsCat 协同
+
+[ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。
+
+在 ActionsCat 接入适配器后，您可以二者并行，智能体将发挥优秀的能力。
+
+### 与 Alcyone 协同
+
+[Alcyone](https://github.com/GuaiZai233/Alcyone) 是 GuaiTech 编写的计费系统后端实现，帮助 Bot 接入公共场景（如群聊）时统计计费，以量化 Token 等资源消耗。
+
+### 与 Code-interpreter 协同
+[Code-interpreter](https://github.com/GuaiZai233/code-interpreter) 是一个精简的沙箱运行时，支持 Bot 运行简单代码。
 
 ## 许可证
 
-MPL-2.0 (see LICENSE file)
+MPL-2.0（见 [LICENCE](LICENCE)）

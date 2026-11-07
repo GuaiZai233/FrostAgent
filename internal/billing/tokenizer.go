@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 var (

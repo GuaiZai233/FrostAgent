@@ -1,13 +1,22 @@
 package llm
 
 import (
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
 	"context"
+	"sync"
+	"sync/atomic"
+
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 )
 
 // BillingRunState tracks request-level billing context and accumulates consumption across tool loop iterations.
 type BillingRunState struct {
+	mu               sync.Mutex
+	nextCall         uint64
+	pending          int
+	idle             chan struct{}
+	usage            core.Usage
 	Platform         string
 	ExternalID       string
 	DisplayName      string
@@ -22,24 +31,50 @@ type BillingRunState struct {
 // RunContext contains request-local state that tools must not read from the
 // shared Engine, otherwise concurrent sessions can cross-send or mix owners.
 type RunContext struct {
+	Turn                *SessionTurn // Sender-local execution authority; SessionID remains the shared sandbox key.
+	SkillState          *SessionContext
+	Context             context.Context // Optional request-local cancellation context (falls back to Engine.Context)
 	SessionID           string
 	Owner               string
 	OwnerType           memory.OwnerType
-	ActorUserID         string // Trusted sender ID supplied by the platform adapter.
-	ActorPlatform       string // Trusted platform namespace; never populated from model content.
-	InstanceID          string // Runtime instance used for audit/evaluation attribution.
+	ActorUserID         string              // Trusted sender ID supplied by the platform adapter.
+	MemorySource        memory.GroupMessage // Current message text and vision output supplied by the adapter.
+	ActorPlatform       string              // Trusted platform namespace; never populated from model content.
+	AdapterID           string              // Trusted transport adapter used for later delivery.
+	InstanceID          string              // Runtime instance used for audit/evaluation attribution.
 	SendHook            func(toolResultJSON string) error
 	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
-	ObservationScope    string // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
-	Billing             *BillingRunState
-	RouteScope          modelrouter.Scope
-	RouteSnapshot       *modelrouter.Snapshot
+	// LoadObservedImage resolves a trusted image attachment from a message that
+	// the adapter observed in the current session. The adapter enforces message
+	// ownership; the model only supplies an opaque message ID and image index.
+	LoadObservedImage    func(context.Context, string, int) ([]byte, error)
+	ImageInspectionQuota *atomic.Int32 // Per-request image inspection budget shared by tool calls.
+	ObservationScope     string        // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
+	Billing              *BillingRunState
+	RouteScope           modelrouter.Scope
+	RouteSnapshot        *modelrouter.Snapshot
+	SecurityNotice       string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
+	Mock                 bool   // Mock / ephemeral session: do not write to persistent memory or group summary
+	Proactive            bool   // Trusted unaddressed turn: only narrow current-session text replies may send; unsolicited errors remain suppressed.
+	ProactiveStickerOnly bool   // Adapter-classified current message; backend supplies stay_silent only when Proactive is also true.
+	Epoch                uint64
+
+	// CanReplyToMessage validates an opaque message ID against trusted,
+	// adapter-owned current-session observations, never model-supplied text.
+	CanReplyToMessage func(messageID string) bool
+
+	// FinalReplyText returns the adapter's rendered text for a text-only final
+	// message. False retains the original output, including media and rich content.
+	FinalReplyText func(string) (string, bool)
 }
 
 type runContextKey struct{}
 
 func withRunContext(ctx context.Context, runContext RunContext) context.Context {
 	runContext.OwnerType = memory.NormalizeOwnerType(runContext.OwnerType)
+	if runContext.ImageInspectionQuota == nil {
+		runContext.ImageInspectionQuota = new(atomic.Int32)
+	}
 	return context.WithValue(ctx, runContextKey{}, runContext)
 }
 

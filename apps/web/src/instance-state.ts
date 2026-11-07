@@ -1,10 +1,12 @@
+import { controlPlaneFetch } from './api/control-auth';
+
 export interface InstanceInfo {
   id: string;
   name: string;
   created_at: string;
   enabled: boolean;
+  deleting?: boolean;
   error?: string;
-  restart_required?: boolean;
 }
 let selected: InstanceInfo | null = null;
 let controller = new AbortController();
@@ -42,7 +44,11 @@ export const instanceState = {
     if (selected && selected.id === selectedAtStart) {
       const next = result.instances.find((item) => item.id === selected?.id);
       if (!next) this.select(null);
-      else selected = next;
+      else {
+        const labelChanged = selected.name !== next.name || selected.enabled !== next.enabled;
+        selected = next;
+        if (labelChanged) window.dispatchEvent(new Event('instance-updated'));
+      }
     }
     return result;
   },
@@ -52,11 +58,20 @@ export function instanceURL(path: string): string {
     ? '/instances/' + instanceState.selected.id + path
     : path;
 }
+export async function restoreInstanceZIP(file: Blob): Promise<InstanceInfo> {
+  const response = await controlPlaneFetch('/api/instances/restore', {
+    method: 'POST',
+    body: file,
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || response.statusText);
+  return result as InstanceInfo;
+}
 export async function instanceRequest<T = { success: boolean }>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch(
+  const response = await controlPlaneFetch(
     '/api/instances' + path,
     body === undefined
       ? undefined

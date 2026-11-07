@@ -9,9 +9,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 func TestDialogueService_CRUD(t *testing.T) {
@@ -20,8 +20,6 @@ func TestDialogueService_CRUD(t *testing.T) {
 
 	initialYAML := `
 - id: "1"
-  scene: 场景A
-  relation: 熟人
   user: |
     你好
   preferred: |
@@ -43,8 +41,9 @@ func TestDialogueService_CRUD(t *testing.T) {
 	if len(listResp.Msg.GetDialogues()) != 1 {
 		t.Fatalf("expected 1 dialogue, got %d", len(listResp.Msg.GetDialogues()))
 	}
-	if listResp.Msg.GetDialogues()[0].GetRelation() != "熟人" {
-		t.Errorf("expected relation '熟人', got %q", listResp.Msg.GetDialogues()[0].GetRelation())
+	item := listResp.Msg.GetDialogues()[0]
+	if item.GetId() != "1" || strings.TrimSpace(item.GetUser()) != "你好" || strings.TrimSpace(item.GetPreferred()) != "你好呀！" {
+		t.Errorf("unexpected dialogue: %v", item)
 	}
 	if !strings.Contains(listResp.Msg.GetPromptPreview(), "User: 你好\nAssistant: 你好呀！") {
 		t.Errorf("prompt preview missing content: %q", listResp.Msg.GetPromptPreview())
@@ -55,15 +54,11 @@ func TestDialogueService_CRUD(t *testing.T) {
 		Dialogues: []*v1.DialogueItem{
 			{
 				Id:        "1",
-				Scene:     "场景A",
-				Relation:  "熟人",
 				User:      "问题一",
 				Preferred: "回答一",
 			},
 			{
 				Id:        "2",
-				Scene:     "场景B",
-				Relation:  "朋友",
 				User:      "问题二",
 				Preferred: "回答二",
 			},
@@ -89,11 +84,13 @@ func TestDialogueService_CRUD(t *testing.T) {
 		t.Errorf("raw content missing expected text: %q", rawResp.Msg.GetContent())
 	}
 
+	if strings.Contains(rawResp.Msg.GetContent(), "scene:") || strings.Contains(rawResp.Msg.GetContent(), "relation:") {
+		t.Fatalf("saved YAML contains removed fields: %s", rawResp.Msg.GetContent())
+	}
+
 	// 4. UpdateRawDialogueFile - Valid
 	newRaw := `
 - id: "10"
-  scene:
-  relation: 朋友
   user: |
     直接修改YAML测试
   preferred: |
@@ -151,7 +148,7 @@ func TestDialogueService_LogProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries = instanceLogger.Snapshot()
-	if len(entries) < 2 || !strings.Contains(entries[len(entries)-1].Content, "已更新原始示例对话文件 (1 条)") {
+	if len(entries) < 2 || !strings.Contains(entries[len(entries)-1].Content, "已导入示例对话 YAML (1 条)") {
 		t.Fatalf("instance logger missing UpdateRawDialogueFile log: %v", entries)
 	}
 }

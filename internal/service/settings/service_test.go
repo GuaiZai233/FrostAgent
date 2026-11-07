@@ -13,7 +13,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/joho/godotenv"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 )
 
 func mustNew(t *testing.T, envPath string) *Service {
@@ -25,8 +25,20 @@ func mustNew(t *testing.T, envPath string) *Service {
 	return svc
 }
 
+func TestSQLExportableSettingsIncludeCompactAndBillingPrices(t *testing.T) {
+	keys := ExportableValueKeys()
+	for _, key := range []string{
+		"GROUP_COMPACT_MAX_BUFFER_SIZE", "BILLING_PROMPT_PRICE_PER_MILLION",
+		"BILLING_COMPLETION_PRICE_PER_MILLION",
+	} {
+		if !keys[key] {
+			t.Fatalf("non-secret SQL setting %s is not exportable", key)
+		}
+	}
+}
+
 func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
-	t.Setenv("UPSTREAM_API_KEY", "sk-secret-key-123456789")
+	t.Setenv("ACTIONSCAT_MANAGEMENT_TOKEN", "sk-secret-key-123456789")
 	t.Setenv("BOT_NAME", "FrostFox")
 
 	svc := mustNew(t, ".env.nonexistent")
@@ -37,13 +49,13 @@ func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 
 	var foundKey, foundName bool
 	for _, envVar := range resp.Msg.GetEnvVars() {
-		if envVar.GetKey() == "UPSTREAM_API_KEY" {
+		if envVar.GetKey() == "ACTIONSCAT_MANAGEMENT_TOKEN" {
 			foundKey = true
 			if envVar.GetValue() != "sk-secret-key-123456789" {
 				t.Fatalf("expected unmasked secret value for single-admin console, got %q", envVar.GetValue())
 			}
 			if !envVar.GetIsSecret() {
-				t.Fatalf("expected UPSTREAM_API_KEY to have isSecret=true")
+				t.Fatalf("expected ACTIONSCAT_MANAGEMENT_TOKEN to have isSecret=true")
 			}
 		}
 		if envVar.GetKey() == "BOT_NAME" {
@@ -55,7 +67,7 @@ func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 	}
 
 	if !foundKey || !foundName {
-		t.Fatalf("expected to find UPSTREAM_API_KEY and BOT_NAME in response")
+		t.Fatalf("expected to find ACTIONSCAT_MANAGEMENT_TOKEN and BOT_NAME in response")
 	}
 }
 
@@ -104,6 +116,38 @@ func TestSettingsUpdateEnvVarAllowlist(t *testing.T) {
 	}
 	if resp.Msg.GetSuccess() {
 		t.Fatalf("expected empty key to be rejected")
+	}
+}
+
+func TestStickerActivitySettingAcceptsOnlyIntegerRange(t *testing.T) {
+	svc := mustNew(t, filepath.Join(t.TempDir(), ".env"))
+	for _, value := range []string{"-1", "11", "1.5", "invalid", "01"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY", Value: value}))
+		if err != nil || res.Msg.GetSuccess() {
+			t.Fatalf("invalid value %q accepted: response=%v error=%v", value, res, err)
+		}
+	}
+	for _, value := range []string{"0", "1", "10"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY", Value: value}))
+		if err != nil || !res.Msg.GetSuccess() {
+			t.Fatalf("valid value %q rejected: response=%v error=%v", value, res, err)
+		}
+	}
+}
+
+func TestQuoteTraceDepthAcceptsOnlyIntegerRange(t *testing.T) {
+	svc := mustNew(t, filepath.Join(t.TempDir(), ".env"))
+	for _, value := range []string{"0", "11", "1.5", "invalid", "01", ""} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "QUOTE_TRACE_DEPTH", Value: value}))
+		if err != nil || res.Msg.GetSuccess() {
+			t.Fatalf("invalid depth %q accepted: response=%v error=%v", value, res, err)
+		}
+	}
+	for _, value := range []string{"1", "5", "10"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "QUOTE_TRACE_DEPTH", Value: value}))
+		if err != nil || !res.Msg.GetSuccess() {
+			t.Fatalf("valid depth %q rejected: response=%v error=%v", value, res, err)
+		}
 	}
 }
 
@@ -226,7 +270,7 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 		"BOT_NAME",
 		"SYSTEM_PROMPT",
 		"MAX_CONTEXT_MESSAGES",
-		"MAX_CONTEXT_CHARS",
+		"BOT_ALIASES",
 		"GROUP_COMPACT_BUFFER_SIZE",
 	}
 
@@ -239,6 +283,9 @@ func TestSettingsConcurrentUpdates(t *testing.T) {
 			go func(k string, round int) {
 				defer wg.Done()
 				val := fmt.Sprintf("val_%s_%d", k, round)
+				if k == "MAX_CONTEXT_MESSAGES" {
+					val = fmt.Sprintf("%d", round+4)
+				}
 				resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
 					Key:   k,
 					Value: val,
@@ -616,6 +663,39 @@ func TestSettingsUpdateEnvVarEndToEndMatrix(t *testing.T) {
 	}
 	if !strings.Contains(resp.Msg.GetError(), "cannot be safely represented") &&
 		!strings.Contains(resp.Msg.GetError(), "cannot be safely round-tripped") {
+		t.Fatalf("unexpected error message: %s", resp.Msg.GetError())
+	}
+}
+
+func TestSettingsUpdateStickerConfirmValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	envPath := filepath.Join(tmpDir, ".env")
+	svc := mustNew(t, envPath)
+
+	for _, val := range []string{"true", "false", ""} {
+		resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+			Key:   "ENABLE_STICKER_CONFIRM",
+			Value: val,
+		}))
+		if err != nil {
+			t.Fatalf("UpdateEnvVar error: %v", err)
+		}
+		if !resp.Msg.GetSuccess() {
+			t.Fatalf("expected ENABLE_STICKER_CONFIRM=%q to succeed, got error: %s", val, resp.Msg.GetError())
+		}
+	}
+
+	resp, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "ENABLE_STICKER_CONFIRM",
+		Value: "invalid",
+	}))
+	if err != nil {
+		t.Fatalf("UpdateEnvVar error: %v", err)
+	}
+	if resp.Msg.GetSuccess() {
+		t.Fatalf("expected ENABLE_STICKER_CONFIRM='invalid' to fail")
+	}
+	if !strings.Contains(resp.Msg.GetError(), "表情包确认必须为 true 或 false") {
 		t.Fatalf("unexpected error message: %s", resp.Msg.GetError())
 	}
 }
@@ -1122,5 +1202,34 @@ func TestSettingsMultipleStatementsOnSameLine(t *testing.T) {
 	}
 	if _, ok := parsed["BOT_NAME"]; ok {
 		t.Errorf("BOT_NAME still present after delete (content:\n%s)", text)
+	}
+}
+
+func TestStickerActivityModeSettingValidationAndPersistence(t *testing.T) {
+	svc := mustNew(t, filepath.Join(t.TempDir(), ".env"))
+	for _, value := range []string{"", "replies", "ALL_MESSAGES", " bot_turns"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY_MODE", Value: value}))
+		if err != nil || res.Msg.GetSuccess() {
+			t.Fatalf("invalid mode %q accepted: %v %v", value, res, err)
+		}
+	}
+	for _, value := range []string{"bot_turns", "all_messages"} {
+		res, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "STICKER_ACTIVITY_MODE", Value: value}))
+		if err != nil || !res.Msg.GetSuccess() {
+			t.Fatalf("valid mode %q rejected: %v %v", value, res, err)
+		}
+		got, err := svc.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, item := range got.Msg.GetEnvVars() {
+			if item.GetKey() == "STICKER_ACTIVITY_MODE" && item.GetValue() == value {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("mode %q was not saved", value)
+		}
 	}
 }

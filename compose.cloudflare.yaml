@@ -1,0 +1,14 @@
+# Optional: use only when this deployment runs the user's Cloudflare connector.
+# Configure Access for the entire public hostname before enabling the route.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set the token of your existing Cloudflare Tunnel}
+    network_mode: service:frostagent
+    depends_on:
+      frostagent:
+        condition: service_started
+        restart: true

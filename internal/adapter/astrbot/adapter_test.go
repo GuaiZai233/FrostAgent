@@ -1,14 +1,19 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sticker"
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestAdapterID(t *testing.T) {
@@ -69,6 +74,199 @@ func TestAdapterObservesCurrentAndQuotedQQStickersInSession(t *testing.T) {
 	}
 	if _, _, err := stealer.StealObserved(context.Background(), "aiocqhttp:private:other", "msg_quoted", 0, loader); !errors.Is(err, sticker.ErrStickerNotInScope) {
 		t.Fatalf("cross-session error = %v, want ErrStickerNotInScope", err)
+	}
+}
+
+func TestLoadObservedImageFromEventSelectsImagesByMessageID(t *testing.T) {
+	firstImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	secondImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	quotedImage := []byte("GIF89a quoted")
+	event := Event{
+		MessageID: "msg_current",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: firstImage},
+			{Type: core.AttachmentTypeFile, Content: []byte("not an image")},
+			{Type: core.AttachmentTypeImage, Content: secondImage},
+			{Type: core.AttachmentTypeImage, Content: quotedImage, MessageID: "msg_quoted"},
+		},
+	}
+	trusted := map[string]struct{}{"msg_current": {}, "msg_quoted": {}}
+
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 1)
+	if err != nil {
+		t.Fatalf("load second image: %v", err)
+	}
+	if string(data) != string(secondImage) {
+		t.Fatalf("image index 1 loaded %q, want %q", data, secondImage)
+	}
+
+	data, err = loadObservedImageFromEvent(context.Background(), event, trusted, "msg_quoted", 0)
+	if err != nil {
+		t.Fatalf("load quoted image: %v", err)
+	}
+	if string(data) != string(quotedImage) {
+		t.Fatalf("quoted image loaded %q, want %q", data, quotedImage)
+	}
+
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2); err == nil {
+		t.Fatal("expected out-of-range image index error")
+	}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_unknown", 0); err == nil {
+		t.Fatal("expected unknown message error")
+	}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "", 0); err == nil {
+		t.Fatal("expected empty message_id error")
+	}
+}
+
+func TestLoadObservedImageFromEventRejectsUnvalidatedQuotedAttachment(t *testing.T) {
+	// The plugin may forward a Reply.chain image under a quoted message ID even
+	// when the quote belongs to another group. Only IDs produced by the
+	// adapter's same-session quote validation are authorized.
+	foreignImage := []byte("GIF89a foreign")
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "group-a",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: foreignImage, MessageID: "msg_foreign"},
+		},
+	}
+	onlyCurrent := map[string]struct{}{"msg_current": {}}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, onlyCurrent, "msg_foreign", 0); err == nil {
+		t.Fatal("unvalidated quoted attachment must not be exposed to the image tool")
+	}
+
+	validated := trustedQuotedMessageIDs([]astrBotQuoteNode{{
+		Context: map[string]any{"message_id": "msg_foreign"},
+	}}, event)
+	if _, err := loadObservedImageFromEvent(context.Background(), event, validated, "msg_foreign", 0); err != nil {
+		t.Fatalf("validated quoted attachment should be readable: %v", err)
+	}
+}
+
+func TestLoadObservedImageFromEventUsesExplicitImageIndices(t *testing.T) {
+	// The plugin deduplicates identical image bytes. For [A, A, B] it keeps
+	// A with image_indices [0, 1] and B with [2]; both A slots must resolve to A.
+	sameImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	otherImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "group-a",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: sameImage, ImageIndices: []int{0, 1}},
+			{Type: core.AttachmentTypeImage, Content: otherImage, ImageIndices: []int{2}},
+		},
+	}
+	trusted := map[string]struct{}{"msg_current": {}}
+
+	for _, imageIndex := range []int{0, 1} {
+		data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", imageIndex)
+		if err != nil {
+			t.Fatalf("load deduplicated image index %d: %v", imageIndex, err)
+		}
+		if string(data) != string(sameImage) {
+			t.Fatalf("image index %d loaded %q, want %q", imageIndex, data, sameImage)
+		}
+	}
+
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2)
+	if err != nil {
+		t.Fatalf("load third image: %v", err)
+	}
+	if string(data) != string(otherImage) {
+		t.Fatalf("image index 2 loaded %q, want %q", data, otherImage)
+	}
+
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 3); err == nil {
+		t.Fatal("expected out-of-range image index error")
+	}
+}
+
+func TestAstrBotVisibleTextAndImageLoaderAlignForRepeatedImages(t *testing.T) {
+	sameImage := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	otherImage := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	event := Event{
+		MessageID:       "msg_current",
+		MessageType:     "group",
+		GroupID:         "group-a",
+		ImageSlotCounts: map[string]int{"msg_current": 3},
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: sameImage, ImageIndices: []int{0, 1}},
+			{Type: core.AttachmentTypeImage, Content: otherImage, ImageIndices: []int{2}},
+		},
+	}
+
+	if text := astrBotVisibleText(event); strings.Count(text, "[图片]") != 3 {
+		t.Fatalf("visible text has %d placeholders, want 3: %q", strings.Count(text, "[图片]"), text)
+	}
+
+	trusted := map[string]struct{}{"msg_current": {}}
+	for _, imageIndex := range []int{0, 1} {
+		data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", imageIndex)
+		if err != nil || string(data) != string(sameImage) {
+			t.Fatalf("image index %d = %q, err=%v; want same image", imageIndex, data, err)
+		}
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 2)
+	if err != nil || string(data) != string(otherImage) {
+		t.Fatalf("image index 2 = %q, err=%v; want other image", data, err)
+	}
+}
+
+func TestAstrBotVisibleTextAndImageLoaderAlignForUnreadableFirstImage(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	event := Event{
+		MessageID:       "msg_current",
+		MessageType:     "group",
+		GroupID:         "group-a",
+		ImageSlotCounts: map[string]int{"msg_current": 2},
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: readable, ImageIndices: []int{1}},
+		},
+	}
+
+	if text := astrBotVisibleText(event); strings.Count(text, "[图片]") != 2 {
+		t.Fatalf("visible text has %d placeholders, want 2: %q", strings.Count(text, "[图片]"), text)
+	}
+
+	trusted := map[string]struct{}{"msg_current": {}}
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 0); err == nil {
+		t.Fatal("unreadable first image slot must not resolve")
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "msg_current", 1)
+	if err != nil || string(data) != string(readable) {
+		t.Fatalf("image index 1 = %q, err=%v; want readable image", data, err)
+	}
+}
+
+func TestAstrBotQuotedImagePromptAndLoaderAlignForUnreadableFirstImage(t *testing.T) {
+	readable := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x01}
+	event := Event{
+		MessageID:   "msg_current",
+		MessageType: "group",
+		GroupID:     "101",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, Content: readable, MessageID: "44", ImageIndices: []int{1}},
+		},
+	}
+	raw := json.RawMessage(`{"message_id":44,"message_type":"group","group_id":"101","user_id":1,"message":[{"type":"image","data":{}},{"type":"image","data":{"url":"https://example.com/readable"}}]}`)
+	node, ok := parseAstrBotQuote(event, "44", raw)
+	if !ok {
+		t.Fatal("quote should pass same-session validation")
+	}
+	if prompt := astrBotQuotePrompt([]astrBotQuoteNode{node}); strings.Count(prompt, "[图片]") != 2 {
+		t.Fatalf("quoted prompt has %d placeholders, want 2: %q", strings.Count(prompt, "[图片]"), prompt)
+	}
+
+	trusted := trustedQuotedMessageIDs([]astrBotQuoteNode{node}, event)
+	if _, err := loadObservedImageFromEvent(context.Background(), event, trusted, "44", 0); err == nil {
+		t.Fatal("unreadable quoted image slot must not resolve")
+	}
+	data, err := loadObservedImageFromEvent(context.Background(), event, trusted, "44", 1)
+	if err != nil || string(data) != string(readable) {
+		t.Fatalf("quoted image index 1 = %q, err=%v; want readable image", data, err)
 	}
 }
 
@@ -205,5 +403,255 @@ func TestAstrBot_CaptureGroupCompactMessage(t *testing.T) {
 	expected := "[user] 小红 (usr_777): 我们在讨论周日活动"
 	if snap.RecentMessages[0] != expected {
 		t.Errorf("expected %q, got %q", expected, snap.RecentMessages[0])
+	}
+}
+
+func TestAdapterSend_OutboundContract(t *testing.T) {
+	engine := newTestEngine(&mockLLMProvider{})
+	srv, adapter, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	// Wait briefly for connection registration
+	for range 20 {
+		adapter.mu.RLock()
+		n := len(adapter.conns)
+		adapter.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	ctx := context.Background()
+
+	// 1. Sticker image with SubType: 1 -> produces ActionMessage with IsSticker: true, SubType: 1
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "grp_123",
+		MessageType: "group",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/fox_sticker.png", SubType: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send sticker failed: %v", err)
+	}
+
+	var action Action
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	if action.Action != "send_message" {
+		t.Fatalf("expected send_message, got %s", action.Action)
+	}
+	if action.GroupID != "grp_123" {
+		t.Fatalf("expected group_id grp_123, got %s", action.GroupID)
+	}
+	if len(action.Messages) != 1 {
+		t.Fatalf("expected 1 message component, got %+v", action.Messages)
+	}
+	if action.Messages[0].Type != "image" {
+		t.Fatalf("expected type image, got %s", action.Messages[0].Type)
+	}
+	if action.Messages[0].URL != "https://example.com/fox_sticker.png" {
+		t.Fatalf("expected sticker URL, got %s", action.Messages[0].URL)
+	}
+	if !action.Messages[0].IsSticker {
+		t.Fatalf("expected IsSticker=true, got %v", action.Messages[0].IsSticker)
+	}
+	if action.Messages[0].SubType != 1 {
+		t.Fatalf("expected SubType=1, got %d", action.Messages[0].SubType)
+	}
+
+	// 2. Text + regular image -> produces 2 components: plain and image
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Content:     "look at this",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: "https://example.com/normal.png"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("send text+image failed: %v", err)
+	}
+	if err := conn.ReadJSON(&action); err != nil {
+		t.Fatalf("read action: %v", err)
+	}
+	if action.UserID != "usr_456" {
+		t.Fatalf("expected user_id usr_456, got %s", action.UserID)
+	}
+	if len(action.Messages) != 2 {
+		t.Fatalf("expected 2 components, got %+v", action.Messages)
+	}
+	if action.Messages[0].Type != "plain" || action.Messages[0].Text != "look at this" {
+		t.Fatalf("expected plain component, got %+v", action.Messages[0])
+	}
+	if action.Messages[1].Type != "image" || action.Messages[1].URL != "https://example.com/normal.png" || action.Messages[1].IsSticker {
+		t.Fatalf("expected regular image component, got %+v", action.Messages[1])
+	}
+
+	// 3. Unsupported attachment (audio) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeAudio, URL: "https://example.com/audio.mp3"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported audio attachment, got nil")
+	}
+
+	// 4. Unsupported attachment (video) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeVideo, URL: "https://example.com/video.mp4"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported video attachment, got nil")
+	}
+
+	// 5. Unsupported attachment (file) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeFile, URL: "https://example.com/file.pdf"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported file attachment, got nil")
+	}
+
+	// 6. Empty URL -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+		Attachments: []core.Attachment{
+			{Type: core.AttachmentTypeImage, URL: ""},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty attachment url, got nil")
+	}
+
+	// 7. Empty message (no text, no attachments) -> returns error
+	err = adapter.Send(ctx, core.OutgoingMessage{
+		TargetID:    "usr_456",
+		MessageType: "private",
+	})
+	if err == nil {
+		t.Fatal("expected error for empty message, got nil")
+	}
+
+	// 8. Insecure URLs (file://, local path, UNC, ftp) -> returns error
+	insecureMediaURLs := []string{
+		"file:///etc/passwd",
+		"file:///C:/Windows/win.ini",
+		"C:\\Windows\\System32\\drivers\\etc\\hosts",
+		"C:/Windows/win.ini",
+		"/etc/passwd",
+		"./local.png",
+		"\\\\attacker\\share\\fox.png",
+		"//attacker.com/fox.png",
+		"ftp://attacker.com/fox.png",
+		"http:///no-host",
+	}
+	for _, rawURL := range insecureMediaURLs {
+		err = adapter.Send(ctx, core.OutgoingMessage{
+			TargetID:    "usr_456",
+			MessageType: "private",
+			Attachments: []core.Attachment{
+				{Type: core.AttachmentTypeImage, URL: rawURL},
+			},
+		})
+		if err == nil {
+			t.Fatalf("expected error for insecure media URL %q, got nil", rawURL)
+		}
+	}
+}
+
+func TestAstrBot_RoutePropagation_QQPlatform(t *testing.T) {
+	tmpDir := t.TempDir()
+	gm := memory.NewGroupManager(tmpDir, nil)
+	engine := newTestEngine(&mockLLMProvider{})
+	engine.GroupManager = gm
+
+	srv, adapter, wsURL := startWSTestServer(engine)
+	defer srv.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer conn.Close()
+
+	for range 20 {
+		adapter.mu.RLock()
+		n := len(adapter.conns)
+		adapter.mu.RUnlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	groupID := "syn_grp_qq_route_99"
+	event := Event{
+		Type:        "event",
+		MessageID:   "msg_route_001",
+		SessionID:   "aiocqhttp:group:" + groupID,
+		UserID:      "syn_usr_route_01",
+		SenderName:  "TestUser",
+		GroupID:     groupID,
+		GroupName:   "QQTestGroup",
+		Content:     "hello world",
+		Platform:    "aiocqhttp", // Dynamic QQ adapter platform
+		MessageType: "group",
+	}
+
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatalf("write event failed: %v", err)
+	}
+
+	// Wait for event to be processed and route remembered
+	var route core.RouteContext
+	var found bool
+	for range 50 {
+		gStore, err := gm.GetGroupStore(groupID)
+		if err == nil {
+			route = gStore.RouteForOwner(groupID)
+			if route.Platform == "aiocqhttp" {
+				found = true
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !found {
+		t.Fatalf("expected route to be remembered in GroupStore, got Platform=%q", route.Platform)
+	}
+	if route.Platform != "aiocqhttp" {
+		t.Errorf("expected route Platform to be %q, got %q", "aiocqhttp", route.Platform)
+	}
+	if route.GroupID != groupID {
+		t.Errorf("expected route GroupID to be %q, got %q", groupID, route.GroupID)
+	}
+
+	// Also verify GroupOwnerExplicit route has dynamic QQ platform
+	gStore, _ := gm.GetGroupStore(groupID)
+	explicitRoute := gStore.RouteForOwner(memory.GroupOwnerExplicit)
+	if explicitRoute.Platform != "aiocqhttp" {
+		t.Errorf("expected GroupOwnerExplicit route Platform to be %q, got %q", "aiocqhttp", explicitRoute.Platform)
 	}
 }

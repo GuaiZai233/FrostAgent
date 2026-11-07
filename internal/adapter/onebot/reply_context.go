@@ -1,14 +1,16 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/quotetrace"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +46,10 @@ type oneBotAPIResponse struct {
 // SendActionAndWait sends a OneBot action and waits for the matching ACK response (via echo).
 // It distinguishes between websocket write failures, platform ACK timeout, and platform errors (retcode != 0).
 func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time.Duration) (oneBotAPIResponse, error) {
+	return c.sendActionAndWaitTurn(action, timeout, nil)
+}
+
+func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn) (oneBotAPIResponse, error) {
 	if c == nil || c.conn == nil {
 		return oneBotAPIResponse{}, fmt.Errorf("websocket connection is nil")
 	}
@@ -60,33 +66,54 @@ func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time
 		return oneBotAPIResponse{}, fmt.Errorf("marshal action failed: %w", err)
 	}
 
-	if err := c.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
+	if err := c.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		c.clearMessageRequest(echo, responseChannel)
 		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", err)
 	}
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-
-	select {
-	case <-c.Context().Done():
-		c.clearMessageRequest(echo, responseChannel)
-		return oneBotAPIResponse{}, c.Context().Err()
-	case response := <-responseChannel:
-		if response.RetCode != 0 || response.Status != "ok" {
-			detail := strings.TrimSpace(response.Wording)
-			if detail == "" {
-				detail = strings.TrimSpace(response.Message)
-			}
-			if detail == "" {
-				detail = fmt.Sprintf("retcode=%d", response.RetCode)
-			}
-			return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
+	defer c.clearMessageRequest(echo, responseChannel)
+	response, err := waitActionResponse(turn.Context(), c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
+	if err != nil {
+		if err == context.DeadlineExceeded {
+			err = fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
 		}
+		return response, err
+	}
+	if response.RetCode != 0 || response.Status != "ok" {
+		detail := strings.TrimSpace(response.Wording)
+		if detail == "" {
+			detail = strings.TrimSpace(response.Message)
+		}
+		if detail == "" {
+			detail = fmt.Sprintf("retcode=%d", response.RetCode)
+		}
+		return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
+	}
+	return response, nil
+}
+
+func waitActionResponse(turnCtx, connCtx context.Context, responses <-chan oneBotAPIResponse, timeout <-chan time.Time, detach func()) (oneBotAPIResponse, error) {
+	var err error
+	select {
+	case response := <-responses:
 		return response, nil
-	case <-timer.C:
-		c.clearMessageRequest(echo, responseChannel)
-		return oneBotAPIResponse{}, fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
+	case <-turnCtx.Done():
+		err = turnCtx.Err()
+	case <-connCtx.Done():
+		err = connCtx.Err()
+	case <-timeout:
+		err = context.DeadlineExceeded
+	}
+	// Detach under the response dispatcher lock, then prefer any ACK already
+	// confirmed at cancellation. Unacknowledged operations remain unknown.
+	detach()
+	select {
+	case response := <-responses:
+		return response, nil
+	default:
+		return oneBotAPIResponse{}, err
 	}
 }
 
@@ -114,6 +141,8 @@ type resolvedReplyContext struct {
 	MessageID   string
 	SessionID   string
 	Segments    []content.MessageSegment
+	ParentID    int64
+	Ancestors   []resolvedReplyContext
 }
 
 type oneBotMessageData struct {
@@ -129,15 +158,53 @@ type oneBotMessageData struct {
 	Message     json.RawMessage     `json:"message"`
 }
 
-// lookupReplyContext resolves the first reply segment through OneBot get_msg.
-// It waits at most one second and always degrades to an empty context so stale
-// or unsupported history cannot block the current event's normal wake signal.
+// lookupReplyContext follows an in-session reply chain through OneBot get_msg.
+// Each lookup has a one-second bound; stale or unsupported history ends the chain.
 func (c *wsConnection) lookupReplyContext(event model.OneBotEvent) resolvedReplyContext {
 	messageID, ok := replyMessageID(event)
 	if !ok || c == nil {
 		return resolvedReplyContext{}
 	}
-	return c.lookupMessageContext(c.Context(), event, messageID)
+	depth := quotetrace.Depth(c.Scope.Getenv)
+	if depth == 0 {
+		return resolvedReplyContext{}
+	}
+	seen := map[int64]struct{}{int64(event.MessageID): {}}
+	chain := make([]resolvedReplyContext, 0, depth)
+	for len(chain) < depth && messageID != 0 {
+		if _, exists := seen[messageID]; exists {
+			break
+		}
+		seen[messageID] = struct{}{}
+		resolved := c.lookupMessageContext(c.Context(), event, messageID)
+		if resolved.MessageID == "" {
+			break
+		}
+		chain = append(chain, resolved)
+		messageID = resolved.ParentID
+	}
+	if len(chain) == 0 {
+		return resolvedReplyContext{}
+	}
+	first := chain[0]
+	first.Ancestors = chain[1:]
+	return first
+}
+
+func (r resolvedReplyContext) promptWithAncestors() string {
+	if len(r.Ancestors) == 0 {
+		return r.Prompt
+	}
+	messages := make([]json.RawMessage, 0, 1+len(r.Ancestors))
+	messages = append(messages, json.RawMessage(r.Prompt))
+	for _, ancestor := range r.Ancestors {
+		messages = append(messages, json.RawMessage(ancestor.Prompt))
+	}
+	prompt, err := json.Marshal(map[string]any{"quoted_messages": messages})
+	if err != nil {
+		return r.Prompt
+	}
+	return string(prompt)
 }
 
 func (c *wsConnection) lookupMessageContext(ctx context.Context, event model.OneBotEvent, messageID int64) resolvedReplyContext {
@@ -203,12 +270,12 @@ func (c *wsConnection) deliverMessageResponse(echo string, response oneBotAPIRes
 	responseChannel, ok := c.pendingMessage[echo]
 	if ok {
 		delete(c.pendingMessage, echo)
+		responseChannel <- response
 	}
 	c.messageMu.Unlock()
 	if !ok {
 		return false
 	}
-	responseChannel <- response
 	return true
 }
 
@@ -268,6 +335,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		MessageID:   strconv.FormatInt(messageID, 10),
 		SessionID:   historyKey(event),
 		Segments:    segments,
+		ParentID:    replyMessageIDFromRaw(data.Message),
 	}
 }
 
@@ -277,9 +345,12 @@ func (c *wsConnection) replyMessageMatchesEvent(event model.OneBotEvent, message
 		if data.MessageType != "" && data.MessageType != "group" {
 			return false
 		}
-		return data.GroupID == 0 || data.GroupID == event.GroupID
+		if data.GroupID != 0 {
+			return data.GroupID == event.GroupID
+		}
+		return c.messageSessionMatches(messageID, historyKey(event))
 	case "private":
-		if data.MessageType != "" && data.MessageType != "private" {
+		if data.GroupID != 0 || (data.MessageType != "" && data.MessageType != "private") {
 			return false
 		}
 		if peerID, ok := privateMessagePeer(event.SelfID, data); ok {
@@ -418,6 +489,75 @@ func stickerDataFromSegments(ctx context.Context, segments []content.MessageSegm
 	return sticker.LoadImageSource(ctx, sources[stickerIndex])
 }
 
+// loadObservedImage resolves one trusted image attachment selected by message
+// ID and image index. Current-message and already-resolved quote segments are
+// used directly; anything else is fetched from the platform get_msg API, which
+// revalidates that the message belongs to the current session.
+func (c *wsConnection) loadObservedImage(
+	ctx context.Context,
+	event model.OneBotEvent,
+	reply resolvedReplyContext,
+	currentSegments []content.MessageSegment,
+	messageID string,
+	imageIndex int,
+) ([]byte, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return nil, fmt.Errorf("OneBot message_id 不能为空")
+	}
+	if imageIndex < 0 {
+		return nil, fmt.Errorf("image_index %d 不能小于 0", imageIndex)
+	}
+
+	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)
+	if messageID == currentMessageID {
+		return imageDataFromSegments(ctx, currentSegments, imageIndex)
+	}
+	quoteNodes := []resolvedReplyContext{reply}
+	quoteNodes = append(quoteNodes, reply.Ancestors...)
+	for _, quote := range quoteNodes {
+		if quote.MessageID == messageID && quote.SessionID == historyKey(event) && len(quote.Segments) > 0 {
+			return imageDataFromSegments(ctx, quote.Segments, imageIndex)
+		}
+	}
+
+	numericID, ok := numericMessageID(messageID)
+	if !ok {
+		return nil, fmt.Errorf("OneBot message_id %q 不是数字", messageID)
+	}
+	resolved := c.lookupMessageContext(ctx, event, numericID)
+	if len(resolved.Segments) == 0 {
+		return nil, fmt.Errorf("OneBot get_msg 未能获取消息 %s 的可读内容", messageID)
+	}
+	return imageDataFromSegments(ctx, resolved.Segments, imageIndex)
+}
+
+// imageSourcesFromSegments returns one slot per image/mface segment, including
+// segments whose source is unreadable. Keeping unreadable slots preserves the
+// model-visible ordinal so image_index always refers to the same placeholder.
+func imageSourcesFromSegments(segments []content.MessageSegment) []string {
+	var sources []string
+	for _, seg := range segments {
+		if seg.Type != "image" && seg.Type != "mface" {
+			continue
+		}
+		sources = append(sources, content.SegmentImageSource(seg))
+	}
+	return sources
+}
+
+func imageDataFromSegments(ctx context.Context, segments []content.MessageSegment, imageIndex int) ([]byte, error) {
+	sources := imageSourcesFromSegments(segments)
+	if imageIndex < 0 || imageIndex >= len(sources) {
+		return nil, fmt.Errorf("image index %d is unavailable", imageIndex)
+	}
+	source := strings.TrimSpace(sources[imageIndex])
+	if source == "" {
+		return nil, fmt.Errorf("image index %d has no readable source", imageIndex)
+	}
+	return sticker.LoadImageSource(ctx, source)
+}
+
 func (r *resolvedReplyContext) addImageDescription(description string, scopes ...*runtimescope.Scope) {
 	scope := runtimescope.First(scopes)
 	description = strings.TrimSpace(description)
@@ -442,16 +582,47 @@ func (r *resolvedReplyContext) addImageDescription(description string, scopes ..
 
 func replyMessageID(event model.OneBotEvent) (int64, bool) {
 	for _, raw := range EventRawMessages(event) {
-		for _, segment := range ParseMessageSegments(raw) {
-			if segment.Type != "reply" {
-				continue
-			}
-			if messageID, ok := numericMessageID(segment.Data["id"]); ok {
-				return messageID, true
-			}
+		if messageID := replyMessageIDFromRaw(raw); messageID != 0 {
+			return messageID, true
 		}
 	}
 	return 0, false
+}
+
+func replyMessageIDFromRaw(raw json.RawMessage) int64 {
+	var entries []struct {
+		Type string
+		Data map[string]json.RawMessage
+	}
+	if json.Unmarshal(raw, &entries) == nil {
+		for _, entry := range entries {
+			if entry.Type != "reply" {
+				continue
+			}
+			var value json.Number
+			if json.Unmarshal(entry.Data["id"], &value) == nil {
+				if id, err := value.Int64(); err == nil {
+					return id
+				}
+			}
+			var text string
+			if json.Unmarshal(entry.Data["id"], &text) == nil {
+				if id, err := strconv.ParseInt(strings.TrimSpace(text), 10, 64); err == nil {
+					return id
+				}
+			}
+		}
+		return 0
+	}
+	for _, segment := range ParseMessageSegments(raw) {
+		if segment.Type != "reply" {
+			continue
+		}
+		if messageID, ok := numericMessageID(segment.Data["id"]); ok {
+			return messageID
+		}
+	}
+	return 0
 }
 
 func numericMessageID(value interface{}) (int64, bool) {

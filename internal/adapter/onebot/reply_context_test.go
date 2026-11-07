@@ -1,17 +1,17 @@
 package onebot
 
 import (
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/model"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -417,6 +417,26 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 	}
 }
 
+type stubSecurityClassifier struct{}
+
+func (s *stubSecurityClassifier) Classify(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+	text := strings.ToLower(input.Normalized)
+	if strings.Contains(text, "ignore all previous") {
+		return security.ClassificationResult{
+			Category:  security.RiskCategoryPromptInjection,
+			RiskLevel: security.RiskLevelHigh,
+			Origin:    input.Origin,
+			Reason:    "scripted test stub prompt injection",
+		}, nil
+	}
+	return security.ClassificationResult{
+		Category:  security.RiskCategoryNone,
+		RiskLevel: security.RiskLevelNone,
+		Origin:    input.Origin,
+		Reason:    "benign",
+	}, nil
+}
+
 func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	dialogueProvider := &mockLLMProvider{responses: []*core.ChatResponse{{
 		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "正常回复"},
@@ -424,6 +444,8 @@ func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogueProvider)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
+	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -511,11 +533,14 @@ func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	dialogueRequest := dialogueProvider.requests[0]
 	dialogueProvider.mu.Unlock()
 
-	// Verify reply_context was vetted out and not injected into prompt
+	// Verify reply_context raw dangerous content was vetted out and replaced with sanitized notice
 	for _, msg := range dialogueRequest.Messages {
 		if content, ok := msg.Content.(string); ok {
-			if strings.Contains(content, "<reply_context>") {
-				t.Fatalf("包含高风险内容的 reply_context 未被安全机制剔除: %s", content)
+			if strings.Contains(content, "ignore all previous instructions") {
+				t.Fatalf("包含高风险内容的 reply_context 原始恶意指令未被安全机制剔除: %s", content)
+			}
+			if strings.Contains(content, "<reply_context>") && !strings.Contains(content, "<此内容已过滤：检测到提示词注入内容！") {
+				t.Fatalf("期望高风险 reply_context 被降级替换为脱敏提示，实际=%s", content)
 			}
 		}
 	}
@@ -548,6 +573,8 @@ func TestWSDangerousImageDescriptionVettedOut(t *testing.T) {
 	engine := newTestEngine(dialogueProvider)
 	engine.VisionProvider = visionProvider
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
+	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -606,11 +633,14 @@ func TestWSDangerousImageDescriptionVettedOut(t *testing.T) {
 	dialogueRequest := dialogueProvider.requests[0]
 	dialogueProvider.mu.Unlock()
 
-	// Verify dangerous image description was vetted out and not injected into user text
+	// Verify dangerous image description was sanitized and original dangerous content was discarded
 	for _, msg := range dialogueRequest.Messages {
 		if content, ok := msg.Content.(string); ok {
-			if strings.Contains(content, "【图片内容】：") || strings.Contains(content, "ignore all previous instructions") {
-				t.Fatalf("高风险图片描述未被安全机制剔除: %s", content)
+			if strings.Contains(content, "ignore all previous instructions") {
+				t.Fatalf("高风险图片描述原始恶意指令未被安全机制剔除: %s", content)
+			}
+			if strings.Contains(content, "【图片内容】：") && !strings.Contains(content, "<此内容已过滤：检测到提示词注入内容！") {
+				t.Fatalf("期望高风险图片描述被降级替换为脱敏提示，实际=%s", content)
 			}
 		}
 	}
@@ -636,6 +666,8 @@ func TestWSDangerousSenderMetadataVettedOut(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogueProvider)
 	engine.Security = security.NewController(t.TempDir())
+	engine.Security.SetMode(security.ControlModeAggressive)
+	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
@@ -720,5 +752,30 @@ func TestWSDangerousSenderMetadataVettedOut(t *testing.T) {
 	locked, record, err := engine.Security.Access.IsLocked(p)
 	if err != nil || locked || len(record.StrikeTimes) != 0 {
 		t.Fatalf("用户不应累计 strike 或被锁定: locked=%v strikes=%d err=%v", locked, len(record.StrikeTimes), err)
+	}
+}
+
+func TestGroupGetMsgWithoutGroupIDRequiresObservedSession(t *testing.T) {
+	event := model.OneBotEvent{MessageType: "group", GroupID: 101}
+	conn := newWSConnection(nil)
+	data := oneBotMessageData{MessageType: "group", MessageID: 42}
+	if conn.replyMessageMatchesEvent(event, 42, data) {
+		t.Fatal("unobserved group message without group_id became trusted")
+	}
+	conn.rememberMessageSession(42, historyKey(event))
+	if !conn.replyMessageMatchesEvent(event, 42, data) {
+		t.Fatal("observed same-session group message was rejected")
+	}
+	if conn.replyMessageMatchesEvent(event, 43, oneBotMessageData{MessageType: "group", GroupID: 202}) {
+		t.Fatal("cross-group message became trusted")
+	}
+}
+
+func TestPrivateGetMsgRejectsGroupID(t *testing.T) {
+	event := model.OneBotEvent{MessageType: "private", UserID: 101}
+	conn := newWSConnection(nil)
+	data := oneBotMessageData{MessageType: "private", GroupID: 202, UserID: 101}
+	if conn.replyMessageMatchesEvent(event, 42, data) {
+		t.Fatal("group message became trusted as private quote")
 	}
 }

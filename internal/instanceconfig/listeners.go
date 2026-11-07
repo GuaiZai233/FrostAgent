@@ -1,0 +1,63 @@
+package instanceconfig
+
+import (
+	"fmt"
+	"net"
+)
+
+// Default listener addresses can be overridden at link time for container builds.
+// SQL settings take precedence, subject to container listener isolation.
+var (
+	DefaultListenAddr   = "127.0.0.1:8080"
+	DefaultWSListenAddr = "127.0.0.1:11023"
+	// ContainerManagement enables the Docker host publication auth policy.
+	ContainerManagement = "false"
+	// Host-network builds retain the connector's loopback-only listener policy.
+	ManagementLoopbackOnly = "false"
+)
+
+// ValidateContainerListeners keeps management separate from adapter ingress.
+// Bridge builds allow wildcard or loopback listeners; host builds require loopback.
+func ValidateContainerListeners(listenAddr, wsListenAddr string) error {
+	if ManagementLoopbackOnly == "true" {
+		return ValidateListenerIsolation(listenAddr, wsListenAddr)
+	}
+	return validateListenerPorts(listenAddr, wsListenAddr)
+}
+
+// ValidateListenerIsolation prevents SQL settings from exposing management routes
+// outside the connector's shared network namespace, including through a shared port.
+func ValidateListenerIsolation(listenAddr, wsListenAddr string) error {
+	host, _, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return fmt.Errorf("invalid management listener: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("container management listener must use a loopback IP address")
+	}
+	return validateListenerPorts(listenAddr, wsListenAddr)
+}
+
+func validateListenerPorts(listenAddr, wsListenAddr string) error {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return fmt.Errorf("invalid management listener: %w", err)
+	}
+	managementPort, err := net.LookupPort("tcp", port)
+	if err != nil {
+		return fmt.Errorf("invalid management port: %w", err)
+	}
+	_, wsPort, err := net.SplitHostPort(wsListenAddr)
+	if err != nil {
+		return fmt.Errorf("invalid adapter listener: %w", err)
+	}
+	adapterPort, err := net.LookupPort("tcp", wsPort)
+	if err != nil {
+		return fmt.Errorf("invalid adapter port: %w", err)
+	}
+	if managementPort == adapterPort {
+		return fmt.Errorf("container management and adapter listeners must use different ports")
+	}
+	return nil
+}

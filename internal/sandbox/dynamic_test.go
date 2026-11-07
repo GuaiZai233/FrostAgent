@@ -252,6 +252,48 @@ func TestDynamicBackend_ReleaseDelegates(t *testing.T) {
 	}
 }
 
+func TestDynamicBackend_ReleaseCachedWhenDisabledAtRuntime(t *testing.T) {
+	var releasedID string
+	var releaseCalled atomic.Bool
+	stub := &stubBackend{
+		releaseFunc: func(_ context.Context, sessionID string) error {
+			releaseCalled.Store(true)
+			releasedID = sessionID
+			return nil
+		},
+	}
+
+	enabled := true
+	db := NewDynamicBackend(
+		func() Config {
+			if enabled {
+				return validTestConfig()
+			}
+			return Config{Enabled: false}
+		},
+		func(cfg Config) Backend { return stub },
+	)
+
+	// 1. 在启用状态下执行一次操作，使 backend 被缓存
+	if _, err := db.Exec(context.Background(), ExecRequest{SessionID: "s1", Command: "echo"}); err != nil {
+		t.Fatalf("Exec failed: %v", err)
+	}
+
+	// 2. 运行时动态禁用沙箱
+	enabled = false
+
+	// 3. 验证 Release 能够通过缓存的 backend 执行释放，而不是直接抛出 ErrSandboxDisabled
+	if err := db.Release(context.Background(), "mock:session:123"); err != nil {
+		t.Fatalf("运行时禁用沙箱后 Release 失败: %v", err)
+	}
+	if !releaseCalled.Load() {
+		t.Fatal("未调用缓存 backend 的 Release 方法")
+	}
+	if releasedID != "mock:session:123" {
+		t.Fatalf("释放的 sessionID 不匹配: want mock:session:123, got %s", releasedID)
+	}
+}
+
 func TestConfigManager_LifecycleAndConcurrency(t *testing.T) {
 	initial := validTestConfig()
 	initial.Enabled = false

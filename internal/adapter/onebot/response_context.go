@@ -1,8 +1,8 @@
 package onebot
 
 import (
-	"FrostAgent/internal/model"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/model"
 )
 
 // buildResponseContext creates per-turn, user-segment guidance for the model's
@@ -13,15 +13,21 @@ func buildResponseContext(
 	wakeSignals GroupWakeSignals,
 	quotedAlias bool,
 ) string {
-	triggers := make([]string, 0, 3)
+	triggers := make([]string, 0, 4)
 	if event.MessageType == "private" {
 		triggers = append(triggers, "private_message")
 	} else {
+		if wakeSignals.Poke {
+			triggers = append(triggers, "poke")
+		}
 		if wakeSignals.AtBot {
 			triggers = append(triggers, "at")
 		}
 		if wakeSignals.Alias {
 			triggers = append(triggers, "alias")
+		}
+		if wakeSignals.Proactive {
+			triggers = append(triggers, "proactive")
 		}
 		if quotedAlias {
 			triggers = append(triggers, "quoted_alias")

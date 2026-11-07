@@ -12,9 +12,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/service/settings"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/service/settings"
 )
 
 type integrationStubBackend struct {

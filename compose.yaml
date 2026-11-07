@@ -1,0 +1,19 @@
+services:
+  frostagent:
+    build: .
+    image: frostagent:local
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    # First startup only; an existing SQL control token always takes precedence.
+    environment:
+      FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN: ${FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN:-}
+    # Publish management only on the Docker host's loopback interface.
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:11023:11023"
+    volumes:
+      - frostagent-data:/app/data
+
+volumes:
+  frostagent-data:

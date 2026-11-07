@@ -1,17 +1,27 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,10 +30,15 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 AstrBot WebSocket 客户端连接与消息收发。
 type Adapter struct {
-	engine  *llm.Engine
-	stealer *sticker.Stealer
-	mu      sync.RWMutex
-	conns   map[*wsConn]struct{}
+	engine             *llm.Engine
+	stealer            *sticker.Stealer
+	mu                 sync.RWMutex
+	conns              map[*wsConn]struct{}
+	incomingDispatcher core.IncomingDispatcher
+	connectionConfig   wsclient.Config
+	clientCancel       context.CancelFunc
+	clientRunning      bool
+	stopped            bool
 }
 
 const astrBotQQPlatform = "aiocqhttp"
@@ -38,6 +53,11 @@ func NewAdapter(engine *llm.Engine) *Adapter {
 
 func (a *Adapter) SetStealer(s *sticker.Stealer) {
 	a.stealer = s
+}
+
+// SetIncomingDispatcher configures dispatch before the adapter starts serving.
+func (a *Adapter) SetIncomingDispatcher(dispatcher core.IncomingDispatcher) {
+	a.incomingDispatcher = dispatcher
 }
 
 func (a *Adapter) observeStickers(event Event) {
@@ -100,6 +120,64 @@ func loadStickerAttachment(ctx context.Context, att core.Attachment) ([]byte, er
 	return sticker.LoadImageSource(ctx, att.URL)
 }
 
+// loadObservedImageFromEvent resolves any image attachment that the adapter
+// received for the selected message. Only the current event message and quoted
+// IDs that passed the adapter's same-session quote validation are authorized;
+// the model only chooses an opaque message ID and image index.
+func loadObservedImageFromEvent(ctx context.Context, event Event, trustedMessageIDs map[string]struct{}, messageID string, imageIndex int) ([]byte, error) {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" || imageIndex < 0 {
+		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+	if _, authorized := trustedMessageIDs[messageID]; !authorized {
+		return nil, fmt.Errorf("message %s is not authorized for image inspection", messageID)
+	}
+
+	// The plugin deduplicates identical attachment bytes and carries the
+	// original image-segment ordinals in image_indices. Prefer those explicit
+	// ordinals so repeated identical images keep their model-visible positions.
+	indexed := false
+	for _, att := range event.Attachments {
+		if attachmentMessageID(event, att) == messageID && att.Type == core.AttachmentTypeImage && len(att.ImageIndices) > 0 {
+			indexed = true
+			break
+		}
+	}
+	if indexed {
+		for _, att := range event.Attachments {
+			if attachmentMessageID(event, att) != messageID || att.Type != core.AttachmentTypeImage {
+				continue
+			}
+			for _, index := range att.ImageIndices {
+				if index == imageIndex {
+					return loadStickerAttachment(ctx, att)
+				}
+			}
+		}
+		return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+	}
+
+	// Compatibility path for plugin versions that do not send image_indices.
+	matchedIndex := 0
+	for _, att := range event.Attachments {
+		if attachmentMessageID(event, att) != messageID || att.Type != core.AttachmentTypeImage {
+			continue
+		}
+		if matchedIndex == imageIndex {
+			return loadStickerAttachment(ctx, att)
+		}
+		matchedIndex++
+	}
+	return nil, fmt.Errorf("image index %d is unavailable for message %s", imageIndex, messageID)
+}
+
+func attachmentMessageID(event Event, att core.Attachment) string {
+	if id := strings.TrimSpace(att.MessageID); id != "" {
+		return id
+	}
+	return event.MessageID
+}
+
 // ID 返回平台唯一标识 "astrbot"
 func (a *Adapter) ID() string {
 	return "astrbot"
@@ -108,6 +186,10 @@ func (a *Adapter) ID() string {
 func (a *Adapter) registerConn(c *wsConn) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.stopped {
+		_ = c.Close()
+		return
+	}
 	a.conns[c] = struct{}{}
 }
 
@@ -138,14 +220,43 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 		userID = msg.TargetID
 	}
 
+	var actionMessages []ActionMessage
+	if msg.Content != "" {
+		actionMessages = append(actionMessages, ActionMessage{
+			Type: "plain",
+			Text: msg.Content,
+		})
+	}
+	for _, att := range msg.Attachments {
+		switch att.Type {
+		case core.AttachmentTypeImage:
+			if err := validateOutboundMediaURL(att.URL); err != nil {
+				return fmt.Errorf("astrbot: %w", err)
+			}
+			actionMessages = append(actionMessages, ActionMessage{
+				Type:      "image",
+				URL:       att.URL,
+				IsSticker: att.SubType == 1,
+				SubType:   att.SubType,
+			})
+		default:
+			return fmt.Errorf("astrbot: attachment type %q is unsupported for outbound delivery", att.Type)
+		}
+	}
+	if len(actionMessages) == 0 {
+		return fmt.Errorf("astrbot: cannot send empty message (no content and no valid attachments)")
+	}
+
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
+		Platform:       msg.Platform,
 		TargetID:       msg.TargetID,
 		MessageType:    msg.MessageType,
 		GroupID:        groupID,
 		UserID:         userID,
 		Content:        msg.Content,
+		Messages:       actionMessages,
 		Attachments:    msg.Attachments,
 		IsIntermediate: false,
 		Echo:           fmt.Sprintf("astrbot_send_%s", msg.TargetID),
@@ -159,7 +270,9 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	var errs []error
 	for _, c := range conns {
 		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -186,6 +299,7 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 		SenderCard:  event.SenderCard,
 		Content:     event.Content,
 		Platform:    platform,
+		AdapterID:   "astrbot",
 		MessageType: event.MessageType,
 		GroupID:     event.GroupID,
 		GroupName:   event.GroupName,
@@ -199,103 +313,462 @@ func ToIncomingMessage(event Event) core.IncomingMessage {
 // Handler 返回用于注册到 HTTP mux 的 WebSocket Handler。
 func (a *Adapter) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		done, ok := a.engine.Enter()
-		if !ok {
-			http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+		mock := directchat.IsRequest(r)
+		if !mock && !wsauth.Authorize(w, r, a.connectionConfig.InboundToken) {
 			return
 		}
-		defer done()
+		if a.connectionConfig.Disabled && !mock {
+			http.Error(w, "当前适配器连接未启用", http.StatusServiceUnavailable)
+			return
+		}
+		if a.connectionConfig.Mode == wsclient.Forward && !mock {
+			http.Error(w, "当前适配器使用正向 WebSocket（FA 作为客户端）", http.StatusConflict)
+			return
+		}
+		if a.engine != nil {
+			done, ok := a.engine.Enter()
+			if !ok {
+				http.Error(w, "实例未启用", http.StatusServiceUnavailable)
+				return
+			}
+			defer done()
+		}
 		localUpgrader := upgrader
-		if a.engine.Scope != nil {
+		if mock {
+			localUpgrader.Subprotocols = []string{directchat.Subprotocol}
+		}
+		if a.engine != nil && a.engine.Scope != nil {
 			localUpgrader.CheckOrigin = a.engine.CheckOrigin
 		}
 
 		conn, err := localUpgrader.Upgrade(w, r, nil)
 		if err != nil {
-			a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
+			if a.engine != nil {
+				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 升级失败: %v", err))
+			}
 			return
 		}
-		c := newWSConn(conn)
+		a.serveConnection(r.Context(), conn, mock, r.RemoteAddr)
+	}
+}
+
+func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, mock bool, peer string) {
+	var c *wsConn
+	if a.engine != nil {
+		c = newWSConn(conn, a.engine.Scope)
 		c.Scope = a.engine.Scope
-		a.registerConn(c)
-		if a.engine.Context().Err() != nil {
-			c.Close()
+	} else {
+		c = newWSConn(conn)
+	}
+	c.mock = mock
+	stopCancellation := context.AfterFunc(ctx, func() { _ = c.Close() })
+	defer stopCancellation()
+	a.registerConn(c)
+	if a.engine != nil && a.engine.Context().Err() != nil {
+		c.Close()
+	}
+	defer func() {
+		a.unregisterConn(c)
+		c.Close()
+		c.inFlight.Wait()
+		if c.mock && a.engine != nil {
+			if a.engine.SessionManager != nil {
+				c.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						a.engine.SessionManager.Delete(sessionID)
+					}
+					return true
+				})
+			}
+			if a.engine.SandboxBackend != nil {
+				c.mockSessions.Range(func(key, _ any) bool {
+					if sessionID, ok := key.(string); ok {
+						if err := a.engine.SandboxBackend.Release(context.Background(), sessionID); err != nil && !errors.Is(err, sandbox.ErrSandboxDisabled) {
+							a.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("释放 mock sandbox session %s 失败: %v", sessionID, err))
+						}
+					}
+					return true
+				})
+			}
 		}
-		defer func() {
-			a.unregisterConn(c)
-			c.Close()
-		}()
+	}()
 
-		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", r.RemoteAddr))
+	if a.engine != nil {
+		a.engine.Log().Info(logs.WEBSOCKET, fmt.Sprintf("AstrBot WebSocket 连接已建立: %s", peer))
+	}
 
-		for {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
-				break
+	reader := heartbeat.Start(c.Context(), conn, c.Close)
+	defer reader.Close()
+	for {
+		_, message, err := reader.ReadMessage()
+		if err != nil {
+			if a.engine != nil {
+				if a.connectionConfig.Mode == wsclient.Forward && !mock {
+					a.engine.Log().Warn(logs.WEBSOCKET, "AstrBot 正向 WebSocket 连接已断开")
+				} else {
+					a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 读取消息失败: %v", err))
+				}
 			}
+			break
+		}
 
-			var event Event
-			if err := json.Unmarshal(message, &event); err != nil {
+		var event Event
+		if err := json.Unmarshal(message, &event); err != nil {
+			if a.engine != nil {
 				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 消息解析失败: %v", err))
-				continue
 			}
+			continue
+		}
 
-			if event.Type == "heartbeat" || event.EventType == "heartbeat" {
+		if event.Type == "heartbeat" || event.EventType == "heartbeat" {
+			continue
+		}
+		if event.Type == "delivery_result" {
+			var receipt deliveryReceipt
+			if json.Unmarshal(message, &receipt) == nil {
+				c.acceptDeliveryReceipt(receipt)
+			}
+			continue
+		}
+		if event.Type == "quote_lookup_result" {
+			var response quoteLookupResponse
+			if json.Unmarshal(message, &response) == nil {
+				c.acceptQuoteLookup(response)
+			}
+			continue
+		}
+
+		if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
+			normalized, accepted := a.normalizePoke(event, c.mock)
+			if !accepted {
+				_ = sendTerminalNoopWithSuppress(event, c)
 				continue
 			}
-			if a.engine != nil && a.engine.Security != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				platform := event.Platform
-				if platform == "" {
-					platform = "astrbot"
+			event = normalized
+		}
+		if handleRuntimeStatusCommand(c, event, a.engine) {
+			continue
+		}
+		if !c.mock && (event.Type == "" || event.Type == "event") &&
+			(event.EventType == "" || event.EventType == "message") &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			a.engine.RecordIncomingMessage()
+		}
+		sanitizeIngressMetadata(&event)
+		var warningNotice string
+		var botLoopObservation *llm.BotLoopObservation
+		var botLoopConfig botloop.Config
+		var botLoopMarked bool
+		var scope *runtimescope.Scope
+		if a.engine != nil {
+			scope = a.engine.Scope
+		}
+		pristineShouldReply := false
+		pristineInject := false
+		if event.MessageType == "group" || event.MessageType == "private" {
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]any)
+			}
+			pristineShouldReply = shouldReply(&event, scope)
+			injectionEvent := event
+			injectionEvent.IsWake = false
+			pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
+			event.Metadata["_frostagent_should_reply"] = pristineShouldReply
+			if a.engine != nil && a.engine.SessionManager != nil &&
+				(event.Type == "" || event.Type == "event") &&
+				(event.EventType == "" || event.EventType == "message") {
+				botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
+				if botLoopConfig.Enabled() {
+					platform := event.Platform
+					if platform == "" {
+						platform = "astrbot"
+					}
+					botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
+					botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
+						event.UserID, botLoopMarked, botLoopConfig.Revision(), isBotLoopResetWake(event, scope),
+					)
 				}
-				principal, principalErr := security.NewPrincipal(platform, event.UserID)
-				if principalErr != nil {
-					continue
+			}
+			if !c.mock && handleAdminCommand(c, event, a.engine) {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
+				continue
+			}
+		}
+
+		canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
+			(event.Type == "" || event.Type == "event") &&
+			(event.EventType == "" || event.EventType == "message") &&
+			(event.MessageType == "group" || event.MessageType == "private")
+		if a.engine != nil && a.engine.Security != nil && (pristineShouldReply || canDispatch) {
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
+			}
+			if c.mock {
+				platform = "mock"
+			}
+			principal, principalErr := security.NewPrincipal(platform, event.UserID)
+			if principalErr != nil {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
+				if isProactiveReply(&event) || event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
 				}
-				decision := a.engine.Security.GateIngress(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: sessionKey(event)})
-				if security.Blocks(decision.Action) {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s", event.UserID, decision.Action, decision.Reason))
-					if shouldReply(event, a.engine.Scope) {
-						msg := a.engine.Security.RejectMessage(principal, decision)
-						_ = sendDirectReply(event, c, msg)
+				continue
+			}
+			var decision security.WatchdogDecision
+			if c.mock {
+				decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+			} else {
+				decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+			}
+			if security.Blocks(decision.Action) {
+				directReply := isExplicitWake(&event, scope)
+				if directReply {
+					if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+						_ = sendTerminalNoopWithSuppress(event, c)
+						continue
+					}
+				} else {
+					botLoopObservation.Finish(false, botLoopConfig.Limit())
+				}
+				if decision.IsFailure {
+					if a.engine != nil && a.engine.Scope != nil {
+						a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+					} else {
+						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+					}
+				} else {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+					if event.MessageType == "group" && decision.SanitizedContent != "" {
+						captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+					}
+				}
+				if directReply {
+					msg := a.engine.Security.RejectMessage(principal, decision)
+					_ = sendDirectReply(event, c, msg)
+				} else if isProactiveReply(&event) || event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
+				continue
+			} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+				event.Content = decision.SanitizedContent
+				if len(event.Messages) > 0 {
+					event.Messages = []string{decision.SanitizedContent}
+				}
+			} else if decision.Action == security.WatchdogWarn {
+				warningNotice = decision.WarningNotice
+			}
+		}
+
+		var routeSnapshot *modelrouter.Snapshot
+		if a.engine != nil && a.engine.ModelRouter != nil &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			routeSnapshot = a.engine.ModelRouter.Snapshot()
+		}
+		botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
+			(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
+		var botLoopExceeded bool
+		if event.pokeID != "" {
+			var admitted bool
+			botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
+				botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
+					return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
+				},
+			)
+			if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
+				if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
+					a.engine.PauseOnStorageError(routeSnapshot.LoadError())
+				}
+				_ = sendTerminalNoopWithSuppress(event, c)
+				continue
+			}
+		} else {
+			botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+		}
+		if botLoopExceeded && !botLoopConfig.Hard() {
+			event.botLoopSoft = true
+		}
+
+		if canDispatch && !c.isClosed() {
+			incoming := ToIncomingMessage(event)
+			incoming.SessionID = sessionKey(event)
+			if err := a.incomingDispatcher.DispatchIncoming(c.Context(), incoming); err != nil {
+				if a.engine != nil {
+					a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
+				}
+			}
+		}
+
+		if botLoopExceeded && botLoopConfig.Hard() {
+			_ = sendTerminalNoopWithSuppress(event, c)
+			continue
+		}
+
+		if routeSnapshot != nil {
+			if err := routeSnapshot.LoadError(); err != nil {
+				a.engine.PauseOnStorageError(err)
+				if event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
+				continue
+			}
+			if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
+				if isProactiveReply(&event) || event.pokeID != "" {
+					_ = sendTerminalNoopWithSuppress(event, c)
+				}
+				continue
+			}
+		}
+
+		if c.isClosed() {
+			continue
+		}
+		c.rememberReplyTarget(event)
+		var turn *llm.SessionTurn
+		if a.engine != nil && a.engine.SessionManager != nil &&
+			(event.MessageType == "group" || event.MessageType == "private") {
+			if shouldReply(&event, a.engine.Scope) {
+				lane := "sender:" + event.Platform + ":" + event.UserID
+				proactiveTurn := isProactiveReply(&event)
+				if proactiveTurn {
+					lane = "proactive:" + event.Platform
+				}
+				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
+			}
+		}
+
+		if event.MessageType == "group" && !c.mock {
+			if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
+				gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
+				if err == nil && gStore != nil {
+					role := memory.GroupRoleUnknown
+					if r, ok := event.Metadata["role"].(string); ok {
+						role = memory.NormalizeGroupRole(r)
+					}
+					_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+					if err == nil && event.GroupName != "" {
+						err = gStore.UpdateGroupName(event.GroupName)
+					}
+					if err == nil {
+						routeScope := astrBotRouteScope(event)
+						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+					}
+				}
+				if err != nil {
+					a.engine.PauseOnStorageError(err)
+					if turn != nil {
+						turn.Done()
 					}
 					continue
 				}
 			}
-
-			var routeSnapshot *modelrouter.Snapshot
-			if a.engine != nil && a.engine.ModelRouter != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				routeSnapshot = a.engine.ModelRouter.Snapshot()
-				if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
-					continue
+			if isExplicitlyWoken(event, scope) {
+				guard := stageGroupCompactMessage(event, a.engine)
+				if turn != nil {
+					turn.AttachStagedGuard(guard)
 				}
-			}
-
-			if event.MessageType == "group" {
+			} else {
 				captureGroupCompactMessage(event, a.engine)
 			}
+		}
 
+		if !c.mock {
 			a.observeStickers(event)
-
-			var turn *llm.SessionTurn
-			if a.engine != nil && a.engine.SessionManager != nil &&
-				(event.MessageType == "group" || event.MessageType == "private") {
-				turn = a.engine.SessionManager.GetOrCreate(sessionKey(event)).ReserveTurn()
-			}
-			if !a.engine.Go(func() { processEvent(c, event, a.engine, turn, routeSnapshot) }) && turn != nil {
+		}
+		c.inFlight.Add(1)
+		if !a.engine.Go(func() {
+			defer c.inFlight.Done()
+			processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice)
+		}) {
+			c.inFlight.Done()
+			if turn != nil {
 				turn.Done()
+			}
+			if isProactiveReply(&event) || event.pokeID != "" {
+				_ = sendTerminalNoopWithSuppress(event, c)
 			}
 		}
 	}
 }
 
 func (a *Adapter) CloseConnections() {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.stopped = true
+	if a.clientCancel != nil {
+		a.clientCancel()
+	}
 	for c := range a.conns {
 		c.Close()
+	}
+}
+
+func validateOutboundMediaURL(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return errors.New("attachment requires a valid 'url': local 'path' without url is unsupported")
+	}
+
+	lower := strings.ToLower(rawURL)
+	if strings.HasPrefix(lower, "file:") || strings.HasPrefix(lower, "file/") {
+		return fmt.Errorf("insecure media url %q: file:// scheme is forbidden", rawURL)
+	}
+	if len(rawURL) >= 2 && rawURL[1] == ':' && ((rawURL[0] >= 'a' && rawURL[0] <= 'z') || (rawURL[0] >= 'A' && rawURL[0] <= 'Z')) {
+		return fmt.Errorf("insecure media url %q: local drive path is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, `\\`) || strings.HasPrefix(rawURL, "//") {
+		return fmt.Errorf("insecure media url %q: UNC or network path without scheme is forbidden", rawURL)
+	}
+	if strings.HasPrefix(rawURL, "/") || strings.HasPrefix(rawURL, ".") {
+		return fmt.Errorf("insecure media url %q: local path without scheme is forbidden", rawURL)
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid media url %q: %w", rawURL, err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+	switch scheme {
+	case "http", "https":
+		if parsed.Host == "" {
+			return fmt.Errorf("insecure media url %q: missing host", rawURL)
+		}
+		return nil
+	case "base64":
+		return nil
+	default:
+		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
+	}
+}
+
+func isExplicitlyWoken(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	return isExplicitWake(&event, scopes...)
+}
+
+// A generic plugin wake (for example, quoting the Bot) may trigger dialogue,
+// but only at/name/alias/poke wakes restore Bot budgets.
+func isBotLoopResetWake(event Event, scopes ...*runtimescope.Scope) bool {
+	event.IsWake = event.pokeID != ""
+	return isExplicitlyWoken(event, scopes...)
+}
+
+// sanitizeIngressMetadata strips reserved internal routing metadata keys from untrusted inbound payloads.
+func sanitizeIngressMetadata(event *Event) {
+	if event == nil || event.Metadata == nil {
+		return
+	}
+	for k := range event.Metadata {
+		if strings.HasPrefix(k, "_frostagent_") {
+			delete(event.Metadata, k)
+		}
 	}
 }

@@ -47,7 +47,6 @@ export function mountLogsPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">日志查询</h1>
-          <p class="page-description">查看运行时日志、请求体/响应体详情与实时日志流</p>
         </div>
         <div class="flex items-center gap-2">
           <button class="btn btn-outline btn-icon-sm" id="logs-refresh-btn" title="刷新">
@@ -393,6 +392,13 @@ export function mountLogsPage(container: HTMLElement): () => void {
           )}</span>
           <span class="font-mono text-muted text-xs">${escapeHtml(formatDateTime(selectedEntry.timestamp))}</span>
           <span class="badge badge-outline text-[11px] px-1.5 py-0">${escapeHtml(selectedEntry.source || '-')}</span>
+          ${
+            selectedEntry.traceId
+              ? `<span class="badge badge-outline text-[11px] px-1.5 py-0 font-mono text-muted" title="Trace ID">Trace: ${escapeHtml(
+                  selectedEntry.traceId,
+                )}</span>`
+              : ''
+          }
         </div>
 
         <div>
@@ -437,10 +443,11 @@ export function mountLogsPage(container: HTMLElement): () => void {
   function openSummaryDialog(entry: LogEntry) {
     const hasPrompt = isPromptEntry(entry);
     const promptPayload = entry.requestBody || '';
+    const traceInfo = entry.traceId ? ` · Trace: ${entry.traceId}` : '';
 
     openDialog({
       title: `日志摘要 - ${entry.source || '日志'}`,
-      description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}`,
+      description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}${traceInfo}`,
       maxWidth: '38rem',
       bodyHtml: `
         <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${renderLoggedImagesInText(entry.summary || '无摘要内容')}</div>
@@ -564,6 +571,13 @@ export function mountLogsPage(container: HTMLElement): () => void {
               formatLogLevel(e.level),
             )}</span>
             <span class="font-medium text-foreground">${escapeHtml(e.source)}</span>
+            ${
+              e.traceId
+                ? `<span class="badge badge-outline text-[10px] px-1.5 py-0 font-mono text-muted">Trace: ${escapeHtml(
+                    e.traceId,
+                  )}</span>`
+                : ''
+            }
           </div>
           <div class="font-mono whitespace-pre-wrap select-text mt-0.5 text-foreground leading-relaxed">${escapeHtml(
             e.summary,

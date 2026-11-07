@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 // ToolTarget identifies a remote tool by its server ID and remote name.

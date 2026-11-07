@@ -1,7 +1,7 @@
 package settings
 
 import (
-	"FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"os"
 	"path/filepath"
 	"testing"

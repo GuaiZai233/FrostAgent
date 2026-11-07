@@ -16,9 +16,9 @@ import {
   parseHeadersText,
   formatHeadersMap,
 } from './mcp-config';
+import { MCP_PRESETS, createMCPPresetDraft, type MCPPresetId } from './mcp-presets';
 
-export function mountMCPPage(container: HTMLElement): () => void {
-  const api = createInstanceAPI();
+export function mountMCPPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   let isUnmounted = false;
   let loading = false;
   let servers: MCPServerInfo[] = [];
@@ -29,7 +29,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">MCP 服务器</h1>
-          <p class="page-description">连接外部 MCP Server，为 Agent 动态扩展工具能力</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <button class="btn btn-outline" id="mcp-refresh-btn" title="刷新服务器列表">
@@ -532,8 +531,7 @@ export function mountMCPPage(container: HTMLElement): () => void {
                           <thead>
                             <tr>
                               <th style="width: 5rem;">状态</th>
-                              <th style="width: 14rem;">工具名称</th>
-                              <th>描述</th>
+                              <th>工具名称</th>
                               <th style="width: 8.5rem; text-align: right;">操作</th>
                             </tr>
                           </thead>
@@ -572,20 +570,17 @@ export function mountMCPPage(container: HTMLElement): () => void {
                                     </div>
                                   </div>
                                 </td>
-                                <td class="text-muted-foreground leading-relaxed">
-                                  ${escapeHtml(tool.description || '无描述')}
-                                </td>
                                 <td style="text-align: right;">
                                   <button
                                     class="btn btn-outline btn-sm"
-                                    data-action="view-schema"
+                                    data-action="view-details"
                                     data-server-id="${escapeHtml(srv.id)}"
                                     data-tool-name="${escapeHtml(tool.name)}"
-                                    title="查看参数规范 (JSON Schema)"
+                                    title="查看工具详情"
                                     style="height: 1.625rem; padding: 0 0.5rem; font-size: 0.75rem;"
                                   >
                                     ${icon('file_code', 'size-3')}
-                                    <span>Schema</span>
+                                    <span>详情</span>
                                   </button>
                                 </td>
                               </tr>
@@ -765,8 +760,8 @@ export function mountMCPPage(container: HTMLElement): () => void {
       });
     });
 
-    // View tool schema
-    serversContainer.querySelectorAll('[data-action="view-schema"]').forEach((btn) => {
+    // View tool details
+    serversContainer.querySelectorAll('[data-action="view-details"]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const target = e.currentTarget as HTMLElement;
         const serverId = target.dataset.serverId;
@@ -776,13 +771,13 @@ export function mountMCPPage(container: HTMLElement): () => void {
         const srv = servers.find((s) => s.id === serverId);
         const tool = srv?.tools.find((t) => t.name === toolName);
         if (tool) {
-          openToolSchemaDialog(tool, serverId);
+          openToolDetailsDialog(tool, serverId);
         }
       });
     });
   }
 
-  function openToolSchemaDialog(tool: MCPToolInfo, serverId: string): void {
+  function openToolDetailsDialog(tool: MCPToolInfo, serverId: string): void {
     let prettyJSON = '{}';
     try {
       if (tool.parametersJson) {
@@ -794,14 +789,14 @@ export function mountMCPPage(container: HTMLElement): () => void {
     }
 
     openDialog({
-      title: `工具参数: ${tool.name}`,
+      title: `工具详情: ${tool.name}`,
       description: `完整名称: ${tool.fullName} (由 ${serverId} 提供)`,
       maxWidth: '38rem',
       bodyHtml: `
         <div class="flex flex-col gap-3">
           <div>
             <label class="text-xs font-semibold text-foreground mb-1 block">功能描述</label>
-            <p class="text-xs text-muted leading-relaxed">${escapeHtml(tool.description || '无描述')}</p>
+            <div class="mcp-tool-description rounded-md border border-border bg-muted/50 p-3 text-xs text-muted leading-relaxed whitespace-pre-wrap break-words" style="max-height: 15rem; overflow: auto; overscroll-behavior: contain;" tabindex="0" role="region" aria-label="工具功能描述">${escapeHtml(tool.description || '无描述')}</div>
           </div>
           <div>
             <div class="flex items-center justify-between mb-1">
@@ -842,13 +837,36 @@ export function mountMCPPage(container: HTMLElement): () => void {
     openDialog({
       title: isEdit ? `编辑 MCP 服务器: ${existing?.name}` : '添加 MCP 服务器',
       description: isEdit
-        ? '修改传输方式或命令参数，支持可视化表单与 JSON 实时双向识别'
-        : '配置外部 MCP Server，支持可视化表单与 JSON 实时双向识别',
+        ? '修改传输方式或命令参数'
+        : '配置外部 MCP Server',
       maxWidth: '42rem',
       bodyHtml: `
         <div class="flex flex-col gap-3 text-xs">
-          <!-- Top Tabs & Bidirectional Sync Indicator -->
-          <div class="flex items-center justify-between gap-2 pb-2 border-b border-border flex-wrap">
+          ${!isEdit ? `
+            <section class="flex flex-col gap-2.5 rounded-md border border-border p-3" aria-label="常用 MCP 预设">
+              <div class="font-semibold text-foreground">常用 MCP 预设</div>
+              <div class="flex gap-2 flex-wrap">
+                ${MCP_PRESETS.map((preset) => `
+                  <button type="button" class="btn btn-outline btn-sm" data-mcp-preset="${preset.id}" aria-pressed="false">
+                    ${preset.name}
+                  </button>
+                `).join('')}
+              </div>
+              <div id="mcp-preset-fields" hidden>
+                <div class="flex flex-col gap-2">
+                  <p id="mcp-preset-description" class="text-muted break-all"></p>
+                  <label for="mcp-preset-token" class="font-semibold text-foreground">Bearer Token *</label>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <input type="password" id="mcp-preset-token" class="input flex-1 min-w-0 font-mono" autocomplete="off" spellcheck="false" placeholder="粘贴自己的 Token，可带 Bearer 前缀" aria-describedby="mcp-preset-description mcp-preset-hint" />
+                    <button type="button" id="mcp-preset-apply" class="btn btn-outline btn-sm">填入模板</button>
+                  </div>
+                  <p id="mcp-preset-hint" class="text-muted">填入模板会替换当前表单和 JSON，可继续编辑。点击「保存并应用」后才会保存并连接。</p>
+                </div>
+              </div>
+            </section>
+          ` : ''}
+          <!-- Top Tabs -->
+          <div class="pb-2 border-b border-border">
             <div class="tabs" id="mcp-dialog-tabs">
               <button type="button" class="tab-item active" data-tab="form">
                 ${icon('sliders_horizontal', 'size-3.5')}
@@ -858,10 +876,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
                 ${icon('file_code', 'size-3.5')}
                 <span>JSON 编辑</span>
               </button>
-            </div>
-            <div id="mcp-sync-status" class="text-[11px] flex items-center gap-1.5 text-muted">
-              <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-              <span class="text-success">表单与 JSON 实时双向识别</span>
             </div>
           </div>
 
@@ -1058,7 +1072,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
 
         const jsonTextarea = dialogEl.querySelector('#form-json') as HTMLTextAreaElement;
         const jsonAlert = dialogEl.querySelector('#mcp-json-alert') as HTMLElement;
-        const syncStatus = dialogEl.querySelector('#mcp-sync-status') as HTMLElement;
 
         let isSyncing = false;
         let activeTab: 'form' | 'json' = 'form';
@@ -1183,10 +1196,6 @@ export function mountMCPPage(container: HTMLElement): () => void {
             readFormIntoDraft();
             jsonTextarea.value = draftToJSON(currentDraft);
             jsonAlert.className = 'hidden';
-            syncStatus.innerHTML = `
-              <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-              <span class="text-success">表单与 JSON 实时双向识别</span>
-            `;
           } finally {
             isSyncing = false;
           }
@@ -1201,23 +1210,57 @@ export function mountMCPPage(container: HTMLElement): () => void {
               currentDraft = res.draft;
               renderFormFromDraft();
               jsonAlert.className = 'hidden';
-              syncStatus.innerHTML = `
-                <span class="inline-flex text-success">${icon('check', 'size-3')}</span>
-                <span class="text-success">${res.message || '已成功识别并同步至表单'}</span>
-              `;
               return true;
             } else {
               jsonAlert.className = 'text-xs p-2 rounded-md bg-destructive/10 text-destructive border border-destructive/20 block';
               jsonAlert.textContent = res.error || '未识别到有效的 MCP 配置';
-              syncStatus.innerHTML = `
-                <span class="inline-flex text-destructive">${icon('circle_alert', 'size-3')}</span>
-                <span class="text-destructive">${res.error || '配置无法识别'}</span>
-              `;
               return false;
             }
           } finally {
             isSyncing = false;
           }
+        }
+
+        if (!isEdit) {
+          const presetFields = dialogEl.querySelector('#mcp-preset-fields') as HTMLElement;
+          const presetDescription = dialogEl.querySelector('#mcp-preset-description') as HTMLElement;
+          const presetToken = dialogEl.querySelector('#mcp-preset-token') as HTMLInputElement;
+          const presetButtons = dialogEl.querySelectorAll<HTMLButtonElement>('[data-mcp-preset]');
+          let selectedPreset: MCPPresetId | undefined;
+
+          presetButtons.forEach((button) => {
+            button.addEventListener('click', () => {
+              const preset = MCP_PRESETS.find((entry) => entry.id === button.dataset.mcpPreset);
+              if (!preset) return;
+              selectedPreset = preset.id;
+              presetToken.value = '';
+              presetFields.hidden = false;
+              presetDescription.textContent = `${preset.description} ${preset.url}`;
+              presetButtons.forEach((entry) => {
+                const selected = entry === button;
+                entry.setAttribute('aria-pressed', String(selected));
+                entry.classList.toggle('btn-primary', selected);
+                entry.classList.toggle('btn-outline', !selected);
+              });
+              presetToken.focus();
+            });
+          });
+
+          dialogEl.querySelector('#mcp-preset-apply')?.addEventListener('click', () => {
+            if (!selectedPreset) return;
+            try {
+              currentDraft = createMCPPresetDraft(selectedPreset, presetToken.value, servers.map((server) => server.id));
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : '无法填入 MCP 预设');
+              presetToken.focus();
+              return;
+            }
+            renderFormFromDraft();
+            jsonTextarea.value = draftToJSON(currentDraft);
+            jsonAlert.className = 'hidden';
+            presetToken.value = '';
+            toast.success(`${currentDraft.name} 模板已填入，请检查后保存`);
+          });
         }
 
         // Initialize UI from currentDraft

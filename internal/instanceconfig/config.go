@@ -1,8 +1,10 @@
 package instanceconfig
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/joho/godotenv"
 	"os"
 	"path/filepath"
@@ -20,25 +22,99 @@ var GlobalKeys = map[string]bool{
 	"SANDBOX_ENABLED": true, "SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
 	"DEFAULT_DIALOGUE_TEMPLATE": true,
+	"SECURITY_CONTROL_MODE":     true,
 }
-var InstanceRestartKeys = map[string]bool{"MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true, "BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true}
+var InstanceRestartKeys = map[string]bool{
+	"ONEBOT_WS_ENABLED": true, "ASTRBOT_WS_ENABLED": true,
+	"ONEBOT_WS_MODE": true, "ONEBOT_WS_URL": true, "ONEBOT_WS_TOKEN": true,
+	"ASTRBOT_WS_MODE": true, "ASTRBOT_WS_URL": true, "ASTRBOT_WS_TOKEN": true,
+	"ONEBOT_WS_INBOUND_TOKEN": true, "ASTRBOT_WS_INBOUND_TOKEN": true,
+	"MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true,
+	"BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true,
+	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
+	"AGENT_MAX_ITERATIONS": true,
+}
 var ControlPlaneRestartKeys = map[string]bool{
 	"LISTEN_ADDR": true, "WS_LISTEN_ADDR": true, "HTTP_ALLOWED_ORIGINS": true,
 	"ALCYONE_BASE_URL": true, "ALCYONE_SERVICE_TOKEN": true, "ALCYONE_TIMEOUT": true,
 	"SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true, "SANDBOX_SESSION_NAMESPACE": true,
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true, "ALLOW_REMOTE_MCP_MANAGEMENT": true, "MCP_ENFORCE_LOCAL_TOKEN": true,
+	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
+}
+
+// SharedKeys can be configured at both global (control plane) and instance scopes.
+var SharedKeys = map[string]bool{
+	"SECURITY_GATEWAY_TIMEOUT":    true,
+	"SECURITY_CLASSIFIER_TIMEOUT": true,
 }
 var keyPattern = regexp.MustCompile("^[A-Za-z_][A-Za-z0-9_]*$")
 
 type Store struct {
-	mu        sync.RWMutex
-	path      string
-	values    map[string]string
-	overrides map[string]string
-	global    bool
-	raw       string
-	loadErr   error
-	accessErr error
+	mu              sync.RWMutex
+	path            string
+	values          map[string]string
+	overrides       map[string]string
+	global          bool
+	raw             string
+	loadErr         error
+	accessErr       error
+	db              *storage.DB
+	dbScope         string
+	dbID            string
+	botLoopRevision uint64
+}
+
+// OpenDatabase loads application settings exclusively from SQL. Process
+// environment is not used as an application setting source.
+func OpenDatabase(db *storage.DB, instanceID string, global bool) (*Store, error) {
+	scope := "instance"
+	if global {
+		scope = "global"
+		instanceID = ""
+	}
+	s := &Store{db: db, dbScope: scope, dbID: instanceID, global: global,
+		values: map[string]string{}, overrides: map[string]string{}}
+	rows, err := db.SQL.QueryContext(context.Background(), db.Bind(`SELECT key, value FROM settings
+		WHERE scope = ? AND instance_id = ?`), scope, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		if !allowed(key, global) {
+			return nil, fmt.Errorf("invalid database setting %q", key)
+		}
+		s.values[key] = value
+	}
+	return s, rows.Err()
+}
+
+// InitializeInstanceSettings installs the initial editable settings atomically.
+func InitializeInstanceSettings(db *storage.DB, instanceID string) error {
+	defaults, err := godotenv.Unmarshal(Template)
+	if err != nil {
+		return err
+	}
+	tx, err := db.SQL.BeginTx(context.Background(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key, value := range defaults {
+		if !allowed(key, false) {
+			continue
+		}
+		if _, err := tx.Exec(db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+			VALUES ('instance', ?, ?, ?) ON CONFLICT (scope, instance_id, key) DO NOTHING`),
+			instanceID, key, value); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func Open(path string, global bool) (*Store, error) {
@@ -89,10 +165,28 @@ func Open(path string, global bool) (*Store, error) {
 }
 func (s *Store) AccessError() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.accessErr }
 func (s *Store) Error() error       { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
+func (s *Store) IsDatabase() bool   { return s != nil && s.db != nil }
+
+// BotLoopRevision changes after each successful Bot loop setting mutation.
+func (s *Store) BotLoopRevision() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.botLoopRevision
+}
+
+func botLoopSetting(key string) bool {
+	return key == "BOT_LOOP_USER_IDS" || key == "BOT_LOOP_MAX_TURNS" || key == "BOT_LOOP_MODE"
+}
 
 func allowed(k string, global bool) bool {
 	if !keyPattern.MatchString(k) {
 		return false
+	}
+	if SharedKeys[k] {
+		return true
 	}
 	if global {
 		return GlobalKeys[k]
@@ -107,6 +201,15 @@ func (s *Store) Get(k string) string {
 	}
 	return s.values[k]
 }
+func (s *Store) HasOverride(k string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, exists := s.overrides[k]
+	return exists
+}
 func (s *Store) Snapshot() map[string]string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -120,6 +223,9 @@ func (s *Store) Snapshot() map[string]string {
 	return v
 }
 func (s *Store) Raw() (string, error) {
+	if s.db != nil {
+		return "", fmt.Errorf("raw .env settings are unavailable with SQL storage")
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.raw, s.accessErr
@@ -130,6 +236,32 @@ func (s *Store) Update(k, v string, remove bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db != nil {
+		if strings.ContainsRune(v, 0) {
+			return fmt.Errorf("setting %s contains NUL", k)
+		}
+		if remove {
+			if _, err := s.db.SQL.Exec(s.db.Bind(`DELETE FROM settings WHERE scope = ? AND instance_id = ? AND key = ?`),
+				s.dbScope, s.dbID, k); err != nil {
+				return err
+			}
+			delete(s.values, k)
+			if botLoopSetting(k) {
+				s.botLoopRevision++
+			}
+			return nil
+		}
+		if _, err := s.db.SQL.Exec(s.db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+			VALUES (?, ?, ?, ?) ON CONFLICT (scope, instance_id, key) DO UPDATE SET value = excluded.value`),
+			s.dbScope, s.dbID, k, v); err != nil {
+			return err
+		}
+		s.values[k] = v
+		if botLoopSetting(k) {
+			s.botLoopRevision++
+		}
+		return nil
+	}
 	if s.loadErr != nil {
 		return fmt.Errorf("配置文件不可解析，请通过原始 .env 编辑修复: %w", s.loadErr)
 	}
@@ -158,10 +290,70 @@ func (s *Store) Update(k, v string, remove bool) error {
 	}
 	s.values = next
 	s.raw = raw
+	if botLoopSetting(k) {
+		s.botLoopRevision++
+	}
+	return nil
+}
+
+// ReplaceDatabaseSubset atomically replaces only the selected SQL settings.
+// Other keys, including secrets, keep their current values.
+func (s *Store) ReplaceDatabaseSubset(keys map[string]bool, values map[string]string) error {
+	if s.db == nil {
+		return fmt.Errorf("SQL settings are unavailable")
+	}
+	for key := range keys {
+		if !allowed(key, s.global) {
+			return fmt.Errorf("字段 %s 不属于此配置", key)
+		}
+	}
+	for key, value := range values {
+		if !keys[key] || strings.ContainsRune(value, 0) {
+			return fmt.Errorf("invalid imported setting %s", key)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx := context.Background()
+	tx, err := s.db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for key := range keys {
+		if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM settings WHERE scope = ? AND instance_id = ? AND key = ?`),
+			s.dbScope, s.dbID, key); err != nil {
+			return err
+		}
+		if value, exists := values[key]; exists {
+			if _, err := tx.ExecContext(ctx, s.db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+				VALUES (?, ?, ?, ?)`), s.dbScope, s.dbID, key, value); err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for key := range keys {
+		delete(s.values, key)
+	}
+	for key, value := range values {
+		s.values[key] = value
+	}
+	for key := range keys {
+		if botLoopSetting(key) {
+			s.botLoopRevision++
+			break
+		}
+	}
 	return nil
 }
 
 func (s *Store) Replace(raw string) error {
+	if s.db != nil {
+		return fmt.Errorf("raw .env replacement is unavailable with SQL storage")
+	}
 	next, err := godotenv.Unmarshal(raw)
 	if err != nil {
 		return err
@@ -178,6 +370,12 @@ func (s *Store) Replace(raw string) error {
 	}
 	if err := WriteAtomic(s.path, []byte(raw), 0600); err != nil {
 		return err
+	}
+	for _, key := range []string{"BOT_LOOP_USER_IDS", "BOT_LOOP_MAX_TURNS", "BOT_LOOP_MODE"} {
+		if s.values[key] != next[key] {
+			s.botLoopRevision++
+			break
+		}
 	}
 	s.values = next
 	s.raw = raw
@@ -235,18 +433,21 @@ func WriteAtomicDurable(path string, data []byte, mode os.FileMode) (committed b
 // SyncDirectory makes a newly created child entry durable where supported.
 func SyncDirectory(path string) error { return syncDirectory(path) }
 
-const Template = `# Instance settings. Restart-required fields take effect after disabling/enabling.
-UPSTREAM_API_KEY=
+const Template = `# Default values for new SQL instances.
 BOT_NAME=霜降狐
 BOT_ALIASES=霜降,FrostAgent
 ADMIN_QQ_IDS=
 SYSTEM_PROMPT=你是一个乐于助人的助手。
 MAX_CONTEXT_MESSAGES=20
-MAX_CONTEXT_CHARS=24000
 MEMORY_REFLECTION_TIMEOUT=10m
 ENABLE_AT_IN_GROUP_MSG=true
 GROUP_REPLY_ON_MENTION=true
 ENABLE_REPLY_IN_GROUP_MSG=false
+ENABLE_QUOTE_TRACE=true
+QUOTE_TRACE_DEPTH=5
+BOT_LOOP_USER_IDS=
+BOT_LOOP_MAX_TURNS=3
+BOT_LOOP_MODE=soft
 GROUP_COMPACT_BUFFER_SIZE=20
 GROUP_COMPACT_MIN_INTERVAL=30s
 GROUP_RAW_CONTEXT_MAX_CHARS=12000
@@ -255,4 +456,9 @@ MEMORY_EXTRACT_BATCH_MAX=5
 BILLING_ENABLED=false
 BILLING_MAX_OUTPUT_TOKENS=2048
 BILLING_SAFETY_MULTIPLIER=1.2
+AGENT_MAX_ITERATIONS=35
+ACTIONSCAT_ENABLED=true
+STICKER_ACTIVITY=0
+STICKER_ACTIVITY_MODE=bot_turns
+ENABLE_STICKER_CONFIRM=false
 `

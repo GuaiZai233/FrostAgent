@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 type Tool struct {
@@ -11,6 +12,25 @@ type Tool struct {
 	parameter      any //用于大模型生成json schema
 	execute        func(args string) (string, error)
 	executeContext func(ctx context.Context, args string) (string, error)
+	executeResult  func(ctx context.Context, args string) (core.ToolExecutionResult, error)
+	enabled        func() bool
+	disabledError  error
+	// configured gates model discovery; stale calls retain executor-specific feedback.
+	configured func() bool
+	// proactiveAllowed marks tools permitted during an unaddressed proactive
+	// turn. send_message additionally requires the engine's narrow reply gate.
+	proactiveAllowed bool
+}
+
+// IsEnabled reports whether this tool is currently available to the model.
+func (t Tool) IsEnabled() bool {
+	return (t.enabled == nil || t.enabled()) && (t.configured == nil || t.configured())
+}
+
+// IsProactiveAllowed reports whether the tool is safe to call during an
+// unaddressed proactive turn. It defaults to false.
+func (t Tool) IsProactiveAllowed() bool {
+	return t.proactiveAllowed
 }
 
 func (t Tool) Name() string {
@@ -34,6 +54,13 @@ func (t Tool) Execute(args string) (string, error) {
 
 // ExecuteContext supplies request-local values to tools that need them.
 func (t Tool) ExecuteContext(ctx context.Context, args string) (string, error) {
+	if t.enabled != nil && !t.enabled() {
+		return "", t.disabledError
+	}
+	if t.executeResult != nil {
+		result, err := t.executeResult(ctx, args)
+		return result.Content, err
+	}
 	if t.executeContext != nil {
 		return t.executeContext(ctx, args)
 	}
@@ -41,4 +68,20 @@ func (t Tool) ExecuteContext(ctx context.Context, args string) (string, error) {
 		return "", fmt.Errorf("tool %s has no executor", t.name)
 	}
 	return t.execute(args)
+}
+
+// ExecuteResult returns execution metadata without changing the legacy API.
+func (t Tool) ExecuteResult(ctx context.Context, args string) (core.ToolExecutionResult, error) {
+	if t.enabled != nil && !t.enabled() {
+		return core.ToolExecutionResult{}, t.disabledError
+	}
+	if t.executeResult != nil {
+		return t.executeResult(ctx, args)
+	}
+	content, err := t.ExecuteContext(ctx, args)
+	return textResult(content), err
+}
+
+func textResult(content string) core.ToolExecutionResult {
+	return core.ToolExecutionResult{Content: content}
 }

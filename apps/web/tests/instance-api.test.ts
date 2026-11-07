@@ -1,8 +1,10 @@
 import { strict as assert } from 'node:assert';
-import { createInstanceAPI, securityAPI } from '../src/api/client';
+import { createInstanceAPI, securityAPI, actionsCatAPI } from '../src/api/client';
 import { instanceState } from '../src/instance-state';
 import { RequestGeneration } from '../src/utils/request-generation';
 import { instanceWebSocketURL } from '../src/utils/websocket-url';
+import { create } from '@bufbuild/protobuf';
+import { ModelRouterConfigurationSchema } from '@frostagent/proto';
 const events = new EventTarget();
 Object.assign(globalThis, {
   window: Object.assign(events, { location: { origin: 'http://localhost' } }),
@@ -10,13 +12,23 @@ Object.assign(globalThis, {
 });
 const calls: string[] = [];
 const logSources: string[] = [];
+const catalogDraftOwners: string[] = [];
+const catalogDraftResets: string[] = [];
+const publishPayloads: Record<string, unknown>[] = [];
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = input instanceof Request ? input.url : String(input);
-  init?.signal?.throwIfAborted();
+  (input instanceof Request ? input.signal : init?.signal)?.throwIfAborted();
   calls.push(url);
   logSources.push(
     new Headers(init?.headers).get('X-FrostAgent-Log-Source') ?? '',
   );
+  catalogDraftOwners.push(new Headers(input instanceof Request ? input.headers : init?.headers)
+    .get('X-FrostAgent-Catalog-Draft') ?? '');
+  catalogDraftResets.push(new Headers(input instanceof Request ? input.headers : init?.headers)
+    .get('X-FrostAgent-Catalog-Draft-Reset') ?? '');
+  if (url.endsWith('/Publish')) {
+    publishPayloads.push(await (input instanceof Request ? input.clone() : new Request(url, init)).json());
+  }
   return new Response(JSON.stringify({ success: true }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
@@ -25,18 +37,18 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 const a = { id: 'a1b2c3d4', name: 'a', enabled: false, created_at: '' };
 const b = { id: 'b1c2d3e4', name: 'b', enabled: false, created_at: '' };
 assert.equal(
-  instanceWebSocketURL(':1234', a.id, 'astrbot', 'http://localhost:8080'),
-  'ws://localhost:1234/instances/a1b2c3d4/ws/astrbot',
+  instanceWebSocketURL(':11023', a.id, 'astrbot', 'http://localhost:8080'),
+  'ws://localhost:11023/instances/a1b2c3d4/ws/astrbot',
   'adapter URL used the management HTTP port instead of WS_LISTEN_ADDR',
 );
 assert.equal(
   instanceWebSocketURL(
-    '0.0.0.0:1234',
+    '0.0.0.0:11023',
     a.id,
     'onebot',
     'http://dashboard.example:8080',
   ),
-  'ws://dashboard.example:1234/instances/a1b2c3d4/ws/onebot',
+  'ws://dashboard.example:11023/instances/a1b2c3d4/ws/onebot',
   'wildcard listener host was exposed instead of the dashboard host',
 );
 instanceState.select(a);
@@ -94,10 +106,36 @@ assert.equal(
   '/instances/b1c2d3e4/frostagent.v1.DialogueService/ListDialogues',
   'dialogue requests bypassed their owning instance',
 );
+await actionsCatAPI.listActions();
+assert.equal(
+  new URL(calls[6], 'http://localhost').pathname,
+  '/instances/b1c2d3e4/api/actionscat/actions',
+  'ActionsCat requests bypassed their owning instance',
+);
+instanceState.select(null);
+
+// Capture the Request signal as well as requests which start after a switch.
+const originalFetch = globalThis.fetch;
+let requestStarted!: () => void;
+const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+let pendingSignal: AbortSignal | undefined;
+globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+  pendingSignal = input instanceof Request ? input.signal : init?.signal ?? undefined;
+  pendingSignal?.addEventListener('abort', () => reject(pendingSignal?.reason), { once: true });
+  requestStarted();
+});
+const inFlightCatalog = createInstanceAPI({ globalModelCatalog: true }).getModelRouterState();
+const rejectedCatalog = assert.rejects(inFlightCatalog);
+await started;
+instanceState.select(a);
+assert.equal(pendingSignal?.aborted, true, 'switch did not abort the in-flight shared catalog Request');
+await rejectedCatalog;
+globalThis.fetch = originalFetch;
 instanceState.select(null);
 await assert.rejects(createInstanceAPI().listMCPServers(), /请先选择实例/);
 await assert.rejects(createInstanceAPI().listDialogues(), /请先选择实例/);
-assert.equal(calls.length, 6, 'zero-instance request reached the network');
+await assert.rejects(actionsCatAPI.listActions(), /请先选择实例/);
+assert.equal(calls.length, 7, 'zero-instance request reached the network');
 instanceState.logSource = 'instance';
 await assert.rejects(
   createInstanceAPI().listLogs(10, '', 0, ''),
@@ -105,19 +143,19 @@ await assert.rejects(
 );
 assert.equal(
   calls.length,
-  6,
+  7,
   'zero-instance log request silently used General',
 );
 const locked = await securityAPI.listLockedPrincipals();
 assert.deepEqual(locked, { success: true });
-assert.equal(new URL(calls[6], 'http://localhost').pathname, '/api/security/locked');
+assert.equal(new URL(calls[7], 'http://localhost').pathname, '/api/security/locked');
 await securityAPI.unlockPrincipal('test', 'user');
-assert.equal(new URL(calls[7], 'http://localhost').pathname, '/api/security/unlock');
-assert.equal(calls.length, 8, 'security requests must use the global REST API');
+assert.equal(new URL(calls[8], 'http://localhost').pathname, '/api/security/unlock');
+assert.equal(calls.length, 9, 'security requests must use the global REST API');
 instanceState.logSource = 'control-plane';
 await createInstanceAPI().listLogs(10, '', 0, '');
 assert.equal(
-  new URL(calls[8], 'http://localhost').pathname,
+  new URL(calls[9], 'http://localhost').pathname,
   '/frostagent.v1.LogService/ListLogs',
   'explicit zero-instance General log request did not use the root endpoint',
 );
@@ -145,3 +183,31 @@ assert.equal(
 console.log(
   'PASS: stale instance continuations and log responses are rejected',
 );
+
+instanceState.select(null);
+await createInstanceAPI({ globalModelCatalog: true }).getModelRouterState();
+assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/GetState');
+await assert.rejects(createInstanceAPI().getModelRouterState(), /请先选择实例/);
+instanceState.select(a);
+await createInstanceAPI().getModelRouterState();
+assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1.ModelRouterService/GetState');
+await createInstanceAPI({ globalModelCatalog: true }).publishModelRouter();
+assert.equal(new URL(calls.at(-1)!).pathname, '/frostagent.v1.ModelRouterService/Publish');
+assert.deepEqual(publishPayloads.at(-1), {});
+const expectedRoutes = create(ModelRouterConfigurationSchema, { version: 1, revision: 7n });
+await createInstanceAPI().publishModelRouter(expectedRoutes);
+assert.equal(new URL(calls.at(-1)!).pathname, '/instances/a1b2c3d4/frostagent.v1.ModelRouterService/Publish');
+assert.deepEqual(publishPayloads.at(-1), { expectedConfiguration: { version: 1, revision: '7' } });
+await createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: 'synthetic-page-b' }).getModelRouterState();
+assert.equal(catalogDraftOwners.at(-1), 'synthetic-page-b', 'shared catalog requests lost the editor owner');
+await createInstanceAPI({ globalModelCatalog: true, catalogDraftOwner: 'synthetic-page-b' }).resetSharedCatalogDraft();
+assert.equal(catalogDraftResets.at(-1), 'true', 'explicit shared draft reset lost its request marker');
+console.log('PASS: shared providers use the root API and instance routes require a selected instance');
+
+const oldCatalogPage = createInstanceAPI({ globalModelCatalog: true });
+instanceState.select(b);
+const catalogCallsBeforeSwitch = calls.length;
+await assert.rejects(oldCatalogPage.publishModelRouter());
+await assert.rejects(oldCatalogPage.setDraftEndpointSecret('synthetic-provider', 'synthetic-key'));
+assert.equal(calls.length, catalogCallsBeforeSwitch, 'stale model editor mutated the shared catalog after switching instances');
+instanceState.select(null);

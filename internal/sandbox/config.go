@@ -35,9 +35,18 @@ func LoadConfig(getenv func(string) string) Config {
 	enabled := ParseBool(getenv("SANDBOX_ENABLED"), false)
 	baseURL := strings.TrimSpace(getenv("SANDBOX_BASE_URL"))
 	if baseURL == "" {
+		baseURL = strings.TrimSpace(getenv("FA_SANDBOX_ENDPOINT"))
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(getenv("SANDBOX_ENDPOINT"))
+	}
+	if baseURL == "" {
 		baseURL = DefaultBaseURL
 	}
 	authToken := strings.TrimSpace(getenv("SANDBOX_AUTH_TOKEN"))
+	if authToken == "" {
+		authToken = strings.TrimSpace(getenv("FA_SANDBOX_AUTH_TOKEN"))
+	}
 	sessionNamespace := strings.TrimSpace(getenv("SANDBOX_SESSION_NAMESPACE"))
 	if sessionNamespace == "" {
 		sessionNamespace = DefaultSessionNamespace

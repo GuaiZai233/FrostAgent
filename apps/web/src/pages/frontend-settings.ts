@@ -38,7 +38,6 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">网页端设置</h1>
-            <p class="page-description">自定义 FrostAgent 网页端视觉风格与服务端访问凭据</p>
           </div>
         </header>
 
@@ -80,7 +79,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
         <section class="card p-4 flex flex-col gap-4 mt-1" style="max-width: 42rem;">
           <div>
             <h2 class="text-sm font-semibold text-foreground">API / 控制平面访问凭据</h2>
-            <p class="text-xs text-muted mt-0.5">当服务端启用了 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN，或通过非本地网络远程访问时，网页端将自动在请求头中携带此 Bearer Token 进行身份认证。</p>
+            <p class="text-xs text-muted mt-0.5">Docker 端口映射和远程管理需要控制令牌。Docker 首次部署请填写初始化时设置的令牌；已有部署填写服务端的管理控制令牌。</p>
           </div>
 
           <div class="flex flex-col gap-2.5">
@@ -89,7 +88,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
                 id="control-token-input"
                 type="password"
                 class="input text-xs flex-1"
-                placeholder="输入 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN (留空清除)"
+                placeholder="输入管理 Token（留空清除）"
                 value="${escapeHtml(currentToken)}"
               />
               <button id="toggle-token-visibility" class="btn btn-secondary btn-sm" type="button" title="切换可见性">
@@ -98,7 +97,7 @@ export function mountFrontendSettingsPage(container: HTMLElement): () => void {
             </div>
             <div class="flex items-center justify-between pt-1">
               <span class="text-xs text-muted">
-                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已配置 Token</span>' : '未设置 Token (本地同源访问将使用默认安全边界)'}
+                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已配置 Token</span>' : '未设置 Token；Docker 端口映射访问仍需填写凭据'}
               </span>
               <div class="flex gap-2">
                 ${currentToken ? `<button id="clear-token-btn" class="btn btn-ghost btn-sm text-destructive text-xs">清除</button>` : ''}

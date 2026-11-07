@@ -7,6 +7,9 @@ export interface DialogOptions<T = unknown> {
   bodyHtml?: string;
   footerHtml?: string;
   maxWidth?: string;
+  // Controls user dismissal; the onMount close function remains available for
+  // successful completion and page teardown.
+  canDismiss?: () => boolean;
   onMount?: (dialogEl: HTMLDialogElement, close: (result?: T | null) => void) => void;
   onClose?: (result?: T | null) => void;
 }
@@ -51,13 +54,17 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
       resolve(result);
     };
 
+    const dismiss = () => {
+      if (options.canDismiss?.() === false) return;
+      finish(null);
+    };
     dialog.querySelectorAll('.dialog-close-btn').forEach((btn) => {
-      btn.addEventListener('click', () => finish(null));
+      btn.addEventListener('click', dismiss);
     });
 
     dialog.addEventListener('cancel', (e) => {
       e.preventDefault();
-      finish(null);
+      dismiss();
     });
 
     // Close when clicking on the backdrop
@@ -70,7 +77,7 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
         rect.left <= e.clientX &&
         e.clientX <= rect.width + rect.left;
       if (!isInDialog) {
-        finish(null);
+        dismiss();
       }
     });
 

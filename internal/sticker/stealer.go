@@ -1,11 +1,11 @@
 package sticker
 
 import (
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/runtimescope"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"math/rand"
 	"sync"
 	"time"

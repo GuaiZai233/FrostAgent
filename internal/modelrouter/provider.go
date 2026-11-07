@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 )
 
 type snapshotContextKey struct{}
@@ -59,14 +59,27 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	if err != nil {
 		return nil, err
 	}
-	apiKey, err := resolveEndpointAPIKey(p.manager.secrets, Endpoint{
-		ID:           target.EndpointID,
-		DisplayName:  target.EndpointDisplayName,
-		APIKeySource: target.APIKeySource,
-		APIKeyRef:    target.APIKeyRef,
-	})
+	var apiKey string
+	if snapshot.credentials != nil {
+		credential := snapshot.credentials[target.EndpointID]
+		apiKey, err = credential.value, credential.err
+	} else {
+		apiKey, err = resolveEndpointAPIKey(p.manager.secrets, Endpoint{
+			ID:           target.EndpointID,
+			DisplayName:  target.EndpointDisplayName,
+			APIKeySource: target.APIKeySource,
+			APIKeyRef:    target.APIKeyRef,
+		})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", target.EndpointDisplayName, err)
+	}
+	if p.workload == WorkloadMemoryExtract || p.workload == WorkloadReflection {
+		var limitErr error
+		req, limitErr = limitMemoryChat(req, target.MaxInputTokens)
+		if limitErr != nil {
+			return nil, limitErr
+		}
 	}
 	req.Model = target.UpstreamModel
 	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
@@ -75,14 +88,13 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 }
 
 func (m *Manager) ListUpstreamModels(endpointID string) ([]string, error) {
-	cfg := m.Draft()
-	endpoint, err := endpointByID(cfg, endpointID)
+	return m.ListUpstreamModelsForOwner(endpointID, "")
+}
+
+func (m *Manager) ListUpstreamModelsForOwner(endpointID, owner string) ([]string, error) {
+	endpoint, _, apiKey, err := m.previewEndpointForOwner(endpointID, "", owner)
 	if err != nil {
 		return nil, err
-	}
-	apiKey, err := m.resolveDraftEndpointAPIKey(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
 	}
 	fullURL, err := url.JoinPath(endpoint.BaseURL, "models")
 	if err != nil {
@@ -130,22 +142,26 @@ func (m *Manager) ListUpstreamModels(endpointID string) ([]string, error) {
 }
 
 func (m *Manager) TestModel(modelID string) (string, time.Duration, error) {
-	cfg := m.Draft()
-	model, err := modelByID(cfg, modelID)
+	return m.TestModelForOwner(modelID, "")
+}
+
+func (m *Manager) TestModelForOwner(modelID, owner string) (string, time.Duration, error) {
+	endpoint, model, apiKey, err := m.previewEndpointForOwner("", modelID, owner)
 	if err != nil {
 		return "", 0, err
-	}
-	endpoint, err := endpointByID(cfg, model.EndpointID)
-	if err != nil {
-		return "", 0, err
-	}
-	apiKey, err := m.resolveDraftEndpointAPIKey(endpoint)
-	if err != nil {
-		return "", 0, fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
 	}
 	client := openai.NewClient(endpoint.BaseURL, apiKey)
 	client.Logger = m.Log()
 	started := time.Now()
+	for _, capability := range model.Capabilities {
+		if capability == "embedding" {
+			result, err := client.Embed(context.Background(), core.EmbeddingRequest{Model: model.UpstreamModel, Input: []string{"Embedding connectivity test"}})
+			if err != nil {
+				return "", time.Since(started), err
+			}
+			return fmt.Sprintf("Embedding 已返回 %d 维向量", len(result.Vectors[0])), time.Since(started), nil
+		}
+	}
 	response, err := client.Chat(context.Background(), core.ChatRequest{
 		Model: model.UpstreamModel,
 		Messages: []core.ChatMessage{{
@@ -164,8 +180,42 @@ func (m *Manager) TestModel(modelID string) (string, time.Duration, error) {
 	return string(body), duration, nil
 }
 
-func (m *Manager) resolveDraftEndpointAPIKey(endpoint Endpoint) (string, error) {
-	return m.secrets.ResolveDraft(endpoint)
+func (m *Manager) previewEndpointForOwner(endpointID, modelID, owner string) (Endpoint, Model, string, error) {
+	if m.db != nil {
+		m.db.ModelRouterMu.RLock()
+		defer m.db.ModelRouterMu.RUnlock()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.db != nil {
+		if err := m.loadSQL(); err != nil {
+			return Endpoint{}, Model{}, "", err
+		}
+		if m.instanceID != "" {
+			m.draft.Endpoints, m.draft.Models = m.active.Endpoints, m.active.Models
+		}
+	}
+	if err := m.checkDraftOwner(owner); err != nil {
+		return Endpoint{}, Model{}, "", err
+	}
+	var model Model
+	var err error
+	if modelID != "" {
+		model, err = modelByID(m.draft, modelID)
+		if err != nil {
+			return Endpoint{}, Model{}, "", err
+		}
+		endpointID = model.EndpointID
+	}
+	endpoint, err := endpointByID(m.draft, endpointID)
+	if err != nil {
+		return Endpoint{}, Model{}, "", err
+	}
+	apiKey, err := m.secrets.ResolveDraft(endpoint)
+	if err != nil {
+		return Endpoint{}, Model{}, "", fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
+	}
+	return endpoint, model, apiKey, nil
 }
 
 func endpointByID(cfg Configuration, id string) (Endpoint, error) {

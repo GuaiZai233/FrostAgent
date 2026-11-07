@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
 	"sort"
@@ -74,12 +75,22 @@ type accessFile struct {
 // Reads reload the atomic file so separate FrostAgent processes sharing the
 // same data directory observe lock and unlock operations immediately.
 type AccessStore struct {
-	path string
-	mu   sync.RWMutex
+	path           string
+	db             *storage.DB
+	mu             sync.RWMutex
+	beforeSaveHook func()
 }
 
-func NewAccessStore(path string) *AccessStore { return &AccessStore{path: path} }
-func (s *AccessStore) Path() string           { return s.path }
+// SetBeforeSaveHook supports deterministic concurrent restore tests.
+func (s *AccessStore) SetBeforeSaveHook(hook func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beforeSaveHook = hook
+}
+
+func NewAccessStore(path string) *AccessStore       { return &AccessStore{path: path} }
+func NewSQLAccessStore(db *storage.DB) *AccessStore { return &AccessStore{db: db} }
+func (s *AccessStore) Path() string                 { return s.path }
 
 func (s *AccessStore) IsLocked(p Principal) (bool, AccessRecord, error) {
 	s.mu.RLock()
@@ -92,18 +103,21 @@ func (s *AccessStore) IsLocked(p Principal) (bool, AccessRecord, error) {
 	return ok && record.State == AccessLocked, record, nil
 }
 
-func (s *AccessStore) LastBlockedHash(p Principal, cutoff time.Time) string {
+func (s *AccessStore) LastBlockedHash(p Principal, cutoff time.Time) (string, error) {
+	if s == nil {
+		return "", nil
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	file, err := s.load()
 	if err != nil {
-		return ""
+		return "", err
 	}
 	record, ok := file.Records[p.Key()]
 	if !ok || record.LastBlockedAt.IsZero() || record.LastBlockedAt.Before(cutoff) {
-		return ""
+		return "", nil
 	}
-	return record.LastBlockedHash
+	return record.LastBlockedHash, nil
 }
 
 func (s *AccessStore) ListLocked() ([]AccessRecord, error) {
@@ -207,6 +221,19 @@ func (s *AccessStore) RecordBlockedSubmission(
 func (s *AccessStore) update(fn func(*accessFile) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.db != nil {
+		file, err := s.load()
+		if err != nil {
+			return err
+		}
+		if err := fn(&file); err != nil {
+			return err
+		}
+		if s.beforeSaveHook != nil {
+			s.beforeSaveHook()
+		}
+		return s.save(file)
+	}
 	lock, err := acquireFileLock(s.path + ".lock")
 	if err != nil {
 		return err
@@ -224,6 +251,9 @@ func (s *AccessStore) update(fn func(*accessFile) error) error {
 }
 
 func (s *AccessStore) load() (accessFile, error) {
+	if s.db != nil {
+		return s.loadSQL()
+	}
 	file := accessFile{Version: 1, Records: make(map[string]AccessRecord)}
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
@@ -248,6 +278,9 @@ func (s *AccessStore) load() (accessFile, error) {
 }
 
 func (s *AccessStore) save(file accessFile) error {
+	if s.db != nil {
+		return s.saveSQL(file)
+	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode security access store: %w", err)

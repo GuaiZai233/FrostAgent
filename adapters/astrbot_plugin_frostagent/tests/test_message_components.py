@@ -54,6 +54,15 @@ class InboundImage:
         return base64.b64encode(self.data_bytes).decode("ascii")
 
 
+class FailingInboundImage:
+    """An image component whose conversion fails, leaving an unreadable slot."""
+
+    subType = 0
+
+    async def convert_to_base64(self) -> str:
+        raise RuntimeError("synthetic image conversion failure")
+
+
 class Reply:
     def __init__(
         self,
@@ -180,6 +189,73 @@ def load_plugin_module():
         yield module
 
 
+class PokeTests(unittest.TestCase):
+    def test_poke_notice_preserves_actor_and_target_without_fake_content(self):
+        with load_plugin_module() as module:
+            event = InboundEvent([])
+            event.platform = "aiocqhttp"
+            event.message_obj.raw_message = {
+                "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+                "self_id": 101, "target_id": 101, "user_id": 202, "group_id": 404,
+            }
+            event.message_obj.message_id = "notice-test"
+            payload = asyncio.run(module.build_frostagent_payload(event))
+            self.assertEqual(payload["event_type"], "notice")
+            self.assertEqual(payload["user_id"], "202")
+            self.assertEqual(payload["target_id"], payload["self_id"])
+            self.assertEqual(payload["group_id"], "404")
+            self.assertEqual(payload["message_type"], "group")
+            self.assertEqual(payload["content"], "")
+            self.assertEqual(payload["attachments"], [])
+            event.message_obj.raw_message.pop("group_id")
+            payload = asyncio.run(module.build_frostagent_payload(event))
+            self.assertEqual(payload["message_type"], "private")
+
+    def test_poke_forwarding_bypasses_empty_content_filter_and_finishes_noop(self):
+        async def run(module, target_id, send_succeeds=True):
+            event = InboundEvent([])
+            event.platform = "aiocqhttp"
+            event.message_obj.raw_message = {
+                "post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+                "self_id": 101, "target_id": target_id, "user_id": 202, "group_id": 404,
+            }
+            event.message_obj.message_id = "notice-test"
+            event.get_group_id = lambda: "404"
+            suppressed = []
+            event.should_call_llm = suppressed.append
+
+            test_case = self
+            class Client:
+                sent = []
+                def register_waiter(self, message_id):
+                    self.queue = asyncio.Queue()
+                    return self.queue
+                async def send_event(self, payload):
+                    test_case.assertEqual(suppressed, [True], "suppress default LLM before forwarding")
+                    self.sent.append(payload)
+                    if not send_succeeds:
+                        return False
+                    await self.queue.put({"action": "noop", "suppress_llm": False})
+                    return True
+                def unregister_waiter(self, message_id):
+                    pass
+
+            plugin = object.__new__(module.FrostAgentAdapter)
+            plugin._configuration_error = None
+            plugin.settings = types.SimpleNamespace(forward_all_group_messages=False)
+            plugin.client = Client()
+            plugin.client.sent = []
+            results = [result async for result in plugin.forward_to_frostagent(event)]
+            self.assertEqual(results, [])
+            self.assertEqual(len(plugin.client.sent), 1 if target_id == 101 else 0)
+            self.assertEqual(suppressed, [True] if target_id == 101 else [])
+
+        with load_plugin_module() as module:
+            asyncio.run(run(module, 101))
+            asyncio.run(run(module, 303))
+            asyncio.run(run(module, 101, send_succeeds=False))
+
+
 class MessageComponentTests(unittest.TestCase):
 
     def test_instance_sticker_endpoint_keeps_prefix_and_origin(self) -> None:
@@ -213,6 +289,114 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(attachments[0]["content"]), current_data)
             self.assertEqual(base64.b64decode(attachments[1]["content"]), quoted_data)
             self.assertEqual(module.extract_reply_message_id(event), "msg_quoted")
+
+    def test_repeated_identical_images_keep_all_image_indices(self) -> None:
+        first = b"same-image"
+        second = b"different-image"
+        event = InboundEvent([
+            InboundImage(first, sub_type=0),
+            InboundImage(first, sub_type=0),
+            InboundImage(second, sub_type=0),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+
+            self.assertEqual(slot_counts, {"msg_current": 3})
+            self.assertEqual(len(attachments), 2)
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), first)
+            self.assertEqual(attachments[0]["image_indices"], [0, 1])
+            self.assertEqual(base64.b64decode(attachments[1]["content"]), second)
+            self.assertEqual(attachments[1]["image_indices"], [2])
+
+    def test_image_indices_are_counted_per_message_id(self) -> None:
+        current = b"current-image"
+        quoted = b"quoted-image"
+        event = InboundEvent([
+            InboundImage(current, sub_type=0),
+            Reply("msg_quoted", [
+                InboundImage(quoted, sub_type=0),
+                InboundImage(quoted, sub_type=0),
+            ]),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+            current_attachments = [a for a in attachments if a["message_id"] == "msg_current"]
+            quoted_attachments = [a for a in attachments if a["message_id"] == "msg_quoted"]
+
+            self.assertEqual(slot_counts, {"msg_current": 1, "msg_quoted": 2})
+            self.assertEqual(current_attachments[0]["image_indices"], [0])
+            self.assertEqual(quoted_attachments[0]["image_indices"], [0, 1])
+
+    def test_failed_current_image_still_consumes_a_slot(self) -> None:
+        readable = b"readable-image"
+        event = InboundEvent([
+            FailingInboundImage(),
+            InboundImage(readable, sub_type=0),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+
+            self.assertEqual(slot_counts, {"msg_current": 2})
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["image_indices"], [1])
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), readable)
+
+    def test_failed_quoted_image_still_consumes_a_slot(self) -> None:
+        readable = b"quoted-readable-image"
+        event = InboundEvent([
+            Reply("msg_quoted", [
+                FailingInboundImage(),
+                InboundImage(readable, sub_type=0),
+            ]),
+        ])
+
+        with load_plugin_module() as module:
+            slot_counts: dict[str, int] = {}
+            attachments = asyncio.run(module.extract_attachments(event, "msg_current", slot_counts))
+
+            self.assertEqual(slot_counts, {"msg_quoted": 2})
+            self.assertEqual(len(attachments), 1)
+            self.assertEqual(attachments[0]["message_id"], "msg_quoted")
+            self.assertEqual(attachments[0]["image_indices"], [1])
+            self.assertEqual(base64.b64decode(attachments[0]["content"]), readable)
+
+    def test_payload_exports_original_image_slot_counts(self) -> None:
+        first = b"same-image"
+        second = b"different-image"
+        event = InboundEvent([
+            InboundImage(first, sub_type=0),
+            InboundImage(first, sub_type=0),
+            InboundImage(second, sub_type=0),
+        ])
+        event.message_id = "msg_current"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertEqual(payload["image_slot_counts"], {"msg_current": 3})
+            self.assertEqual(payload["attachments"][0]["image_indices"], [0, 1])
+            self.assertEqual(payload["attachments"][1]["image_indices"], [2])
+
+    def test_payload_counts_unreadable_image_slot(self) -> None:
+        readable = b"readable-image"
+        event = InboundEvent([
+            FailingInboundImage(),
+            InboundImage(readable, sub_type=0),
+        ])
+        event.message_id = "msg_current"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertEqual(payload["image_slot_counts"], {"msg_current": 2})
+            self.assertEqual(len(payload["attachments"]), 1)
+            self.assertEqual(payload["attachments"][0]["image_indices"], [1])
 
     def test_raw_image_sticker_sub_type_is_preserved_without_downloadable_source(self) -> None:
         image_data = b"custom-sticker"
@@ -359,6 +543,28 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual([type(part) for part in parts], [FakeAt, FakePlain])
             self.assertEqual(parts[0].qq, "114514")
             self.assertEqual(parts[1].text, " 一起来聊天吧")
+
+    def test_text_mention_text_chain_uses_native_at(self) -> None:
+        action = {"messages": [
+            {"type": "plain", "text": "请 "},
+            {"type": "mention_user", "mention_user_id": "10002"},
+            {"type": "plain", "text": " 看一下"},
+        ]}
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+        self.assertEqual([type(part) for part in parts], [FakePlain, FakeAt, FakePlain])
+        self.assertEqual(parts[0].text, "请 ")
+        self.assertEqual(parts[1].qq, "10002")
+        self.assertEqual(parts[2].text, " 看一下")
+
+    def test_mention_display_token_stays_literal_text(self) -> None:
+        text = "语法示例：[@10002] [CQ:at,qq=10002]"
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components({
+                "messages": [{"type": "plain", "text": text}],
+            })
+        self.assertEqual([type(part) for part in parts], [FakePlain])
+        self.assertEqual(parts[0].text, text)
 
     def test_quote_and_plain_build_ordered_chain(self) -> None:
         action = {
@@ -525,6 +731,37 @@ class MessageComponentTests(unittest.TestCase):
             self.assertIsInstance(parts[0], FakeImage)
             mocked_urlopen.assert_not_called()
 
+    def test_action_with_sub_type_image_creates_sticker_image(self) -> None:
+        action = {
+            "messages": [
+                {"type": "image", "url": "https://example.com/sticker.png", "sub_type": 1},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual(len(parts), 1)
+            self.assertIsInstance(parts[0], module.StickerImage)
+            self.assertEqual(parts[0].file, "https://example.com/sticker.png")
+
+    def test_attachments_fallback_with_sub_type_creates_sticker_image(self) -> None:
+        action = {
+            "attachments": [
+                {"type": "image", "url": "https://example.com/sticker.png", "sub_type": 1},
+                {"type": "image", "url": "https://example.com/normal.png"},
+            ]
+        }
+
+        with load_plugin_module() as module:
+            parts = module.action_to_message_components(action)
+
+            self.assertEqual(len(parts), 2)
+            self.assertIsInstance(parts[0], module.StickerImage)
+            self.assertEqual(parts[0].file, "https://example.com/sticker.png")
+            self.assertIsInstance(parts[1], FakeImage)
+            self.assertEqual(parts[1].source, "https://example.com/normal.png")
+
     def test_mention_user_action_returns_one_chain_result(self) -> None:
         action = {
             "messages": [
@@ -559,7 +796,53 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(payload["content"], "")
             self.assertTrue(payload["is_at"])
             self.assertTrue(payload["metadata"]["has_other_mention"])
+            self.assertEqual(payload["metadata"]["mentioned_user_ids"], ["other_user"])
             self.assertFalse(payload["metadata"]["has_other_content"])
+
+    def test_build_payload_preserves_multiple_mentions_in_metadata(self) -> None:
+        event = InboundEvent([
+            FakeAt(qq="bot_self"),
+            FakeAt(qq="user_a"),
+            FakeAt(qq="user_b"),
+        ])
+        event.get_self_id = lambda: "bot_self"
+        event.get_message_str = lambda: ""
+        event.get_sender_id = lambda: "user_1"
+        event.get_group_id = lambda: "group_1"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertTrue(payload["is_at"])
+            self.assertTrue(payload["metadata"]["has_other_mention"])
+            self.assertEqual(
+                payload["metadata"]["mentioned_user_ids"],
+                ["user_a", "user_b"],
+            )
+
+    def test_build_payload_extracts_mentioned_user_ids_from_raw_segments_fallback(self) -> None:
+        event = InboundEvent(
+            [],
+            raw_segments=[
+                {"type": "at", "data": {"qq": "bot_self"}},
+                {"type": "at", "data": {"qq": "raw_user_1"}},
+                {"type": "text", "data": {"text": "hello"}},
+            ],
+        )
+        event.get_self_id = lambda: "bot_self"
+        event.get_message_str = lambda: ""
+        event.get_sender_id = lambda: "user_1"
+        event.get_group_id = lambda: "group_1"
+
+        with load_plugin_module() as module:
+            payload = asyncio.run(module.build_frostagent_payload(event))
+
+            self.assertTrue(payload["is_at"])
+            self.assertTrue(payload["metadata"]["has_other_mention"])
+            self.assertEqual(
+                payload["metadata"]["mentioned_user_ids"],
+                ["raw_user_1"],
+            )
 
     def test_build_payload_preserves_non_text_content_in_metadata(self) -> None:
         class FakeFace:
@@ -593,6 +876,7 @@ class MessageComponentTests(unittest.TestCase):
             self.assertEqual(payload["content"], "")
             self.assertTrue(payload["is_at"])
             self.assertFalse(payload["metadata"]["has_other_mention"])
+            self.assertEqual(payload["metadata"]["mentioned_user_ids"], [])
             self.assertFalse(payload["metadata"]["has_other_content"])
             self.assertFalse(payload["metadata"]["has_media_content"])
             self.assertFalse(payload["metadata"]["has_images"])

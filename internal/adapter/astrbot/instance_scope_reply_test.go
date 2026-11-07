@@ -1,9 +1,9 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/runtimescope"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"path/filepath"
 	"testing"
 	"time"

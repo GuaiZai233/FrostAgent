@@ -108,9 +108,19 @@ func (d *DynamicBackend) Exec(ctx context.Context, req ExecRequest) (ExecResult,
 }
 
 // Release releases a sandbox session, resolving the backend dynamically.
+// If the sandbox is currently disabled, it performs best-effort cleanup on the
+// previously cached backend (if any) rather than failing immediately.
 func (d *DynamicBackend) Release(ctx context.Context, sessionID string) error {
 	b, err := d.resolve()
 	if err != nil {
+		if errors.Is(err, ErrSandboxDisabled) {
+			d.mu.Lock()
+			cached := d.backend
+			d.mu.Unlock()
+			if cached != nil {
+				return cached.Release(ctx, sessionID)
+			}
+		}
 		return err
 	}
 	return b.Release(ctx, sessionID)

@@ -1,63 +1,85 @@
 package instance
 
 import (
-	"FrostAgent/internal/adapter/astrbot"
-	"FrostAgent/internal/adapter/onebot"
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/sandbox/codeinterpreter"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/service/botstatus"
-	"FrostAgent/internal/service/dialogue"
-	logsvc "FrostAgent/internal/service/logs"
-	mcpsvc "FrostAgent/internal/service/mcp"
-	memsvc "FrostAgent/internal/service/memory"
-	routersvc "FrostAgent/internal/service/modelrouter"
-	"FrostAgent/internal/service/settings"
-	stickersvc "FrostAgent/internal/service/sticker"
-	"FrostAgent/internal/sticker"
-	"FrostAgent/internal/tools"
+	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox/codeinterpreter"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	actionscatsvc "github.com/GuaiZai233/FrostAgent/internal/service/actionscat"
+	"github.com/GuaiZai233/FrostAgent/internal/service/botstatus"
+	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
+	logsvc "github.com/GuaiZai233/FrostAgent/internal/service/logs"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	memsvc "github.com/GuaiZai233/FrostAgent/internal/service/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/service/messages"
+	routersvc "github.com/GuaiZai233/FrostAgent/internal/service/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/service/settings"
+	skillservice "github.com/GuaiZai233/FrostAgent/internal/service/skills"
+	stickersvc "github.com/GuaiZai233/FrostAgent/internal/service/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	pbconnect "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 )
 
-const version = "0.1.0"
-
 type Runtime struct {
-	Scope   *runtimescope.Scope
-	Engine  *llm.Engine
-	Handler http.Handler
-	Onebot  *onebot.Adapter
-	Astrbot *astrbot.Adapter
+	Scope          *runtimescope.Scope
+	Engine         *llm.Engine
+	Handler        http.Handler
+	Onebot         *onebot.Adapter
+	Astrbot        *astrbot.Adapter
+	backgroundOnce sync.Once
+	onebotClient   bool
+	astrbotClient  bool
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
 	if enabled && config.Error() != nil {
 		return nil, config.Error()
 	}
+	onebotConnection, onebotError := wsclient.Load(config.Get, "ONEBOT")
+	astrbotConnection, astrbotError := wsclient.Load(config.Get, "ASTRBOT")
+	if enabled {
+		if onebotError != nil {
+			return nil, fmt.Errorf("OneBot connection: %w", onebotError)
+		}
+		if astrbotError != nil {
+			return nil, fmt.Errorf("AstrBot connection: %w", astrbotError)
+		}
+	}
 	if err := safeTree(dir); err != nil {
 		return nil, err
 	}
 	scope := runtimescope.New(config, global, logger)
+	scope.SetInstanceID(instanceID)
 	if !enabled {
 		scope.Cancel()
 	}
@@ -68,7 +90,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			scope.Wait()
 		}
 	}()
-	routerManager := modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
+	var routerManager *modelrouter.Manager
+	if db != nil {
+		routerManager = modelrouter.NewSQL(db, instanceID, scope)
+	} else {
+		routerManager = modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
+	}
 	if err := routerManager.LoadError(); err != nil {
 		if enabled {
 			return nil, err
@@ -85,14 +112,41 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		memoryConfig.ReflectTimeout,
 	)
 	reflectionProvider := routerManager.Provider(modelrouter.WorkloadReflection, false, memoryConfig.ReflectTimeout)
+	securityTimeout := resolveSecurityGatewayTimeout(scope, security.DefaultClassifierTimeout)
+	securityProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, securityTimeout)
+	if securityController != nil {
+		if enabled {
+			securityController.SetInstanceProviderWithTimeout(instanceID, securityProvider, "model-router-security-gateway", securityTimeout)
+		} else {
+			securityController.RemoveInstanceProvider(instanceID)
+		}
+	}
 
 	// Initialize memory system
-	store := memory.NewStore(filepath.Join(dir, "brain.json"))
+	var store *memory.Store
+	var groupManager *memory.GroupManager
+	if db != nil {
+		store = memory.NewSQLStore(db, instanceID)
+		groupManager = memory.NewSQLGroupManager(db, instanceID, scope)
+	} else {
+		store = memory.NewStore(filepath.Join(dir, "brain.json"))
+		groupManager = memory.NewGroupManager(dir, scope)
+		if err := memory.MigrateLegacyGroupMemories(dir, store, groupManager, scope); err != nil {
+			return nil, fmt.Errorf("migrate legacy group memories: %w", err)
+		}
+	}
 	reader := memory.NewReader(store, 20)
 	writer := memory.NewWriter(store)
 	writer.Scope = scope
+	writer.SetGroupManager(groupManager)
 	writer.SetLLM(memoryProvider, "model-router-memory-extract")
-	groupSummaryStore, err := groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
+	var groupSummaryStore *groupsummary.Store
+	var err error
+	if db != nil {
+		groupSummaryStore, err = groupsummary.NewSQLStore(db, instanceID)
+	} else {
+		groupSummaryStore, err = groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +163,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		groupCompactMinInterval,
 	)
 	groupCompactor.Scope = scope
+	groupCompactor.SetGroupManager(groupManager)
+	groupCompactor.SetMemoryWriter(writer)
 	if groupCompactMaxBufferSize > 0 {
 		if groupCompactMaxBufferSize < groupCompactBufferSize {
 			scope.Log().Warn(
@@ -126,7 +182,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Gateway: owner + visibility filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation
-	catalog := memory.NewCatalogStore(filepath.Join(dir, "memory_catalog.json"))
+	var catalog *memory.CatalogStore
+	if db != nil {
+		catalog = memory.NewSQLCatalogStore(db, instanceID, memory.ScopePrivate, "", "")
+	} else {
+		catalog = memory.NewCatalogStore(filepath.Join(dir, "memory_catalog.json"))
+	}
 	reflector := memory.NewReflector(
 		store,
 		catalog,
@@ -144,26 +205,71 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	reflections := memory.NewReflectionManager(reflector)
 	reflections.Scope = scope
 
+	var skillStore *skills.Store
+	if db != nil {
+		skillStore = skills.NewStore(db, instanceID)
+	}
+
 	// Register tools
 	registry := make(map[string]tools.Tool)
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool
+	if securityController != nil {
+		banUserTool := tools.NewBanUserTool(securityController)
+		registry[banUserTool.Name()] = banUserTool
+	}
 
 	subAgentTool := tools.SubAgentTool(subagentProvider)
 	registry[subAgentTool.Name()] = subAgentTool
+	var dynamicSandbox *sandbox.DynamicBackend
 	if sandboxManager != nil {
-		dynamicBackend := sandbox.NewDynamicBackend(func() sandbox.Config {
+		dynamicSandbox = sandbox.NewDynamicBackend(func() sandbox.Config {
 			cfg := sandboxManager.Get()
 			cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + instanceID
 			return cfg
 		}, func(cfg sandbox.Config) sandbox.Backend {
 			return codeinterpreter.New(cfg, codeinterpreter.WithLogger(logger))
 		})
-		commandTool := tools.ExecuteCommandTool(dynamicBackend)
+		commandTool := tools.ExecuteCommandTool(dynamicSandbox)
 		registry[commandTool.Name()] = commandTool
 	}
+
+	// Initialize ActionsCat client & tools
+	actionsCatClient := actionscat.New(scope.Getenv)
+	actionsCatListTool := tools.ActionsCatListActionsTool(actionsCatClient)
+	registry[actionsCatListTool.Name()] = actionsCatListTool
+	actionsCatRunTool := tools.ActionsCatRunActionTool(actionsCatClient)
+	registry[actionsCatRunTool.Name()] = actionsCatRunTool
+	actionsCatGetRunTool := tools.ActionsCatGetRunTool(actionsCatClient)
+	registry[actionsCatGetRunTool.Name()] = actionsCatGetRunTool
+	actionsCatCreateTool := tools.ActionsCatCreateActionTool(actionsCatClient, scope)
+	registry[actionsCatCreateTool.Name()] = actionsCatCreateTool
+	actionsCatCreateVersionTool := tools.ActionsCatCreateVersionTool(actionsCatClient, scope)
+	registry[actionsCatCreateVersionTool.Name()] = actionsCatCreateVersionTool
+	actionsCatBuildVersionTool := tools.ActionsCatBuildVersionTool(actionsCatClient, scope)
+	registry[actionsCatBuildVersionTool.Name()] = actionsCatBuildVersionTool
+	actionsCatGetBuildTool := tools.ActionsCatGetBuildTool(actionsCatClient)
+	registry[actionsCatGetBuildTool.Name()] = actionsCatGetBuildTool
+	actionsCatListBuildsTool := tools.ActionsCatListBuildsTool(actionsCatClient)
+	registry[actionsCatListBuildsTool.Name()] = actionsCatListBuildsTool
+	actionsCatActivateBuildTool := tools.ActionsCatActivateBuildTool(actionsCatClient, scope)
+	registry[actionsCatActivateBuildTool.Name()] = actionsCatActivateBuildTool
+	actionsCatDeployActionTool := tools.ActionsCatDeployActionTool(actionsCatClient, scope)
+	registry[actionsCatDeployActionTool.Name()] = actionsCatDeployActionTool
+	actionsCatCreateScheduleTool := tools.ActionsCatCreateScheduleTool(actionsCatClient, scope)
+	registry[actionsCatCreateScheduleTool.Name()] = actionsCatCreateScheduleTool
+	actionsCatListSchedulesTool := tools.ActionsCatListSchedulesTool(actionsCatClient)
+	registry[actionsCatListSchedulesTool.Name()] = actionsCatListSchedulesTool
+	actionsCatDeleteScheduleTool := tools.ActionsCatDeleteScheduleTool(actionsCatClient, scope)
+	registry[actionsCatDeleteScheduleTool.Name()] = actionsCatDeleteScheduleTool
+	actionsCatCreateMatcherTool := tools.ActionsCatCreateMatcherTool(actionsCatClient, scope)
+	registry[actionsCatCreateMatcherTool.Name()] = actionsCatCreateMatcherTool
+	actionsCatListMatchersTool := tools.ActionsCatListMatchersTool(actionsCatClient)
+	registry[actionsCatListMatchersTool.Name()] = actionsCatListMatchersTool
+	actionsCatDeleteMatcherTool := tools.ActionsCatDeleteMatcherTool(actionsCatClient, scope)
+	registry[actionsCatDeleteMatcherTool.Name()] = actionsCatDeleteMatcherTool
 
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,
@@ -172,7 +278,13 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	var summarizer *sticker.Summarizer
 	var stealer *sticker.Stealer
-	stickerStore, err2 := sticker.NewStore(filepath.Join(dir, "sticker"))
+	var stickerStore *sticker.Store
+	var err2 error
+	if db != nil {
+		stickerStore, err2 = sticker.NewSQLStore(db, instanceID, filepath.Join(dir, "sticker"))
+	} else {
+		stickerStore, err2 = sticker.NewStore(filepath.Join(dir, "sticker"))
+	}
 	if err2 != nil {
 		return nil, err2
 	} else {
@@ -188,6 +300,14 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 	}
 
+	var skillBackend sandbox.Backend
+	if dynamicSandbox != nil {
+		skillBackend = dynamicSandbox
+	}
+	for _, tool := range tools.SkillTools(skillStore, skillBackend, sessionManager) {
+		registry[tool.Name()] = tool
+	}
+
 	executorMap := make(map[string]llm.ToolExecutor)
 	for name, tool := range registry {
 		executorMap[name] = tool
@@ -197,23 +317,32 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	dispatcher := core.NewDefaultDispatcher()
 
 	dialoguePath := filepath.Join(configDir, "dialogue.yml")
-	if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
-		var dialogueContent []byte
-		if templateDialogue != "" {
-			dialogueContent, _ = os.ReadFile(templateDialogue)
+	if db == nil {
+		if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
+			var dialogueContent []byte
+			if templateDialogue != "" {
+				dialogueContent, _ = os.ReadFile(templateDialogue)
+			}
+			if len(dialogueContent) == 0 {
+				dialogueContent = []byte("[]\n")
+			}
+			_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
 		}
-		if len(dialogueContent) == 0 {
-			dialogueContent = []byte("[]\n")
-		}
-		_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
 	}
-	dialoguePrompt, err := llm.LoadDialoguePrompt(dialoguePath)
+	var dialoguePrompt string
+	if db != nil {
+		dialoguePrompt, err = dialogue.LoadPromptSQL(db, instanceID)
+	} else {
+		dialoguePrompt, err = llm.LoadDialoguePrompt(dialoguePath)
+	}
 	if err != nil && !os.IsNotExist(err) {
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
+	maxIterations := positiveIntFromEnv(scope, "AGENT_MAX_ITERATIONS", llm.DefaultMaxIterations)
+	version := buildinfo.DisplayVersion()
 	engine := &llm.Engine{Scope: scope,
-		MaxIterations:  5,
+		MaxIterations:  maxIterations,
 		ToolRegistry:   executorMap,
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,
@@ -224,6 +353,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		StartedAt:      time.Now(),
 		Version:        version,
 		MCPManager:     mcpManager,
+		Skills:         skillStore,
+		SandboxBackend: dynamicSandbox,
 		Security:       securityController,
 		InstanceID:     instanceID,
 		// Billing components
@@ -235,10 +366,20 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		MemoryGateway:     gateway,
 		MemoryCatalog:     catalog,
 		MemoryReflections: reflections,
+		GroupManager:      groupManager,
 		GroupCompactor:    groupCompactor,
 		GroupSummaryStore: groupSummaryStore,
 		// Persona dialogue prompt
 		DialoguePrompt: dialoguePrompt,
+	}
+	if strings.EqualFold(scope.Getenv("ENABLE_EMBEDDING"), "true") {
+		embeddings, err := memory.NewEmbeddings(scope, store, groupManager, routerManager, reflector)
+		if err != nil {
+			return nil, err
+		}
+		engine.MemoryEmbeddings = embeddings
+		embeddings.BindWriter(writer)
+
 	}
 	compactSummary := fmt.Sprintf(
 		"✓ 群聊 running compact 已启用 (buffer: %d, min interval: %s)",
@@ -251,12 +392,35 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Register memory tool (must be after engine assignment)
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
+	// Register the context-image inspection tool after the engine so it can use
+	// the routed vision/dialogue providers and the shared security controller.
+	inspectImageTool := tools.InspectMessageImageTool(engine)
+	engine.ToolRegistry[inspectImageTool.Name()] = inspectImageTool
 	mux := http.NewServeMux()
+	if skillStore != nil {
+		mux.Handle("/api/skills", skillservice.New(skillStore, mcpGetenv))
+		mux.Handle("/api/skills/", skillservice.New(skillStore, mcpGetenv))
+	}
 	// ConnectRPC 服务注册
 	botPath, botHandler := pbconnect.NewBotStatusServiceHandler(botstatus.New(engine, version, wsListenAddr))
 	mux.Handle(botPath, botHandler)
 
-	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settings.NewScoped(config, global, sandboxManager))
+	settingsService := settings.NewScoped(config, global, sandboxManager)
+	backend := "sqlite"
+	if db != nil {
+		backend = string(db.Backend)
+	}
+	settingsService.SetEmbeddingStorage(backend, func(ctx context.Context) error {
+		if _, err := routerManager.Snapshot().Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{}); err != nil {
+			return fmt.Errorf("请先配置可用的 Embedding 模型路由: %w", err)
+		}
+		if db != nil {
+			_, err := db.EnsureEmbeddingStorage(ctx)
+			return err
+		}
+		return nil
+	})
+	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsService)
 	mux.Handle(settingsPath, settingsHandler)
 
 	routerPath, routerHandler := pbconnect.NewModelRouterServiceHandler(routersvc.New(engine.ModelRouter))
@@ -269,12 +433,17 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mcpPath, mcpHandler := pbconnect.NewMCPServiceHandler(mcpsvc.NewScoped(mcpManager, mcpGetenv))
 	mux.Handle(mcpPath, mcpHandler)
 
-	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(
-		memsvc.New(store, engine.MemoryReflections),
-	)
+	memoryService := memsvc.New(store, groupManager, engine.MemoryReflections)
+	memoryService.SetEmbeddings(engine.MemoryEmbeddings)
+	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memoryService)
 	mux.Handle(memoryPath, memoryHandler)
 
-	dialogueSvc := dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
+	var dialogueSvc *dialogue.Service
+	if db != nil {
+		dialogueSvc = dialogue.NewSQL(db, instanceID, engine, dialogue.WithLogger(logger))
+	} else {
+		dialogueSvc = dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
+	}
 	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
 		dialogueSvc,
 	)
@@ -287,15 +456,27 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		mux.HandleFunc("/api/sticker/", stickerSvc.ImageHandler())
 	}
 
+	msgSvc := messages.New(dispatcher, instanceID, scope.Getenv)
+	mux.Handle("/api/v1/messages/send", msgSvc)
+
+	actionsCatSvc := actionscatsvc.NewScoped(actionsCatClient, instanceID, mcpGetenv)
+	mux.Handle("/api/actionscat/", actionsCatSvc)
+	mux.Handle("/api/actionscat", actionsCatSvc)
+	mux.Handle("/api/v1/actionscat/", actionsCatSvc)
+	mux.Handle("/api/v1/actionscat", actionsCatSvc)
+
 	ob := onebot.NewAdapter(engine)
 	ab := astrbot.NewAdapter(engine)
+	ob.ConfigureConnection(onebotConnection)
+	ab.ConfigureConnection(astrbotConnection)
+	ob.SetIncomingDispatcher(actionsCatClient)
+	ab.SetIncomingDispatcher(actionsCatClient)
 	ob.SetStealer(stealer)
 	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)
 	dispatcher.RegisterAdapter(ab)
-	// Both built-in IM adapters stay available for every instance for now.
-	// Adapter selection is intentionally deferred; legacy ENABLE_*_ADAPTER
-	// values are ignored so they cannot disable OneBot or AstrBot.
+	// Keep both endpoints for reverse connections and browser mock sessions.
+	// Each adapter rejects real inbound connections in forward mode.
 	mux.HandleFunc("/ws/onebot", ob.Handler())
 	mux.HandleFunc("/ws/astrbot", ab.Handler())
 	if !enabled {
@@ -303,8 +484,35 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		logger.Clear()
 	}
 	success = true
-	return &Runtime{scope, engine, mux, ob, ab}, nil
+	return &Runtime{
+		Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab,
+		onebotClient:  !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
+		astrbotClient: !astrbotConnection.Disabled && astrbotConnection.Mode == wsclient.Forward,
+	}, nil
 }
+
+// StartBackground starts activation-owned workers only after the runtime is
+// published. Building disabled or rollback candidates never initiates a dial.
+func (r *Runtime) StartBackground() {
+	if r == nil || r.Scope == nil || r.Scope.Context().Err() != nil {
+		return
+	}
+	r.backgroundOnce.Do(func() {
+		r.StartEmbeddings()
+		if r.onebotClient {
+			r.Scope.Go(func() { r.Onebot.RunClient(r.Scope.Context()) })
+		}
+		if r.astrbotClient {
+			r.Scope.Go(func() { r.Astrbot.RunClient(r.Scope.Context()) })
+		}
+	})
+}
+func (r *Runtime) StartEmbeddings() {
+	if r != nil && r.Engine != nil && r.Engine.MemoryEmbeddings != nil && r.Scope.Context().Err() == nil {
+		r.Engine.MemoryEmbeddings.Start()
+	}
+}
+
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
 	r.Onebot.CloseConnections()
@@ -312,6 +520,36 @@ func (r *Runtime) Stop() {
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()
 }
+
+func resolveSecurityGatewayTimeout(scope *runtimescope.Scope, fallback time.Duration) time.Duration {
+	if fallback <= 0 {
+		fallback = security.DefaultClassifierTimeout
+	}
+	keys := []string{"SECURITY_GATEWAY_TIMEOUT", "SECURITY_CLASSIFIER_TIMEOUT"}
+	for _, key := range keys {
+		raw := ""
+		if scope != nil {
+			raw = strings.TrimSpace(scope.Getenv(key))
+		} else {
+			raw = strings.TrimSpace(os.Getenv(key))
+		}
+		if raw != "" {
+			val, err := time.ParseDuration(raw)
+			if err != nil || val <= 0 {
+				if scope != nil {
+					scope.Log().Warn(
+						logs.SYSTEM,
+						fmt.Sprintf("%s=%q 不是有效的正数时长，使用默认值 %s", key, raw, fallback),
+					)
+				}
+				return fallback
+			}
+			return val
+		}
+	}
+	return fallback
+}
+
 func durationFromEnv(scope *runtimescope.Scope, name string, fallback time.Duration) time.Duration {
 	raw := strings.TrimSpace(scope.Getenv(name))
 	if raw == "" {

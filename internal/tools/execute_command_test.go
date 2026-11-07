@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/tools"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 )
 
 type fakeSandboxBackend struct {

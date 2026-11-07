@@ -1,9 +1,12 @@
 package memory
 
 import (
-	"FrostAgent/internal/core"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"slices"
 	"sort"
@@ -12,13 +15,20 @@ import (
 	"time"
 )
 
+var (
+	// ErrConditionFailed is returned by SaveConditionally when validator returns false.
+	ErrConditionFailed = errors.New("save condition check failed")
+)
+
 // Store implements a file-based unified memory store.
 // All memories are stored in a single brain.json file.
 type Store struct {
-	path    string
-	mu      sync.RWMutex
-	routeMu sync.RWMutex
-	routes  map[string]core.RouteContext
+	refreshEditedSummaries bool
+	path                   string
+	sql                    *sqlBrainStore
+	mu                     sync.RWMutex
+	routeMu                sync.RWMutex
+	routes                 map[string]core.RouteContext
 }
 
 // NewStore creates a new file-based memory store.
@@ -27,8 +37,26 @@ func NewStore(path string) *Store {
 	return &Store{path: path}
 }
 
+// NewSQLStore creates an instance-scoped private memory store.
+func NewSQLStore(db *storage.DB, instanceID string) *Store {
+	return &Store{sql: &sqlBrainStore{db: db, instanceID: instanceID, scope: ScopePrivate}}
+}
+
+func (s *Store) ListMergeArchives() ([]MemoryMergeArchive, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	brain, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return append([]MemoryMergeArchive(nil), brain.MergeArchives...), nil
+}
+
 // load reads the brain data from disk.
 func (s *Store) load() (*BrainData, error) {
+	if s.sql != nil {
+		return s.sql.load()
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -48,6 +76,9 @@ func (s *Store) load() (*BrainData, error) {
 
 // save writes the brain data to disk.
 func (s *Store) save(brain *BrainData) error {
+	if s.sql != nil {
+		return s.sql.save(brain)
+	}
 	data, err := json.MarshalIndent(brain, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal brain: %w", err)
@@ -55,30 +86,85 @@ func (s *Store) save(brain *BrainData) error {
 	return os.WriteFile(s.path, data, 0644)
 }
 
-// Save writes a single memory entry to the store.
-func (s *Store) Save(entry MemoryEntry) error {
+// SaveEntriesConditionally evaluates validator while holding the store write lock,
+// then appends all entries and writes to disk atomically.
+// If validator returns false, the write is aborted and ErrConditionFailed is returned,
+// ensuring an atomic linearizable boundary between validation and persistence.
+func (s *Store) SaveEntriesConditionally(entries []MemoryEntry, validator func() bool) error {
+	return s.SaveEntriesConditionallyContext(context.Background(), entries, validator)
+}
+
+// SaveEntriesConditionallyContext evaluates validator and context/barrier guards while holding the
+// store write lock, then appends all entries and writes to disk atomically.
+// If validator or barrier returns false, the write is aborted and ErrConditionFailed is returned.
+func (s *Store) SaveEntriesConditionallyContext(
+	ctx context.Context,
+	entries []MemoryEntry,
+	validator func() bool,
+) error {
+	if len(entries) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if ctx != nil && ctx.Err() != nil {
+		return ErrConditionFailed
+	}
+	if validator != nil && !validator() {
+		return ErrConditionFailed
+	}
+
+	barrier := core.ExtractionBarrierFromContext(ctx)
+	if barrier != nil {
+		if !barrier.TryBeginCommit() {
+			return ErrConditionFailed
+		}
+		defer barrier.EndCommit()
+	}
+
+	now := time.Now()
+	for i := range entries {
+		entries[i].UpdatedAt = now
+		if entries[i].CreatedAt.IsZero() {
+			entries[i].CreatedAt = now
+		}
+		if entries[i].Visibility == "" {
+			entries[i].Visibility = VisibilityPrivate
+		}
+		if entries[i].OwnerType == "" {
+			entries[i].OwnerType = OwnerUser
+		}
+		entries[i].Owner = CanonicalOwner(entries[i].Owner)
+	}
+	if s.sql != nil {
+		return s.sql.appendEntries(entries)
+	}
 	brain, err := s.load()
 	if err != nil {
 		return err
 	}
-
-	entry.UpdatedAt = time.Now()
-	if entry.CreatedAt.IsZero() {
-		entry.CreatedAt = entry.UpdatedAt
-	}
-	if entry.Visibility == "" {
-		entry.Visibility = VisibilityPrivate
-	}
-	if entry.OwnerType == "" {
-		entry.OwnerType = OwnerUser
-	}
-	entry.Owner = CanonicalOwner(entry.Owner)
-
-	brain.Entries = append(brain.Entries, entry)
+	brain.Entries = append(brain.Entries, entries...)
 	return s.save(brain)
+}
+
+// SaveConditionally evaluates validator while holding the store write lock.
+// If validator returns false, the write is aborted and ErrConditionFailed is returned,
+// ensuring an atomic linearizable boundary between validation and persistence.
+func (s *Store) SaveConditionally(entry MemoryEntry, validator func() bool) error {
+	return s.SaveEntriesConditionally([]MemoryEntry{entry}, validator)
+}
+
+// Save writes a single memory entry to the store.
+func (s *Store) Save(entry MemoryEntry) error {
+	return s.SaveConditionally(entry, nil)
+}
+
+// LockWriteForTest acquires the store's write lock and returns an unlock function.
+// For deterministic race condition testing only.
+func (s *Store) LockWriteForTest() func() {
+	s.mu.Lock()
+	return s.mu.Unlock
 }
 
 // Search performs a global keyword search across all memories.
@@ -272,9 +358,15 @@ func (s *Store) applyReflectionWithMerges(
 	owner string,
 	merges []validatedMerge,
 	outdatedIDs []string,
+	snapshots ...map[string]MemoryEntry,
 ) (reflectionApplyResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	var snapshotByID map[string]MemoryEntry
+	if len(snapshots) > 0 {
+		snapshotByID = snapshots[0]
+	}
 
 	brain, err := s.load()
 	if err != nil {
@@ -360,6 +452,15 @@ func (s *Store) applyReflectionWithMerges(
 				continue
 			}
 			if outdated[entry.ID] {
+				if snapshotByID != nil {
+					snap, ok := snapshotByID[entry.ID]
+					if !ok || !sameMergeSource(entry, snap) {
+						// Concurrently modified in UI while reflection was running.
+						entry.Owner = canonicalOwner
+						remainingAll = append(remainingAll, entry)
+						continue
+					}
+				}
 				removedIDs = append(removedIDs, entry.ID)
 				appliedOutdated = append(appliedOutdated, entry.ID)
 				continue
@@ -399,6 +500,7 @@ func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 		current.Content == snapshot.Content &&
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&
+		current.SourceMedia == snapshot.SourceMedia &&
 		current.Visibility == snapshot.Visibility &&
 		current.CreatedAt.Equal(snapshot.CreatedAt) &&
 		current.UpdatedAt.Equal(snapshot.UpdatedAt) &&
@@ -416,7 +518,11 @@ func buildMergedEntry(
 	visibility := VisibilityPublic
 	accessCount := 0
 	mergedFrom := make([]string, 0, len(sources))
+	sourceMedia := ""
 	for _, source := range sources {
+		if source.SourceMedia == SourceMediaImage {
+			sourceMedia = SourceMediaImage
+		}
 		mergedFrom = append(mergedFrom, source.ID)
 		if source.Visibility != VisibilityPublic {
 			visibility = VisibilityPrivate
@@ -433,6 +539,7 @@ func buildMergedEntry(
 		Content:     merge.Content,
 		Tags:        slices.Clone(merge.Tags),
 		Source:      SourceReflect,
+		SourceMedia: sourceMedia,
 		Visibility:  visibility,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -441,7 +548,7 @@ func buildMergedEntry(
 	}
 }
 
-// UpdateEntry replaces an existing memory entry in-place, preserving its ID and CreatedAt.
+// UpdateEntry replaces editable fields while preserving identity and provenance.
 func (s *Store) UpdateEntry(updated MemoryEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -454,7 +561,23 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 	for i, entry := range brain.Entries {
 		if entry.ID == updated.ID {
 			updated.Owner = entry.Owner
+			updated.OwnerType = entry.OwnerType
+			updated.ScopeType = entry.ScopeType
+			updated.GroupID = entry.GroupID
+			updated.Summary = entry.Summary
+			updated.SummaryNeedsRefresh = entry.SummaryNeedsRefresh
+			if updated.Content != entry.Content {
+				if s.refreshEditedSummaries {
+					updated.Summary = ""
+				}
+				updated.SummaryNeedsRefresh = true
+			}
+			updated.Evidence = entry.Evidence
+			updated.SourceMedia = entry.SourceMedia
+			updated.SourceMessageID = entry.SourceMessageID
+			updated.SourceSenderID = entry.SourceSenderID
 			updated.Source = entry.Source
+			updated.Visibility = entry.Visibility
 			updated.CreatedAt = entry.CreatedAt
 			updated.AccessCount = entry.AccessCount
 			updated.MergedFrom = slices.Clone(entry.MergedFrom)
@@ -473,6 +596,9 @@ func (s *Store) IncrementAccessCount(memoryIDs ...string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.sql != nil {
+		return s.sql.incrementAccessCounts(memoryIDs)
+	}
 
 	brain, err := s.load()
 	if err != nil {

@@ -1,0 +1,104 @@
+package backup
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
+	settingsservice "github.com/GuaiZai233/FrostAgent/internal/service/settings"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"strings"
+)
+
+// ValidateConnectionSettingsImport checks the configuration produced by the
+// import before a caller stops its runtime. Non-secret values are replaced,
+// including omitted keys; credentials in an upload are ignored and retained
+// from the destination instance, just as in the import transaction.
+func ValidateConnectionSettingsImport(db *storage.DB, instanceID string, data Settings) error {
+	current, err := instanceconfig.OpenDatabase(db, instanceID, false)
+	if err != nil {
+		return err
+	}
+	get := func(key string) string {
+		if strings.HasSuffix(key, "_WS_TOKEN") || strings.HasSuffix(key, "_WS_INBOUND_TOKEN") {
+			return current.Get(key)
+		}
+		return data.Values[key]
+	}
+	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+		if _, err := wsclient.Load(get, adapter); err != nil {
+			return fmt.Errorf("invalid imported connection settings: %w", err)
+		}
+	}
+	return nil
+}
+
+// ImportSettings replaces all classified non-secret settings and the exported
+// router, MCP, and dialogue configuration in one SQL transaction. Secrets in
+// an uploaded file are ignored; existing shared credentials remain untouched.
+func ImportSettings(db *storage.DB, instanceID string, data Settings) error {
+	db.CatalogMutationMu.Lock()
+	defer db.CatalogMutationMu.Unlock()
+	return ImportSettingsWithinCatalogMutation(db, instanceID, data)
+}
+
+// ImportSettingsWithinCatalogMutation is for instance restore while it holds
+// CatalogMutationMu across every restore phase and its rollback.
+func ImportSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data Settings) error {
+	db.ModelRouterMu.Lock()
+	defer db.ModelRouterMu.Unlock()
+	if err := ValidateFormat(data.FormatVersion); err != nil {
+		return err
+	}
+	if err := ValidateConnectionSettingsImport(db, instanceID, data); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var present int
+	if err := tx.QueryRowContext(ctx, db.Bind(`SELECT COUNT(*) FROM instances WHERE id = ? AND deleting = 0`), instanceID).Scan(&present); err != nil {
+		return err
+	}
+	if present != 1 {
+		return sql.ErrNoRows
+	}
+	for key := range settingsservice.ExportableValueKeys() {
+		if instanceconfig.GlobalKeys[key] && !instanceconfig.SharedKeys[key] {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM settings
+			WHERE scope = 'instance' AND instance_id = ? AND key = ?`), instanceID, key); err != nil {
+			return err
+		}
+		if value, exists := data.Values[key]; exists {
+			if strings.ContainsRune(value, 0) {
+				return fmt.Errorf("setting %s contains NUL", key)
+			}
+			if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO settings(scope, instance_id, key, value)
+				VALUES ('instance', ?, ?, ?)`), instanceID, key, value); err != nil {
+				return err
+			}
+		}
+	}
+	if err := modelrouter.WriteImportedConfigurationTx(ctx, db, tx, instanceID, data.ModelRouter); err != nil {
+		return err
+	}
+	for i := range data.MCP.Servers {
+		data.MCP.Servers[i].Transport.URL = publicURL(data.MCP.Servers[i].Transport.URL)
+	}
+	if err := mcp.WriteImportedConfigTx(ctx, db, tx, instanceID, &data.MCP); err != nil {
+		return err
+	}
+	if err := dialogue.WriteExamplesTx(ctx, db, tx, instanceID, data.Dialogues); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

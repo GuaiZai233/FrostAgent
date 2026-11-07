@@ -1,10 +1,10 @@
 package tools
 
 import (
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/sticker"
 	"context"
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
 	"strings"
 	"testing"

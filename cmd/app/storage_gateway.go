@@ -1,0 +1,246 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	"github.com/GuaiZai233/FrostAgent/internal/instance"
+	secsvc "github.com/GuaiZai233/FrostAgent/internal/service/security"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"net/http"
+	"strings"
+	"sync"
+)
+
+// storageGateway keeps the management routes stable while the selected SQL
+// database and its instance runtimes are replaced.
+type storageGateway struct {
+	mu         sync.RWMutex
+	switchMu   sync.Mutex
+	root       string
+	bootstrap  *storage.Bootstrap
+	current    *instance.Manager
+	security   http.Handler
+	config     storage.Config
+	generation uint64
+	prepare    func(*instance.Manager) error
+	apply      func(*instance.Manager) error
+}
+
+func newStorageGateway(ctx context.Context, root string) (*storageGateway, error) {
+	bootstrap, err := storage.OpenBootstrap(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	config, err := bootstrap.Load(ctx)
+	if err != nil {
+		bootstrap.Close()
+		return nil, err
+	}
+	manager, err := openSelectedManager(ctx, root, config, true)
+	if err != nil {
+		bootstrap.Close()
+		return nil, err
+	}
+	return &storageGateway{root: root, bootstrap: bootstrap, current: manager,
+		security: securityHandlerFor(manager), config: config}, nil
+}
+
+func securityHandlerFor(manager *instance.Manager) http.Handler {
+	return manager.SettingsWriteHandler(secsvc.NewWithStore(manager.SecurityController(), manager.ControlPlaneGetenv(), manager.GlobalConfig()))
+}
+
+func openSelectedManager(ctx context.Context, root string, config storage.Config, injectEnv bool) (*instance.Manager, error) {
+	db, err := storage.OpenWithConfig(ctx, root, config)
+	if err != nil {
+		return nil, err
+	}
+	if injectEnv {
+		if err := envinject.ApplyAtStartup(ctx, db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	return instance.NewDatabaseWithDB(root, db)
+}
+
+func (g *storageGateway) snapshot() (*instance.Manager, storage.Config, uint64) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.current, g.config, g.generation
+}
+
+func (g *storageGateway) Close() {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	g.mu.Lock()
+	manager := g.current
+	g.current = nil
+	g.security = nil
+	g.mu.Unlock()
+	if manager != nil {
+		manager.Close()
+	}
+	_ = g.bootstrap.Close()
+}
+
+func (g *storageGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/storage" {
+		g.serveStorage(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/instances/global/extra-env") ||
+		r.URL.Path == "/api/instances/global/import/settings" ||
+		(strings.Contains(r.URL.Path, "/frostagent.v1.SettingsService/") && r.Method == http.MethodPost) {
+		g.switchMu.Lock()
+		defer g.switchMu.Unlock()
+	}
+	manager, _, _ := g.snapshot()
+	if manager == nil {
+		http.Error(w, "database is switching", http.StatusServiceUnavailable)
+		return
+	}
+	managementAuthMiddleware(manager, manager.ControlPlaneGetenv()).ServeHTTP(w, r)
+}
+
+func (g *storageGateway) SecurityHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			g.switchMu.Lock()
+			defer g.switchMu.Unlock()
+		}
+		g.mu.RLock()
+		handler := g.security
+		manager := g.current
+		g.mu.RUnlock()
+		if handler == nil || manager == nil {
+			http.Error(w, "database is switching", http.StatusServiceUnavailable)
+			return
+		}
+		managementAuthMiddleware(handler, manager.ControlPlaneGetenv()).ServeHTTP(w, r)
+	})
+}
+
+func (g *storageGateway) serveStorage(w http.ResponseWriter, r *http.Request) {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	manager, _, _ := g.snapshot()
+	if manager == nil {
+		http.Error(w, "database is switching", http.StatusServiceUnavailable)
+		return
+	}
+	managementAuthMiddleware(http.HandlerFunc(g.serveStorageLocked), manager.ControlPlaneGetenv()).ServeHTTP(w, r)
+}
+
+func (g *storageGateway) serveStorageLocked(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	switch r.Method {
+	case http.MethodGet:
+		_, config, _ := g.snapshot()
+		dsn, err := g.bootstrap.PostgresDSN(r.Context())
+		if err != nil {
+			writeStorageError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		config.DSN = dsn
+		_ = json.NewEncoder(w).Encode(config)
+	case http.MethodPost:
+		var config storage.Config
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&config); err != nil {
+			writeStorageError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := g.switchToLocked(r.Context(), config); err != nil {
+			writeStorageError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		manager, _, _ := g.snapshot()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true, "listen_addr": manager.GlobalConfig().Get("LISTEN_ADDR"),
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func writeStorageError(w http.ResponseWriter, status int, err error) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+}
+
+func (g *storageGateway) switchTo(ctx context.Context, requested storage.Config) error {
+	g.switchMu.Lock()
+	defer g.switchMu.Unlock()
+	return g.switchToLocked(ctx, requested)
+}
+
+func (g *storageGateway) switchToLocked(ctx context.Context, requested storage.Config) error {
+	config, err := storage.NormalizeConfig(requested)
+	if err != nil {
+		return err
+	}
+	old, previous, _ := g.snapshot()
+	if old == nil {
+		return errors.New("database is unavailable")
+	}
+	if config == previous {
+		return g.bootstrap.Save(ctx, requested)
+	}
+	// Drain the old manager before opening a new PostgreSQL connection; the
+	// single-process lease also covers a DSN edit targeting the same database.
+	g.mu.Lock()
+	g.current = nil
+	g.security = nil
+	g.mu.Unlock()
+	old.Close()
+	previousInjection := envinject.Suspend()
+	manager, err := openSelectedManager(ctx, g.root, config, false)
+	// Check credentials before changing listeners or saving the selected database.
+	// This hook runs only for a newly selected manager, never for settings edits.
+	if err == nil && g.prepare != nil {
+		err = g.prepare(manager)
+	}
+	if err == nil && g.apply != nil {
+		manager.SetGlobalApplyHook(func() error { return g.apply(manager) })
+	}
+	if err == nil && g.apply != nil {
+		err = g.apply(manager)
+	}
+	if err == nil {
+		err = g.bootstrap.Save(ctx, requested)
+	}
+	if err != nil {
+		if manager != nil {
+			manager.Close()
+		}
+		if restoreErr := envinject.Restore(previousInjection); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+		recovered, recoveryErr := openSelectedManager(context.Background(), g.root, previous, false)
+		if recoveryErr == nil && g.apply != nil {
+			recovered.SetGlobalApplyHook(func() error { return g.apply(recovered) })
+		}
+		if recoveryErr == nil && g.apply != nil {
+			recoveryErr = g.apply(recovered)
+		}
+		if recoveryErr == nil {
+			g.mu.Lock()
+			g.current = recovered
+			g.security = securityHandlerFor(recovered)
+			g.mu.Unlock()
+		} else if recovered != nil {
+			recovered.Close()
+		}
+		return errors.Join(fmt.Errorf("switch database: %w", err), recoveryErr)
+	}
+	g.mu.Lock()
+	g.current = manager
+	g.security = securityHandlerFor(manager)
+	g.config = config
+	g.generation++
+	g.mu.Unlock()
+	return nil
+}

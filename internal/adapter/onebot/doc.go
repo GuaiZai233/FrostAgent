@@ -52,7 +52,7 @@
 //     connection generation for that exact session. Stale, unresolvable, or cross-generation IDs
 //     are rejected before wire serialization, preventing upstream vendor divergence where NapCat vs
 //     LuckyLillia handle stale reply segments inconsistently.
-// All lookups via `get_msg` (for quotes, replies, or historical stickers)
+// All lookups via `get_msg` (for quotes, replies, historical stickers, or context image inspection)
 // strictly degrade to empty context on failure, stale IDs, deleted messages, or timeouts,
 // ensuring upstream discrepancies never stall the core dialogue pipeline.
 //

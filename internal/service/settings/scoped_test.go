@@ -1,11 +1,11 @@
 package settings
 
 import (
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/sandbox"
 	"connectrpc.com/connect"
 	"context"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,10 +68,105 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().Enabled {
 		t.Fatalf("shared sandbox disable failed: response=%v error=%v", deleteResponse, err)
 	}
-	if !update("UPSTREAM_API_KEY", `C:\synthetic\`) || c.Get("UPSTREAM_API_KEY") != `C:\synthetic\` {
+	if !update("ACTIONSCAT_MANAGEMENT_TOKEN", `C:\synthetic\`) || c.Get("ACTIONSCAT_MANAGEMENT_TOKEN") != `C:\synthetic\` {
 		t.Fatal("trailing backslash did not roundtrip")
 	}
 	if os.Getenv("BOT_NAME") != "process-sentinel" || os.Getenv("SYSTEM_PROMPT") != "shared-process-sentinel" {
 		t.Fatal("scoped mutation changed process environment")
+	}
+}
+
+func TestScopedSettingsSharedKeys(t *testing.T) {
+	dir := t.TempDir()
+	c, err := instanceconfig.Open(filepath.Join(dir, "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := instanceconfig.Open(filepath.Join(dir, "global.env"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Global-only settings service updates global store
+	svcGlobal := NewScoped(nil, g, nil)
+	resp, err := svcGlobal.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SECURITY_GATEWAY_TIMEOUT",
+		Value: "50s",
+	}))
+	if err != nil || !resp.Msg.Success {
+		t.Fatalf("failed to update SECURITY_GATEWAY_TIMEOUT on global service: %v", err)
+	}
+	if g.Get("SECURITY_GATEWAY_TIMEOUT") != "50s" {
+		t.Fatalf("expected global store to have 50s, got %q", g.Get("SECURITY_GATEWAY_TIMEOUT"))
+	}
+
+	// 2. Instance settings service reads inherited global value when instance value is unset
+	svcInstance := NewScoped(c, g, nil)
+	listResp, err := svcInstance.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTimeout := false
+	for _, ev := range listResp.Msg.EnvVars {
+		if ev.Key == "SECURITY_GATEWAY_TIMEOUT" {
+			foundTimeout = true
+			if ev.Value != "50s" || !ev.IsInherited || !strings.Contains(ev.ResetHint, "50s") {
+				t.Fatalf("expected inherited global value 50s, got %q", ev.Value)
+			}
+		}
+	}
+	if !foundTimeout {
+		t.Fatal("SECURITY_GATEWAY_TIMEOUT not found in ListEnvVars")
+	}
+
+	// 3. Updating on instance settings service overrides instance store without mutating global
+	resp, err = svcInstance.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{
+		Key:   "SECURITY_GATEWAY_TIMEOUT",
+		Value: "35s",
+	}))
+	if err != nil || !resp.Msg.Success {
+		t.Fatalf("failed to update SECURITY_GATEWAY_TIMEOUT on instance service: %v", err)
+	}
+	if c.Get("SECURITY_GATEWAY_TIMEOUT") != "35s" {
+		t.Fatalf("expected instance store to have 35s, got %q", c.Get("SECURITY_GATEWAY_TIMEOUT"))
+	}
+	if g.Get("SECURITY_GATEWAY_TIMEOUT") != "50s" {
+		t.Fatalf("global store must remain 50s, got %q", g.Get("SECURITY_GATEWAY_TIMEOUT"))
+	}
+
+	// 4. ListEnvVars on instance now returns instance override
+	listResp, err = svcInstance.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range listResp.Msg.EnvVars {
+		if ev.Key == "SECURITY_GATEWAY_TIMEOUT" {
+			if ev.Value != "35s" || ev.IsInherited {
+				t.Fatalf("expected instance override value 35s, got %q", ev.Value)
+			}
+		}
+	}
+
+	// 5. Deleting on instance restores inheritance of global value
+	delResp, err := svcInstance.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{
+		Key: "SECURITY_GATEWAY_TIMEOUT",
+	}))
+	if err != nil || !delResp.Msg.Success {
+		t.Fatalf("failed to delete on instance service: %v", err)
+	}
+	if c.Get("SECURITY_GATEWAY_TIMEOUT") != "" {
+		t.Fatalf("expected instance store to be cleared, got %q", c.Get("SECURITY_GATEWAY_TIMEOUT"))
+	}
+	if g.Get("SECURITY_GATEWAY_TIMEOUT") != "50s" {
+		t.Fatalf("global store must remain 50s after instance delete, got %q", g.Get("SECURITY_GATEWAY_TIMEOUT"))
+	}
+	listResp, err = svcInstance.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range listResp.Msg.EnvVars {
+		if value.Key == "SECURITY_GATEWAY_TIMEOUT" && (value.Value != "50s" || !value.IsInherited || !strings.Contains(value.ResetHint, "50s")) {
+			t.Fatalf("cleared override must return to the inherited placeholder: %#v", value)
+		}
 	}
 }

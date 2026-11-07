@@ -2,9 +2,10 @@
 package runtimescope
 
 import (
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/logs"
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,26 +14,59 @@ import (
 )
 
 type Scope struct {
-	Config  *instanceconfig.Store
-	Global  *instanceconfig.Store
-	Logger  *logs.Store
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	stopped bool
-	wg      sync.WaitGroup
+	Config     *instanceconfig.Store
+	Global     *instanceconfig.Store
+	Logger     *logs.Store
+	instanceID string
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	stopped    bool
+	wg         sync.WaitGroup
 }
 
 func New(config, global *instanceconfig.Store, logger *logs.Store) *Scope {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scope{Config: config, Global: global, Logger: logger, ctx: ctx, cancel: cancel}
 }
+func (s *Scope) InstanceID() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.instanceID != "" {
+		return s.instanceID
+	}
+	if s.Config != nil {
+		return s.Config.Get("INSTANCE_ID")
+	}
+	return ""
+}
+
+func (s *Scope) SetInstanceID(id string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.instanceID = id
+	s.mu.Unlock()
+}
+
 func (s *Scope) Context() context.Context {
 	if s == nil {
 		return context.Background()
 	}
 	return WithContext(s.ctx, s)
 }
+
+func (s *Scope) BotLoopRevision() uint64 {
+	if s == nil || s.Config == nil {
+		return 0
+	}
+	return s.Config.BotLoopRevision()
+}
+
 func (s *Scope) Getenv(k string) string {
 	if s == nil {
 		return os.Getenv(k)
@@ -43,10 +77,32 @@ func (s *Scope) Getenv(k string) string {
 		}
 		return s.Global.Get(k)
 	}
+	if instanceconfig.SharedKeys[k] {
+		if s.Config != nil {
+			if v := s.Config.Get(k); strings.TrimSpace(v) != "" {
+				return v
+			}
+		}
+		if s.Global != nil {
+			if v := s.Global.Get(k); strings.TrimSpace(v) != "" {
+				return v
+			}
+		}
+		if (s.Config != nil && s.Config.IsDatabase()) || (s.Global != nil && s.Global.IsDatabase()) {
+			return ""
+		}
+		return os.Getenv(k)
+	}
 	if s.Config == nil {
 		return ""
 	}
-	return s.Config.Get(k)
+	value := s.Config.Get(k)
+	if value == "" && s.Config.IsDatabase() {
+		if injected, ok := envinject.LookupApplied(k); ok {
+			return injected
+		}
+	}
+	return value
 }
 func (s *Scope) Log() *logs.Store {
 	if s == nil || s.Logger == nil {
@@ -115,9 +171,37 @@ func (s *Scope) LookupEnv(k string) (string, bool) {
 	if s == nil {
 		return os.LookupEnv(k)
 	}
-	v, ok := s.Config.Snapshot()[k]
 	if instanceconfig.GlobalKeys[k] {
-		v, ok = s.Global.Snapshot()[k]
+		if s.Global == nil {
+			return "", false
+		}
+		v, ok := s.Global.Snapshot()[k]
+		return v, ok
+	}
+	if instanceconfig.SharedKeys[k] {
+		if s.Config != nil {
+			if v, ok := s.Config.Snapshot()[k]; ok && strings.TrimSpace(v) != "" {
+				return v, true
+			}
+		}
+		if s.Global != nil {
+			if v, ok := s.Global.Snapshot()[k]; ok && strings.TrimSpace(v) != "" {
+				return v, true
+			}
+		}
+		if (s.Config != nil && s.Config.IsDatabase()) || (s.Global != nil && s.Global.IsDatabase()) {
+			return "", false
+		}
+		return os.LookupEnv(k)
+	}
+	if s.Config == nil {
+		return "", false
+	}
+	v, ok := s.Config.Snapshot()[k]
+	if !ok && s.Config.IsDatabase() {
+		if injected, exists := envinject.LookupApplied(k); exists {
+			return injected, true
+		}
 	}
 	return v, ok
 }

@@ -12,75 +12,52 @@ const globalKeys = new Set([
   'SANDBOX_SESSION_NAMESPACE',
   'MCP_CONTROL_TOKEN',
   'ADMIN_TOKEN',
-  'ALLOW_REMOTE_MCP_MANAGEMENT',
   'MCP_ENFORCE_LOCAL_TOKEN',
+  'SECURITY_CONTROL_MODE',
 ]);
-const instanceRestartKeys = new Set([
-  'ENABLE_ONEBOT_ADAPTER',
-  'ENABLE_ASTRBOT_ADAPTER',
-  'MEMORY_REFLECTION_TIMEOUT',
-  'GROUP_COMPACT_BUFFER_SIZE',
-  'GROUP_COMPACT_MAX_BUFFER_SIZE',
-  'GROUP_COMPACT_MIN_INTERVAL',
-  'BILLING_ENABLED',
-  'BILLING_MAX_OUTPUT_TOKENS',
-  'BILLING_SAFETY_MULTIPLIER',
-  'BILLING_PROMPT_PRICE_PER_MILLION',
-  'BILLING_COMPLETION_PRICE_PER_MILLION',
-]);
-const controlPlaneRestartKeys = new Set([
-  'LISTEN_ADDR',
-  'WS_LISTEN_ADDR',
-  'HTTP_ALLOWED_ORIGINS',
-  'ALCYONE_BASE_URL',
-  'ALCYONE_SERVICE_TOKEN',
-  'ALCYONE_TIMEOUT',
-  'SANDBOX_BASE_URL',
-  'SANDBOX_AUTH_TOKEN',
-  'SANDBOX_SESSION_NAMESPACE',
-  'MCP_CONTROL_TOKEN',
-  'ADMIN_TOKEN',
-  'ALLOW_REMOTE_MCP_MANAGEMENT',
-  'MCP_ENFORCE_LOCAL_TOKEN',
-]);
-import { createInstanceAPI } from '../api/client';
-import { EnvVar } from '@frostagent/proto';
-import { escapeHtml, maskSecret } from '../utils/formatters';
+import { createInstanceAPI, extraEnvAPI, setControlToken } from '../api/client';
+import { instanceState } from '../instance-state';
+import { escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { openDialog } from '../components/dialog';
-import { confirmDialog } from '../components/confirm';
+import { renderBackendSettingsForm } from './backend-settings-form';
+import { SettingsDraft } from './settings-draft';
+import { dedicatedSettingKeys, settingFields } from './backend-setting-fields';
+import {
+  groupIdFromSessionId,
+  parseWhitelistGroups,
+  formatGroupOption,
+  isWhitelistEnabled,
+} from './proactive-whitelist';
+import {
+  groupProbabilitiesKey,
+  groupProbabilityIdentity,
+  normalizeGroupProbability,
+  parseGroupProbabilities,
+  serializeGroupProbabilities,
+} from './proactive-group-probabilities';
 
-function configurationBadges(key: string): string {
-  const ownership = globalKeys.has(key)
-    ? '<small class="badge badge-outline">全局共享</small>'
-    : '<small class="badge badge-outline">当前实例</small>';
-  const applyScope = controlPlaneRestartKeys.has(key)
-    ? '<small class="badge badge-warning">重启 FrostAgent 后生效</small>'
-    : instanceRestartKeys.has(key)
-      ? '<small class="badge badge-warning">重启实例后生效</small>'
-      : '<small class="badge badge-outline">立即生效</small>';
-  return ownership + applyScope;
-}
-
-export function mountBackendSettingsPage(container: HTMLElement): () => void {
-  const api = createInstanceAPI();
+export function mountBackendSettingsPage(container: HTMLElement, api = createInstanceAPI(), extraAPI = extraEnvAPI): () => void {
   let isUnmounted = false;
   let loading = false;
+  let storageBackend = '';
   let saving = false;
-  let envVars: EnvVar[] = [];
-  let rawContent = '';
-  const visibleSecrets = new Set<string>();
-  let editingKey: string | null = null;
-  let editingValue = '';
-  let editingIsSecret = false;
-
-  let groupReplyOnMention = false;
-  let enableAtOther = false;
-  let enableReplyOther = false;
+  let loadSeq = 0;
+  let draft: SettingsDraft | null = null;
+  const controller = new AbortController();
+  const sessionGroupMap = new Map<string, string>();
+  let closeGroupProbabilityDialog: (() => void) | null = null;
 
   container.innerHTML = `
     <div class="page-container fade-in">
+      <div id="settings-draft-banner" class="settings-draft-banner" role="alert" hidden>
+        <span>当前更改尚未保存，离开将丢弃。</span>
+        <div class="flex gap-2 shrink-0">
+          <button type="button" id="settings-draft-restore" class="btn btn-outline btn-sm">还原</button>
+          <button type="button" id="settings-draft-save" class="btn btn-outline btn-sm">保存</button>
+        </div>
+      </div>
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div class="flex items-center gap-2.5">
           <a href="#/settings" class="btn btn-ghost btn-icon-sm" title="返回设置" style="text-decoration: none;">
@@ -88,618 +65,823 @@ export function mountBackendSettingsPage(container: HTMLElement): () => void {
           </a>
           <div>
             <h1 class="page-title">Bot 服务端设置</h1>
-            <p class="page-description">每项配置分别标明归属范围与生效方式；Control Plane 字段需要重启 FrostAgent 时会明确提示。</p>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button class="btn btn-primary btn-sm" id="add-env-btn">
-            ${icon('plus', 'w-3.5 h-3.5')}
-            <span>新增环境变量</span>
-          </button>
+          <a class="btn btn-outline btn-sm" href="/api/instances/${instanceState.selected!.id}/backup/settings" download="setting.json">下载设置备份</a>
           <button class="btn btn-outline btn-icon-sm" id="backend-refresh-btn" title="刷新">
             ${icon('refresh', 'w-3.5 h-3.5')}
           </button>
         </div>
       </header>
 
-      <!-- Tabs -->
-      <div class="tabs">
-        <button class="tab-item active" id="tab-table-btn">
-          ${icon('table', 'w-3.5 h-3.5')}
-          <span>环境变量表</span>
-        </button>
-        <button class="tab-item" id="tab-raw-btn">
-          ${icon('file_text', 'w-3.5 h-3.5')}
-          <span>原始 .env</span>
-        </button>
-      </div>
-
-      <!-- Table View Container -->
-      <div id="tab-table-content" class="flex flex-col gap-4">
+      <div class="flex flex-col gap-4">
+        <article class="card p-4">
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="card-title text-sm font-semibold">记忆设置</h2>
+            <small class="badge badge-outline">当前实例</small>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-3">
+            <label class="text-xs font-semibold" for="embedding-enabled">启用Embedding</label>
+            <label class="toggle-switch"><input type="checkbox" id="embedding-enabled" role="switch" aria-label="启用Embedding" disabled><span aria-hidden="true"></span></label>
+          </div>
+          <p id="embedding-sqlite-warning" class="text-xs text-destructive mt-2" hidden>sqlite不支持向量存储，反思后embedding的结果将不会持久化！</p>
+        </article>
         <!-- Group Behavior Settings Card -->
         <article class="card p-4">
           <div class="card-header border-b border-border pb-3 mb-3">
             <div class="flex items-center gap-2">
-              <span class="text-primary flex items-center">${icon('users', 'w-4 h-4')}</span>
-              <h2 class="card-title text-sm font-semibold">群聊回复行为策略</h2>
+              <span class="text-primary flex items-center">${icon('bot', 'w-4 h-4')}</span>
+              <h2 class="card-title text-sm font-semibold">Bot 行为与回复策略</h2>
             </div>
           </div>
-          <div class="card-content grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-              <input type="checkbox" id="group-mention-cb" class="checkbox" style="margin-top: 0.125rem;" />
-              <div>
-                <span class="text-xs font-semibold text-foreground">被 @ 时触发回复</span>
-                <p class="text-[11px] text-muted font-mono mt-0.5">GROUP_REPLY_ON_MENTION</p>
-              </div>
-            </label>
 
-            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-              <input type="checkbox" id="group-at-cb" class="checkbox" style="margin-top: 0.125rem;" />
-              <div>
-                <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
-                <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_AT_IN_GROUP_MSG</p>
+          <div class="mb-4 pb-4 border-b border-border" id="poke-card">
+            <div class="flex items-center gap-2.5 mb-3">
+              <label class="toggle-switch"><input type="checkbox" id="poke-enabled" role="switch" aria-label="允许发送戳一戳行为" /><span aria-hidden="true"></span></label>
+              <label for="poke-enabled" class="text-xs font-semibold text-foreground">允许发送戳一戳行为</label>
+            </div>
+            <div id="poke-controls" class="flex flex-col gap-2.5">
+              <label for="poke-custom-text" class="text-xs font-medium">行为附加自定义文本</label>
+              <p id="poke-text-description" class="text-[11px] text-muted">一旦Bot被戳，发送给LLM的附加消息。</p>
+              <input type="text" id="poke-custom-text" class="input input-sm settings-default-input w-full min-w-0" placeholder="的..." aria-describedby="poke-text-description poke-preview" />
+              <p id="poke-preview" class="text-[11px] text-muted break-all" aria-live="polite"></p>
+              <div class="flex items-center gap-2 flex-wrap">
+                <label for="poke-cooldown" class="text-xs font-medium">冷却时间</label>
+                <input type="number" id="poke-cooldown" class="input input-sm settings-default-input font-mono" style="width: 6rem; flex: none;" min="0" max="86400" step="1" placeholder="30" />
+                <span class="text-xs text-muted">秒</span>
               </div>
-            </label>
+              <p class="text-[11px] text-muted">每个群/私聊独立冷却，同一群内所有人共享。默认 30 秒，0 表示不冷却；冷却期间不会向 LLM 发送消息。</p>
+            </div>
+            <p class="text-[11px] text-muted mt-2">此行为会被雪花计费。</p>
+          </div>
 
-            <label class="card p-3.5 flex items-start gap-2.5 cursor-pointer hover-bg transition-colors">
-              <input type="checkbox" id="group-reply-cb" class="checkbox" style="margin-top: 0.125rem;" />
-              <div>
-                <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
-                <p class="text-[11px] text-muted font-mono mt-0.5">ENABLE_REPLY_IN_GROUP_MSG</p>
+          <!-- Proactive Reply Section -->
+          <div class="mb-4 pb-4 border-b border-border" id="proactive-reply-card">
+            <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-primary flex items-center">${icon('sparkles', 'w-4 h-4')}</span>
+                <div>
+                  <h3 class="text-xs font-semibold text-foreground">主动回复</h3>
+                </div>
               </div>
-            </label>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-muted" id="proactive-reply-status-text" aria-live="polite" style="display: none;"></span>
+                <label class="toggle-switch" title="主动回复">
+                  <input type="checkbox" id="proactive-reply-cb" role="switch" aria-label="主动回复" />
+                  <span aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="p-3 bg-muted/40 rounded-lg border border-border flex flex-col gap-2.5" id="proactive-reply-controls" style="transition: opacity 0.2s ease;">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-xs font-semibold text-foreground">触发概率</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-mono font-semibold text-primary" id="proactive-reply-prob-display">0.05 (5%)</span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-4 pt-1">
+                <input
+                  type="range"
+                  id="proactive-reply-slider"
+                  class="slider flex-1"
+                  min="0.01"
+                  max="1.00"
+                  step="0.01"
+                  value="0.05"
+                />
+                <div class="flex items-center gap-1.5" style="width: 7.5rem;">
+                  <input
+                    type="number"
+                    id="proactive-reply-number"
+                    class="input input-sm settings-default-input font-mono text-right"
+                    min="0.01"
+                    max="1.00"
+                    step="0.01"
+                    placeholder="0.01"
+                    style="width: 5.5rem;"
+                  />
+                  <span class="text-xs text-muted">/ 1.0</span>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between text-[11px] text-muted mt-0.5">
+                <span>0.01 (1%)</span>
+                <span>1.00 (100%)</span>
+              </div>
+
+              <!-- Whitelist Mode Section -->
+              <div class="pt-3 mt-1 border-t border-border/60 flex flex-col gap-2.5">
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-semibold text-foreground">群聊白名单模式</span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-medium text-muted" id="proactive-whitelist-status-text" aria-live="polite" style="display: none;"></span>
+                    <label class="toggle-switch" title="群聊白名单模式">
+                      <input type="checkbox" id="proactive-whitelist-cb" role="switch" aria-label="群聊白名单模式" />
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
+                </div>
+                <p class="text-[11px] text-muted">
+                  启用后，非白名单群不会触发主动回复；正常被唤醒的回复不受此限制。
+                </p>
+
+                <div class="flex flex-col gap-2 pt-1" id="proactive-whitelist-controls">
+                  <!-- Add Group Input & Select Bar -->
+                  <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <select id="proactive-whitelist-select" class="input input-sm text-xs flex-1 min-w-[200px]">
+                      <option value="">-- 从最近会话选择群聊 --</option>
+                    </select>
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                      <input
+                        type="text"
+                        id="proactive-whitelist-input"
+                        class="input input-sm text-xs font-mono flex-1 sm:w-44"
+                        placeholder="或手动输入群号"
+                      />
+                      <button type="button" id="proactive-whitelist-add-btn" class="btn btn-secondary btn-sm text-xs shrink-0 flex items-center gap-1">
+                        ${icon('plus', 'w-3 h-3')}
+                        <span>添加群</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Tag List of Whitelisted Groups -->
+                  <div class="flex flex-col gap-1.5">
+                    <span class="text-[11px] font-medium text-muted">已配置白名单群：</span>
+                    <div id="proactive-whitelist-tags" class="flex flex-wrap gap-1.5 min-h-[1.75rem] items-center p-2 rounded bg-background border border-border">
+                      <span class="text-[11px] text-muted">暂无白名单群聊</span>
+                    </div>
+                    <p class="text-[11px] text-muted">点击群聊名称可单独配置主动回复概率；未单独配置时使用上方统一概率。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bot loop guard -->
+          <div class="mb-4 pb-4 border-b border-border">
+            <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
+            <p class="text-[11px] text-muted mb-3">按会话分别累计各标记 Bot 的轮数；仅未标记用户明确唤醒（@、名称/别名或戳一戳）后恢复额度，普通闲聊不会重置。</p>
+            <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
+              <div class="flex flex-col gap-1.5 min-w-0">
+                <label for="bot-loop-user-id-input" class="text-xs font-medium">标记为 Bot 的用户 ID</label>
+                <div class="flex items-center gap-2">
+                  <input id="bot-loop-user-id-input" type="text" class="input input-sm font-mono text-xs flex-1 min-w-0" placeholder="输入用户 ID" autocomplete="off" />
+                  <button type="button" id="bot-loop-add-user" class="btn btn-outline btn-sm shrink-0">添加</button>
+                </div>
+              </div>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">每个 Bot 最多轮数</span>
+                <input id="bot-loop-max-turns" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="1" step="1" placeholder="3" />
+              </label>
+              <label class="flex flex-col gap-1.5">
+                <span class="text-xs font-medium">超限处理</span>
+                <select id="bot-loop-mode" class="input input-sm settings-default-select text-xs">
+                  <option value="">默认（提示静默）</option>
+                  <option value="soft">非强制：提示静默</option>
+                  <option value="hard">强制：丢弃请求</option>
+                </select>
+              </label>
+            </div>
+            <div id="bot-loop-user-tags" class="flex flex-wrap gap-1.5 mt-2" aria-live="polite"></div>
+            <div class="flex items-center justify-between gap-2 mt-2">
+              <span class="text-[11px] text-muted">列表为空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+            </div>
+          </div>
+
+          <div class="mb-4 pb-4 border-b border-border" id="sticker-activity-card">
+            <div class="flex items-center justify-between mb-3 gap-2">
+              <h3 class="text-xs font-semibold text-foreground">表情包使用积极度</h3>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-mono font-semibold text-primary" id="sticker-activity-display" aria-live="polite">0 · 已禁用</span>
+                <input type="number" id="sticker-activity-number" class="input input-sm settings-default-input w-16 text-right" min="0" max="10" step="1" placeholder="0" aria-label="表情包使用积极度数值" />
+              </div>
+            </div>
+            <label for="sticker-activity-mode" class="text-xs font-medium text-foreground">计数方式</label>
+            <select id="sticker-activity-mode" class="select settings-default-select w-full mt-1 mb-2">
+              <option value="">默认（按 Bot 对话轮次）</option>
+              <option value="bot_turns">按 Bot 对话轮次</option>
+              <option value="all_messages">按收到的消息条数</option>
+            </select>
+            <p id="sticker-activity-mode-description" class="text-[11px] text-muted mb-3">每次唤醒或触发主动回复计一轮。</p>
+            <p class="text-[11px] text-muted mb-3">积极度控制发送约束的间隔，不是概率；计数在实例内共享，不按群分别计数。</p>
+            <input type="range" id="sticker-activity-slider" class="slider w-full" min="0" max="10" step="1" value="0" aria-label="表情包使用积极度" />
+            <div class="flex justify-between text-[11px] text-muted mt-1">
+              <span>0 · 禁用</span><span>10 · 每 5 轮</span>
+            </div>
+            <div class="mt-4 pt-3 border-t border-border/60">
+              <label class="card p-3 flex items-center justify-between cursor-pointer hover-bg transition-colors" style="flex-direction: row; text-align: left;">
+                <div class="min-w-0">
+                  <span class="text-xs font-semibold text-foreground">表情包确认</span>
+                  <p class="text-[11px] text-muted mt-0.5">返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度。</p>
+                </div>
+                <span class="toggle-switch shrink-0 ml-3">
+                  <input type="checkbox" id="sticker-confirm-cb" role="switch" aria-label="启用表情包确认" />
+                  <span aria-hidden="true"></span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Group Response Rules -->
+          <div>
+            <h3 class="text-xs font-semibold text-foreground mb-2.5">群聊回复规则</h3>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-mention-cb" role="switch" aria-label="启用群聊对话回复" /><span aria-hidden="true"></span></span>
+                <div>
+                  <span class="text-xs font-semibold text-foreground">启用群聊对话回复</span>
+                </div>
+              </label>
+
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-at-cb" role="switch" aria-label="回复时 @ 对方" /><span aria-hidden="true"></span></span>
+                <div>
+                  <span class="text-xs font-semibold text-foreground">回复时 @ 对方</span>
+                </div>
+              </label>
+
+              <label class="card p-3.5 flex items-center gap-2.5 cursor-pointer hover-bg transition-colors">
+                <span class="toggle-switch"><input type="checkbox" id="group-reply-cb" role="switch" aria-label="引用对方消息" /><span aria-hidden="true"></span></span>
+                <div>
+                  <span class="text-xs font-semibold text-foreground">引用/回复对方消息</span>
+                </div>
+              </label>
+            </div>
+            <p class="text-[11px] text-muted mt-2">关闭群聊对话回复后，@、名称或别名唤醒及主动回复均不响应。</p>
+          </div>
+
+          <div class="mt-4 p-3.5 rounded-lg border border-border flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-2.5">
+              <span class="text-xs font-semibold text-foreground">引用追溯</span>
+              <label class="toggle-switch" title="引用追溯">
+                <input type="checkbox" id="quote-trace-cb" role="switch" aria-label="引用追溯" />
+                <span aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="flex items-center gap-2">
+              <label for="quote-trace-depth" class="text-xs text-muted">追溯深度</label>
+              <input type="number" id="quote-trace-depth" class="input input-sm settings-default-input font-mono w-20"
+                min="1" max="10" step="1" placeholder="5" />
+              <span class="text-xs text-muted">层（1～10，默认 5）</span>
+            </div>
           </div>
         </article>
 
-        <!-- Env Vars Table Card -->
-        <div class="card table-card overflow-hidden">
-          <div class="table-container">
-            <table class="table env-table">
-              <thead>
-                <tr>
-                  <th class="env-table-key-col">变量名 (Key)</th>
-                  <th class="env-table-val-col">变量值 (Value)</th>
-                  <th class="env-table-action-col">操作</th>
-                </tr>
-              </thead>
-              <tbody id="env-table-body">
-                <tr>
-                  <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
-                    <span class="spinner"></span>
-                    <span style="margin-left: 0.5rem;">加载中...</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+        <div id="settings-form" class="flex flex-col gap-4"></div>
+        <article class="card p-4">
+          <h2 class="card-title text-sm font-semibold">额外 env 注入</h2>
+          <p class="text-xs text-muted mt-1 mb-4">供外部组件读取的环境变量。保存或删除后需重启 FrostAgent 才会生效；宿主环境中已有的同名变量优先。</p>
+          <div id="extra-env-list" class="flex flex-col gap-2 mb-4"></div>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <input id="extra-env-key" class="input input-sm sm:w-48" aria-label="额外环境变量名" placeholder="变量名" autocomplete="off" />
+            <input id="extra-env-value" class="input input-sm flex-1" type="password" aria-label="额外环境变量值" placeholder="变量值" autocomplete="off" />
+            <button id="extra-env-add" type="button" class="btn btn-outline btn-sm">添加</button>
           </div>
-        </div>
-      </div>
-
-      <!-- Raw .env View Container -->
-      <div id="tab-raw-content" class="flex flex-col gap-3" style="display: none;">
-        <article class="card p-4 flex flex-col gap-3.5">
-          <div class="flex items-center justify-between">
-            <label class="form-label" for="raw-env-textarea">实例 .env 原始文件编辑（不含全局字段）</label>
-            <button class="btn btn-primary btn-sm" id="save-raw-env-btn">
-              ${icon('save', 'w-3.5 h-3.5')}
-              <span>保存 .env 文件</span>
-            </button>
-          </div>
-          <textarea
-            id="raw-env-textarea"
-            class="textarea font-mono text-xs leading-relaxed"
-            rows="20"
-            placeholder="KEY=VALUE..."
-            style="white-space: pre;"
-          ></textarea>
         </article>
       </div>
+
     </div>
   `;
 
-  // Elements
-  const tabTableBtn =
-    container.querySelector<HTMLButtonElement>('#tab-table-btn')!;
-  const tabRawBtn = container.querySelector<HTMLButtonElement>('#tab-raw-btn')!;
-  const tabTableContent =
-    container.querySelector<HTMLElement>('#tab-table-content')!;
-  const tabRawContent =
-    container.querySelector<HTMLElement>('#tab-raw-content')!;
+  const element = <T extends HTMLElement>(id: string) => container.querySelector<T>('#' + id)!;
+  const refreshBtn = element<HTMLButtonElement>('backend-refresh-btn');
+  const banner = element<HTMLElement>('settings-draft-banner');
+  const restoreBtn = element<HTMLButtonElement>('settings-draft-restore');
+  const saveBtn = element<HTMLButtonElement>('settings-draft-save');
+  const settingsRoot = element<HTMLElement>('settings-form');
+  const extraList = element<HTMLElement>('extra-env-list');
+  const extraKey = element<HTMLInputElement>('extra-env-key');
+  const extraValue = element<HTMLInputElement>('extra-env-value');
+  const extraAdd = element<HTMLButtonElement>('extra-env-add');
+  const pokeEnabled = element<HTMLInputElement>('poke-enabled');
+  const pokeText = element<HTMLInputElement>('poke-custom-text');
+  const pokeCooldown = element<HTMLInputElement>('poke-cooldown');
+  function updatePokePreview(): void {
+    const text = pokeText.value.trim();
+    element<HTMLElement>('poke-preview').textContent = '发送预览：user:（用户戳了戳你' + (text ? ' ' + text : '') + '）';
+  }
+  function updatePokeControls(): void {
+    pokeText.disabled = pokeCooldown.disabled = !pokeEnabled.checked;
+    element<HTMLElement>('poke-controls').style.opacity = pokeEnabled.checked ? '1' : '0.55';
+  }
+  const proactive = element<HTMLInputElement>('proactive-reply-cb');
+  const probability = element<HTMLInputElement>('proactive-reply-number');
+  const probabilitySlider = element<HTMLInputElement>('proactive-reply-slider');
+  const whitelist = element<HTMLInputElement>('proactive-whitelist-cb');
+  const groupSelect = element<HTMLSelectElement>('proactive-whitelist-select');
+  const groupInput = element<HTMLInputElement>('proactive-whitelist-input');
+  const groupAdd = element<HTMLButtonElement>('proactive-whitelist-add-btn');
+  const groupTags = element<HTMLElement>('proactive-whitelist-tags');
+  const botUserInput = element<HTMLInputElement>('bot-loop-user-id-input');
+  const botUserAdd = element<HTMLButtonElement>('bot-loop-add-user');
+  const botUserTags = element<HTMLElement>('bot-loop-user-tags');
+  const stickerSlider = element<HTMLInputElement>('sticker-activity-slider');
+  const stickerNumber = element<HTMLInputElement>('sticker-activity-number');
+  const stickerMode = element<HTMLSelectElement>('sticker-activity-mode');
+  const quote = element<HTMLInputElement>('quote-trace-cb');
+  const quoteDepth = element<HTMLInputElement>('quote-trace-depth');
+  const embeddingToggle = element<HTMLInputElement>('embedding-enabled');
+  const embeddingWarning = element<HTMLElement>('embedding-sqlite-warning');
+  function updateEmbeddingWarning(): void {
+    embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
+  }
+  const numericControls: Record<string, HTMLInputElement> = {
+    POKE_COOLDOWN_SECONDS: pokeCooldown,
+    PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
+    QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
+  };
 
-  const refreshBtn = container.querySelector<HTMLButtonElement>(
-    '#backend-refresh-btn',
-  )!;
-  const addEnvBtn = container.querySelector<HTMLButtonElement>('#add-env-btn')!;
-
-  const groupMentionCb =
-    container.querySelector<HTMLInputElement>('#group-mention-cb')!;
-  const groupAtCb = container.querySelector<HTMLInputElement>('#group-at-cb')!;
-  const groupReplyCb =
-    container.querySelector<HTMLInputElement>('#group-reply-cb')!;
-
-  const tbody = container.querySelector<HTMLElement>('#env-table-body')!;
-  const rawTextarea =
-    container.querySelector<HTMLTextAreaElement>('#raw-env-textarea')!;
-  const saveRawEnvBtn =
-    container.querySelector<HTMLButtonElement>('#save-raw-env-btn')!;
-
-  async function loadData() {
-    if (isUnmounted) return;
-    loading = true;
-    renderTable();
-
-    try {
-      const [vars, raw] = await Promise.all([
-        api.listEnvVars(),
-        api.getRawEnvFile(),
-      ]);
-      if (isUnmounted) return;
-      envVars = vars;
-      rawContent = raw;
-      rawTextarea.value = rawContent;
-
-      const getVal = (k: string) => vars.find((v) => v.key === k)?.value ?? '';
-      groupReplyOnMention = getVal('GROUP_REPLY_ON_MENTION') !== 'false';
-      enableAtOther = getVal('ENABLE_AT_IN_GROUP_MSG') === 'true';
-      enableReplyOther = getVal('ENABLE_REPLY_IN_GROUP_MSG') === 'true';
-
-      groupMentionCb.checked = groupReplyOnMention;
-      groupAtCb.checked = enableAtOther;
-      groupReplyCb.checked = enableReplyOther;
-    } catch (err) {
-      if (isUnmounted) return;
-      toast.error(
-        '加载环境变量失败: ' +
-          (err instanceof Error ? err.message : String(err)),
-      );
-      envVars = [];
-    } finally {
-      if (!isUnmounted) {
-        loading = false;
-        renderTable();
-      }
-    }
+  function invalidNumbers(): HTMLInputElement[] {
+    return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
+  }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || invalidNumbers().length > 0; }
+  function updateBanner(): void {
+    banner.hidden = !dirty();
+    saveBtn.disabled = saving || loading || !draft;
+    restoreBtn.disabled = saving || loading;
+    saveBtn.textContent = saving ? '保存中…' : '保存';
+    refreshBtn.disabled = saving || loading || dirty();
   }
 
-  function renderTable() {
-    if (loading && envVars.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 2.5rem;">
-            <span class="spinner"></span>
-            <span style="margin-left: 0.5rem;">加载中...</span>
-          </td>
-        </tr>
-      `;
+  function change(key: string, value: string): void {
+    if (!draft || saving || loading) return;
+    draft.set(key, value);
+    updateBanner();
+  }
+
+  function renderForm(): void {
+    if (!draft) {
+      settingsRoot.innerHTML = '<div class="card p-8 text-center text-muted">加载设置后即可编辑</div>';
       return;
     }
-
-    if (envVars.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="3" class="text-center text-muted" style="padding: 3rem;">
-            暂无环境变量配置。
-          </td>
-        </tr>
-      `;
-      return;
-    }
-
-    tbody.innerHTML = envVars
-      .map((item) => {
-        const isEditing = editingKey === item.key;
-        const isSecret = item.isSecret;
-        const isVisible = visibleSecrets.has(item.key);
-
-        if (isEditing) {
-          const isMultiline =
-            !editingIsSecret &&
-            (editingValue.includes('\n') || editingValue.length > 60);
-
-          return `
-            <tr class="bg-muted">
-              <td class="align-top">
-                <div class="flex items-center gap-1.5 flex-wrap">
-                  <span class="font-mono text-xs font-semibold text-foreground break-all">${escapeHtml(item.key)}</span>
-                  <div class="flex items-center gap-1 flex-wrap">
-                    ${configurationBadges(item.key)}
-                  </div>
-                </div>
-              </td>
-              <td class="align-top">
-                <div class="flex items-start gap-2 min-w-0">
-                  ${
-                    editingIsSecret
-                      ? `
-                    <input
-                      type="password"
-                      class="input font-mono text-xs flex-1 min-w-0"
-                      id="edit-env-val-input"
-                      value="${escapeHtml(editingValue)}"
-                      style="height: 1.875rem;"
-                    />
-                  `
-                      : isMultiline
-                        ? `
-                    <textarea
-                      class="textarea font-mono text-xs flex-1 min-w-0 leading-relaxed"
-                      id="edit-env-val-input"
-                      rows="${Math.min(8, Math.max(3, editingValue.split('\n').length))}"
-                      style="resize: vertical; min-height: 2.25rem;"
-                    >${escapeHtml(editingValue)}</textarea>
-                  `
-                        : `
-                    <input
-                      type="text"
-                      class="input font-mono text-xs flex-1 min-w-0"
-                      id="edit-env-val-input"
-                      value="${escapeHtml(editingValue)}"
-                      style="height: 1.875rem;"
-                    />
-                  `
-                  }
-                  <label class="flex items-center gap-1.5 cursor-pointer text-xs select-none shrink-0" style="white-space: nowrap; flex-shrink: 0; margin-top: 0.25rem;">
-                    <input type="checkbox" id="edit-env-secret-cb" class="checkbox" ${editingIsSecret ? 'checked' : ''} />
-                    <span class="text-muted">敏感</span>
-                  </label>
-                </div>
-              </td>
-              <td class="align-top" style="text-align: right;">
-                <div class="flex items-center justify-end gap-1">
-                  <button class="btn btn-primary btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="save-inline-btn" title="保存">
-                    ${icon('check', 'w-3.5 h-3.5')}
-                  </button>
-                  <button class="btn btn-outline btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" id="cancel-inline-btn" title="取消">
-                    ${icon('close', 'w-3.5 h-3.5')}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          `;
-        }
-
-        const displayVal =
-          isSecret && !isVisible ? maskSecret(item.value) : item.value;
-
-        return `
-          <tr>
-            <td class="align-top">
-              <div class="flex items-center gap-1.5 flex-wrap">
-                ${isSecret ? `<span class="text-muted flex items-center shrink-0" title="敏感配置">${icon('lock', 'w-3.5 h-3.5')}</span>` : ''}
-                <span class="font-mono text-xs font-medium select-text text-foreground break-all">${escapeHtml(item.key)}</span>
-                <div class="flex items-center gap-1 flex-wrap">
-                  ${configurationBadges(item.key)}
-                </div>
-              </div>
-            </td>
-            <td class="align-top">
-              <div class="flex items-start gap-1.5 min-w-0">
-                <span class="font-mono text-xs break-all whitespace-pre-wrap select-text text-foreground flex-1 min-w-0 leading-relaxed">${escapeHtml(displayVal || '（空）')}</span>
-                ${
-                  isSecret
-                    ? `
-                  <button class="btn btn-ghost btn-icon-sm text-muted shrink-0" style="width: 1.5rem; height: 1.5rem; padding: 0; flex-shrink: 0;" data-action="toggle-secret" data-key="${escapeHtml(
-                    item.key,
-                  )}" title="${isVisible ? '隐藏' : '显示'}">
-                    ${icon(isVisible ? 'eye_off' : 'eye', 'w-3 h-3')}
-                  </button>
-                `
-                    : ''
-                }
-              </div>
-            </td>
-            <td class="align-top" style="text-align: right;">
-              <div class="flex items-center justify-end gap-1">
-                <button class="btn btn-ghost btn-icon-sm" style="width: 1.75rem; height: 1.75rem;" data-action="edit-env" data-key="${escapeHtml(
-                  item.key,
-                )}" title="修改">
-                  ${icon('pencil', 'w-3.5 h-3.5')}
-                </button>
-                <button class="btn btn-ghost btn-icon-sm text-destructive" style="width: 1.75rem; height: 1.75rem;" data-action="delete-env" data-key="${escapeHtml(
-                  item.key,
-                )}" title="删除">
-                  ${icon('trash', 'w-3.5 h-3.5')}
-                </button>
-              </div>
-            </td>
-          </tr>
-        `;
-      })
-      .join('');
-
-    // Attach inline edit handlers if active
-    if (editingKey) {
-      const editInput = tbody.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-        '#edit-env-val-input',
-      );
-      const editSecretCb = tbody.querySelector<HTMLInputElement>(
-        '#edit-env-secret-cb',
-      );
-      const saveInlineBtn =
-        tbody.querySelector<HTMLButtonElement>('#save-inline-btn');
-      const cancelInlineBtn =
-        tbody.querySelector<HTMLButtonElement>('#cancel-inline-btn');
-
-      editInput?.focus();
-      if (editInput && typeof editInput.setSelectionRange === 'function') {
-        const len = editInput.value.length;
-        editInput.setSelectionRange(len, len);
-      }
-      editInput?.addEventListener('input', () => {
-        editingValue = editInput.value;
-      });
-      editSecretCb?.addEventListener('change', () => {
-        editingIsSecret = editSecretCb.checked;
-        if (editInput) {
-          editingValue = editInput.value;
-        }
-        renderTable();
-      });
-
-      saveInlineBtn?.addEventListener('click', async () => {
-        await saveEnvVar(editingKey!, editingValue, editingIsSecret);
-        editingKey = null;
-        renderTable();
-      });
-
-      cancelInlineBtn?.addEventListener('click', () => {
-        editingKey = null;
-        renderTable();
-      });
-
-      editInput?.addEventListener('keydown', ((e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          cancelInlineBtn?.click();
-        } else if (
-          (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) ||
-          (e.key === 'Enter' && editInput instanceof HTMLInputElement)
-        ) {
-          e.preventDefault();
-          saveInlineBtn?.click();
-        }
-      }) as EventListener);
-    }
-
-    // Attach row button events
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="toggle-secret"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.key;
-          if (!key) return;
-          if (visibleSecrets.has(key)) visibleSecrets.delete(key);
-          else visibleSecrets.add(key);
-          renderTable();
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="edit-env"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const key = btn.dataset.key;
-          const item = envVars.find((v) => v.key === key);
-          if (item) {
-            editingKey = item.key;
-            editingValue = item.value;
-            editingIsSecret = item.isSecret;
-            renderTable();
-          }
-        });
-      });
-
-    tbody
-      .querySelectorAll<HTMLButtonElement>('[data-action="delete-env"]')
-      .forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const key = btn.dataset.key;
-          if (!key) return;
-          const confirmed = await confirmDialog({
-            title: '删除环境变量',
-            message: `确认删除环境变量 ${key} 吗？`,
-            confirmLabel: '删除',
-            destructive: true,
-          });
-          if (confirmed) {
-            try {
-              const res = await api.deleteEnvVar(key);
-              if (res.success) {
-                toast.success('环境变量已删除');
-                void loadData();
-              } else {
-                toast.error('删除失败: ' + res.error);
-              }
-            } catch (err) {
-              toast.error(
-                '删除失败: ' +
-                  (err instanceof Error ? err.message : String(err)),
-              );
-            }
-          }
-        });
-      });
+    renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change);
   }
 
-  async function saveEnvVar(key: string, value: string, isSecret: boolean) {
-    if (!key) return;
-    try {
-      const res = await api.updateEnvVar({ key, value, isSecret });
-      if (res.success) {
-        toast.success('环境变量已保存');
-        void loadData();
-      } else {
-        toast.error('保存失败: ' + res.error);
-      }
-    } catch (err) {
-      toast.error(
-        '保存失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
-    }
+  function renderGroups(): void {
+    const groups = parseWhitelistGroups(draft?.get('PROACTIVE_REPLY_GROUP_WHITELIST') ?? '');
+    let probabilities = new Map<string, number>();
+    let probabilityError = false;
+    try { probabilities = parseGroupProbabilities(draft?.get(groupProbabilitiesKey) ?? ''); }
+    catch { probabilityError = true; }
+    whitelist.checked = isWhitelistEnabled(draft?.get('ENABLE_PROACTIVE_REPLY_WHITELIST'), groups.length);
+    groupTags.innerHTML = groups.length === 0 ? '<span class="text-[11px] text-muted">白名单为空。</span>' : groups.map((id) => `
+      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs max-w-full">
+        <button type="button" data-group-probability="${escapeHtml(id)}" class="cursor-pointer text-left break-all" title="单独配置主动回复概率" aria-label="配置 ${escapeHtml(formatGroupOption(id, sessionGroupMap.get(id)))} 的主动回复概率">${escapeHtml(formatGroupOption(id, sessionGroupMap.get(id)))}</button>
+        ${probabilities.has(groupProbabilityIdentity(id)) ? `<span class="border border-border rounded px-1.5 py-0.5 bg-background font-mono shrink-0" aria-label="单独配置概率" title="单独配置概率">${probabilities.get(groupProbabilityIdentity(id))}</span>` : ''}
+        <button type="button" data-group-id="${escapeHtml(id)}" aria-label="移除群聊" class="proactive-remove-group-btn">×</button>
+      </span>`).join('');
+    if (probabilityError) groupTags.innerHTML += '<span class="text-xs text-destructive">单群概率配置格式异常，请先修复配置后再编辑。</span>';
+    groupTags.querySelectorAll<HTMLButtonElement>('[data-group-probability]').forEach((button) => {
+      button.addEventListener('click', () => openGroupProbability(button.dataset.groupProbability!));
+    });
+    groupTags.querySelectorAll<HTMLButtonElement>('[data-group-id]').forEach((button) => {
+      button.addEventListener('click', () => {
+        changeGroups(groups.filter((id) => id !== button.dataset.groupId));
+      });
+    });
   }
 
-  function openAddEnvModal() {
-    openDialog({
-      title: '新增环境变量',
-      description: '添加或覆盖服务端使用的环境变量。',
-      maxWidth: '32rem',
-      bodyHtml: `
-        <div class="flex flex-col gap-3.5">
-          <div class="form-group">
-            <label class="form-label" for="add-env-key">Key <span class="text-destructive">*</span></label>
-            <input id="add-env-key" class="input font-mono text-xs" placeholder="如 SYSTEM_PROMPT, BOT_NAME..." autocomplete="off" />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="add-env-val">Value</label>
-            <input id="add-env-val" class="input font-mono text-xs" placeholder="环境变量值..." autocomplete="off" />
-          </div>
-          <label class="flex items-center gap-2 cursor-pointer text-xs select-none">
-            <input type="checkbox" id="add-env-secret-cb" class="checkbox" />
-            <span class="text-muted">这是敏感信息（自动脱敏显示）</span>
-          </label>
-        </div>
-      `,
-      footerHtml: `
-        <button class="btn btn-outline btn-sm" id="add-env-cancel">取消</button>
-        <button class="btn btn-primary btn-sm" id="add-env-save">
-          ${icon('save', 'w-3.5 h-3.5')}
-          <span>保存</span>
-        </button>
-      `,
-      onMount: (dialogEl, close) => {
-        const keyInput =
-          dialogEl.querySelector<HTMLInputElement>('#add-env-key')!;
-        const valInput =
-          dialogEl.querySelector<HTMLInputElement>('#add-env-val')!;
-        const secretCb =
-          dialogEl.querySelector<HTMLInputElement>('#add-env-secret-cb')!;
-        const saveBtn =
-          dialogEl.querySelector<HTMLButtonElement>('#add-env-save')!;
-        const cancelBtn =
-          dialogEl.querySelector<HTMLButtonElement>('#add-env-cancel')!;
+  function changeGroups(groups: string[]): void {
+    if (!draft || saving || loading) return;
+    const retained = new Set(groups.map(groupProbabilityIdentity));
+    const removed = parseWhitelistGroups(draft.get('PROACTIVE_REPLY_GROUP_WHITELIST'))
+      .map(groupProbabilityIdentity).filter((id) => !retained.has(id));
+    if (removed.length) {
+      try {
+        const probabilities = parseGroupProbabilities(draft.get(groupProbabilitiesKey));
+        let changed = false;
+        for (const id of removed) changed = probabilities.delete(id) || changed;
+        if (changed) change(groupProbabilitiesKey, serializeGroupProbabilities(probabilities));
+      } catch (error) {
+        toast.error('无法移除群聊：' + String(error));
+        return;
+      }
+    }
+    if (!draft.get('ENABLE_PROACTIVE_REPLY_WHITELIST')) {
+      change('ENABLE_PROACTIVE_REPLY_WHITELIST', whitelist.checked ? 'true' : 'false');
+    }
+    change('PROACTIVE_REPLY_GROUP_WHITELIST', groups.join(','));
+    renderGroups();
+  }
 
-        secretCb.addEventListener('change', () => {
-          valInput.type = secretCb.checked ? 'password' : 'text';
+  function openGroupProbability(id: string): void {
+    if (!draft || saving || loading || isUnmounted) return;
+    let probabilities: Map<string, number>;
+    try { probabilities = parseGroupProbabilities(draft.get(groupProbabilitiesKey)); }
+    catch (error) { toast.error('无法编辑群聊概率：' + String(error)); return; }
+    closeGroupProbabilityDialog?.();
+    const identity = groupProbabilityIdentity(id);
+    const current = probabilities.get(identity) ?? normalizeGroupProbability(draft.get('PROACTIVE_REPLY_PROBABILITY'));
+    void openDialog({
+      title: '单独配置主动回复概率',
+      description: formatGroupOption(id, sessionGroupMap.get(id)),
+      maxWidth: '26rem',
+      bodyHtml: `<label class="text-xs font-semibold" for="group-probability-input">触发概率</label>
+        <input id="group-probability-input" class="input font-mono mt-2 w-full" type="text" inputmode="decimal" value="${current}" aria-describedby="group-probability-hint" autocomplete="off" />
+        <p id="group-probability-hint" class="text-xs text-muted mt-2">小于 0 或输入不合法时设为 0.01，大于 1 时设为 1。0 表示该群不触发主动回复。</p>
+        <p class="text-xs text-muted mt-2">确认后加入草稿，点击页面上方「保存」后生效。总开关和白名单限制仍然适用。</p>`,
+      footerHtml: `<button type="button" id="group-probability-reset" class="btn btn-outline btn-sm" ${probabilities.has(identity) ? '' : 'disabled'}>恢复统一概率</button>
+        <button type="button" class="btn btn-outline btn-sm dialog-close-btn">取消</button>
+        <button type="button" id="group-probability-confirm" class="btn btn-primary btn-sm">确认</button>`,
+      onMount(dialog, close) {
+        closeGroupProbabilityDialog = close;
+        const input = dialog.querySelector<HTMLInputElement>('#group-probability-input')!;
+        const apply = (probability: number | null) => {
+          if (!draft || saving || loading || isUnmounted) return;
+          const values = parseGroupProbabilities(draft.get(groupProbabilitiesKey));
+          if (probability === null) values.delete(identity);
+          else values.set(identity, probability);
+          change(groupProbabilitiesKey, serializeGroupProbabilities(values));
+          renderGroups();
+          close();
+        };
+        dialog.querySelector('#group-probability-confirm')!.addEventListener('click', () => apply(normalizeGroupProbability(input.value)));
+        dialog.querySelector('#group-probability-reset')!.addEventListener('click', () => apply(null));
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); apply(normalizeGroupProbability(input.value)); }
         });
-
-        cancelBtn.addEventListener('click', () => close());
-        saveBtn.addEventListener('click', async () => {
-          const key = keyInput.value.trim();
-          if (!key) {
-            toast.error('Key 不能为空');
-            return;
-          }
-          const value = valInput.value;
-          const isSecret = secretCb.checked;
-
-          try {
-            saveBtn.disabled = true;
-            const res = await api.updateEnvVar({ key, value, isSecret });
-            if (res.success) {
-              toast.success('环境变量已保存');
-              close();
-              void loadData();
-            } else {
-              toast.error('保存失败: ' + res.error);
-            }
-          } catch (err) {
-            toast.error(
-              '保存失败: ' + (err instanceof Error ? err.message : String(err)),
-            );
-          } finally {
-            saveBtn.disabled = false;
-          }
-        });
+        input.focus();
+        input.select();
+      },
+      onClose() {
+        closeGroupProbabilityDialog = null;
+        if (!isUnmounted) {
+          [...groupTags.querySelectorAll<HTMLButtonElement>('[data-group-probability]')]
+            .find((button) => button.dataset.groupProbability === id)?.focus();
+        }
       },
     });
   }
 
-  // Toggle behavior settings
-  async function toggleGroupSetting(key: string, value: boolean) {
-    try {
-      const res = await api.updateEnvVar({
-        key,
-        value: value ? 'true' : 'false',
-        isSecret: false,
+  function normalizeBotUserID(userID: string): string {
+    const colon = userID.indexOf(':');
+    return colon < 0 ? userID : userID.slice(0, colon).toLowerCase() + userID.slice(colon);
+  }
+
+  function botUserIDs(): string[] {
+    return [...new Set((draft?.get('BOT_LOOP_USER_IDS') ?? '').split(/[,;\s]+/).filter(Boolean).map(normalizeBotUserID))];
+  }
+
+  function renderBotUsers(): void {
+    const ids = botUserIDs();
+    const disabled = !draft || saving || loading;
+    botUserTags.innerHTML = ids.length === 0
+      ? '<span class="text-[11px] text-muted">尚未添加用户 ID</span>'
+      : ids.map((userID, index) => `
+          <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-muted border border-border text-xs text-foreground font-mono min-w-0">
+            <span class="break-all">${escapeHtml(userID)}</span>
+            <button type="button" class="text-muted hover:text-danger shrink-0 cursor-pointer" data-bot-user-index="${index}" aria-label="移除 ${escapeHtml(userID)}" title="移除用户 ID" ${disabled ? 'disabled' : ''}>&times;</button>
+          </span>`).join('');
+    botUserTags.querySelectorAll<HTMLButtonElement>('[data-bot-user-index]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!draft || saving || loading) return;
+        change('BOT_LOOP_USER_IDS', ids.filter((_, index) => index !== Number(button.dataset.botUserIndex)).join(','));
+        renderBotUsers();
       });
-      if (res.success) {
-        toast.success('群聊设置已更新');
-        void loadData();
-      } else {
-        toast.error('更新失败: ' + res.error);
-      }
-    } catch (err) {
-      toast.error(
-        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
+    });
+  }
+
+  function addBotUser(): boolean {
+    if (!draft || saving || loading) return false;
+    const userID = normalizeBotUserID(botUserInput.value.trim());
+    if (!userID || /[,;\s]/.test(userID)) {
+      toast.error(userID ? '每次添加一个用户 ID' : '请输入用户 ID');
+      return false;
+    }
+    const ids = botUserIDs();
+    if (ids.includes(userID)) {
+      toast.error('该用户 ID 已添加');
+      return false;
+    }
+    botUserInput.value = '';
+    change('BOT_LOOP_USER_IDS', [...ids, userID].join(','));
+    renderBotUsers();
+    botUserInput.focus();
+    return true;
+  }
+
+  function updateProbabilityDisplay(): void {
+    const text = probability.value || '0.01';
+    const value = Number(text);
+    element<HTMLElement>('proactive-reply-prob-display').textContent = Number.isFinite(value)
+      ? `${text} (${Math.round(value * 100)}%)` : '待填写';
+  }
+
+  function updateStickerDisplay(): void {
+    const level = Number(stickerNumber.value);
+    element<HTMLElement>('sticker-activity-display').textContent = level === 0 ? '0 · 已禁用' : `${level} · 每 ${(11 - level) * 5} 轮`;
+    element<HTMLElement>('sticker-activity-mode-description').textContent = stickerMode.value === 'all_messages'
+      ? '每条传入消息计一轮，无需唤醒 Bot。' : '每次唤醒或触发主动回复计一轮。';
+  }
+
+  function renderControls(): void {
+    if (!draft) return;
+    const value = (key: string) => draft!.get(key);
+    pokeEnabled.checked = value('ENABLE_POKE') === 'true';
+    pokeText.value = value('POKE_CUSTOM_TEXT');
+    pokeCooldown.value = value('POKE_COOLDOWN_SECONDS');
+    updatePokePreview();
+    updatePokeControls();
+    embeddingToggle.checked = value('ENABLE_EMBEDDING') === 'true';
+    updateEmbeddingWarning();
+    proactive.checked = value('ENABLE_PROACTIVE_REPLY') === 'true' ||
+      (value('ENABLE_PROACTIVE_REPLY') !== 'false' && Number(value('PROACTIVE_REPLY_PROBABILITY')) > 0);
+    probability.value = value('PROACTIVE_REPLY_PROBABILITY').trim();
+    probabilitySlider.value = probability.value || '0.01';
+    probability.disabled = probabilitySlider.disabled = !proactive.checked;
+    element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
+    element<HTMLElement>('proactive-reply-status-text').style.display = 'none';
+    element<HTMLElement>('proactive-whitelist-status-text').style.display = 'none';
+    const toggles: Record<string, string> = {
+      'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
+      'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG',
+      'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
+    };
+    for (const [id, key] of Object.entries(toggles)) {
+      element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
+    }
+    quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
+    quoteDepth.value = value('QUOTE_TRACE_DEPTH');
+    quoteDepth.disabled = !quote.checked;
+    renderBotUsers();
+    element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
+    const loopMode = element<HTMLSelectElement>('bot-loop-mode');
+    loopMode.value = value('BOT_LOOP_MODE');
+    loopMode.dataset.default = String(!loopMode.value);
+    stickerNumber.value = value('STICKER_ACTIVITY');
+    stickerSlider.value = stickerNumber.value || '0';
+    stickerMode.value = value('STICKER_ACTIVITY_MODE');
+    stickerMode.dataset.default = String(!stickerMode.value);
+    renderGroups();
+    updateProbabilityDisplay();
+    updateStickerDisplay();
+  }
+
+  function validateExtra(key: string, value: string): void {
+    if (key.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('请填写有效的环境变量名');
+    const upper = key.toUpperCase();
+    if (settingFields[upper] || dedicatedSettingKeys.has(upper) || draft?.values().some((item) => item.key === upper) ||
+      ['BRAIN_PATH', 'DIALOGUE_PATH', 'ONEBOT_WS_PATH', 'ASTRBOT_WS_PATH'].includes(upper)) {
+      throw new Error('此项应在常规设置中修改');
+    }
+    if (new TextEncoder().encode(value).length > 16 * 1024 || /[\r\n\0]/.test(value)) {
+      throw new Error('环境变量值不得超过 16 KiB，也不能包含换行或 NUL');
     }
   }
 
-  // Raw .env save
-  async function saveRawEnv() {
-    if (saving) return;
-    saving = true;
-    saveRawEnvBtn.disabled = true;
+  function addExtra(): boolean {
+    if (!draft) return false;
     try {
-      const content = rawTextarea.value;
-      const res = await api.updateRawEnvFile(content);
-      if (res.success) {
-        toast.success('.env 文件已更新并已重载配置');
-        void loadData();
-      } else {
-        toast.error('更新失败: ' + res.error);
+      const key = extraKey.value.trim();
+      validateExtra(key, extraValue.value);
+      draft.setExtra(key, extraValue.value);
+      extraKey.value = extraValue.value = '';
+      renderExtra();
+      updateBanner();
+      return true;
+    } catch (error) {
+      toast.error(String(error));
+      return false;
+    }
+  }
+
+  function renderExtra(): void {
+    const entries = draft?.extraEntries() ?? [];
+    extraList.innerHTML = entries.length === 0 ? '<p class="text-xs text-muted">暂无额外注入项。</p>' : entries.map(({ key, value }) => `
+      <div class="flex items-center gap-2 min-w-0" data-extra-key="${escapeHtml(key)}">
+        <span class="font-mono text-xs w-40 shrink-0 break-all">${escapeHtml(key)}</span>
+        <input class="input input-sm flex-1 min-w-0" type="password" value="${escapeHtml(value)}" aria-label="${escapeHtml(key)}的值" />
+        <button type="button" class="btn btn-outline btn-sm" data-extra-show>显示</button>
+        <button type="button" class="btn btn-ghost btn-sm text-destructive" data-extra-delete>删除</button>
+      </div>`).join('');
+    extraList.querySelectorAll<HTMLElement>('[data-extra-key]').forEach((row) => {
+      const key = row.dataset.extraKey!;
+      const input = row.querySelector<HTMLInputElement>('input')!;
+      input.addEventListener('input', () => { draft!.setExtra(key, input.value); updateBanner(); });
+      row.querySelector<HTMLButtonElement>('[data-extra-show]')!.addEventListener('click', (event) => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+        (event.currentTarget as HTMLButtonElement).textContent = input.type === 'password' ? '显示' : '隐藏';
+      });
+      row.querySelector<HTMLButtonElement>('[data-extra-delete]')!.addEventListener('click', () => {
+        draft!.deleteExtra(key);
+        renderExtra();
+        updateBanner();
+      });
+    });
+  }
+
+  function renderAll(): void {
+    container.querySelectorAll<HTMLInputElement>('input, select, button').forEach((input) => { input.disabled = false; });
+    renderForm();
+    renderControls();
+    renderExtra();
+    if (saving || loading || !draft) container.querySelectorAll<HTMLInputElement>('input, select, button').forEach((input) => { input.disabled = true; });
+    refreshBtn.disabled = loading || saving || dirty();
+    updateBanner();
+  }
+
+  async function loadData(): Promise<void> {
+    closeGroupProbabilityDialog?.();
+    const sequence = ++loadSeq;
+    loading = true;
+    renderAll();
+    try {
+      const [memorySettings, extra, sessions] = await Promise.all([
+        api.listEnvVarsWithStorage(), extraAPI.list(), api.getSessions(100).catch(() => ({ sessions: [] })),
+      ]);
+      if (isUnmounted || sequence !== loadSeq) return;
+      storageBackend = memorySettings.storageBackend;
+      draft = new SettingsDraft(memorySettings.envVars, extra);
+      sessionGroupMap.clear();
+      for (const session of sessions.sessions ?? []) {
+        const id = groupIdFromSessionId(session.sessionId);
+        if (id) sessionGroupMap.set(id, session.groupName || '');
       }
-    } catch (err) {
-      toast.error(
-        '更新失败: ' + (err instanceof Error ? err.message : String(err)),
-      );
+      groupSelect.innerHTML = '<option value="">-- 从最近会话选择群聊 --</option>' +
+        [...sessionGroupMap].map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(formatGroupOption(id, name))}</option>`).join('');
+    } catch (error) {
+      if (!isUnmounted) toast.error('加载设置失败: ' + String(error));
+    } finally {
+      if (!isUnmounted && sequence === loadSeq) { loading = false; renderAll(); }
+    }
+  }
+
+  async function saveDraft(): Promise<void> {
+    if (!draft || saving || loading) return;
+    if (botUserInput.value && !addBotUser()) return;
+    if (groupInput.value) addGroup();
+    if ((extraKey.value || extraValue.value) && !addExtra()) return;
+    for (const input of invalidNumbers()) {
+      const disabled = input.disabled;
+      input.disabled = false;
+      input.reportValidity();
+      input.disabled = disabled;
+      return;
+    }
+    for (const { key, value } of draft.pending()) {
+      if (value === null) continue;
+      const input = numericControls[key] ?? container.querySelector<HTMLInputElement>(`input[type="number"][data-setting-input="${key}"]`);
+      if (!input) continue;
+      const disabled = input.disabled;
+      if (value !== '' && settingFields[key]?.positive && !(Number(value) > 0)) {
+        toast.error(`${settingFields[key].label}必须大于 0`);
+        return;
+      }
+      input.disabled = false;
+      const valid = input.reportValidity();
+      input.disabled = disabled;
+      if (!valid) return;
+    }
+    const current = draft;
+    const extraChanges = current.extraChanges();
+    try {
+      extraChanges.forEach(({ key, value }) => validateExtra(key, value ?? ''));
+    } catch (error) { toast.error(String(error)); return; }
+    const changes = current.pending();
+    saving = true;
+    renderAll();
+    try {
+      for (const { key, value } of extraChanges) {
+        controller.signal.throwIfAborted();
+        if (value === null) await extraAPI.delete(key, controller.signal);
+        else await extraAPI.put({ key, value }, controller.signal);
+        current.acknowledgeExtra(key, value);
+      }
+      if (changes.length) {
+        controller.signal.throwIfAborted();
+        const response = await api.updateEnvVars(changes, controller.signal);
+        if (!response.success) throw new Error(response.error);
+        current.acknowledgeSettings(changes);
+        if (changes.some(({ key }) => key === 'MCP_CONTROL_TOKEN' || key === 'ADMIN_TOKEN')) {
+          setControlToken(current.get('MCP_CONTROL_TOKEN').trim() || current.get('ADMIN_TOKEN'));
+        }
+      }
+      if (isUnmounted) return;
+      toast.success(extraChanges.length ? '设置已保存；额外 env 注入项重启 FrostAgent 后生效' : '设置已保存');
+      saving = false;
+      await loadData();
+    } catch (error) {
+      if (!isUnmounted) toast.error('保存未完成，剩余更改仍保留在草稿中: ' + String(error));
     } finally {
       saving = false;
-      saveRawEnvBtn.disabled = false;
+      if (!isUnmounted) renderAll();
     }
   }
 
-  // Tab switching
-  tabTableBtn.addEventListener('click', () => {
-    tabTableBtn.classList.add('active');
-    tabRawBtn.classList.remove('active');
-    tabTableContent.style.display = 'flex';
-    tabRawContent.style.display = 'none';
-  });
-
-  tabRawBtn.addEventListener('click', () => {
-    tabTableBtn.classList.remove('active');
-    tabRawBtn.classList.add('active');
-    tabTableContent.style.display = 'none';
-    tabRawContent.style.display = 'flex';
-  });
-
-  // Group cb handlers
-  groupMentionCb.addEventListener(
-    'change',
-    () =>
-      void toggleGroupSetting('GROUP_REPLY_ON_MENTION', groupMentionCb.checked),
-  );
-  groupAtCb.addEventListener(
-    'change',
-    () => void toggleGroupSetting('ENABLE_AT_IN_GROUP_MSG', groupAtCb.checked),
-  );
-  groupReplyCb.addEventListener(
-    'change',
-    () =>
-      void toggleGroupSetting(
-        'ENABLE_REPLY_IN_GROUP_MSG',
-        groupReplyCb.checked,
-      ),
-  );
-
-  addEnvBtn.addEventListener('click', openAddEnvModal);
-  saveRawEnvBtn.addEventListener('click', () => void saveRawEnv());
-  refreshBtn.addEventListener('click', () => void loadData());
-
-  void loadData();
-
-  return () => {
-    isUnmounted = true;
+  const binds: Record<string, string> = {
+    'poke-enabled': 'ENABLE_POKE',
+    'embedding-enabled': 'ENABLE_EMBEDDING',
+    'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
+    'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG', 'quote-trace-cb': 'ENABLE_QUOTE_TRACE',
+    'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
+    'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
   };
+  for (const [id, key] of Object.entries(binds)) {
+    const input = element<HTMLInputElement>(id);
+    input.addEventListener('change', () => {
+      change(key, input.checked ? 'true' : 'false');
+      if (input === pokeEnabled) updatePokeControls();
+      if (input === embeddingToggle) updateEmbeddingWarning();
+      if (input === quote) quoteDepth.disabled = !quote.checked;
+    });
+  }
+  pokeText.addEventListener('input', () => {
+    change('POKE_CUSTOM_TEXT', pokeText.value);
+    updatePokePreview();
+  });
+  const texts: Record<string, string> = {
+    'poke-cooldown': 'POKE_COOLDOWN_SECONDS',
+    'bot-loop-max-turns': 'BOT_LOOP_MAX_TURNS', 'quote-trace-depth': 'QUOTE_TRACE_DEPTH',
+  };
+  for (const [id, key] of Object.entries(texts)) {
+    const input = element<HTMLInputElement>(id);
+    input.addEventListener('input', () => change(key, input.value));
+  }
+  element<HTMLSelectElement>('bot-loop-mode').addEventListener('change', () => {
+    const input = element<HTMLSelectElement>('bot-loop-mode');
+    input.dataset.default = String(!input.value);
+    change('BOT_LOOP_MODE', input.value);
+  });
+  proactive.addEventListener('change', () => {
+    change('ENABLE_PROACTIVE_REPLY', proactive.checked ? 'true' : 'false');
+    const rawProbability = draft?.get('PROACTIVE_REPLY_PROBABILITY') ?? '';
+    const editedProbability = draft?.pending().some(({ key }) => key === 'PROACTIVE_REPLY_PROBABILITY');
+    const trimmedProbability = rawProbability.trim();
+    const numericProbability = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmedProbability)
+      ? Number(trimmedProbability) : Number.NaN;
+    if (proactive.checked && !editedProbability && trimmedProbability &&
+      (!Number.isFinite(numericProbability) || numericProbability <= 0)) {
+      change('PROACTIVE_REPLY_PROBABILITY', '');
+      probability.value = '';
+      probabilitySlider.value = '0.01';
+      updateProbabilityDisplay();
+    }
+    probability.disabled = probabilitySlider.disabled = !proactive.checked;
+    element<HTMLElement>('proactive-reply-controls').style.opacity = proactive.checked ? '1' : '0.55';
+  });
+  probabilitySlider.addEventListener('input', () => {
+    probability.value = probabilitySlider.value;
+    change('PROACTIVE_REPLY_PROBABILITY', probability.value);
+    updateProbabilityDisplay();
+  });
+  probability.addEventListener('input', () => {
+    probabilitySlider.value = probability.value || '0.01';
+    change('PROACTIVE_REPLY_PROBABILITY', probability.value);
+    updateProbabilityDisplay();
+  });
+  stickerSlider.addEventListener('input', () => {
+    stickerNumber.value = stickerSlider.value;
+    change('STICKER_ACTIVITY', stickerSlider.value);
+    updateStickerDisplay();
+  });
+  stickerNumber.addEventListener('input', () => {
+    stickerSlider.value = stickerNumber.value || '0';
+    change('STICKER_ACTIVITY', stickerNumber.value);
+    updateStickerDisplay();
+  });
+  stickerMode.addEventListener('change', () => {
+    stickerMode.dataset.default = String(!stickerMode.value);
+    change('STICKER_ACTIVITY_MODE', stickerMode.value);
+    updateStickerDisplay();
+  });
+  groupSelect.addEventListener('change', () => { groupInput.value = groupSelect.value; updateBanner(); });
+  const addGroup = () => {
+    if (!groupInput.value.trim()) return;
+    const groups = parseWhitelistGroups((draft?.get('PROACTIVE_REPLY_GROUP_WHITELIST') ?? '') + ',' + groupInput.value);
+    changeGroups(groups);
+    groupInput.value = groupSelect.value = '';
+    updateBanner();
+  };
+  groupAdd.addEventListener('click', addGroup);
+  groupInput.addEventListener('input', updateBanner);
+  groupInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addGroup(); } });
+  botUserAdd.addEventListener('click', () => { addBotUser(); });
+  botUserInput.addEventListener('input', updateBanner);
+  botUserInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); addBotUser(); }
+  });
+  extraKey.addEventListener('input', updateBanner);
+  extraValue.addEventListener('input', updateBanner);
+  extraAdd.addEventListener('click', addExtra);
+  restoreBtn.addEventListener('click', () => {
+    if (saving) return;
+    closeGroupProbabilityDialog?.();
+    draft?.restore();
+    extraKey.value = extraValue.value = '';
+    groupInput.value = groupSelect.value = '';
+    botUserInput.value = '';
+    renderAll();
+  });
+  saveBtn.addEventListener('click', () => void saveDraft());
+  refreshBtn.addEventListener('click', () => { if (!dirty()) void loadData(); });
+  void loadData();
+  return () => { isUnmounted = true; closeGroupProbabilityDialog?.(); controller.abort(); draft = null; banner.hidden = true; };
 }

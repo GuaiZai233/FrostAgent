@@ -1,5 +1,9 @@
 import { instanceState } from './instance-state';
 import { openInstanceManagement } from './components/instances';
+import { renderInstanceLabel } from './components/instance-label';
+import { mountInstanceRequired } from './components/instance-required';
+import logoURL from '../../../assets/logo.png';
+import { mountAuthenticatedResources } from './components/authenticated-resources';
 import './styles/app.css';
 import './styles/variables.css';
 import './styles/base.css';
@@ -9,36 +13,64 @@ import './styles/layout.css';
 import { themeManager, type ThemeMode } from './theme';
 import { router } from './router';
 import { icon } from './components/icons';
+import { lazyMount } from './lazy-page';
 
 import { mountOverviewPage } from './pages/overview';
-import { mountSessionsPage } from './pages/sessions';
-import { mountMemoryPage } from './pages/memory';
+import { mountConnectionsPage } from './pages/connections';
 import { mountDialoguePage } from './pages/dialogue';
 import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
-import { mountMCPPage } from './pages/mcp';
+import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
-import { mountBackendSettingsPage } from './pages/backend-settings';
+import { mountStorageSettingsPage } from './pages/storage-settings';
+import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountFrontendSettingsPage } from './pages/frontend-settings';
-import { mountModelRouterPage } from './pages/model-router';
+import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountSecurityPage } from './pages/security';
+
+const mountBackendSettingsPage = lazyMount(() =>
+  import('./pages/backend-settings').then(
+    ({ mountBackendSettingsPage }) => mountBackendSettingsPage,
+  ),
+);
+const mountModelRouterPage = lazyMount(() =>
+  import('./pages/model-router').then(
+    ({ mountModelRouterPage }) => mountModelRouterPage,
+  ),
+);
+const mountMemoryPage = lazyMount(() =>
+  import('./pages/memory').then(({ mountMemoryPage }) => mountMemoryPage),
+);
+const mountMCPPage = lazyMount(() =>
+  import('./pages/mcp').then(({ mountMCPPage }) => mountMCPPage),
+);
+const mountActionsCatPage = lazyMount(() =>
+  import('./pages/actionscat').then(({ mountActionsCatPage }) => mountActionsCatPage),
+);
+
+const mountSkillsPage = lazyMount(() =>
+  import('./pages/skills').then(({ mountSkillsPage }) => mountSkillsPage),
+);
 
 // Initialize Theme
 themeManager.init();
 
 const navItems = [
   { path: '/overview', label: '概览', iconName: 'dashboard' },
+  { path: '/connections', label: '连接', iconName: 'radio' },
   { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
-  { path: '/sessions', label: '会话管理', iconName: 'forum' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
-  { path: '/dialogue', label: '人设对话', iconName: 'chat' },
-  { path: '/prompt', label: 'Prompt 检查', iconName: 'sparkles' },
+  { path: '/dialogue', label: '人格设定', iconName: 'chat' },
+  { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
+  { path: '/skills', label: 'Skills', iconName: 'sparkles' },
+  { path: '/actionscat', label: 'ActionsCat', iconName: 'play' },
+  { path: '/chat', label: '直接对话', iconName: 'bot' },
   { path: '/logs', label: '日志查询', iconName: 'receipt_long' },
-  { path: '/settings', label: '系统设置', iconName: 'settings' },
   { path: '/security', label: '安全控制', iconName: 'lock' },
+  { path: '/settings', label: '系统设置', iconName: 'settings' },
 ];
 
 function buildNavigationLinks(isMobile = false): string {
@@ -84,7 +116,7 @@ function initAppShell(): void {
         <div class="sidebar-header">
           <div class="brand">
             <div class="brand-icon">
-              ${icon('sparkles')}
+              <img src="${logoURL}" alt="FrostAgent Logo" />
             </div>
             <div class="brand-info">
               <span class="brand-title">FrostAgent</span>
@@ -100,7 +132,7 @@ function initAppShell(): void {
         <div class="sidebar-footer">
           <button class="theme-toggle-btn instance-manager-btn">
             <span>实例管理</span>
-            <span class="instance-selected-label text-xs text-muted">未选择</span>
+            <span class="instance-selected-label text-xs text-muted">${renderInstanceLabel(instanceState.selected)}</span>
           </button>
         </div>
       </aside>
@@ -112,7 +144,7 @@ function initAppShell(): void {
         </button>
         <div class="flex items-center gap-2">
           <div class="brand-icon" style="width: 1.5rem; height: 1.5rem; border-radius: var(--radius-sm);">
-            ${icon('sparkles', '', 14)}
+            <img src="${logoURL}" alt="FrostAgent Logo" />
           </div>
           <span class="font-bold text-sm">FrostAgent</span>
         </div>
@@ -129,7 +161,7 @@ function initAppShell(): void {
         <div class="drawer-header flex items-center justify-between p-4 border-b">
           <div class="brand">
             <div class="brand-icon">
-              ${icon('sparkles')}
+              <img src="${logoURL}" alt="FrostAgent Logo" />
             </div>
             <div class="brand-info">
               <span class="brand-title">FrostAgent</span>
@@ -146,7 +178,7 @@ function initAppShell(): void {
         <div class="sidebar-footer">
           <button class="theme-toggle-btn instance-manager-btn">
             <span>实例管理</span>
-            <span class="instance-selected-label text-xs text-muted">未选择</span>
+            <span class="instance-selected-label text-xs text-muted">${renderInstanceLabel(instanceState.selected)}</span>
           </button>
         </div>
       </aside>
@@ -214,7 +246,8 @@ function initAppShell(): void {
 
       const isActive =
         activePath === linkPath ||
-        (linkPath === '/settings' && activePath.startsWith('/settings'));
+        (linkPath === '/settings' && activePath.startsWith('/settings')) ||
+        (linkPath === '/prompt' && activePath === '/sessions');
 
       if (isActive) {
         item.classList.add('active');
@@ -230,28 +263,41 @@ function initAppShell(): void {
       void openInstanceManagement();
     }),
   );
-  window.addEventListener('instance-selected', () => {
+  const updateInstanceLabel = () => {
     document
       .querySelectorAll('.instance-selected-label')
       .forEach(
         (label) =>
-          (label.textContent = instanceState.selected?.name || '未选择'),
+          (label.innerHTML = renderInstanceLabel(instanceState.selected)),
       );
+  };
+  window.addEventListener('instance-updated', updateInstanceLabel);
+  window.addEventListener('instance-selected', () => {
+    updateInstanceLabel();
     router.refresh();
   });
 
   // Register Routes
   router.register('/overview', '概览', mountOverviewPage);
-  router.register('/sessions', '会话管理', mountSessionsPage);
+  router.register('/connections', '连接', mountConnectionsPage);
+  router.register('/sessions', '会话与 Prompt', mountPromptPage);
   router.register('/memory', '记忆管理', mountMemoryPage);
-  router.register('/dialogue', '人设对话', mountDialoguePage);
-  router.register('/prompt', 'Prompt 检查', mountPromptPage);
+  router.register('/dialogue', '人格设定', mountDialoguePage);
+  router.register('/prompt', '会话与 Prompt', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
+  router.register('/chat', '直接对话', mountChatPage);
+  router.register('/skills', 'Skills', mountSkillsPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
+  router.register('/settings/storage', '数据库设置', mountStorageSettingsPage);
   router.register(
     '/settings/backend',
     'Bot 服务端设置',
+    mountBackendSettingsPage,
+  );
+  router.register(
+    '/settings/behavior',
+    'Bot 行为设置',
     mountBackendSettingsPage,
   );
   router.register(
@@ -259,32 +305,35 @@ function initAppShell(): void {
     '网页端外观设置',
     mountFrontendSettingsPage,
   );
+  router.register(
+    '/settings/commands',
+    '指令设置',
+    mountCommandSettingsPage,
+  );
   router.register('/model-router', '模型路由器', mountModelRouterPage);
   // Security is a control-plane page and must remain available without an instance.
   router.register('/security', '安全控制', mountSecurityPage);
 
   const register = router.register.bind(router);
   const guardedPaths = [
-    '/overview',
-    '/sessions',
-    '/memory',
+    '/connections',
     '/dialogue',
-    '/prompt',
-    '/stickers',
     '/mcp',
+    '/actionscat',
     '/settings/backend',
-    '/model-router',
+    '/settings/behavior',
+    '/settings/backup',
+    '/settings/commands',
   ];
   const mounts = [
-    mountOverviewPage,
-    mountSessionsPage,
-    mountMemoryPage,
+    mountConnectionsPage,
     mountDialoguePage,
-    mountPromptPage,
-    mountStickersPage,
     mountMCPPage,
+    mountActionsCatPage,
     mountBackendSettingsPage,
-    mountModelRouterPage,
+    mountBackendSettingsPage,
+    mountBackupRestorePage,
+    mountCommandSettingsPage,
   ];
   guardedPaths.forEach((path, index) =>
     register(
@@ -292,10 +341,8 @@ function initAppShell(): void {
       navItems.find((n) => n.path === path)?.label || '设置',
       (container) => {
         if (instanceState.selected) return mounts[index](container);
-        container.innerHTML = `<div class="page-container"><article class="card p-6"><h1 class="page-title">请选择实例</h1><p class="page-description">FrostAgent Control Plane 正在运行。创建或选择实例后，即可管理它的配置与数据。</p><button class="btn btn-primary mt-4" id="empty-manage">实例管理</button></article></div>`;
-        container
-          .querySelector('#empty-manage')!
-          .addEventListener('click', () => void openInstanceManagement());
+        container.innerHTML = '<div class="page-container"></div>';
+        mountInstanceRequired(container.firstElementChild as HTMLElement);
       },
     ),
   );
@@ -308,5 +355,6 @@ function initAppShell(): void {
 
 // Start application
 document.addEventListener('DOMContentLoaded', () => {
+  mountAuthenticatedResources();
   initAppShell();
 });

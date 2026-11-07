@@ -1,35 +1,46 @@
 package instance
 
 import (
-	pbconnect "FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/instanceconfig"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/mcp"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/sandbox"
-	"FrostAgent/internal/sandbox/codeinterpreter"
-	"FrostAgent/internal/security"
-	logsvc "FrostAgent/internal/service/logs"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	pbconnect "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
+	"github.com/GuaiZai233/FrostAgent/internal/backup"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox/codeinterpreter"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	logsvc "github.com/GuaiZai233/FrostAgent/internal/service/logs"
+	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	routersvc "github.com/GuaiZai233/FrostAgent/internal/service/modelrouter"
+	settingssvc "github.com/GuaiZai233/FrostAgent/internal/service/settings"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
 
 var ErrBusy = errors.New("实例正忙")
+var ErrNameExists = errors.New("实例名称已存在")
 var ErrDeleting = errors.New("实例正在删除，请重试删除操作")
 var ErrClosing = errors.New("Control Plane 正在关闭")
 var idPattern = regexp.MustCompile("^[a-f0-9]{8}$")
@@ -58,27 +69,75 @@ type managed struct {
 	logger  *logs.Store
 	mcp     *mcp.Manager
 }
+
+type runtimeBuilder func(*Manager, *managed, *instanceconfig.Store, string, bool) (*Runtime, error)
+
 type Manager struct {
-	mu               sync.RWMutex
-	root             string
-	global           *instanceconfig.Store
-	wsListenAddr     string
-	registry         registry
-	instances        map[string]*managed
-	templateDialogue string
-	billing          *billing.Client
-	mcpGetenv        func(string) string
-	sandbox          *sandbox.ConfigManager
-	security         *security.Controller
-	endpointMu       sync.Mutex
-	endpointOwners   map[string]string
-	general          http.Handler
-	shutdown         context.Context
-	shutdownCancel   context.CancelFunc
-	closeOnce        sync.Once
+	mu                 sync.RWMutex
+	root               string
+	global             *instanceconfig.Store
+	legacyWSListenAddr string
+	registry           registry
+	instances          map[string]*managed
+	templateDialogue   string
+	billing            atomic.Pointer[billing.Client]
+	globalApplyMu      sync.Mutex
+	settingsWriteMu    sync.Mutex
+	appliedGlobal      map[string]string
+	globalApplyHook    func() error
+	mcpGetenv          func(string) string
+	sandbox            *sandbox.ConfigManager
+	security           *security.Controller
+	endpointMu         sync.Mutex
+	endpointOwners     map[string]string
+	general            http.Handler
+	shutdown           context.Context
+	shutdownCancel     context.CancelFunc
+	closeOnce          sync.Once
+	db                 *storage.DB
+	buildRuntime       runtimeBuilder
 }
 
 func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
+	return newManager(root, global, dialoguePath, nil, buildManagedRuntime)
+}
+
+// NewDatabase starts the control plane with SQL as its only runtime state
+// source. Legacy JSON, dotenv and dialogue YAML files are never read.
+func NewDatabase(root string) (*Manager, error) {
+	db, err := storage.Open(context.Background(), root)
+	if err != nil {
+		return nil, err
+	}
+	return NewDatabaseWithDB(root, db)
+}
+
+// NewDatabaseWithDB adopts an already connected database for a control plane.
+func NewDatabaseWithDB(root string, db *storage.DB) (*Manager, error) {
+	global, err := instanceconfig.OpenDatabase(db, "", true)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	m, err := newManager(root, global, "", db, buildManagedRuntime)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return m, nil
+}
+
+func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, configDir string, enabled bool) (*Runtime, error) {
+	wsListenAddr := strings.TrimSpace(m.global.Get("WS_LISTEN_ADDR"))
+	if m.db == nil {
+		wsListenAddr = m.legacyWSListenAddr
+	} else if wsListenAddr == "" {
+		wsListenAddr = instanceconfig.DefaultWSListenAddr
+	}
+	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db)
+}
+
+func newManager(root string, global *instanceconfig.Store, dialoguePath string, db *storage.DB, builder runtimeBuilder) (*Manager, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -87,32 +146,74 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		return nil, err
 	}
 	shutdown, shutdownCancel := context.WithCancel(context.Background())
-	wsListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
-	if wsListenAddr == "" {
-		wsListenAddr = "127.0.0.1:1234"
-	}
 	if dialoguePath == "" {
 		dialoguePath = "eval/dialogue/dialogue.yml"
 	}
-	m := &Manager{root: abs, global: global, wsListenAddr: wsListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, security: security.NewController(abs)}
-	data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
-	if err == nil {
-		if err = json.Unmarshal(data, &m.registry); err != nil {
+	legacyWSListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
+	if legacyWSListenAddr == "" {
+		legacyWSListenAddr = instanceconfig.DefaultWSListenAddr
+	}
+	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db, buildRuntime: builder}
+	if db != nil {
+		m.appliedGlobal = global.Snapshot()
+		m.security = security.NewControllerSQL(db)
+	} else {
+		m.security = security.NewController(abs)
+	}
+	if global != nil {
+		rawTimeout := strings.TrimSpace(global.Get("SECURITY_GATEWAY_TIMEOUT"))
+		if rawTimeout == "" {
+			rawTimeout = strings.TrimSpace(global.Get("SECURITY_CLASSIFIER_TIMEOUT"))
+		}
+		if rawTimeout != "" {
+			m.security.SetClassifierTimeout(security.ValidateClassifierTimeout(rawTimeout, security.DefaultClassifierTimeout))
+		}
+
+		rawMode := strings.TrimSpace(global.Get("SECURITY_CONTROL_MODE"))
+		if rawMode != "" && !security.IsValidControlMode(rawMode) {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("SECURITY_CONTROL_MODE 配置值非法 %q，安全回退到 simple 模式", rawMode))
+		}
+		mode := security.ParseControlMode(rawMode)
+		m.security.SetMode(mode)
+	}
+	if db != nil {
+		records, nextNumber, err := db.LoadInstances(context.Background())
+		if err != nil {
 			return nil, err
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
+		m.registry.NextNumber = nextNumber
+		for _, record := range records {
+			m.registry.Instances = append(m.registry.Instances, Info{ID: record.ID, Name: record.Name,
+				CreatedAt: record.CreatedAt, Enabled: record.Enabled, Deleting: record.Deleting,
+				Error: record.Error, CredentialTargets: record.CredentialTargets})
+		}
+	} else {
+		data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
+		if err == nil {
+			if err = json.Unmarshal(data, &m.registry); err != nil {
+				return nil, err
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
 	}
 	if m.registry.Version != 1 || m.registry.NextNumber < 1 {
 		return nil, fmt.Errorf("无效的实例注册表")
 	}
-	data, err = os.ReadFile(filepath.Join(abs, "endpoint_ids.json"))
-	if err == nil {
-		if err = json.Unmarshal(data, &m.endpointOwners); err != nil {
+	if db != nil {
+		if err := m.recoverDeletionStages(); err != nil {
+			return nil, fmt.Errorf("recover interrupted instance deletion: %w", err)
+		}
+	}
+	if db == nil {
+		data, err := os.ReadFile(filepath.Join(abs, "endpoint_ids.json"))
+		if err == nil {
+			if err = json.Unmarshal(data, &m.endpointOwners); err != nil {
+				return nil, err
+			}
+		} else if !os.IsNotExist(err) {
 			return nil, err
 		}
-	} else if !os.IsNotExist(err) {
-		return nil, err
 	}
 	recoveryErrors := make(map[string]error)
 	for index, info := range m.registry.Instances {
@@ -128,8 +229,10 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			recoveryErrors[info.ID] = err
 			continue
 		}
-		if err := m.recoverCopyTransaction(info.ID); err != nil {
-			recoveryErrors[info.ID] = err
+		if db == nil {
+			if err := m.recoverCopyTransaction(info.ID); err != nil {
+				recoveryErrors[info.ID] = err
+			}
 		}
 	}
 	cfg := billing.LoadConfig(global.Get)
@@ -137,14 +240,26 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	if base == "" {
 		base = billing.DefaultAlcyoneBaseURL
 	}
-	m.billing = billing.NewClient(base, cfg.ServiceToken, cfg.Timeout)
+	m.billing.Store(billing.NewClient(base, cfg.ServiceToken, cfg.Timeout))
 	mux := http.NewServeMux()
+	if db != nil {
+		path, handler := pbconnect.NewModelRouterServiceHandler(routersvc.New(modelrouter.NewSQL(db, "")))
+		mux.Handle(path, handler)
+	}
 	p, h := pbconnect.NewLogServiceHandler(logsvc.New(logs.General))
 	mux.Handle(p, h)
 	mux.HandleFunc(logs.LogImagePathPrefix, logs.General.ImageHandler)
+	mux.HandleFunc("/api/v1/messages/send", m.handleDefaultSendMessage)
+	mux.HandleFunc("/api/actionscat/", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/actionscat", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/v1/actionscat/", m.handleDefaultActionsCat)
+	mux.HandleFunc("/api/v1/actionscat", m.handleDefaultActionsCat)
 	m.general = mux
 	// Retained data directories reserve their endpoint IDs too.
-	paths, err := filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
+	paths := []string{}
+	if db == nil {
+		paths, err = filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -191,13 +306,17 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 	} else {
 		logs.General.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
-	mcpEnvironment := map[string]string{
-		"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
-		"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
-		"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
-		"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
+	if db != nil {
+		m.mcpGetenv = global.Get
+	} else {
+		mcpEnvironment := map[string]string{
+			"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
+			"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
+			"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
+			"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
+		}
+		m.mcpGetenv = func(key string) string { return mcpEnvironment[key] }
 	}
-	m.mcpGetenv = func(key string) string { return mcpEnvironment[key] }
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
 		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
@@ -207,7 +326,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 			m.registry.Instances[index].Error = pathError.Error()
 			continue
 		}
-		if info.Deleting {
+		if info.Deleting || info.Enabled {
 			continue
 		}
 		r, c, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
@@ -219,6 +338,10 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 		} else if c != nil && c.Error() != nil {
 			m.registry.Instances[index].Enabled = false
 			m.registry.Instances[index].Error = c.Error().Error()
+		} else if info.Error != "" {
+			if err := m.update(info.ID, func(info *Info) { info.Error = "" }); err != nil {
+				i.logger.Warn(logs.SYSTEM, fmt.Sprintf("保存实例恢复状态失败: %v", err))
+			}
 		}
 	}
 	for _, info := range append([]Info{}, m.registry.Instances...) {
@@ -232,7 +355,7 @@ func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manag
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
 
-var mcpBuiltinNames = []string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "execute_command"}
+var mcpBuiltinNames = []string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "inspect_message_image", "execute_command", "load_skill", "read_skill_resource", "run_skill"}
 
 func (m *Manager) ensureInstanceMCP(i *managed) {
 	i.mu.Lock()
@@ -240,10 +363,13 @@ func (m *Manager) ensureInstanceMCP(i *managed) {
 	if i.mcp != nil {
 		return
 	}
-	manager := mcp.NewInactiveManager(
-		mcp.NewConfigStore(filepath.Join(m.dir(i.id), "mcp_servers.json")),
-		mcpBuiltinNames,
-	)
+	var configStore *mcp.ConfigStore
+	if m.db != nil {
+		configStore = mcp.NewSQLConfigStore(m.db, i.id)
+	} else {
+		configStore = mcp.NewConfigStore(filepath.Join(m.dir(i.id), "mcp_servers.json"))
+	}
+	manager := mcp.NewInactiveManager(configStore, mcpBuiltinNames)
 	if err := manager.Load(); err != nil {
 		i.logger.Warn(logs.SYSTEM, fmt.Sprintf("加载实例 MCP 配置失败: %v", err))
 	}
@@ -260,13 +386,22 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 			return nil, nil, err
 		}
 	}
-	c, openErr := instanceconfig.Open(filepath.Join(configDir, ".env"), false)
+	var c *instanceconfig.Store
+	var openErr error
+	if m.db != nil {
+		c, openErr = instanceconfig.OpenDatabase(m.db, id, false)
+	} else {
+		c, openErr = instanceconfig.Open(filepath.Join(configDir, ".env"), false)
+	}
+	if c == nil {
+		return nil, nil, openErr
+	}
 	if openErr != nil && c.AccessError() != nil {
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := buildRuntime(m.dir(id), configDir, "/instances/"+id, m.wsListenAddr, c, m.global, i.logger, m.templateDialogue, m.billing, i.mcp, m.mcpGetenv, m.sandbox, id, enabled, m.security)
-	if err == nil {
+	r, err := m.buildRuntime(m, i, c, configDir, enabled)
+	if err == nil && m.db == nil {
 		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
 	}
 	return r, c, errors.Join(openErr, err)
@@ -284,12 +419,14 @@ func (m *Manager) reserveEndpointsLocked(owner string, endpoints []modelrouter.E
 	if err != nil {
 		return err
 	}
-	data, err := json.Marshal(next)
-	if err != nil {
-		return err
-	}
-	if err = instanceconfig.WriteAtomic(filepath.Join(m.root, "endpoint_ids.json"), data, 0600); err != nil {
-		return err
+	{
+		data, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		if err = instanceconfig.WriteAtomic(filepath.Join(m.root, "endpoint_ids.json"), data, 0600); err != nil {
+			return err
+		}
 	}
 	m.endpointOwners = next
 	return nil
@@ -321,11 +458,25 @@ func (m *Manager) nextEndpointOwnersLocked(owner string, endpoints []modelrouter
 	return next, nil
 }
 func (m *Manager) saveLocked() error {
+	if m.db != nil {
+		return fmt.Errorf("SQL instance registry requires an explicit row operation")
+	}
 	data, err := json.MarshalIndent(m.registry, "", "  ")
 	if err != nil {
 		return err
 	}
 	return instanceconfig.WriteAtomic(filepath.Join(m.root, "instances.json"), data, 0600)
+}
+
+func (m *Manager) persistInfoLocked(info Info) error {
+	if m.db == nil {
+		return m.saveLocked()
+	}
+	return m.db.UpdateInstance(context.Background(), storage.InstanceRecord{
+		ID: info.ID, Name: info.Name, CreatedAt: info.CreatedAt,
+		Enabled: info.Enabled, Deleting: info.Deleting, Error: info.Error,
+		CredentialTargets: info.CredentialTargets,
+	})
 }
 func (m *Manager) List() ([]Info, int) {
 	m.mu.RLock()
@@ -335,6 +486,18 @@ func (m *Manager) List() ([]Info, int) {
 
 // SecurityController returns the single controller shared by every runtime.
 func (m *Manager) SecurityController() *security.Controller { return m.security }
+
+// GlobalConfig returns the global configuration store.
+func (m *Manager) GlobalConfig() *instanceconfig.Store { return m.global }
+
+func (m *Manager) SetGlobalApplyHook(hook func() error) { m.globalApplyHook = hook }
+
+func (m *Manager) applyGlobalSettings() error {
+	if m.globalApplyHook != nil {
+		return m.globalApplyHook()
+	}
+	return m.ApplyGlobalSettings()
+}
 
 // ControlPlaneGetenv returns the configuration getter used for control plane authorization.
 func (m *Manager) ControlPlaneGetenv() func(string) string { return m.mcpGetenv }
@@ -381,7 +544,7 @@ func (m *Manager) update(id string, fn func(*Info)) error {
 		if m.registry.Instances[index].ID == id {
 			old := m.registry.Instances[index]
 			fn(&m.registry.Instances[index])
-			if err := m.saveLocked(); err != nil {
+			if err := m.persistInfoLocked(m.registry.Instances[index]); err != nil {
 				m.registry.Instances[index] = old
 				return err
 			}
@@ -424,7 +587,7 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	}
 	for _, v := range m.registry.Instances {
 		if strings.EqualFold(v.Name, name) {
-			return Info{}, fmt.Errorf("实例名称已存在")
+			return Info{}, ErrNameExists
 		}
 	}
 	var id string
@@ -441,6 +604,9 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 		if err != nil && !os.IsNotExist(err) {
 			return Info{}, err
 		}
+	}
+	if m.db != nil {
+		return m.createDatabaseInstanceLocked(id, name)
 	}
 	if err = os.Mkdir(m.dir(id), 0700); err != nil {
 		return Info{}, err
@@ -500,6 +666,37 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	logs.General.InfoWithConsoleSummary(logs.SYSTEM, createdLog, createdLog)
 	return info, nil
 }
+
+func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
+	if err := os.Mkdir(m.dir(id), 0700); err != nil {
+		return Info{}, err
+	}
+	info := Info{ID: id, Name: name, CreatedAt: time.Now().UTC()}
+	if err := m.db.CreateInstance(context.Background(), storage.InstanceRecord{
+		ID: id, Name: name, CreatedAt: info.CreatedAt,
+	}, m.registry.NextNumber+1); err != nil {
+		return Info{}, err
+	}
+	m.registry.Instances = append(m.registry.Instances, info)
+	m.registry.NextNumber++
+	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	m.instances[id] = i
+	if err := instanceconfig.InitializeInstanceSettings(m.db, id); err != nil {
+		info.Error = err.Error()
+		m.registry.Instances[len(m.registry.Instances)-1] = info
+		_ = m.persistInfoLocked(info)
+		return info, nil
+	}
+	r, c, err := m.buildFresh(id, i, false, m.dir(id))
+	i.runtime, i.config = r, c
+	if err != nil {
+		info.Error = err.Error()
+		m.registry.Instances[len(m.registry.Instances)-1] = info
+		_ = m.persistInfoLocked(info)
+	}
+	logs.General.InfoWithConsoleSummary(logs.SYSTEM, "创建实例: "+name, "创建实例: "+name)
+	return info, nil
+}
 func (m *Manager) Rename(id, name string) error {
 	name, err := validateName(name)
 	if err != nil {
@@ -531,7 +728,7 @@ func (m *Manager) Rename(id, name string) error {
 		if m.registry.Instances[index].ID == id {
 			old := m.registry.Instances[index].Name
 			m.registry.Instances[index].Name = name
-			if err = m.saveLocked(); err != nil {
+			if err = m.persistInfoLocked(m.registry.Instances[index]); err != nil {
 				m.registry.Instances[index].Name = old
 				return err
 			}
@@ -551,6 +748,9 @@ func (m *Manager) stop(id string, i *managed) error {
 	}
 	if i.runtime != nil {
 		i.runtime.Stop()
+	}
+	if m.security != nil {
+		m.security.RemoveInstanceProvider(id)
 	}
 	i.logger.EndStreams()
 	i.logger.Clear()
@@ -586,14 +786,17 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if err = m.rejectDeleting(id); err != nil {
 		return err
 	}
-	_, transactionErr := os.Stat(transactionPath(m.dir(id)))
-	hadTransaction := transactionErr == nil
-	if transactionErr != nil && !os.IsNotExist(transactionErr) {
-		return transactionErr
-	}
-	if err = m.recoverCopyTransaction(id); err != nil {
-		_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-		return err
+	hadTransaction := false
+	if m.db == nil {
+		_, transactionErr := os.Stat(transactionPath(m.dir(id)))
+		hadTransaction = transactionErr == nil
+		if transactionErr != nil && !os.IsNotExist(transactionErr) {
+			return transactionErr
+		}
+		if err = m.recoverCopyTransaction(id); err != nil {
+			_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
+			return err
+		}
 	}
 	list, _ := m.List()
 	for _, info := range list {
@@ -651,6 +854,7 @@ func (m *Manager) Enable(id string, enabled bool) error {
 		return err
 	}
 	lifecycleLog := fmt.Sprintf("实例 %s enabled=%t", id, enabled)
+	r.StartBackground()
 	logs.General.InfoWithConsoleSummary(logs.SYSTEM, lifecycleLog, lifecycleLog)
 	return nil
 }
@@ -678,6 +882,9 @@ func safeTree(dir string) error {
 	})
 }
 func (m *Manager) Delete(id string, all bool) error {
+	if m.db != nil {
+		return fmt.Errorf("use prepare, backup, and confirm to delete a SQL instance")
+	}
 	i, err := m.lookup(id)
 	if err != nil {
 		return err
@@ -804,10 +1011,27 @@ func (m *Manager) Delete(id string, all bool) error {
 		return err
 	}
 	delete(m.instances, id)
+	if m.security != nil {
+		m.security.RemoveInstanceProvider(id)
+	}
 	return nil
 }
 
 func (m *Manager) Copy(target, source string) error {
+	if m.db != nil {
+		if target == source {
+			return fmt.Errorf("不能复用自身")
+		}
+		data, _, _, err := m.InstancePart(source, "settings")
+		if err != nil {
+			return err
+		}
+		var settings backup.Settings
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+		return m.ImportSettings(target, settings)
+	}
 	if target == source {
 		return fmt.Errorf("不能复用自身")
 	}
@@ -876,6 +1100,7 @@ func (m *Manager) Copy(target, source string) error {
 		item.runtime = r
 		item.config = c
 		item.mu.Unlock()
+		r.StartBackground()
 	}
 	if dst.runtime == nil || src.runtime == nil {
 		return fmt.Errorf("实例配置不可用")
@@ -1040,6 +1265,9 @@ func (m *Manager) Close() {
 			i.mu.Unlock()
 			i.op.Unlock()
 		}
+		if m.db != nil {
+			_ = m.db.Close()
+		}
 	})
 }
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1067,23 +1295,43 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	id := parts[0]
+	m.serveInstance(w, r, parts[0], "/"+parts[1])
+}
+
+func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path string) {
 	i, err := m.lookup(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
 	id = i.id
-	path := "/" + parts[1]
 	ws := strings.HasPrefix(path, "/ws/")
 	stream := strings.HasSuffix(path, "/StreamLogs")
-	readOnly := r.Method == "GET"
+	isSendMessage := path == "/api/v1/messages/send" || strings.HasSuffix(path, "/api/v1/messages/send")
+	isActionsCat := strings.HasPrefix(path, "/api/actionscat") || strings.HasPrefix(path, "/api/v1/actionscat")
+	if isActionsCat {
+		if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "unauthorized: " + err.Error(),
+			})
+			return
+		}
+	}
+	readOnly := r.Method == "GET" || isSendMessage || isActionsCat
 	method := path[strings.LastIndex(path, "/")+1:]
 	for _, prefix := range []string{"Get", "List", "Search", "Export", "Test"} {
 		if strings.HasPrefix(method, prefix) {
 			readOnly = true
 		}
 	}
+	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
+	if settingsWrite {
+		m.settingsWriteMu.Lock()
+		defer m.settingsWriteMu.Unlock()
+	}
+	var opUnlock func()
 	if !ws && !stream {
 		var locked bool
 		if readOnly {
@@ -1096,10 +1344,15 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if readOnly {
-			defer i.op.RUnlock()
+			opUnlock = i.op.RUnlock
 		} else {
-			defer i.op.Unlock()
+			opUnlock = i.op.Unlock
 		}
+		defer func() {
+			if opUnlock != nil {
+				opUnlock()
+			}
+		}()
 		if _, err = m.lookup(id); err != nil {
 			http.NotFound(w, r)
 			return
@@ -1116,7 +1369,7 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "实例配置不可用", 503)
 		return
 	}
-	if (ws || stream) && rt.Scope.Context().Err() != nil {
+	if (ws || stream || isSendMessage || isActionsCat) && rt.Scope.Context().Err() != nil {
 		http.Error(w, "实例未启用", 503)
 		return
 	}
@@ -1134,13 +1387,66 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	urlCopy := *r.URL
 	urlCopy.Path = path
 	req.URL = &urlCopy
-	var before map[string]string
+	var before, globalBefore map[string]string
+	settingsDraft := settingsWrite && strings.HasSuffix(path, "/UpdateEnvVars")
+	wasRunning := rt.Scope.Context().Err() == nil
 	if !ws && !stream {
 		before = i.config.Snapshot()
 	}
-	rt.Handler.ServeHTTP(w, req)
+	if settingsWrite {
+		globalBefore = m.global.Snapshot()
+	}
+	response := w
+	var buffered *httptest.ResponseRecorder
+	if settingsWrite {
+		buffered = httptest.NewRecorder()
+		response = buffered
+	}
+	rt.Handler.ServeHTTP(response, req)
 	if !ws && !stream {
 		after := i.config.Snapshot()
+		if m.db != nil {
+			globalAfter := m.global.Snapshot()
+			instanceReload := !readOnly && !equalSettings(before, after) && !onlyHotInstanceChanges(before, after)
+			if instanceReload {
+				if err := m.reloadSQLRuntimeLocked(i, wasRunning, before); err != nil {
+					i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
+					if settingsWrite {
+						if settingsDraft {
+							opUnlock()
+							opUnlock = nil
+							err = errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, true))
+						}
+						writeError(w, err)
+					}
+					return
+				}
+			}
+			if settingsWrite {
+				if !equalSettings(globalBefore, m.global.Snapshot()) {
+					opUnlock()
+					opUnlock = nil
+					if err := m.applyGlobalSettings(); err != nil {
+						if settingsDraft {
+							writeError(w, errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
+							return
+						}
+						rollbackErr := m.restoreGlobalSnapshot(globalBefore)
+						if rollbackErr == nil {
+							rollbackErr = m.applyGlobalSettings()
+						}
+						writeError(w, errors.Join(err, rollbackErr))
+						return
+					}
+				}
+				for key, values := range buffered.Header() {
+					w.Header()[key] = append([]string(nil), values...)
+				}
+				w.WriteHeader(buffered.Code)
+				_, _ = w.Write(buffered.Body.Bytes())
+			}
+			return
+		}
 		pending := false
 		for k := range instanceconfig.InstanceRestartKeys {
 			if before[k] != after[k] {
@@ -1152,6 +1458,146 @@ func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+func (m *Manager) handleDefaultSendMessage(w http.ResponseWriter, r *http.Request) {
+	if m.shutdown.Err() != nil {
+		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	targetInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if targetInstanceID == "" {
+		targetInstanceID = strings.TrimSpace(r.Header.Get("X-Instance-ID"))
+	}
+
+	if targetInstanceID == "" && r.Body != nil && r.Method == http.MethodPost {
+		bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20))
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to read request body: " + err.Error()})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		var peek struct {
+			InstanceID string `json:"instance_id"`
+		}
+		if err := json.Unmarshal(bodyBytes, &peek); err == nil {
+			targetInstanceID = strings.TrimSpace(peek.InstanceID)
+		}
+	}
+
+	if targetInstanceID != "" {
+		if _, err := m.lookup(targetInstanceID); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("instance %q not found", targetInstanceID),
+			})
+			return
+		}
+		m.serveInstance(w, r, targetInstanceID, "/api/v1/messages/send")
+		return
+	}
+
+	selectedID := m.findActiveInstanceID()
+	if selectedID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no active instance available to handle message send"})
+		return
+	}
+
+	m.serveInstance(w, r, selectedID, "/api/v1/messages/send")
+}
+
+func (m *Manager) handleDefaultActionsCat(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if m.shutdown.Err() != nil {
+		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "unauthorized: " + err.Error(),
+		})
+		return
+	}
+	targetInstanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if targetInstanceID == "" {
+		targetInstanceID = strings.TrimSpace(r.Header.Get("X-Instance-ID"))
+	}
+	if targetInstanceID != "" {
+		if _, err := m.lookup(targetInstanceID); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("instance %q not found", targetInstanceID),
+			})
+			return
+		}
+		m.serveInstance(w, r, targetInstanceID, r.URL.Path)
+		return
+	}
+
+	selectedID := m.findActiveInstanceID()
+	if selectedID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "no active instance available to handle actionscat request"})
+		return
+	}
+	m.serveInstance(w, r, selectedID, r.URL.Path)
+}
+
+func (m *Manager) findActiveInstanceID() string {
+	// Candidate selection:
+	// IMPORTANT: To avoid lock order inversion with lifecycle operations like stop()
+	// (which acquires i.mu.Lock then m.mu.Lock via m.update), NEVER acquire i.mu while holding m.mu.
+	m.mu.RLock()
+	var enabledCandidates []string
+	var allCandidates []string
+	for _, info := range m.registry.Instances {
+		if m.instances[info.ID] != nil {
+			if info.Enabled {
+				enabledCandidates = append(enabledCandidates, info.ID)
+			}
+			allCandidates = append(allCandidates, info.ID)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, id := range enabledCandidates {
+		i, err := m.lookup(id)
+		if err != nil {
+			continue
+		}
+		i.mu.RLock()
+		rt := i.runtime
+		i.mu.RUnlock()
+		if rt != nil && rt.Scope.Context().Err() == nil {
+			return id
+		}
+	}
+	for _, id := range allCandidates {
+		i, err := m.lookup(id)
+		if err != nil {
+			continue
+		}
+		i.mu.RLock()
+		rt := i.runtime
+		i.mu.RUnlock()
+		if rt != nil {
+			return id
+		}
+	}
+	return ""
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
@@ -1171,8 +1617,209 @@ func writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "code": "aborted", "message": err.Error()})
 }
+
+const blobDownloadHeader = "X-FrostAgent-Download"
+
+func isBlobDownloadRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.EqualFold(strings.TrimSpace(r.Header.Get(blobDownloadHeader)), "blob")
+}
+
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
+	if m.db != nil && path == "global/import/settings" && r.Method == http.MethodPost {
+		m.settingsWriteMu.Lock()
+		defer m.settingsWriteMu.Unlock()
+	}
+	if m.db != nil {
+		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
+			path == "global/backup/settings" || path == "global/import/settings" {
+			w.Header().Set("Cache-Control", "no-store")
+			if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") {
+			m.serveExtraEnv(w, r, path)
+			return
+		}
+		if path == "global/backup/security" && r.Method == http.MethodGet {
+			var state backup.GlobalSecurity
+			err := m.security.WithStateLock(func() error {
+				var exportErr error
+				state, exportErr = backup.ExportGlobalSecurity(m.db)
+				return exportErr
+			})
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			data, err := json.MarshalIndent(state, "", "  ")
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", `attachment; filename="global-security.json"`)
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(append(data, '\n'))
+			return
+		}
+		if path == "global/import/security" && r.Method == http.MethodPost {
+			var state backup.GlobalSecurity
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&state); err != nil {
+				writeError(w, err)
+				return
+			}
+			if err := m.security.WithStateLock(func() error {
+				return backup.ImportGlobalSecurity(m.db, state)
+			}); err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, map[string]bool{"success": true})
+			return
+		}
+		if path == "global/backup/settings" && r.Method == http.MethodGet {
+			settings := backup.ExportGlobalSettings(m.global)
+			entries, err := envinject.List(r.Context(), m.db)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			extra := make(map[string]string, len(entries))
+			for _, entry := range entries {
+				extra[entry.Key] = entry.Value
+			}
+			settings.ExtraEnv = &extra
+			data, err := json.MarshalIndent(settings, "", "  ")
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Disposition", `attachment; filename="global-setting.json"`)
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(append(data, '\n'))
+			return
+		}
+		if path == "global/import/settings" && r.Method == http.MethodPost {
+			before := m.global.Snapshot()
+			var data backup.GlobalSettings
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&data); err != nil {
+				writeError(w, err)
+				return
+			}
+			var previousExtra map[string]string
+			if data.ExtraEnv != nil {
+				for key, value := range *data.ExtraEnv {
+					if settingssvc.IsManagedKey(key) {
+						writeError(w, fmt.Errorf("%s belongs to managed settings", key))
+						return
+					}
+					if err := envinject.Validate(key, value); err != nil {
+						writeError(w, err)
+						return
+					}
+				}
+				entries, err := envinject.List(r.Context(), m.db)
+				if err != nil {
+					writeError(w, err)
+					return
+				}
+				previousExtra = make(map[string]string, len(entries))
+				for _, entry := range entries {
+					previousExtra[entry.Key] = entry.Value
+				}
+			}
+			if err := backup.ImportGlobalSettings(m.global, data); err != nil {
+				writeError(w, err)
+				return
+			}
+			if data.ExtraEnv != nil {
+				if err := envinject.Replace(r.Context(), m.db, *data.ExtraEnv); err != nil {
+					writeError(w, errors.Join(err, m.restoreGlobalSnapshot(before)))
+					return
+				}
+			}
+			if err := m.applyGlobalSettings(); err != nil {
+				rollbackErr := m.restoreGlobalSnapshot(before)
+				if data.ExtraEnv != nil {
+					rollbackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					rollbackErr = errors.Join(rollbackErr, envinject.Replace(rollbackCtx, m.db, previousExtra))
+					cancel()
+				}
+				if rollbackErr == nil {
+					rollbackErr = m.applyGlobalSettings()
+				}
+				writeError(w, errors.Join(err, rollbackErr))
+				return
+			}
+			writeJSON(w, map[string]bool{"success": true})
+			return
+		}
+		if path == "restore" && r.Method == http.MethodPost {
+			m.handleInstanceRestore(w, r)
+			return
+		}
+		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[1] == "import" && parts[2] == "settings" && r.Method == http.MethodPost {
+			m.handleSettingsImport(w, r, parts[0])
+			return
+		}
+		if len(parts) == 3 && parts[1] == "import" && parts[2] == "memories" && r.Method == http.MethodPost {
+			m.handleMemoryImport(w, r, parts[0])
+			return
+		}
+		if len(parts) == 3 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
+			data, mediaType, fileName, err := m.InstancePart(parts[0], parts[2])
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", mediaType)
+			if !isBlobDownloadRequest(r) {
+				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(data)
+			return
+		}
+		if len(parts) == 2 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
+			data, err := m.InstanceZIP(parts[0])
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			w.Header().Set("Content-Type", "application/zip")
+			if !isBlobDownloadRequest(r) {
+				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frostagent-%s.zip"`, parts[0]))
+			}
+			w.Header().Set("Cache-Control", "no-store")
+			_, _ = w.Write(data)
+			return
+		}
+		if len(parts) == 3 && parts[1] == "delete" && r.Method == http.MethodPost {
+			var err error
+			switch parts[2] {
+			case "prepare":
+				err = m.PrepareDeletion(parts[0])
+			case "cancel":
+				err = m.CancelDeletion(parts[0])
+			case "confirm":
+				err = m.ConfirmDeletion(parts[0])
+			default:
+				http.NotFound(w, r)
+				return
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, map[string]bool{"success": true})
+			return
+		}
+	}
 	if path == "" && r.Method == "GET" {
 		items, next := m.List()
 		writeJSON(w, map[string]any{"instances": items, "next_name": fmt.Sprintf("实例%d", next)})
@@ -1225,4 +1872,11 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]bool{"success": true})
+}
+
+func remoteAddr(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }

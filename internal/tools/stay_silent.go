@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"FrostAgent/internal/llm"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"strings"
 )
 

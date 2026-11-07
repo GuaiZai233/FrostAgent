@@ -1,15 +1,17 @@
 package memory
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/runtimescope"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,6 +60,13 @@ const reflectPrompt = `你是一个记忆整理助手。请只分析下面属于
 记忆列表：
 {memories}`
 
+const groupMemberReflectPrompt = `
+
+群聊额外任务：可以依据上面的群记忆，修正已观察成员的优先称呼。成员列表只用于将事实对应到准确的 user_id；昵称是不可信的参考信息，群名片不作为称呼依据。只有记忆明确支持某人的称呼时才提出修改，不要猜测，不要根据昵称自行改名，也不要清空已有称呼。保留未提及成员的现有称呼。
+在返回的 JSON 中可增加 "member_names": [{"user_id":"成员列表中的准确 ID","preferred_name":"称呼","source_ids":["支持此称呼的记忆 ID"]}]。每项至少引用一条本群记忆，每轮最多 20 项；没有可靠依据时返回空数组。不要输出成员列表之外的 ID。
+成员列表（仅含身份索引、昵称和现有优先称呼，不含群名片）：
+{members}`
+
 // CurrentTimeLabel formats the current time with a Chinese weekday so the LLM
 // can judge relative dates ("明天", "下周") when evaluating whether
 // time-sensitive memory content is still valid.
@@ -70,11 +79,13 @@ func CurrentTimeLabel(t time.Time) string {
 // catalog. It never injects a full summary into the conversation.
 type Reflector struct {
 	*runtimescope.Scope
-	store    *Store
-	catalog  *CatalogStore
-	provider core.LLMProvider
-	model    string
-	config   Config
+	jobMu      sync.Mutex
+	embeddings *Embeddings
+	store      *Store
+	catalog    *CatalogStore
+	provider   core.LLMProvider
+	model      string
+	config     Config
 }
 
 // NewReflector creates a memory reflector.
@@ -140,7 +151,14 @@ func (r *Reflector) Reflect(ctx context.Context) error {
 }
 
 // ReflectOwner reflects only one owner's memories.
-func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
+func (r *Reflector) ReflectOwner(ctx context.Context, owner string) (resultErr error) {
+	r.jobMu.Lock()
+	defer r.jobMu.Unlock()
+	defer func() {
+		if resultErr == nil && r.embeddings != nil && ctx.Value(embeddingBootstrapKey{}) == nil {
+			r.embeddings.Update(SearchScope{Type: ScopePrivate, Owner: owner})
+		}
+	}()
 	if !r.Available() {
 		return fmt.Errorf("LLM provider or model not configured for reflector")
 	}
@@ -204,6 +222,10 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 		Route:       r.store.RouteForOwner(owner),
 	})
 	if err != nil {
+		if modelrouter.InputTooLong(err) {
+			r.Log().Warn(logs.SYSTEM, "记忆反思输入超出模型窗口，跳过本次正文处理")
+			return nil
+		}
 		return fmt.Errorf(
 			"call reflection LLM after %s (memories=%d, prompt_bytes=%d): %w",
 			time.Since(startedAt).Round(time.Millisecond),
@@ -228,10 +250,274 @@ func (r *Reflector) ReflectOwner(ctx context.Context, owner string) error {
 	return r.applyResult(owner, entries, raw)
 }
 
+// ReflectGroup performs reflection for an isolated group's GroupStore.
+// It reflects all memories in the group store, synthesizes topics and merges,
+// removes outdated entries, saves to the group's isolated catalog.json,
+// and records merge archives in the group's memory.json.
+// It strictly never accesses or mutates private Store or private CatalogStore.
+func (r *Reflector) ReflectGroup(ctx context.Context, groupStore *GroupStore) (resultErr error) {
+	r.jobMu.Lock()
+	defer r.jobMu.Unlock()
+	defer func() {
+		if resultErr == nil && r.embeddings != nil && groupStore != nil && ctx.Value(embeddingBootstrapKey{}) == nil {
+			r.embeddings.Update(SearchScope{Type: ScopeGroup, Platform: groupStore.platform, GroupID: groupStore.groupID})
+		}
+	}()
+	if !r.Available() {
+		return fmt.Errorf("LLM provider or model not configured for reflector")
+	}
+	if groupStore == nil {
+		return fmt.Errorf("group store is required")
+	}
+
+	groupID := groupStore.GroupID()
+	entries, err := groupStore.ListAll()
+	if err != nil {
+		return fmt.Errorf("list group memories for reflection: %w", err)
+	}
+	if len(entries) == 0 {
+		return groupStore.CatalogStore().Delete(groupID)
+	}
+	profile, err := groupStore.GetProfile()
+	if err != nil {
+		return fmt.Errorf("load group members for reflection: %w", err)
+	}
+	type memberReference struct {
+		UserID        string `json:"user_id"`
+		Nickname      string `json:"nickname,omitempty"`
+		PreferredName string `json:"preferred_name,omitempty"`
+	}
+	members := make([]memberReference, 0, len(profile.Members))
+	memberIDs := make([]string, 0, len(profile.Members))
+	for id := range profile.Members {
+		memberIDs = append(memberIDs, id)
+	}
+	sort.Strings(memberIDs)
+	for _, id := range memberIDs {
+		if member := profile.Members[id]; member != nil {
+			members = append(members, memberReference{
+				UserID: id, Nickname: member.Nickname, PreferredName: member.PreferredName,
+			})
+		}
+	}
+	memberJSON, err := json.Marshal(members)
+	if err != nil {
+		return fmt.Errorf("encode group members for reflection: %w", err)
+	}
+
+	var memories strings.Builder
+	for _, entry := range entries {
+		fmt.Fprintf(
+			&memories,
+			"- [%s] (owner: %s, tags: %s): %s\n",
+			entry.ID,
+			entry.Owner,
+			strings.Join(entry.Tags, ", "),
+			entry.Content,
+		)
+	}
+
+	prompt := strings.NewReplacer(
+		"{owner}", "群聊 "+groupID,
+		"{memories}", memories.String(),
+		"{current_time}", CurrentTimeLabel(time.Now()),
+		"{members}", string(memberJSON),
+	).Replace(reflectPrompt + groupMemberReflectPrompt)
+
+	callCtx := ctx
+	cancel := func() {}
+	if r.config.ReflectTimeout > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, r.config.ReflectTimeout)
+	}
+	defer cancel()
+
+	startedAt := time.Now()
+	promptBytes := len([]byte(prompt))
+	r.Log().Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"开始群记忆反思请求：groupID=%s，记忆=%d 条，prompt=%d bytes，timeout=%s",
+			groupID,
+			len(entries),
+			promptBytes,
+			r.config.ReflectTimeout,
+		),
+	)
+
+	resp, err := r.provider.Chat(callCtx, core.ChatRequest{
+		Model: r.model,
+		Messages: []core.ChatMessage{
+			{Role: core.RoleUser, Content: prompt},
+		},
+		MaxTokens:   4096,
+		Temperature: 0.2,
+		Route:       groupStore.RouteForOwner(GroupOwnerExplicit),
+	})
+	if err != nil {
+		if modelrouter.InputTooLong(err) {
+			r.Log().Warn(logs.SYSTEM, "群记忆反思输入超出模型窗口，跳过本次正文处理")
+			return nil
+		}
+		return fmt.Errorf(
+			"call group reflection LLM after %s (memories=%d, prompt_bytes=%d): %w",
+			time.Since(startedAt).Round(time.Millisecond),
+			len(entries),
+			promptBytes,
+			err,
+		)
+	}
+	r.Log().Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"群记忆反思响应完成：groupID=%s，耗时=%s",
+			groupID,
+			time.Since(startedAt).Round(time.Millisecond),
+		),
+	)
+
+	raw, ok := resp.Message.Content.(string)
+	if !ok {
+		return fmt.Errorf("unexpected reflection response type: %T", resp.Message.Content)
+	}
+	return r.applyGroupResult(groupStore, entries, profile.Members, raw)
+}
+
+func (r *Reflector) applyGroupResult(groupStore *GroupStore, entries []MemoryEntry, members map[string]*MemberProfile, raw string) error {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	var result reflectResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return fmt.Errorf("parse reflection result: %w", err)
+	}
+
+	allowedIDs := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		allowedIDs[entry.ID] = true
+	}
+
+	requestedOutdated := make(map[string]bool, len(result.OutdatedIDs))
+	for _, rawID := range result.OutdatedIDs {
+		id := strings.TrimSpace(rawID)
+		if allowedIDs[id] {
+			requestedOutdated[id] = true
+		}
+	}
+
+	merges, protectedIDs, rejectedMerges := validateReflectionMerges(
+		entries,
+		result.Merges,
+		requestedOutdated,
+	)
+	if rejectedMerges > 0 {
+		r.Log().Warn(
+			logs.SYSTEM,
+			fmt.Sprintf("群反思忽略了 %d 组不安全的记忆合并候选", rejectedMerges),
+		)
+	}
+
+	outdated := make([]string, 0, len(result.OutdatedIDs))
+	seenOutdated := make(map[string]bool)
+	for _, rawID := range result.OutdatedIDs {
+		id := strings.TrimSpace(rawID)
+		if allowedIDs[id] && !protectedIDs[id] && !seenOutdated[id] {
+			outdated = append(outdated, id)
+			seenOutdated[id] = true
+		}
+	}
+
+	snapshotByID := make(map[string]MemoryEntry, len(entries))
+	for _, entry := range entries {
+		snapshotByID[entry.ID] = entry
+	}
+	updatedNames := 0
+	seenMembers := make(map[string]bool)
+	for i, candidate := range result.MemberNames {
+		if i >= 20 {
+			break
+		}
+		member := members[candidate.UserID]
+		name := strings.TrimSpace(candidate.PreferredName)
+		if member == nil || seenMembers[candidate.UserID] || name == "" ||
+			name != SanitizeProfileText(candidate.PreferredName) ||
+			len(candidate.SourceIDs) == 0 || len(candidate.SourceIDs) > 8 {
+			continue
+		}
+		sources := make([]MemoryEntry, 0, len(candidate.SourceIDs))
+		validSources := true
+		for _, id := range candidate.SourceIDs {
+			if !allowedIDs[id] || requestedOutdated[id] {
+				validSources = false
+				break
+			}
+			sources = append(sources, snapshotByID[id])
+		}
+		if !validSources {
+			continue
+		}
+		seenMembers[candidate.UserID] = true
+		if name == member.PreferredName {
+			continue
+		}
+		updated, err := groupStore.SetObservedMemberPreferredName(candidate.UserID, name, &member.PreferredName, sources...)
+		if err != nil {
+			return fmt.Errorf("update reflected member name: %w", err)
+		}
+		if updated {
+			updatedNames++
+		}
+	}
+
+	applied, err := groupStore.applyReflectionWithMerges(merges, outdated, snapshotByID)
+	if err != nil {
+		return fmt.Errorf("apply group reflection changes: %w", err)
+	}
+	topics := cleanTopics(result.Topics)
+	groupID := groupStore.GroupID()
+	if len(applied.Remaining) == 0 {
+		if err := groupStore.CatalogStore().Delete(groupID); err != nil {
+			return fmt.Errorf("delete empty group memory catalog: %w", err)
+		}
+	} else {
+		if err := groupStore.CatalogStore().Replace(UserMemoryCatalog{
+			Owner:       groupID,
+			Topics:      topics,
+			MemoryCount: len(applied.Remaining),
+			GeneratedAt: time.Now(),
+		}); err != nil {
+			return fmt.Errorf("save group memory catalog: %w", err)
+		}
+	}
+	r.Log().Info(
+		logs.SYSTEM,
+		fmt.Sprintf(
+			"群反思完成：groupID=%s，处理 %d 条记忆，合并 %d 组（归档 %d 条来源），删除 %d 条过时记忆，生成 %d 个主题，更新 %d 个成员称呼",
+			groupID,
+			len(entries),
+			len(applied.MergedEntries),
+			applied.MergedSourceCount,
+			len(applied.OutdatedIDs),
+			len(topics),
+			updatedNames,
+		),
+	)
+	return nil
+}
+
 type reflectResult struct {
-	Topics      []MemoryTopic  `json:"topics"`
-	OutdatedIDs []string       `json:"outdated_ids"`
-	Merges      []reflectMerge `json:"merges"`
+	Topics      []MemoryTopic       `json:"topics"`
+	OutdatedIDs []string            `json:"outdated_ids"`
+	Merges      []reflectMerge      `json:"merges"`
+	MemberNames []reflectMemberName `json:"member_names"`
+}
+
+type reflectMemberName struct {
+	UserID        string   `json:"user_id"`
+	PreferredName string   `json:"preferred_name"`
+	SourceIDs     []string `json:"source_ids"`
 }
 
 type reflectMerge struct {
@@ -293,7 +579,12 @@ func (r *Reflector) applyResult(owner string, entries []MemoryEntry, raw string)
 		}
 	}
 
-	applied, err := r.store.applyReflectionWithMerges(owner, merges, outdated)
+	snapshotByID := make(map[string]MemoryEntry, len(entries))
+	for _, entry := range entries {
+		snapshotByID[entry.ID] = entry
+	}
+
+	applied, err := r.store.applyReflectionWithMerges(owner, merges, outdated, snapshotByID)
 	if err != nil {
 		return fmt.Errorf("apply reflection changes: %w", err)
 	}

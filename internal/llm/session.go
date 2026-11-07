@@ -1,29 +1,34 @@
 package llm
 
 import (
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/groupsummary"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/runtimescope"
+	"context"
+	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // GroupCompactMessage represents a structured group chat message for compaction and prompt inspection.
 type GroupCompactMessage struct {
-	Role      string `json:"role"`                 // "user" | "assistant"
-	Sender    string `json:"sender,omitempty"`     // Display name or nick
-	SenderID  string `json:"sender_id,omitempty"`  // User ID or bot ID
-	Content   string `json:"content"`              // Message body (opaque payload)
-	MessageID string `json:"message_id,omitempty"` // Message ID for deduplication
-	Time      string `json:"time,omitempty"`       // Timestamp string e.g. "15:04:05"
-	raw       string `json:"-"`                    // Preserved raw string if ingested from text
+	Role             string `json:"role"`                        // "user" | "assistant"
+	Sender           string `json:"sender,omitempty"`            // Display name or nick
+	SenderID         string `json:"sender_id,omitempty"`         // User ID or bot ID
+	Content          string `json:"content"`                     // Message body (opaque payload)
+	ImageDescription string `json:"image_description,omitempty"` // Vision output kept separate from user text.
+	MessageID        string `json:"message_id,omitempty"`        // Message ID for deduplication
+	Time             string `json:"time,omitempty"`              // Timestamp string e.g. "15:04:05"
+	raw              string `json:"-"`                           // Preserved raw string if ingested from text
 }
 
 // FormatDisplay renders the message as a single-line display string.
@@ -31,21 +36,25 @@ func (m GroupCompactMessage) FormatDisplay() string {
 	if m.raw != "" {
 		return m.raw
 	}
+	body := m.Content
+	if m.ImageDescription != "" {
+		body += " 【图片识别结果】：" + m.ImageDescription
+	}
 	if m.Role == "assistant" {
 		botName := m.Sender
 		if botName == "" {
 			botName = "霜降"
 		}
-		return fmt.Sprintf("[assistant] %s: %s", botName, m.Content)
+		return fmt.Sprintf("[assistant] %s: %s", botName, body)
 	}
 	sender := m.Sender
 	if sender == "" {
 		sender = "user"
 	}
 	if m.SenderID != "" {
-		return fmt.Sprintf("[user] %s (%s): %s", sender, m.SenderID, m.Content)
+		return fmt.Sprintf("[user] %s (%s): %s", sender, m.SenderID, body)
 	}
-	return fmt.Sprintf("[user] %s: %s", sender, m.Content)
+	return fmt.Sprintf("[user] %s: %s", sender, body)
 }
 
 // ParseGroupCompactMessage parses a text line into a GroupCompactMessage while preserving the raw text.
@@ -114,6 +123,7 @@ func ParseGroupCompactMessage(content string, messageID ...string) GroupCompactM
 type groupCompactItem struct {
 	sequence uint64
 	message  GroupCompactMessage
+	staged   bool
 }
 
 // SummaryGroup maps the latest compact batch to the cumulative running summary
@@ -154,9 +164,21 @@ type GroupCompactSnapshot struct {
 // separate from the history mutex because a full LLM turn calls methods that
 // briefly lock session state themselves.
 type SessionTurn struct {
-	wait <-chan struct{}
-	done chan struct{}
-	once sync.Once
+	wait            <-chan struct{}
+	done            chan struct{}
+	once            sync.Once
+	epoch           uint64
+	stagedGuard     *StagedGroupCompactGuard
+	lane            *executionSequence
+	ctx             context.Context
+	cancel          context.CancelFunc
+	previous        *SessionTurn
+	inputIndex      int
+	transcriptStart int
+	durable         string
+	messageSeq      uint64
+	skillState      *SessionContext
+	authorityMu     sync.Mutex
 }
 
 func (t *SessionTurn) Wait() {
@@ -167,8 +189,44 @@ func (t *SessionTurn) Wait() {
 
 func (t *SessionTurn) Done() {
 	if t != nil {
-		t.once.Do(func() { close(t.done) })
+		t.once.Do(func() {
+			if t.stagedGuard != nil {
+				t.stagedGuard.Done()
+			}
+			t.finishSequence()
+			close(t.done)
+		})
 	}
+}
+
+// AttachStagedGuard binds a staged group compact guard to this turn.
+func (t *SessionTurn) AttachStagedGuard(g *StagedGroupCompactGuard) {
+	if t != nil {
+		t.stagedGuard = g
+	}
+}
+
+// StagedGuard returns the attached staged guard, if any.
+func (t *SessionTurn) StagedGuard() *StagedGroupCompactGuard {
+	if t == nil {
+		return nil
+	}
+	return t.stagedGuard
+}
+
+func (t *SessionTurn) Epoch() uint64 {
+	if t == nil {
+		return 0
+	}
+	return t.epoch
+}
+
+// IsValid reports whether this turn matches the session's current generation epoch.
+func (t *SessionTurn) IsValid(s *SessionContext) bool {
+	if t == nil || s == nil {
+		return true
+	}
+	return t.epoch == s.Epoch()
 }
 
 // DeliveryFailure records a transient failure when an assistant response could not be delivered to the platform.
@@ -206,6 +264,7 @@ func (f *DeliveryFailure) FormatDeliveryContext() string {
 
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
+	activeSkills   map[string]activeSkill
 	ConversationID string
 	History        []ChatMessage
 	CreatedAt      time.Time
@@ -213,21 +272,157 @@ type SessionContext struct {
 	mu             sync.Mutex // 保护单个会话的并发访问
 	turnMu         sync.Mutex
 	turnTail       chan struct{}
+	resetMu        sync.Mutex // 串行化会话重置与在途屏障等待
 
-	groupCompactSummary    string
-	groupCompactBuffer     []groupCompactItem
-	groupCompactSequence   uint64
-	groupCompactGeneration uint64
-	groupSummaryGroups     []SummaryGroup
-	pendingTurns           [][]memory.PendingExtractionItem
-	extractionThreshold    int
-	deliveryFailure        *DeliveryFailure
+	activeCancel       context.CancelFunc
+	activeRunID        uint64
+	sequences          map[string]*executionSequence
+	epoch              uint64
+	nextExtractionID   uint64
+	extractionCancels  map[uint64]context.CancelFunc
+	extractionBarriers map[uint64]*sessionExtractionBarrier
+	historySeq         []uint64
+	nextMsgSeq         uint64
+	privateCompacting  bool
+	privateCompact     *privateCompactInspection
+
+	groupCompactSummary     string
+	groupCompactBuffer      []groupCompactItem
+	groupCompactSequence    uint64
+	groupCompactGeneration  uint64
+	groupSummaryGroups      []SummaryGroup
+	prevGroupCompactSummary string
+	prevGroupSummaryGroups  []SummaryGroup
+	lastCommittedMessageIDs []string
+	lastCommittedSenderIDs  []string
+	groupDistillBarriers    map[uint64]*groupDistillationBarrier
+	nextGroupDistillID      uint64
+	validCommittedSources   map[uint64]committedSourceInfo
+	revokedMessageIDs       map[string]struct{}
+	groupStore              *memory.GroupStore
+	scope                   *runtimescope.Scope
+	pendingTurns            [][]memory.PendingExtractionItem
+	extractionThreshold     int
+	deliveryFailure         *DeliveryFailure
+	botLoopTurns            map[string]int
+	botLoopConfig           string
+	botLoopTail             chan struct{}
+	botLoopEpoch            uint64
 
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
 	// memories). Empty until the first LLM request for this session.
 	lastSystemPrompt string
 	lastModelName    string
+	groupName        string
+}
+
+// GroupName returns the cached group name for this session, if any.
+func (s *SessionContext) GroupName() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupName
+}
+
+// SetGroupName updates the cached group name for this session.
+func (s *SessionContext) SetGroupName(name string) {
+	name = strings.TrimSpace(name)
+	if s == nil || name == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupName = name
+}
+
+// BotLoopObservation reserves the sender's position before asynchronous ingress checks.
+type BotLoopObservation struct {
+	session      *SessionContext
+	senderID     string
+	marked       bool
+	config       string
+	explicitWake bool
+	epoch        uint64
+	previous     <-chan struct{}
+	done         chan struct{}
+	once         sync.Once
+	exceeded     bool
+	admitted     bool
+}
+
+// BeginBotLoop records ingress order across connections sharing a session.
+// Only an eligible, unmarked sender's explicit wake restores Bot budgets.
+func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config string, explicitWake ...bool) *BotLoopObservation {
+	if s == nil || senderID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	observation := &BotLoopObservation{
+		session: s, senderID: senderID, marked: marked, config: config,
+		epoch: s.botLoopEpoch, previous: s.botLoopTail, done: make(chan struct{}),
+		explicitWake: len(explicitWake) > 0 && explicitWake[0],
+	}
+	s.botLoopTail = observation.done
+	return observation
+}
+
+// Finish settles an ingress event after policy and routing decisions are known.
+// Every reserved event must be finished, including events rejected before dialogue.
+func (o *BotLoopObservation) Finish(eligible bool, limit int) bool {
+	exceeded, _ := o.FinishWithAdmission(eligible, limit, nil)
+	return exceeded
+}
+
+// FinishWithAdmission keeps admission and the candidate bot-loop state in the
+// same ingress order. Rejected admission leaves budget/configuration state
+// unchanged. admit must not wait for another observation on this session.
+func (o *BotLoopObservation) FinishWithAdmission(eligible bool, limit int, admit func(exceeded bool) bool) (bool, bool) {
+	if o == nil {
+		return false, admit == nil || admit(false)
+	}
+	o.once.Do(func() {
+		if o.previous != nil {
+			<-o.previous
+		}
+		s := o.session
+		s.mu.Lock()
+		if o.epoch == s.botLoopEpoch {
+			turns := s.botLoopTurns
+			if s.botLoopConfig != o.config || (!o.marked && o.explicitWake && eligible) {
+				turns = nil
+			}
+			count := turns[o.senderID]
+			if o.marked && eligible {
+				o.exceeded = limit > 0 && count >= limit
+				if !o.exceeded {
+					count++
+				}
+			}
+			o.admitted = admit == nil || admit(o.exceeded)
+			if o.admitted {
+				// Commit map changes only after admission, including cooldown checks.
+				if o.marked && eligible {
+					if turns == nil {
+						turns = make(map[string]int)
+					}
+					turns[o.senderID] = count
+				}
+				s.botLoopConfig, s.botLoopTurns = o.config, turns
+			}
+		}
+		s.mu.Unlock()
+		close(o.done)
+	})
+	return o.exceeded, o.admitted
+}
+
+// ObserveBotLoop applies a synchronous observation, used when no ingress checks are pending.
+func (s *SessionContext) ObserveBotLoop(senderID string, marked, eligible bool, limit int, config string, explicitWake ...bool) bool {
+	return s.BeginBotLoop(senderID, marked, config, explicitWake...).Finish(eligible, limit)
 }
 
 // SetDeliveryFailure records a transient delivery failure on the session.
@@ -276,9 +471,802 @@ func (s *SessionContext) ReserveTurn() *SessionTurn {
 	s.turnMu.Lock()
 	defer s.turnMu.Unlock()
 
-	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{})}
+	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{}), epoch: s.Epoch()}
 	s.turnTail = turn.done
 	return turn
+}
+
+// Epoch returns the current generation epoch of the session.
+func (s *SessionContext) Epoch() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	return s.epoch
+}
+
+// BeginRun attaches a cancellable context to this session's currently active execution.
+// If another run was active, it is cancelled first.
+// The returned cleanup function must be called when the run ends.
+func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, uint64, func()) {
+	if s == nil {
+		return parentCtx, 0, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.activeCancel = cancel
+	s.activeRunID++
+	runID := s.activeRunID
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	currentEpoch := s.epoch
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			cancel()
+			if s.activeRunID == runID {
+				s.activeCancel = nil
+			}
+		})
+	}
+
+	return ctx, currentEpoch, cleanup
+}
+
+// CancelActiveRun immediately aborts any in-flight execution context for this session.
+func (s *SessionContext) CancelActiveRun() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelSequencesLocked()
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+}
+
+type barrierState int
+
+const (
+	barrierPending barrierState = iota
+	barrierWriting
+	barrierDone
+	barrierAborted
+)
+
+type sessionExtractionBarrier struct {
+	sess       *SessionContext
+	epoch      uint64
+	ctx        context.Context
+	mu         sync.Mutex
+	state      barrierState
+	aborted    bool
+	done       chan struct{}
+	doneClosed bool
+}
+
+var _ core.ExtractionCommitBarrier = (*sessionExtractionBarrier)(nil)
+
+func (b *sessionExtractionBarrier) closeDoneLocked() {
+	if !b.doneClosed && b.done != nil {
+		b.doneClosed = true
+		close(b.done)
+	}
+}
+
+func (b *sessionExtractionBarrier) IsValid() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.aborted {
+		return false
+	}
+	if b.state != barrierPending && b.state != barrierWriting {
+		return false
+	}
+	if b.ctx != nil && b.ctx.Err() != nil {
+		return false
+	}
+	if b.sess != nil && b.sess.Epoch() != b.epoch {
+		return false
+	}
+	return true
+}
+
+func (b *sessionExtractionBarrier) TryBeginCommit() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != barrierPending {
+		return false
+	}
+	if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) || (b.sess != nil && b.sess.Epoch() != b.epoch) {
+		b.state = barrierAborted
+		b.closeDoneLocked()
+		return false
+	}
+	b.state = barrierWriting
+	return true
+}
+
+func (b *sessionExtractionBarrier) EndCommit() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierWriting:
+		b.closeDoneLocked()
+		if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) || (b.sess != nil && b.sess.Epoch() != b.epoch) {
+			b.state = barrierAborted
+		} else {
+			b.state = barrierPending
+			b.done = make(chan struct{})
+			b.doneClosed = false
+		}
+	case barrierPending:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
+}
+
+func (b *sessionExtractionBarrier) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierPending, barrierWriting:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
+}
+
+func (b *sessionExtractionBarrier) AbortAndWait() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.aborted = true
+	if b.state == barrierWriting {
+		ch := b.done
+		b.mu.Unlock()
+		<-ch
+		return
+	}
+	b.state = barrierAborted
+	b.closeDoneLocked()
+	b.mu.Unlock()
+}
+
+func (b *sessionExtractionBarrier) IsTerminated() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.state == barrierDone || b.state == barrierAborted
+}
+
+type committedSourceInfo struct {
+	sequence   uint64
+	messageIDs []string
+	senderIDs  []string
+}
+
+type groupDistillationBarrier struct {
+	sess       *SessionContext
+	snapshot   GroupCompactSnapshot
+	ctx        context.Context
+	cancel     context.CancelFunc
+	mu         sync.Mutex
+	state      barrierState
+	aborted    bool
+	done       chan struct{}
+	doneClosed bool
+}
+
+var _ core.ExtractionCommitBarrier = (*groupDistillationBarrier)(nil)
+
+func (b *groupDistillationBarrier) closeDoneLocked() {
+	if !b.doneClosed && b.done != nil {
+		b.doneClosed = true
+		close(b.done)
+	}
+}
+
+func (b *groupDistillationBarrier) IsValid() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.aborted {
+		return false
+	}
+	if b.state != barrierPending && b.state != barrierWriting {
+		return false
+	}
+	if b.ctx != nil && b.ctx.Err() != nil {
+		return false
+	}
+	return true
+}
+
+func (b *groupDistillationBarrier) TryBeginCommit() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.state != barrierPending {
+		return false
+	}
+	if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) {
+		b.state = barrierAborted
+		b.closeDoneLocked()
+		return false
+	}
+	b.state = barrierWriting
+	return true
+}
+
+func (b *groupDistillationBarrier) EndCommit() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	switch b.state {
+	case barrierWriting:
+		b.closeDoneLocked()
+		if b.aborted || (b.ctx != nil && b.ctx.Err() != nil) {
+			b.state = barrierAborted
+		} else {
+			b.state = barrierDone
+		}
+	case barrierPending:
+		b.state = barrierDone
+		b.closeDoneLocked()
+	}
+}
+
+func (b *groupDistillationBarrier) AbortAndWait() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.aborted = true
+	if b.cancel != nil {
+		b.cancel()
+	}
+	if b.state == barrierWriting {
+		ch := b.done
+		b.mu.Unlock()
+		<-ch
+		return
+	}
+	b.state = barrierAborted
+	b.closeDoneLocked()
+	b.mu.Unlock()
+}
+
+// BeginGroupDistillation registers an active distillation barrier for a committed snapshot.
+// The returned context contains the ExtractionCommitBarrier.
+func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snapshot GroupCompactSnapshot) (context.Context, core.ExtractionCommitBarrier, func()) {
+	if s == nil {
+		return parentCtx, nil, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Validate snapshot against session-owned committed source state.
+	// 1. Snapshot must have been committed via CommitGroupCompact.
+	srcInfo, valid := s.validCommittedSources[snapshot.ThroughSequence]
+	isRevoked := !valid
+
+	// If source sequence matches, also verify message IDs align.
+	if valid && len(srcInfo.messageIDs) > 0 && len(snapshot.MessageIDs) > 0 {
+		if srcInfo.messageIDs[0] != snapshot.MessageIDs[0] {
+			isRevoked = true
+		}
+	}
+
+	// 2. Snapshot must not contain any explicitly revoked message.
+	if !isRevoked && s.revokedMessageIDs != nil {
+		for _, id := range snapshot.MessageIDs {
+			if _, ok := s.revokedMessageIDs[id]; ok {
+				isRevoked = true
+				break
+			}
+		}
+	}
+
+	if isRevoked {
+		ctx, cancel := context.WithCancel(parentCtx)
+		cancel()
+		barrier := &groupDistillationBarrier{
+			sess:       s,
+			snapshot:   snapshot,
+			ctx:        ctx,
+			cancel:     cancel,
+			state:      barrierAborted,
+			aborted:    true,
+			done:       make(chan struct{}),
+			doneClosed: true,
+		}
+		close(barrier.done)
+		return ctx, barrier, func() {}
+	}
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.nextGroupDistillID++
+	id := s.nextGroupDistillID
+
+	barrier := &groupDistillationBarrier{
+		sess:     s,
+		snapshot: snapshot,
+		ctx:      ctx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+	}
+	if s.groupDistillBarriers == nil {
+		s.groupDistillBarriers = make(map[uint64]*groupDistillationBarrier)
+	}
+	s.groupDistillBarriers[id] = barrier
+
+	ctxWithBarrier := core.WithExtractionBarrier(ctx, barrier)
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			barrier.EndCommit()
+			cancel()
+			s.mu.Lock()
+			delete(s.groupDistillBarriers, id)
+			delete(s.validCommittedSources, snapshot.ThroughSequence)
+			s.mu.Unlock()
+		})
+	}
+	return ctxWithBarrier, barrier, cleanup
+}
+
+// SetGroupStore associates a GroupStore with this session context for reconciliation.
+func (s *SessionContext) SetGroupStore(store *memory.GroupStore) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.groupStore = store
+}
+
+// GroupStore returns the associated GroupStore if any.
+func (s *SessionContext) GroupStore() *memory.GroupStore {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupStore
+}
+
+// SetScope associates a runtimescope.Scope with this session context.
+func (s *SessionContext) SetScope(scope *runtimescope.Scope) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scope = scope
+}
+
+// Scope returns the associated runtimescope.Scope if any.
+func (s *SessionContext) Scope() *runtimescope.Scope {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scope
+}
+
+// BeginExtraction creates a cancellable context for background memory extraction bound to this session's current epoch.
+// The returned cleanup function must be called when extraction completes.
+func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Context, uint64, func()) {
+	if s == nil {
+		return parentCtx, 0, func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	currentEpoch := s.epoch
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	s.nextExtractionID++
+	id := s.nextExtractionID
+	if s.extractionCancels == nil {
+		s.extractionCancels = make(map[uint64]context.CancelFunc)
+	}
+	s.extractionCancels[id] = cancel
+
+	barrier := &sessionExtractionBarrier{
+		sess:  s,
+		epoch: currentEpoch,
+		ctx:   ctx,
+		done:  make(chan struct{}),
+	}
+	if s.extractionBarriers == nil {
+		s.extractionBarriers = make(map[uint64]*sessionExtractionBarrier)
+	}
+	s.extractionBarriers[id] = barrier
+
+	ctx = core.WithExtractionBarrier(ctx, barrier)
+
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			barrier.Close()
+			cancel()
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			delete(s.extractionCancels, id)
+			delete(s.extractionBarriers, id)
+		})
+	}
+
+	return ctx, currentEpoch, cleanup
+}
+
+// CancelExtractions cancels all currently registered in-flight extraction contexts.
+func (s *SessionContext) CancelExtractions() {
+	if s == nil {
+		return
+	}
+	s.resetMu.Lock()
+	defer s.resetMu.Unlock()
+
+	s.mu.Lock()
+	for id, cancel := range s.extractionCancels {
+		cancel()
+		delete(s.extractionCancels, id)
+	}
+	type barrierEntry struct {
+		id uint64
+		b  *sessionExtractionBarrier
+	}
+	barriersToWait := make([]barrierEntry, 0, len(s.extractionBarriers))
+	for id, b := range s.extractionBarriers {
+		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
+	}
+	s.mu.Unlock()
+
+	for _, entry := range barriersToWait {
+		entry.b.AbortAndWait()
+	}
+
+	s.mu.Lock()
+	for _, entry := range barriersToWait {
+		if cur, ok := s.extractionBarriers[entry.id]; ok && cur == entry.b {
+			delete(s.extractionBarriers, entry.id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// ResetSession completely resets this session's state:
+// 1. Cancels active in-flight execution context immediately.
+// 2. Cancels in-flight automatic memory extraction contexts immediately.
+// 3. Increments the epoch to invalidate in-flight or queued FIFO turns and extractions.
+// 4. Clears history, rolling summary, uncompacted buffer/mappings, and pending memory turns.
+// 5. Deletes persisted summary from groupsummary.Store on disk (if store is provided).
+func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) error {
+	if s == nil {
+		return nil
+	}
+	s.resetMu.Lock()
+	defer s.resetMu.Unlock()
+
+	s.mu.Lock()
+	s.cancelSequencesLocked()
+	s.sequences = nil
+	if s.activeCancel != nil {
+		s.activeCancel()
+		s.activeCancel = nil
+	}
+	for id, cancel := range s.extractionCancels {
+		cancel()
+		delete(s.extractionCancels, id)
+	}
+	s.epoch++
+
+	type barrierEntry struct {
+		id uint64
+		b  *sessionExtractionBarrier
+	}
+	barriersToWait := make([]barrierEntry, 0, len(s.extractionBarriers))
+	for id, b := range s.extractionBarriers {
+		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
+	}
+
+	var groupDistillBarriersToWait []*groupDistillationBarrier
+	for id, b := range s.groupDistillBarriers {
+		groupDistillBarriersToWait = append(groupDistillBarriersToWait, b)
+		delete(s.groupDistillBarriers, id)
+	}
+
+	s.History = nil
+	s.activeSkills = nil
+	s.historySeq = nil
+	s.privateCompact = nil
+	s.groupCompactSummary = ""
+	s.groupCompactBuffer = nil
+	s.groupSummaryGroups = nil
+	s.prevGroupCompactSummary = ""
+	s.prevGroupSummaryGroups = nil
+	s.lastCommittedMessageIDs = nil
+	s.lastCommittedSenderIDs = nil
+	s.groupCompactGeneration++
+	s.pendingTurns = nil
+	s.extractionThreshold = 0
+	s.deliveryFailure = nil
+	s.botLoopTurns = nil
+	s.botLoopConfig = ""
+	s.botLoopTail = nil
+	s.botLoopEpoch++
+	s.lastSystemPrompt = ""
+	s.lastModelName = ""
+	s.privateCompacting = false
+	s.UpdatedAt = time.Now()
+	conversationID := s.ConversationID
+	s.mu.Unlock()
+
+	for _, entry := range barriersToWait {
+		entry.b.AbortAndWait()
+	}
+	for _, b := range groupDistillBarriersToWait {
+		b.AbortAndWait()
+	}
+
+	s.mu.Lock()
+	for _, entry := range barriersToWait {
+		if cur, ok := s.extractionBarriers[entry.id]; ok && cur == entry.b {
+			delete(s.extractionBarriers, entry.id)
+		}
+	}
+	s.mu.Unlock()
+
+	if groupSummaryStore != nil && conversationID != "" {
+		return groupSummaryStore.Delete(conversationID)
+	}
+	return nil
+}
+
+// PrivateCompactSnapshot captures messages to be summarized in private chat.
+type PrivateCompactSnapshot struct {
+	Messages []ChatMessage
+	Count    int
+	Epoch    uint64
+	LastSeq  uint64
+}
+
+var (
+	ErrAlreadyCompacting = errors.New("压缩正在进行中，请勿重复触发。")
+	ErrNothingToCompact  = errors.New("当前没有需要压缩的消息。")
+)
+
+// SnapshotPrivateCompact captures current history for private chat compaction.
+func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error) {
+	if s == nil {
+		return PrivateCompactSnapshot{}, errors.New("会话不可用")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.privateCompacting {
+		return PrivateCompactSnapshot{}, ErrAlreadyCompacting
+	}
+	if len(s.History) == 0 {
+		return PrivateCompactSnapshot{}, ErrNothingToCompact
+	}
+
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+
+	s.privateCompacting = true
+	snapshotMsgs := make([]ChatMessage, len(s.History))
+	copy(snapshotMsgs, s.History)
+	var lastSeq uint64
+	if len(s.historySeq) > 0 {
+		lastSeq = s.historySeq[len(s.historySeq)-1]
+	}
+
+	return PrivateCompactSnapshot{
+		Messages: snapshotMsgs,
+		Count:    len(s.History),
+		Epoch:    s.epoch,
+		LastSeq:  lastSeq,
+	}, nil
+}
+
+// CommitPrivateCompact commits a private chat summary, replacing the summarized messages
+// while preserving messages that arrived during the compaction LLM call.
+func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, summary string) bool {
+	if s == nil {
+		return false
+	}
+	summary = strings.TrimSpace(summary)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { s.privateCompacting = false }()
+
+	if s.epoch != snapshot.Epoch {
+		return false
+	}
+	if summary == "" {
+		return false
+	}
+
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+
+	var remaining []ChatMessage
+	var remainingSeq []uint64
+	for i, seq := range s.historySeq {
+		if seq > snapshot.LastSeq {
+			remaining = append(remaining, s.History[i])
+			remainingSeq = append(remainingSeq, seq)
+		}
+	}
+
+	newHistory := make([]ChatMessage, 0, 2+len(remaining))
+	newHistory = append(newHistory,
+		ChatMessage{Role: "user", Content: "[先前对话总结] " + summary},
+		ChatMessage{Role: "assistant", Content: "了解，我已记住上述先前的对话背景。"},
+	)
+	newHistory = append(newHistory, remaining...)
+
+	newSeq := make([]uint64, len(newHistory))
+	for i := range newSeq {
+		s.nextMsgSeq++
+		newSeq[i] = s.nextMsgSeq
+	}
+
+	s.History = newHistory
+	s.historySeq = newSeq
+	batch := SummaryGroup{Summary: summary, EndIndex: len(snapshot.Messages) - 1}
+	for _, msg := range snapshot.Messages {
+		item := historyInspectionMessage(msg)
+		batch.StructuredMsgs = append(batch.StructuredMsgs, item)
+		batch.Messages = append(batch.Messages, item.FormatDisplay())
+	}
+	s.privateCompact = &privateCompactInspection{
+		summarySeq: newSeq[0],
+		ackSeq:     newSeq[1],
+		batch:      batch,
+	}
+	s.UpdatedAt = time.Now()
+	return true
+}
+
+// privateCompactInspection retains only the latest successful batch in memory.
+// Sequence handles distinguish injected context from user-authored lookalikes.
+type privateCompactInspection struct {
+	summarySeq uint64
+	ackSeq     uint64
+	batch      SummaryGroup
+}
+
+func (s *SessionContext) hasPrivateCompactLocked() bool {
+	return s.privateCompact != nil && len(s.historySeq) == len(s.History) &&
+		slices.Contains(s.historySeq, s.privateCompact.summarySeq)
+}
+
+// PrivateRunningSummary returns a committed summary still present in history.
+func (s *SessionContext) PrivateRunningSummary() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hasPrivateCompactLocked() {
+		return s.privateCompact.batch.Summary
+	}
+	return ""
+}
+
+// SnapshotPrivateContext returns an atomic inspection view and the actual LLM
+// history. It does not change compaction, persistence, or prompt assembly.
+func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot, []ChatMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var result GroupContextSnapshot
+	compacted := s.hasPrivateCompactLocked()
+	if compacted {
+		batch := s.privateCompact.batch
+		batch.Messages = slices.Clone(batch.Messages)
+		batch.StructuredMsgs = slices.Clone(batch.StructuredMsgs)
+		result.RunningSummary = batch.Summary
+		result.SummaryGroups = []SummaryGroup{batch}
+	}
+	for i, msg := range s.History {
+		if compacted && (s.historySeq[i] == s.privateCompact.summarySeq || s.historySeq[i] == s.privateCompact.ackSeq) {
+			continue
+		}
+		result.RecentStructuredMessages = append(result.RecentStructuredMessages, historyInspectionMessage(msg))
+	}
+	if limit > 0 && len(result.RecentStructuredMessages) > limit {
+		result.RecentStructuredMessages = result.RecentStructuredMessages[len(result.RecentStructuredMessages)-limit:]
+	}
+	for _, msg := range result.RecentStructuredMessages {
+		result.RecentMessages = append(result.RecentMessages, msg.FormatDisplay())
+	}
+	return result, slices.Clone(s.History)
+}
+
+func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
+	return GroupCompactMessage{Role: msg.Role, Content: fmt.Sprint(msg.Content)}
+}
+
+// CancelPrivateCompact releases the private compaction lock if compaction fails.
+func (s *SessionContext) CancelPrivateCompact() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.privateCompacting = false
+}
+
+// IsPrivateCompacting reports whether private chat compaction is currently in flight.
+func (s *SessionContext) IsPrivateCompacting() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.privateCompacting
 }
 
 // Lock 锁定会话
@@ -352,6 +1340,11 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	}
 
 	s.History = newMessages
+	s.historySeq = make([]uint64, len(newMessages))
+	for i := range s.historySeq {
+		s.nextMsgSeq++
+		s.historySeq[i] = s.nextMsgSeq
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -366,6 +1359,36 @@ func (s *SessionContext) TrimHistory(max int) {
 	trimmed := make([]ChatMessage, max)
 	copy(trimmed, s.History[len(s.History)-max:])
 	s.History = trimmed
+
+	if len(s.historySeq) >= len(s.History) {
+		trimmedSeq := make([]uint64, max)
+		copy(trimmedSeq, s.historySeq[len(s.historySeq)-max:])
+		s.historySeq = trimmedSeq
+	} else {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+	s.UpdatedAt = time.Now()
+}
+
+// DropLastMessage removes the most recent message from history,
+// for instance when a turn is cancelled or aborted due to an autonomous ban.
+func (s *SessionContext) DropLastMessage() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.History) == 0 {
+		return
+	}
+	s.History = s.History[:len(s.History)-1]
+	if len(s.historySeq) > len(s.History) {
+		s.historySeq = s.historySeq[:len(s.History)]
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -374,11 +1397,29 @@ func (s *SessionContext) TrimHistory(max int) {
 const DefaultMaxGroupCompactBufferSize = 200
 
 // AppendGroupCompactMessage appends one visible group message to the running
-// compact buffer. It accepts either a GroupCompactMessage, *GroupCompactMessage, or a string.
+// compact buffer as committed. It accepts either a GroupCompactMessage, *GroupCompactMessage, or a string.
 // The uncommitted buffer is capped at maxBufferSize (defaulting to DefaultMaxGroupCompactBufferSize if <= 0)
 // to allow in-flight compactions to complete without eagerly dropping raw messages.
 // Optional messageID can be provided to support deduplication with the triggering message.
 func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, messageID ...string) int {
+	_, bufLen := s.appendGroupCompactInternal(item, false, maxBufferSize, messageID...)
+	return bufLen
+}
+
+// StageGroupCompactSlot appends one visible group message marked as staged and returns both the assigned sequence and buffer length.
+func (s *SessionContext) StageGroupCompactSlot(item any, maxBufferSize int, messageID ...string) (uint64, int) {
+	return s.appendGroupCompactInternal(item, true, maxBufferSize, messageID...)
+}
+
+// StageGroupCompactMessage appends one visible group message to the running
+// compact buffer marked as staged (not eligible for compactor snapshot until promoted).
+// It preserves ingress arrival ordering while isolating unconfirmed wake turns.
+func (s *SessionContext) StageGroupCompactMessage(item any, maxBufferSize int, messageID ...string) int {
+	_, bufLen := s.appendGroupCompactInternal(item, true, maxBufferSize, messageID...)
+	return bufLen
+}
+
+func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBufferSize int, messageID ...string) (uint64, int) {
 	var msg GroupCompactMessage
 	switch v := item.(type) {
 	case GroupCompactMessage:
@@ -398,11 +1439,11 @@ func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, 
 	case fmt.Stringer:
 		msg = ParseGroupCompactMessage(v.String(), messageID...)
 	default:
-		return 0
+		return 0, 0
 	}
 
 	if strings.TrimSpace(msg.Content) == "" {
-		return 0
+		return 0, 0
 	}
 	if msg.Role == "" {
 		msg.Role = "user"
@@ -415,22 +1456,405 @@ func (s *SessionContext) AppendGroupCompactMessage(item any, maxBufferSize int, 
 	defer s.mu.Unlock()
 
 	s.groupCompactSequence++
+	seq := s.groupCompactSequence
 	s.groupCompactBuffer = append(s.groupCompactBuffer, groupCompactItem{
-		sequence: s.groupCompactSequence,
+		sequence: seq,
 		message:  msg,
+		staged:   staged,
 	})
 	if len(s.groupCompactBuffer) > maxBufferSize {
-		drop := len(s.groupCompactBuffer) - maxBufferSize
-		copy(s.groupCompactBuffer, s.groupCompactBuffer[drop:])
-		s.groupCompactBuffer = s.groupCompactBuffer[:maxBufferSize]
+		excess := len(s.groupCompactBuffer) - maxBufferSize
+		// First pass: strictly evict committed entries first (oldest to newest)
+		// to protect in-flight staged barriers from ordinary chatter bursts.
+		dropped := 0
+		w := 0
+		for _, item := range s.groupCompactBuffer {
+			if !item.staged && dropped < excess {
+				dropped++
+				continue
+			}
+			s.groupCompactBuffer[w] = item
+			w++
+		}
+		for i := w; i < len(s.groupCompactBuffer); i++ {
+			s.groupCompactBuffer[i] = groupCompactItem{}
+		}
+		s.groupCompactBuffer = s.groupCompactBuffer[:w]
+
+		// Second pass: if the count of staged entries itself exceeds maxBufferSize
+		// (e.g. under an upstream LLM stall where multiple wake turns arrive and queue up),
+		// evict the oldest staged entries as a hard backpressure safety valve to enforce
+		// the ceiling and prevent unbounded memory growth.
+		if len(s.groupCompactBuffer) > maxBufferSize {
+			stagedExcess := len(s.groupCompactBuffer) - maxBufferSize
+			copy(s.groupCompactBuffer, s.groupCompactBuffer[stagedExcess:])
+			for i := len(s.groupCompactBuffer) - stagedExcess; i < len(s.groupCompactBuffer); i++ {
+				s.groupCompactBuffer[i] = groupCompactItem{}
+			}
+			s.groupCompactBuffer = s.groupCompactBuffer[:len(s.groupCompactBuffer)-stagedExcess]
+		}
 	}
 	s.UpdatedAt = time.Now()
-	return len(s.groupCompactBuffer)
+	return seq, len(s.groupCompactBuffer)
+}
+
+// StagedGroupCompactGuard guarantees exactly-once finalization for staged group compact sequence slots.
+type StagedGroupCompactGuard struct {
+	session   *SessionContext
+	sequences []uint64
+	messageID string
+	senderID  string
+	onPromote func()
+	finalized atomic.Bool
+}
+
+// NewStagedGroupCompactGuard creates a guard that guarantees exactly-once finalization of a staged sequence slot.
+func (s *SessionContext) NewStagedGroupCompactGuard(sequence uint64, messageID, senderID string, onPromote func()) *StagedGroupCompactGuard {
+	var seqs []uint64
+	if sequence > 0 {
+		seqs = []uint64{sequence}
+	}
+	return &StagedGroupCompactGuard{
+		session:   s,
+		sequences: seqs,
+		messageID: strings.TrimSpace(messageID),
+		senderID:  strings.TrimSpace(senderID),
+		onPromote: onPromote,
+	}
+}
+
+// Sequence returns the primary internal buffer sequence bound to this guard slot.
+func (g *StagedGroupCompactGuard) Sequence() uint64 {
+	if g == nil || len(g.sequences) == 0 {
+		return 0
+	}
+	return g.sequences[0]
+}
+
+// SetImageDescription attaches adapter-produced vision output to this guard's
+// exact staged user slot. A dropped, promoted, or evicted slot cannot be revived.
+func (g *StagedGroupCompactGuard) SetImageDescription(description string) bool {
+	if g == nil || g.session == nil || g.Sequence() == 0 || description == "" {
+		return false
+	}
+	g.session.mu.Lock()
+	defer g.session.mu.Unlock()
+	if g.finalized.Load() {
+		return false
+	}
+	for i := range g.session.groupCompactBuffer {
+		item := &g.session.groupCompactBuffer[i]
+		if item.sequence == g.Sequence() && item.staged && item.message.Role == "user" {
+			item.message.ImageDescription = description
+			return true
+		}
+	}
+	return false
+}
+
+// AddSequence binds an additional buffer slot (such as an intermediate assistant response) to this guard.
+func (g *StagedGroupCompactGuard) AddSequence(seq uint64) {
+	if g == nil || seq == 0 {
+		return
+	}
+	if !slices.Contains(g.sequences, seq) {
+		g.sequences = append(g.sequences, seq)
+	}
+}
+
+// Sequences returns all internal buffer sequences bound to this guard.
+func (g *StagedGroupCompactGuard) Sequences() []uint64 {
+	if g == nil {
+		return nil
+	}
+	return append([]uint64(nil), g.sequences...)
+}
+
+// MessageID returns the upstream message ID bound to this guard slot.
+func (g *StagedGroupCompactGuard) MessageID() string {
+	if g == nil {
+		return ""
+	}
+	return g.messageID
+}
+
+// SenderID returns the sender ID bound to this guard slot.
+func (g *StagedGroupCompactGuard) SenderID() string {
+	if g == nil {
+		return ""
+	}
+	return g.senderID
+}
+
+// StageGroupCompactWithGuard appends one visible group message marked as staged and returns an exactly-once finalization guard.
+func (s *SessionContext) StageGroupCompactWithGuard(item any, maxBufferSize int, senderID string, onPromote func(), messageID ...string) (*StagedGroupCompactGuard, int) {
+	var msgID string
+	if len(messageID) > 0 {
+		msgID = strings.TrimSpace(messageID[0])
+	}
+	seq, bufLen := s.appendGroupCompactInternal(item, true, maxBufferSize, msgID)
+	guard := s.NewStagedGroupCompactGuard(seq, msgID, senderID, onPromote)
+	return guard, bufLen
+}
+
+// Promote marks the staged message as committed, clearing the compaction barrier,
+// and invokes any registered onPromote callback (e.g. triggering asynchronous compaction).
+func (g *StagedGroupCompactGuard) Promote() bool {
+	if g == nil || !g.finalized.CompareAndSwap(false, true) {
+		return false
+	}
+	promoted := false
+	if g.session != nil {
+		for _, seq := range g.sequences {
+			if g.session.PromoteGroupCompactSlot(seq, g.messageID) {
+				promoted = true
+			}
+		}
+	}
+	if g.onPromote != nil {
+		g.onPromote()
+	}
+	return promoted
+}
+
+// Drop permanently removes the staged message and invalidates in-flight compaction snapshots.
+func (g *StagedGroupCompactGuard) Drop() bool {
+	dropped, _ := g.DropChecked()
+	return dropped
+}
+
+// DropChecked reports a failed durable purge to the caller.
+func (g *StagedGroupCompactGuard) DropChecked() (bool, error) {
+	if g == nil || !g.finalized.CompareAndSwap(false, true) {
+		return false, nil
+	}
+	dropped := false
+	if g.session != nil {
+		if len(g.sequences) == 0 {
+			return g.session.DropGroupCompactSlotChecked(0, g.messageID, g.senderID)
+		}
+		var dropErr error
+		for i, seq := range g.sequences {
+			messageID := ""
+			if i == len(g.sequences)-1 {
+				messageID = g.messageID
+			}
+			removed, err := g.session.DropGroupCompactSlotChecked(seq, messageID, g.senderID)
+			dropped = dropped || removed
+			dropErr = errors.Join(dropErr, err)
+		}
+		return dropped, dropErr
+	}
+	return false, nil
+}
+
+// Done ensures the staged message is finalized exactly once. If neither Promote nor Drop
+// has been explicitly called, it defaults to Promote to ensure the compaction barrier is not leaked.
+func (g *StagedGroupCompactGuard) Done() {
+	if g == nil {
+		return
+	}
+	g.Promote()
+}
+
+// PromoteGroupCompactSlot marks a specific staged message slot as committed.
+// If sequence > 0, it targets strictly the exact slot matching sequence and staged == true.
+// If sequence == 0 and messageID != "", it targets staged items matching messageID.
+// If both sequence is 0 and messageID is empty, it returns false to ensure unverified
+// staged messages are never prematurely committed.
+func (s *SessionContext) PromoteGroupCompactSlot(sequence uint64, messageID string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	msgID := strings.TrimSpace(messageID)
+	if sequence == 0 && msgID == "" {
+		return false
+	}
+
+	promoted := false
+	for i := range s.groupCompactBuffer {
+		if !s.groupCompactBuffer[i].staged {
+			continue
+		}
+		if sequence > 0 {
+			if s.groupCompactBuffer[i].sequence == sequence {
+				s.groupCompactBuffer[i].staged = false
+				promoted = true
+			}
+		} else if msgID != "" {
+			if s.groupCompactBuffer[i].message.MessageID == msgID {
+				s.groupCompactBuffer[i].staged = false
+				promoted = true
+			}
+		}
+	}
+	if promoted {
+		s.UpdatedAt = time.Now()
+	}
+	return promoted
+}
+
+// PromoteGroupCompactMessage marks staged messages matching messageID as committed.
+// If messageID is empty, it returns false to prevent unverified staged turns from leaking.
+func (s *SessionContext) PromoteGroupCompactMessage(messageID string) bool {
+	msgID := strings.TrimSpace(messageID)
+	if msgID == "" {
+		return false
+	}
+	return s.PromoteGroupCompactSlot(0, msgID)
 }
 
 // AppendGroupCompactString parses a raw message string and appends it to the compact buffer.
 func (s *SessionContext) AppendGroupCompactString(content string, maxBufferSize int, messageID ...string) int {
 	return s.AppendGroupCompactMessage(content, maxBufferSize, messageID...)
+}
+
+// DropGroupCompactSlot removes group compact messages matching sequence (if > 0)
+// or messageID (if sequence == 0 and messageID is non-empty).
+// When sequence > 0, it removes strictly the exact staged slot without touching committed
+// messages or other staged turns, even if they share the same upstream message ID.
+// When sequence == 0 and messageID is empty, it returns false and never guesses or deletes
+// any buffer items.
+// It increments groupCompactGeneration to invalidate any in-flight compaction snapshot.
+// If messageID is non-empty, it also rolls back summaries polluted by messageID, records
+// messageID revocation, invalidates associated snapshot sources, aborts in-flight distillation barriers,
+// and reconciles group store entries.
+func (s *SessionContext) DropGroupCompactSlot(sequence uint64, messageID, senderID string) bool {
+	dropped, _ := s.DropGroupCompactSlotChecked(sequence, messageID, senderID)
+	return dropped
+}
+
+// DropGroupCompactSlotChecked reports durable purge failures to SQL callers.
+func (s *SessionContext) DropGroupCompactSlotChecked(sequence uint64, messageID, senderID string) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	s.mu.Lock()
+
+	msgID := strings.TrimSpace(messageID)
+	if sequence == 0 && msgID == "" {
+		s.mu.Unlock()
+		return false, nil
+	}
+
+	dropped := false
+
+	if len(s.groupCompactBuffer) > 0 {
+		var filtered []groupCompactItem
+		if sequence > 0 {
+			for _, item := range s.groupCompactBuffer {
+				if item.staged && item.sequence == sequence {
+					dropped = true
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+		} else if msgID != "" {
+			for _, item := range s.groupCompactBuffer {
+				if item.message.MessageID == msgID {
+					dropped = true
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+		} else {
+			filtered = s.groupCompactBuffer
+		}
+		s.groupCompactBuffer = filtered
+	}
+
+	// Check if the current committed summary was polluted by this specific message.
+	// Only match by messageID to prevent historical mixed-sender batches from being discarded.
+	hasPollution := false
+	if msgID != "" {
+		if slices.Contains(s.lastCommittedMessageIDs, msgID) {
+			hasPollution = true
+		}
+		if !hasPollution {
+			for _, grp := range s.groupSummaryGroups {
+				if slices.Contains(grp.MessageIDs, msgID) {
+					hasPollution = true
+					break
+				}
+			}
+		}
+	}
+
+	if hasPollution {
+		s.groupCompactSummary = s.prevGroupCompactSummary
+		s.groupSummaryGroups = s.prevGroupSummaryGroups
+		s.prevGroupCompactSummary = ""
+		s.prevGroupSummaryGroups = nil
+		s.lastCommittedMessageIDs = nil
+		s.lastCommittedSenderIDs = nil
+		dropped = true
+	}
+
+	// Record revoked message ID in session state strictly when a valid message ID is provided.
+	// Never blacklist the sender across turns.
+	if msgID != "" {
+		if s.revokedMessageIDs == nil {
+			s.revokedMessageIDs = make(map[string]struct{})
+		}
+		s.revokedMessageIDs[msgID] = struct{}{}
+	}
+
+	// Invalidate any committed sources matching the dropped message ID.
+	// Never invalidate snapshots containing different messages from the same sender.
+	if msgID != "" && s.validCommittedSources != nil {
+		for seq, src := range s.validCommittedSources {
+			if slices.Contains(src.messageIDs, msgID) {
+				delete(s.validCommittedSources, seq)
+				dropped = true
+			}
+		}
+	}
+
+	// Identify which in-flight distillation barriers are affected by the dropped message ID.
+	// Barriers whose snapshots do not contain this specific message are unaffected.
+	var barriersToAbort []*groupDistillationBarrier
+	if msgID != "" {
+		for _, b := range s.groupDistillBarriers {
+			if slices.Contains(b.snapshot.MessageIDs, msgID) {
+				barriersToAbort = append(barriersToAbort, b)
+			}
+		}
+	}
+
+	s.groupCompactGeneration++
+	s.UpdatedAt = time.Now()
+	store := s.groupStore
+	s.mu.Unlock()
+
+	// Coordinate with commit boundary outside session lock: abort affected barriers and wait
+	// if any barrier is actively writing, guaranteeing no stale quote writes persist.
+	for _, b := range barriersToAbort {
+		b.AbortAndWait()
+	}
+
+	// Reconcile and purge any affected distilled records in the group store before returning,
+	// strictly scoped to this specific message ID. Never purge by sender.
+	if store != nil && msgID != "" {
+		if err := store.PurgeDistilledEntries(msgID); err != nil {
+			return dropped || len(barriersToAbort) > 0, fmt.Errorf("purge distilled group memory: %w", err)
+		}
+	}
+
+	return dropped || len(barriersToAbort) > 0, nil
+}
+
+// DropGroupCompactMessage removes group compact messages matching messageID (if non-empty).
+// If messageID is empty, it returns false and never guesses or deletes any buffer items.
+func (s *SessionContext) DropGroupCompactMessage(messageID, senderID string) bool {
+	return s.DropGroupCompactSlot(0, messageID, senderID)
+}
+
+// DropGroupCompactMessageChecked reports durable purge failures to SQL callers.
+func (s *SessionContext) DropGroupCompactMessageChecked(messageID, senderID string) (bool, error) {
+	return s.DropGroupCompactSlotChecked(0, messageID, senderID)
 }
 
 // SnapshotGroupContext atomically retrieves the running summary and uncompacted recent messages
@@ -463,6 +1887,9 @@ func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, m
 
 	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
 		item := s.groupCompactBuffer[i]
+		if item.staged {
+			continue
+		}
 		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
 			continue
 		}
@@ -480,6 +1907,10 @@ func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, m
 				contentRunes := []rune(message.Content)
 				if maxChars < len(contentRunes) {
 					message.Content = string(contentRunes[:maxChars])
+				}
+				remaining := max(0, maxChars-len([]rune(message.Content)))
+				if imageRunes := []rune(message.ImageDescription); len(imageRunes) > remaining {
+					message.ImageDescription = string(imageRunes[:remaining])
 				}
 				message.raw = ""
 				selected = append(selected, message)
@@ -514,6 +1945,10 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 	// Traverse from newest to oldest to prioritize latest messages
 	for i := len(s.groupCompactBuffer) - 1; i >= 0; i-- {
 		item := s.groupCompactBuffer[i]
+
+		if item.staged {
+			continue
+		}
 
 		if excludeID != "" && item.message.MessageID != "" && item.message.MessageID == excludeID {
 			continue
@@ -559,6 +1994,9 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 }
 
 // SnapshotGroupCompact returns a batch once bufferSize raw messages are ready.
+// Only committed (unstaged) messages are eligible for compaction, stopping at the
+// first staged message to preserve contiguous sequence ordering and ensure unconfirmed
+// wake turns cannot enter an in-flight compactor.
 // It does not mutate session state; CommitGroupCompact performs the atomic
 // replacement after the asynchronous summary succeeds.
 func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnapshot, bool) {
@@ -568,17 +2006,30 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 	if bufferSize <= 0 || len(s.groupCompactBuffer) < bufferSize {
 		return GroupCompactSnapshot{}, false
 	}
-	msgs := make([]GroupCompactMessage, len(s.groupCompactBuffer))
-	msgIDs := make([]string, len(s.groupCompactBuffer))
-	for i, item := range s.groupCompactBuffer {
-		msgs[i] = item.message
-		msgIDs[i] = item.message.MessageID
+
+	eligibleCount := 0
+	for _, item := range s.groupCompactBuffer {
+		if item.staged {
+			break
+		}
+		eligibleCount++
+	}
+
+	if eligibleCount < bufferSize {
+		return GroupCompactSnapshot{}, false
+	}
+
+	msgs := make([]GroupCompactMessage, eligibleCount)
+	msgIDs := make([]string, eligibleCount)
+	for i := 0; i < eligibleCount; i++ {
+		msgs[i] = s.groupCompactBuffer[i].message
+		msgIDs[i] = s.groupCompactBuffer[i].message.MessageID
 	}
 	return GroupCompactSnapshot{
 		Summary:         s.groupCompactSummary,
 		Messages:        msgs,
 		MessageIDs:      msgIDs,
-		ThroughSequence: s.groupCompactBuffer[len(s.groupCompactBuffer)-1].sequence,
+		ThroughSequence: s.groupCompactBuffer[eligibleCount-1].sequence,
 		Generation:      s.groupCompactGeneration,
 	}, true
 }
@@ -586,15 +2037,62 @@ func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnaps
 // CommitGroupCompact replaces the running summary and removes only raw
 // messages included in snapshot. It rejects results invalidated by deletion.
 func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summary string) bool {
+	committed, _ := s.CommitGroupCompactWithPersistence(snapshot, summary, nil)
+	return committed
+}
+
+// CommitGroupCompactWithPersistence keeps a SQL summary durable before it is
+// visible to readers or removed from the raw-message buffer.
+func (s *SessionContext) CommitGroupCompactWithPersistence(
+	snapshot GroupCompactSnapshot, summary string, persist func() (bool, error),
+) (bool, error) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		return false
+		return false, nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if snapshot.Generation != s.groupCompactGeneration {
-		return false
+		return false, nil
+	}
+	if persist != nil {
+		applied, err := persist()
+		if err != nil || !applied {
+			return false, err
+		}
+	}
+
+	// Stash previous clean state for potential rollback upon subsequent ban
+	s.prevGroupCompactSummary = s.groupCompactSummary
+	s.prevGroupSummaryGroups = s.groupSummaryGroups
+
+	senderIDs := make([]string, 0, len(snapshot.Messages))
+	for _, m := range snapshot.Messages {
+		if m.SenderID != "" {
+			senderIDs = append(senderIDs, m.SenderID)
+		}
+	}
+	s.lastCommittedMessageIDs = snapshot.MessageIDs
+	s.lastCommittedSenderIDs = senderIDs
+
+	if s.validCommittedSources == nil {
+		s.validCommittedSources = make(map[uint64]committedSourceInfo)
+	}
+	s.validCommittedSources[snapshot.ThroughSequence] = committedSourceInfo{
+		sequence:   snapshot.ThroughSequence,
+		messageIDs: append([]string(nil), snapshot.MessageIDs...),
+		senderIDs:  append([]string(nil), senderIDs...),
+	}
+	if len(s.validCommittedSources) > 32 {
+		var seqs []uint64
+		for seq := range s.validCommittedSources {
+			seqs = append(seqs, seq)
+		}
+		slices.Sort(seqs)
+		for i := 0; i < len(seqs)-32; i++ {
+			delete(s.validCommittedSources, seqs[i])
+		}
 	}
 
 	s.groupCompactSummary = summary
@@ -632,7 +2130,7 @@ func (s *SessionContext) CommitGroupCompact(snapshot GroupCompactSnapshot, summa
 		s.groupCompactBuffer = remaining
 	}
 	s.UpdatedAt = time.Now()
-	return true
+	return true, nil
 }
 
 // GroupRunningSummary returns the latest completed group summary.
@@ -663,21 +2161,60 @@ func (s *SessionContext) SetGroupRunningSummary(summary string) {
 
 // ResetGroupCompact clears summary state and invalidates any in-flight result.
 func (s *SessionContext) ResetGroupCompact() {
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var barriersToWait []*groupDistillationBarrier
+	for id, b := range s.groupDistillBarriers {
+		barriersToWait = append(barriersToWait, b)
+		delete(s.groupDistillBarriers, id)
+	}
 
 	s.groupCompactGeneration++
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
+	s.prevGroupCompactSummary = ""
+	s.prevGroupSummaryGroups = nil
+	s.lastCommittedMessageIDs = nil
+	s.lastCommittedSenderIDs = nil
+	s.validCommittedSources = nil
+	s.revokedMessageIDs = nil
 	s.UpdatedAt = time.Now()
+	s.mu.Unlock()
+
+	for _, b := range barriersToWait {
+		b.AbortAndWait()
+	}
+}
+
+// GroupCompactGeneration returns the current compact generation epoch.
+func (s *SessionContext) GroupCompactGeneration() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupCompactGeneration
 }
 
 // GroupCompactReady reports whether another full raw-message batch is ready.
+// Only committed (unstaged) messages count toward compaction readiness.
 func (s *SessionContext) GroupCompactReady(bufferSize int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return bufferSize > 0 && len(s.groupCompactBuffer) >= bufferSize
+	if bufferSize <= 0 {
+		return false
+	}
+	eligibleCount := 0
+	for _, item := range s.groupCompactBuffer {
+		if item.staged {
+			break
+		}
+		eligibleCount++
+	}
+	return eligibleCount >= bufferSize
 }
 
 // GroupCompactBufferCount returns the number of raw messages currently buffered.
@@ -687,6 +2224,27 @@ func (s *SessionContext) GroupCompactBufferCount() int {
 	return len(s.groupCompactBuffer)
 }
 
+// GroupCompactBufferMessages returns a copy of all buffered group compact messages.
+func (s *SessionContext) GroupCompactBufferMessages() []GroupCompactMessage {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := make([]GroupCompactMessage, len(s.groupCompactBuffer))
+	for i, item := range s.groupCompactBuffer {
+		res[i] = item.message
+	}
+	return res
+}
+
+// PendingExtractionBatch wraps an asynchronous memory extraction batch with its originating session and generation epoch.
+type PendingExtractionBatch struct {
+	Session *SessionContext
+	Epoch   uint64
+	Items   []memory.PendingExtractionItem
+}
+
 // EnqueuePendingTurn appends one completed user/assistant turn. Once the
 // per-session random threshold is reached, it atomically returns and clears the
 // pending batch for asynchronous extraction.
@@ -694,9 +2252,9 @@ func (s *SessionContext) EnqueuePendingTurn(
 	items []memory.PendingExtractionItem,
 	minTurns int,
 	maxTurns int,
-) ([]memory.PendingExtractionItem, bool) {
+) (PendingExtractionBatch, bool) {
 	if len(items) == 0 {
-		return nil, false
+		return PendingExtractionBatch{}, false
 	}
 	if minTurns <= 0 {
 		minTurns = 3
@@ -708,7 +2266,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.extractionThreshold == 0 {
+	if s.extractionThreshold < minTurns || s.extractionThreshold > maxTurns {
 		s.extractionThreshold = minTurns
 		if width := maxTurns - minTurns + 1; width > 1 {
 			s.extractionThreshold += rand.IntN(width)
@@ -718,7 +2276,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 	s.pendingTurns = append(s.pendingTurns, turn)
 	s.UpdatedAt = time.Now()
 	if len(s.pendingTurns) < s.extractionThreshold {
-		return nil, false
+		return PendingExtractionBatch{}, false
 	}
 
 	count := 0
@@ -731,7 +2289,14 @@ func (s *SessionContext) EnqueuePendingTurn(
 	}
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
-	return batch, true
+	if s.epoch == 0 {
+		s.epoch = 1
+	}
+	return PendingExtractionBatch{
+		Session: s,
+		Epoch:   s.epoch,
+		Items:   batch,
+	}, true
 }
 
 func (s *SessionContext) PendingTurnCount() int {
@@ -747,6 +2312,7 @@ const minHistory = 4
 type SessionManager struct {
 	*runtimescope.Scope
 	sessions          map[string]*SessionContext
+	groupNames        map[string]string
 	mu                sync.RWMutex
 	groupSummaryStore *groupsummary.Store
 	MaxHistory        int           // 单个会话保留的最大历史消息数
@@ -759,16 +2325,19 @@ func NewSessionManager(scopes ...*runtimescope.Scope) *SessionManager {
 	sm := &SessionManager{
 		Scope:      scope,
 		sessions:   make(map[string]*SessionContext),
+		groupNames: make(map[string]string),
 		MaxHistory: 50,
 		TTL:        24 * time.Hour,
 	}
 	// MAX_CONTEXT_MESSAGES env 覆盖默认值；运行期再修改 env 会在每次裁剪时生效
 	// （见 agent.go effectiveMaxHistory）。
 	if v := scope.Getenv("MAX_CONTEXT_MESSAGES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= minHistory {
+		if n, err := strconv.Atoi(v); err == nil && n >= minHistory && (scope == nil || scope.Config == nil || !scope.Config.IsDatabase()) {
 			sm.MaxHistory = n
 		}
 	}
+	// SQL scopes read the current limit on every trim; retain the code fallback
+	// here so deleting an override does not keep the startup value indefinitely.
 	// 启动定时清理协程
 	sm.Go(sm.startCleanupRoutine)
 	return sm
@@ -779,6 +2348,27 @@ func (sm *SessionManager) SetGroupSummaryStore(store *groupsummary.Store) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.groupSummaryStore = store
+}
+
+// TransferSessionsTo keeps live conversation state when an instance runtime is
+// rebuilt after a database setting change. The old runtime must be stopped first.
+func (sm *SessionManager) TransferSessionsTo(next *SessionManager) {
+	if sm == nil || next == nil || sm == next {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	next.mu.Lock()
+	defer next.mu.Unlock()
+	for id, session := range sm.sessions {
+		session.SetScope(next.Scope)
+		next.sessions[id] = session
+	}
+	for id, name := range sm.groupNames {
+		next.groupNames[id] = name
+	}
+	sm.sessions = make(map[string]*SessionContext)
+	sm.groupNames = make(map[string]string)
 }
 
 // GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。
@@ -837,15 +2427,79 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 			summary = record.Summary
 		}
 	}
+	gName := sm.groupNames[canonicalID]
+	if gName == "" {
+		gName = sm.groupNames[sessionID]
+	}
 	session := &SessionContext{
 		ConversationID:      sessionID,
 		History:             make([]ChatMessage, 0),
 		CreatedAt:           time.Now(),
 		UpdatedAt:           time.Now(),
+		epoch:               1,
 		groupCompactSummary: summary,
+		scope:               sm.Scope,
+		groupName:           gName,
 	}
 	sm.sessions[canonicalID] = session
 	return session
+}
+
+// SetGroupName records or updates the cached human-readable group name for a session.
+func (sm *SessionManager) SetGroupName(sessionID, name string) {
+	name = strings.TrimSpace(name)
+	if sm == nil || name == "" {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.groupNames == nil {
+		sm.groupNames = make(map[string]string)
+	}
+	sm.groupNames[canonicalID] = name
+	sm.groupNames[sessionID] = name
+	if s, exists := sm.sessions[canonicalID]; exists {
+		s.SetGroupName(name)
+	} else if s, exists := sm.sessions[sessionID]; exists {
+		s.SetGroupName(name)
+	}
+}
+
+// GetGroupName returns the cached group name for a session, if known.
+func (sm *SessionManager) GetGroupName(sessionID string) string {
+	if sm == nil {
+		return ""
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if name, ok := sm.groupNames[canonicalID]; ok && name != "" {
+		return name
+	}
+	if name, ok := sm.groupNames[sessionID]; ok && name != "" {
+		return name
+	}
+	for _, alias := range memory.SessionKeyAliases(sessionID) {
+		if name, ok := sm.groupNames[alias]; ok && name != "" {
+			return name
+		}
+	}
+	if s, exists := sm.sessions[canonicalID]; exists {
+		return s.GroupName()
+	}
+	if s, exists := sm.sessions[sessionID]; exists {
+		return s.GroupName()
+	}
+	return ""
 }
 
 // startCleanupRoutine 定时清理过期会话
@@ -885,9 +2539,25 @@ func (s *SessionContext) ID() string {
 
 // AddMessage 添加一条 core.ChatMessage 到会话历史
 func (s *SessionContext) AddMessage(msg core.ChatMessage) {
+	s.AddMessageTracked(msg)
+}
+
+// AddMessageTracked returns an exact history handle for transient public output.
+func (s *SessionContext) AddMessageTracked(msg core.ChatMessage) uint64 {
+	return s.AddMessageAtEpoch(msg, 0)
+}
+
+// AddMessageAtEpoch records confirmed delivery without reviving reset history.
+func (s *SessionContext) AddMessageAtEpoch(msg core.ChatMessage, epoch uint64) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if epoch != 0 && s.epoch != epoch {
+		return 0
+	}
+	return s.addMessageLocked(msg)
+}
 
+func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
 	// 转换 core.ChatMessage -> llm.ChatMessage
 	llmMsg := ChatMessage{
 		Role:    string(msg.Role),
@@ -906,8 +2576,18 @@ func (s *SessionContext) AddMessage(msg core.ChatMessage) {
 			}
 		}
 	}
+	if len(s.historySeq) != len(s.History) {
+		s.historySeq = make([]uint64, len(s.History))
+		for i := range s.History {
+			s.nextMsgSeq++
+			s.historySeq[i] = s.nextMsgSeq
+		}
+	}
+	s.nextMsgSeq++
+	s.historySeq = append(s.historySeq, s.nextMsgSeq)
 	s.History = append(s.History, llmMsg)
 	s.UpdatedAt = time.Now()
+	return s.nextMsgSeq
 }
 
 // Messages 以 core.ChatMessage 切片形式返回会话历史
@@ -924,6 +2604,9 @@ func (s *SessionContext) Clear() {
 	defer s.mu.Unlock()
 
 	s.History = nil
+	s.activeSkills = nil
+	s.historySeq = nil
+	s.privateCompact = nil
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
@@ -931,6 +2614,10 @@ func (s *SessionContext) Clear() {
 	s.pendingTurns = nil
 	s.extractionThreshold = 0
 	s.deliveryFailure = nil
+	s.botLoopTurns = nil
+	s.botLoopConfig = ""
+	s.botLoopTail = nil
+	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
 	s.UpdatedAt = time.Now()
@@ -963,6 +2650,45 @@ func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
 	}
 	session.ResetGroupCompact()
 	return true
+}
+
+// ResetSession resets the specified session across canonical keys and aliases,
+// cancelling active generation, clearing history/buffers/summaries, and removing
+// persisted group summary from disk.
+func (sm *SessionManager) ResetSession(sessionID string) error {
+	if sm == nil {
+		return nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	canonicalID := memory.CanonicalSessionKey(sessionID)
+	if canonicalID == "" {
+		canonicalID = sessionID
+	}
+	aliases := memory.SessionKeyAliases(sessionID)
+
+	sm.mu.RLock()
+	session, ok := sm.sessions[canonicalID]
+	if !ok {
+		session, ok = sm.sessions[sessionID]
+	}
+	if !ok {
+		for _, alias := range aliases {
+			if s, found := sm.sessions[alias]; found {
+				session = s
+				ok = true
+				break
+			}
+		}
+	}
+	store := sm.groupSummaryStore
+	sm.mu.RUnlock()
+
+	if ok && session != nil {
+		return session.ResetSession(store)
+	} else if store != nil {
+		return store.Delete(canonicalID)
+	}
+	return nil
 }
 
 // ── core.SessionStore interface implementation ──

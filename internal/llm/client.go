@@ -1,10 +1,10 @@
 package llm
 
 import (
-	"FrostAgent/internal/logs"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"io"
 	"net/http"
 	"time"

@@ -1,0 +1,90 @@
+const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
+
+export function getControlToken(): string {
+  try {
+    return localStorage.getItem(CONTROL_TOKEN_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setControlToken(token: string): void {
+  try {
+    const trimmed = token.trim();
+    if (trimmed) localStorage.setItem(CONTROL_TOKEN_STORAGE_KEY, trimmed);
+    else localStorage.removeItem(CONTROL_TOKEN_STORAGE_KEY);
+  } catch {
+    // localStorage may be unavailable in a restricted browser.
+  }
+}
+
+export function directChatWebSocket(url: string): WebSocket {
+  const endpoint = new URL(url);
+  const origin = new URL(window.location.origin);
+  origin.protocol = origin.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (endpoint.origin !== origin.origin || endpoint.username || endpoint.password) {
+    throw new Error('直接对话必须使用同源 WebSocket 地址');
+  }
+  const protocols = ['frostagent.direct-chat'];
+  const token = getControlToken();
+  if (token) {
+    const bytes = new TextEncoder().encode(token);
+    const encoded = btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(''))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    // Keep the control credential out of URLs and endpoint displays. The server
+    // selects only frostagent.direct-chat, never the credential-bearing offer.
+    protocols.push(`frostagent.control-token.${encoded}`);
+  }
+  return new WebSocket(url, protocols);
+}
+
+export async function controlPlaneFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
+  if (url.origin !== window.location.origin) throw new Error('管理请求必须使用同源地址');
+  const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
+  const token = getControlToken();
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetch(input, { ...init, headers });
+  if (response.status === 401) throw new Error('控制令牌无效或未设置，请在「前端设置」填写访问凭据');
+  return response;
+}
+
+function isInstanceBackupURL(url: URL): boolean {
+  const parts = url.pathname.split('/').filter(Boolean);
+  return parts.length >= 4 && parts.length <= 5 &&
+    parts[0] === 'api' && parts[1] === 'instances' && parts[2] !== 'global' && parts[3] === 'backup';
+}
+
+export async function downloadControlPlaneFile(url: string, filename: string): Promise<void> {
+  const requestURL = new URL(url, window.location.origin);
+  // Keep instance backup responses out of browser download interception
+  // helpers (for example, 迅雷). The server treats this authenticated POST as
+  // a byte fetch and omits Content-Disposition; the Blob is downloaded locally
+  // only after the complete response has arrived. Other control-plane files
+  // keep their existing GET/attachment behavior.
+  const response = await controlPlaneFetch(url, isInstanceBackupURL(requestURL) ? {
+    method: 'POST',
+    headers: { 'X-FrostAgent-Download': 'blob' },
+  } : undefined);
+  if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  saveDownloadedBlob(await response.blob(), filename);
+}
+
+export function saveDownloadedBlob(blob: Blob, filename: string): void {
+  if (blob.size === 0) throw new Error('下载文件为空，请重试');
+  const blobURL = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = blobURL;
+  link.download = filename;
+  try {
+    document.body.appendChild(link);
+    link.click();
+  } catch (error) {
+    URL.revokeObjectURL(blobURL);
+    throw error;
+  } finally {
+    link.remove();
+  }
+  // Firefox may still be handing the blob to its download UI after click().
+  setTimeout(() => URL.revokeObjectURL(blobURL), 60_000);
+}

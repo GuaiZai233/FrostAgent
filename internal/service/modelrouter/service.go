@@ -2,10 +2,11 @@ package modelrouter
 
 import (
 	"context"
+	"errors"
 	"strings"
 
-	v1 "FrostAgent/gen/proto/frostagent/v1"
-	router "FrostAgent/internal/modelrouter"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	router "github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 
 	"connectrpc.com/connect"
 )
@@ -14,23 +15,35 @@ type Service struct {
 	manager *router.Manager
 }
 
+const draftOwnerHeader = "X-FrostAgent-Catalog-Draft"
+const missingDraftOwner = "共享供应商修改需要编辑页面标识"
+
+func (s *Service) missingDraftOwner(owner string) bool {
+	return s.manager.IsSharedCatalog() && owner == ""
+}
+
 func New(manager *router.Manager) *Service {
 	return &Service{manager: manager}
 }
 
 func (s *Service) GetState(
-	context.Context,
-	*connect.Request[v1.GetStateRequest],
+	_ context.Context,
+	req *connect.Request[v1.GetStateRequest],
 ) (*connect.Response[v1.GetStateResponse], error) {
+	owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+	active, draft, err := s.manager.StateForOwner(owner)
+	if s.manager.IsSharedCatalog() && owner == "" {
+		draft = active
+	}
 	loadError := ""
-	if err := s.manager.LoadError(); err != nil {
+	if err != nil {
 		loadError = err.Error()
 	}
 	return connect.NewResponse(&v1.GetStateResponse{
-		Active:                configurationToProto(s.manager.Active()),
-		Draft:                 configurationToProto(s.manager.Draft()),
+		Active:                configurationToProto(active),
+		Draft:                 configurationToProto(draft),
 		LoadError:             loadError,
-		HasDraftSecretChanges: s.manager.HasDraftSecretChanges(),
+		HasDraftSecretChanges: owner != "" && s.manager.HasDraftSecretChangesForOwner(owner),
 	}), nil
 }
 
@@ -44,7 +57,11 @@ func (s *Service) SaveDraft(
 		}), nil
 	}
 	cfg := configurationFromProto(req.Msg.GetConfiguration())
-	if err := s.manager.SaveDraft(cfg); err != nil {
+	owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+	if s.missingDraftOwner(owner) {
+		return connect.NewResponse(&v1.SaveDraftResponse{Error: missingDraftOwner}), nil
+	}
+	if err := s.manager.SaveDraftForOwner(cfg, owner); err != nil {
 		return connect.NewResponse(&v1.SaveDraftResponse{Error: err.Error()}), nil
 	}
 	return connect.NewResponse(&v1.SaveDraftResponse{
@@ -57,9 +74,14 @@ func (s *Service) SetDraftEndpointSecret(
 	_ context.Context,
 	req *connect.Request[v1.SetDraftEndpointSecretRequest],
 ) (*connect.Response[v1.SetDraftEndpointSecretResponse], error) {
-	configured, err := s.manager.SetDraftEndpointSecret(
+	owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+	if s.missingDraftOwner(owner) {
+		return connect.NewResponse(&v1.SetDraftEndpointSecretResponse{Error: missingDraftOwner}), nil
+	}
+	configured, err := s.manager.SetDraftEndpointSecretForOwner(
 		strings.TrimSpace(req.Msg.GetEndpointId()),
 		req.Msg.GetApiKey(),
+		owner,
 	)
 	if err != nil {
 		return connect.NewResponse(&v1.SetDraftEndpointSecretResponse{Error: err.Error()}), nil
@@ -74,7 +96,12 @@ func (s *Service) ClearDraftEndpointSecret(
 	_ context.Context,
 	req *connect.Request[v1.ClearDraftEndpointSecretRequest],
 ) (*connect.Response[v1.ClearDraftEndpointSecretResponse], error) {
-	configured, err := s.manager.ClearDraftEndpointSecret(strings.TrimSpace(req.Msg.GetEndpointId()))
+	owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+	if s.missingDraftOwner(owner) {
+		return connect.NewResponse(&v1.ClearDraftEndpointSecretResponse{Error: missingDraftOwner}), nil
+	}
+	configured, err := s.manager.ClearDraftEndpointSecretForOwner(strings.TrimSpace(req.Msg.GetEndpointId()),
+		owner)
 	if err != nil {
 		return connect.NewResponse(&v1.ClearDraftEndpointSecretResponse{Error: err.Error()}), nil
 	}
@@ -85,19 +112,46 @@ func (s *Service) ClearDraftEndpointSecret(
 }
 
 func (s *Service) DiscardDraft(
-	context.Context,
-	*connect.Request[v1.DiscardDraftRequest],
+	_ context.Context,
+	req *connect.Request[v1.DiscardDraftRequest],
 ) (*connect.Response[v1.DiscardDraftResponse], error) {
+	var draft router.Configuration
+	var err error
+	if req.Header().Get("X-FrostAgent-Catalog-Draft-Reset") == "true" {
+		draft, err = s.manager.ResetSharedDraft()
+	} else {
+		owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+		if s.missingDraftOwner(owner) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New(missingDraftOwner))
+		}
+		draft, err = s.manager.DiscardDraftForOwner(owner)
+	}
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
 	return connect.NewResponse(&v1.DiscardDraftResponse{
-		Draft: configurationToProto(s.manager.DiscardDraft()),
+		Draft: configurationToProto(draft),
 	}), nil
 }
 
 func (s *Service) Publish(
-	context.Context,
-	*connect.Request[v1.PublishRequest],
+	_ context.Context,
+	req *connect.Request[v1.PublishRequest],
 ) (*connect.Response[v1.PublishResponse], error) {
-	active, err := s.manager.Publish()
+	owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+	if s.missingDraftOwner(owner) {
+		return connect.NewResponse(&v1.PublishResponse{Error: missingDraftOwner}), nil
+	}
+	var active router.Configuration
+	var err error
+	if s.manager.IsSharedCatalog() {
+		active, err = s.manager.PublishForOwner(owner)
+	} else {
+		if req.Msg.GetExpectedConfiguration() == nil {
+			return connect.NewResponse(&v1.PublishResponse{Error: "实例路由发布缺少预期配置，请刷新页面后重试"}), nil
+		}
+		active, err = s.manager.PublishExpectedRoutes(configurationFromProto(req.Msg.GetExpectedConfiguration()))
+	}
 	if err != nil {
 		return connect.NewResponse(&v1.PublishResponse{Error: err.Error()}), nil
 	}
@@ -111,7 +165,8 @@ func (s *Service) ListUpstreamModels(
 	_ context.Context,
 	req *connect.Request[v1.ListUpstreamModelsRequest],
 ) (*connect.Response[v1.ListUpstreamModelsResponse], error) {
-	models, err := s.manager.ListUpstreamModels(strings.TrimSpace(req.Msg.GetEndpointId()))
+	models, err := s.manager.ListUpstreamModelsForOwner(strings.TrimSpace(req.Msg.GetEndpointId()),
+		strings.TrimSpace(req.Header().Get(draftOwnerHeader)))
 	if err != nil {
 		return connect.NewResponse(&v1.ListUpstreamModelsResponse{Error: err.Error()}), nil
 	}
@@ -122,7 +177,8 @@ func (s *Service) TestModel(
 	_ context.Context,
 	req *connect.Request[v1.TestModelRequest],
 ) (*connect.Response[v1.TestModelResponse], error) {
-	content, duration, err := s.manager.TestModel(strings.TrimSpace(req.Msg.GetModelId()))
+	content, duration, err := s.manager.TestModelForOwner(strings.TrimSpace(req.Msg.GetModelId()),
+		strings.TrimSpace(req.Header().Get(draftOwnerHeader)))
 	if err != nil {
 		return connect.NewResponse(&v1.TestModelResponse{
 			Error:      err.Error(),
@@ -154,12 +210,13 @@ func configurationToProto(cfg router.Configuration) *v1.ModelRouterConfiguration
 	}
 	for _, model := range cfg.Models {
 		result.Models = append(result.Models, &v1.ModelTarget{
-			Id:            model.ID,
-			DisplayName:   model.DisplayName,
-			EndpointId:    model.EndpointID,
-			UpstreamModel: model.UpstreamModel,
-			Enabled:       model.Enabled,
-			Capabilities:  append([]string(nil), model.Capabilities...),
+			Id:             model.ID,
+			DisplayName:    model.DisplayName,
+			EndpointId:     model.EndpointID,
+			UpstreamModel:  model.UpstreamModel,
+			Enabled:        model.Enabled,
+			Capabilities:   append([]string(nil), model.Capabilities...),
+			MaxInputTokens: int32(model.MaxInputTokens),
 		})
 	}
 	for _, workload := range router.Workloads {
@@ -197,12 +254,13 @@ func configurationFromProto(cfg *v1.ModelRouterConfiguration) router.Configurati
 	}
 	for _, model := range cfg.GetModels() {
 		result.Models = append(result.Models, router.Model{
-			ID:            model.GetId(),
-			DisplayName:   model.GetDisplayName(),
-			EndpointID:    model.GetEndpointId(),
-			UpstreamModel: model.GetUpstreamModel(),
-			Enabled:       model.GetEnabled(),
-			Capabilities:  append([]string(nil), model.GetCapabilities()...),
+			ID:             model.GetId(),
+			DisplayName:    model.GetDisplayName(),
+			EndpointID:     model.GetEndpointId(),
+			UpstreamModel:  model.GetUpstreamModel(),
+			Enabled:        model.GetEnabled(),
+			Capabilities:   append([]string(nil), model.GetCapabilities()...),
+			MaxInputTokens: int(model.GetMaxInputTokens()),
 		})
 	}
 	for _, binding := range cfg.GetGlobalBindings() {
@@ -255,6 +313,8 @@ func workloadToProto(workload router.Workload) v1.ModelWorkload {
 		return v1.ModelWorkload_MODEL_WORKLOAD_REFLECTION
 	case router.WorkloadMemoryExtract:
 		return v1.ModelWorkload_MODEL_WORKLOAD_MEMORY_EXTRACT
+	case router.WorkloadEmbedding:
+		return v1.ModelWorkload_MODEL_WORKLOAD_EMBEDDING
 	case router.WorkloadGroupCompact:
 		return v1.ModelWorkload_MODEL_WORKLOAD_GROUP_COMPACT
 	default:
@@ -274,6 +334,8 @@ func workloadFromProto(workload v1.ModelWorkload) router.Workload {
 		return router.WorkloadReflection
 	case v1.ModelWorkload_MODEL_WORKLOAD_MEMORY_EXTRACT:
 		return router.WorkloadMemoryExtract
+	case v1.ModelWorkload_MODEL_WORKLOAD_EMBEDDING:
+		return router.WorkloadEmbedding
 	case v1.ModelWorkload_MODEL_WORKLOAD_GROUP_COMPACT:
 		return router.WorkloadGroupCompact
 	default:

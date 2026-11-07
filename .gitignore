@@ -46,12 +46,11 @@ node_modules
 .pnpm-store/
 .tools/
 
-.claude/worktrees
-.claude/settings.local.json
-.claude/pr
+.claude/
 
 # Local runtime data
 /data/
+/docker-gateway-root.crt
 
 # Python artifacts
 __pycache__/

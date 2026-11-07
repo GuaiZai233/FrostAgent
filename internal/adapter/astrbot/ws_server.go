@@ -1,28 +1,32 @@
 package astrbot
 
 import (
-	"FrostAgent/internal/adapter/onebot/content"
-	"FrostAgent/internal/adapter/parity"
-	"FrostAgent/internal/billing"
-	"FrostAgent/internal/core"
-	"FrostAgent/internal/llm"
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/memory"
-	"FrostAgent/internal/modelrouter"
-	"FrostAgent/internal/runtimescope"
-	"FrostAgent/internal/security"
-	"FrostAgent/internal/tools"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -37,7 +41,7 @@ var allowedOrigins []string
 func init() {
 	env := os.Getenv("WS_ALLOWED_ORIGINS")
 	if env != "" {
-		for _, o := range strings.Split(env, ",") {
+		for o := range strings.SplitSeq(env, ",") {
 			if trimmed := strings.TrimSpace(o); trimmed != "" {
 				allowedOrigins = append(allowedOrigins, trimmed)
 			}
@@ -71,29 +75,86 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	return false
 }
 
-type wsConn struct {
-	*runtimescope.Scope
-	conn    *websocket.Conn
-	writeMu sync.Mutex
+var nextConnGeneration uint64
+var nextDeliveryID uint64
+
+type deliveryReceipt struct {
+	Type       string `json:"type"`
+	DeliveryID string `json:"delivery_id"`
+	Delivered  bool   `json:"delivered"`
+	Error      string `json:"error,omitempty"`
 }
 
-func newWSConn(conn *websocket.Conn) *wsConn {
-	return &wsConn{conn: conn}
+type wsConn struct {
+	*runtimescope.Scope
+	conn              *websocket.Conn
+	generation        string
+	inFlight          sync.WaitGroup
+	closed            atomic.Bool
+	ctx               context.Context
+	cancel            context.CancelFunc
+	writeMu           sync.Mutex
+	mock              bool
+	mockSessions      sync.Map
+	pendingDeliveries sync.Map
+	pendingQuotes     sync.Map
+
+	replyTargetsMu   sync.Mutex
+	replyTargets     map[replyTargetKey]struct{}
+	replyTargetOrder []replyTargetKey
+}
+
+func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
+	gen := fmt.Sprintf("astrbot-conn-%d", atomic.AddUint64(&nextConnGeneration, 1))
+	parentCtx := context.Background()
+	var scope *runtimescope.Scope
+	if len(scopes) > 0 && scopes[0] != nil {
+		scope = scopes[0]
+		if scope.Context() != nil {
+			parentCtx = scope.Context()
+		}
+	}
+	ctx, cancel := context.WithCancel(parentCtx)
+	return &wsConn{
+		Scope:      scope,
+		conn:       conn,
+		generation: gen,
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+}
+
+func (c *wsConn) isClosed() bool {
+	if c == nil {
+		return true
+	}
+	return c.closed.Load()
+}
+
+func (c *wsConn) Context() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 func (c *wsConn) WriteMessage(messageType int, data []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.isClosed() {
 		return errors.New("connection closed")
 	}
 	return c.conn.WriteMessage(messageType, data)
 }
 
 func (c *wsConn) WriteJSON(v any) error {
+	return c.writeTurnJSON(v, nil)
+}
+
+func (c *wsConn) writeTurnJSON(v any, turn *llm.SessionTurn) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil {
+	if c.conn == nil || c.isClosed() {
 		return errors.New("connection closed")
 	}
 
@@ -111,14 +172,82 @@ func (c *wsConn) WriteJSON(v any) error {
 			v = actionAlias(normalized)
 		}
 	}
-	return c.conn.WriteJSON(v)
+	return turn.WithAuthority(func() error {
+		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			return err
+		}
+		defer c.conn.SetWriteDeadline(time.Time{})
+		return c.conn.WriteJSON(v)
+	})
 }
 
 func (c *wsConn) Close() error {
+	if c == nil {
+		return nil
+	}
+	if c.closed.CompareAndSwap(false, true) {
+		if c.cancel != nil {
+			c.cancel()
+		}
+	}
 	if c.conn == nil {
 		return nil
 	}
 	return c.conn.Close()
+}
+
+func (c *wsConn) acceptDeliveryReceipt(receipt deliveryReceipt) {
+	if receipt.DeliveryID == "" {
+		return
+	}
+	if pending, ok := c.pendingDeliveries.Load(receipt.DeliveryID); ok {
+		select {
+		case pending.(chan deliveryReceipt) <- receipt:
+		default:
+		}
+	}
+}
+
+func (c *wsConn) writeStickerActionAndWait(action Action) error {
+	return c.writeStickerActionAndWaitTurn(action, nil)
+}
+
+func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionTurn) error {
+	action.DeliveryID = fmt.Sprintf("delivery_%d", atomic.AddUint64(&nextDeliveryID, 1))
+	receipts := make(chan deliveryReceipt, 1)
+	c.pendingDeliveries.Store(action.DeliveryID, receipts)
+	defer c.pendingDeliveries.Delete(action.DeliveryID)
+	if err := c.writeTurnJSON(action, turn); err != nil {
+		return err
+	}
+	timer := time.NewTimer(60 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-turn.Context().Done():
+		return context.Canceled
+	case receipt := <-receipts:
+		if !receipt.Delivered {
+			if receipt.Error != "" {
+				return fmt.Errorf("AstrBot 贴纸发送失败: %s", receipt.Error)
+			}
+			return errors.New("AstrBot 贴纸发送失败")
+		}
+		return nil
+	case <-c.Context().Done():
+		return c.Context().Err()
+	case <-timer.C:
+		return errors.New("等待 AstrBot 贴纸投递回执超时")
+	}
+}
+
+func (c *wsConn) sessionKey(event Event) string {
+	baseKey := sessionKey(event)
+	if c != nil && c.mock {
+		key := fmt.Sprintf("mock:%s:%s", c.generation, baseKey)
+		c.mockSessions.Store(key, struct{}{})
+		return key
+	}
+	return baseKey
 }
 
 func sessionKey(event Event) string {
@@ -148,15 +277,15 @@ func senderDisplayName(event Event) string {
 	return "unknown"
 }
 
-func captureGroupCompactMessage(event Event, engine *llm.Engine) {
-	if engine == nil || event.GroupID == "" {
-		return
-	}
-	visibleText := astrBotVisibleText(event)
-	if visibleText == "" {
+func captureGroupCompactText(event Event, text string, engine *llm.Engine) {
+	if engine == nil || event.GroupID == "" || strings.TrimSpace(text) == "" {
 		return
 	}
 	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	if event.GroupName != "" {
+		session.SetGroupName(event.GroupName)
+		engine.SessionManager.SetGroupName(sessionKey(event), event.GroupName)
+	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
 		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
@@ -166,7 +295,7 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 			Role:      "user",
 			Sender:    senderDisplayName(event),
 			SenderID:  event.UserID,
-			Content:   visibleText,
+			Content:   strings.TrimSpace(text),
 			MessageID: event.MessageID,
 			Time:      time.Now().Format("15:04:05"),
 		},
@@ -182,15 +311,101 @@ func captureGroupCompactMessage(event Event, engine *llm.Engine) {
 	}
 }
 
+func captureGroupCompactMessage(event Event, engine *llm.Engine) {
+	if engine == nil || event.GroupID == "" {
+		return
+	}
+	visibleText := astrBotVisibleText(event)
+	captureGroupCompactText(event, visibleText, engine)
+}
+
+func stageGroupCompactText(event Event, text string, engine *llm.Engine) *llm.StagedGroupCompactGuard {
+	if engine == nil || event.GroupID == "" || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	session := engine.SessionManager.GetOrCreate(sessionKey(event))
+	if event.GroupName != "" {
+		session.SetGroupName(event.GroupName)
+		engine.SessionManager.SetGroupName(sessionKey(event), event.GroupName)
+	}
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	onPromote := func() {
+		if engine.GroupCompactor != nil {
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
+			}
+			owner, _ := memory.OwnerForPlatformGroup(platform, event.GroupID)
+			engine.GroupCompactor.TriggerWithScope(session, owner, astrBotRouteScope(event))
+		}
+	}
+	guard, _ := session.StageGroupCompactWithGuard(
+		llm.GroupCompactMessage{
+			Role:      "user",
+			Sender:    senderDisplayName(event),
+			SenderID:  event.UserID,
+			Content:   strings.TrimSpace(text),
+			MessageID: event.MessageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+		event.UserID,
+		onPromote,
+		event.MessageID,
+	)
+	return guard
+}
+
+func stageGroupCompactMessage(event Event, engine *llm.Engine) *llm.StagedGroupCompactGuard {
+	if engine == nil || event.GroupID == "" {
+		return nil
+	}
+	visibleText := astrBotVisibleText(event)
+	return stageGroupCompactText(event, visibleText, engine)
+}
+
+func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine, replyText, messageID string, turn *llm.SessionTurn) {
+	replyText = strings.TrimSpace(replyText)
+	if session == nil || engine == nil || replyText == "" {
+		return
+	}
+
+	botName := engine.Getenv("BOT_NAME")
+	if botName == "" {
+		botName = "霜降"
+	}
+	var maxBufferSize int
+	if engine.GroupCompactor != nil {
+		maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+	}
+	seq, _ := session.StageGroupCompactSlot(
+		llm.GroupCompactMessage{
+			Role:      "assistant",
+			Sender:    botName,
+			Content:   replyText,
+			MessageID: messageID,
+			Time:      time.Now().Format("15:04:05"),
+		},
+		maxBufferSize,
+		messageID,
+	)
+	if turn != nil && turn.StagedGuard() != nil && seq > 0 {
+		turn.StagedGuard().AddSequence(seq)
+	} else {
+		session.PromoteGroupCompactSlot(seq, messageID)
+	}
+}
+
 func astrBotVisibleText(event Event) string {
 	parts := make([]string, 0, 3)
 	if text := strings.TrimSpace(event.Content); text != "" {
 		parts = append(parts, text)
 	}
-	for _, att := range event.Attachments {
-		if att.Type == core.AttachmentTypeImage && (att.MessageID == "" || att.MessageID == event.MessageID) {
-			parts = append(parts, "[图片]")
-		}
+	for range astrBotImageSlotCount(event) {
+		parts = append(parts, "[图片]")
 	}
 	if event.Metadata != nil {
 		if replyMessageID, ok := event.Metadata["reply_message_id"].(string); ok && strings.TrimSpace(replyMessageID) != "" {
@@ -198,6 +413,31 @@ func astrBotVisibleText(event Event) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+// astrBotImageSlotCount returns the number of model-visible image slots for the
+// current message. The plugin reports the original count (including unreadable
+// and deduplicated slots); older plugins fall back to attachment ordinals.
+func astrBotImageSlotCount(event Event) int {
+	if count := event.ImageSlotCounts[event.MessageID]; count > 0 {
+		return count
+	}
+	slots := 0
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || (att.MessageID != "" && att.MessageID != event.MessageID) {
+			continue
+		}
+		if len(att.ImageIndices) > 0 {
+			for _, index := range att.ImageIndices {
+				if index+1 > slots {
+					slots = index + 1
+				}
+			}
+			continue
+		}
+		slots++
+	}
+	return slots
 }
 
 func astrBotLogText(event Event) (string, []logs.InlineImage) {
@@ -299,13 +539,7 @@ func isBotNameMentioned(text string, scopes ...*runtimescope.Scope) bool {
 	if text == "" {
 		return false
 	}
-	names := configuredBotNames(scopes...)
-	for _, name := range names {
-		if strings.Contains(text, name) {
-			return true
-		}
-	}
-	return false
+	return parity.ContainsBotName(text, configuredBotNames(scopes...))
 }
 
 func configuredBotNames(scopes ...*runtimescope.Scope) []string {
@@ -336,7 +570,47 @@ func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 	return result
 }
 
-func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
+func shouldReply(event *Event, scopes ...*runtimescope.Scope) bool {
+	return shouldReplyWithRNG(event, nil, scopes...)
+}
+
+func isExplicitWake(event *Event, scopes ...*runtimescope.Scope) bool {
+	if event == nil {
+		return false
+	}
+	if event.MessageType == "private" {
+		return true
+	}
+	if event.MessageType != "group" {
+		return false
+	}
+	scope := runtimescope.First(scopes)
+	if scope != nil && scope.Getenv("GROUP_REPLY_ON_MENTION") == "false" {
+		return false
+	}
+	if event.IsWake || event.IsAt {
+		return true
+	}
+	if isBotNameMentioned(event.Content, scope) {
+		return true
+	}
+	if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+		return true
+	}
+	return false
+}
+
+func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescope.Scope) bool {
+	if event == nil {
+		return false
+	}
+	if event.Metadata != nil {
+		if val, ok := event.Metadata["_frostagent_should_reply"]; ok {
+			if b, ok := val.(bool); ok {
+				return b
+			}
+		}
+	}
 	scope := runtimescope.First(scopes)
 	if event.MessageType == "private" {
 		return true
@@ -351,7 +625,26 @@ func shouldReply(event Event, scopes ...*runtimescope.Scope) bool {
 		if isBotNameMentioned(event.Content, scope) {
 			return true
 		}
-		return slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) })
+		if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+			return true
+		}
+		var getenv func(string) string
+		if scope != nil {
+			getenv = scope.Getenv
+		}
+		platform := event.Platform
+		if platform == "" {
+			platform = "astrbot"
+		}
+		if proactive.RollGroupWithRand(getenv, event.GroupID, rng, platform) {
+			if event.Metadata == nil {
+				event.Metadata = make(map[string]any)
+			}
+			event.Metadata["_frostagent_proactive_reply"] = true
+			event.proactiveStickerOnly = isStickerOnlyEvent(*event)
+			return true
+		}
+		return false
 	}
 	return true
 }
@@ -409,12 +702,52 @@ func isMentionOnlyInteraction(event Event) bool {
 	)
 }
 
-func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot) {
+func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.SessionTurn, routeSnapshot *modelrouter.Snapshot, warningNotice ...string) {
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
+	var startEpoch uint64
 	if turn != nil {
+		startEpoch = turn.Epoch()
 		turn.Wait()
 		defer turn.Done()
+		if engine != nil && engine.SessionManager != nil {
+			if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+				if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+					if !turn.IsValid(sess) {
+						if conn != nil {
+							platform := event.Platform
+							if platform == "" {
+								platform = "astrbot"
+							}
+							_ = conn.WriteJSON(Action{
+								Type:      "action",
+								Action:    "noop",
+								Platform:  platform,
+								SessionID: conn.sessionKey(event),
+								Echo:      "reply_" + event.MessageID,
+							})
+						}
+						return
+					}
+				}
+			}
+		}
+	} else if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				startEpoch = sess.Epoch()
+			}
+		}
+	}
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
 	}
 
+	if event.pokeID != "" && engine.Getenv("ENABLE_POKE") != "true" {
+		_ = sendTerminalNoopWithSuppress(event, conn)
+		return
+	}
 	if event.Type != "event" && event.Type != "" {
 		return
 	}
@@ -427,7 +760,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		platform = "astrbot"
 	}
 
-	if !shouldReply(event, engine.Scope) {
+	if !shouldReply(&event, engine.Scope) {
 		engine.Log().Debug(
 			logs.WEBSOCKET,
 			fmt.Sprintf(
@@ -441,6 +774,7 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		_ = conn.WriteJSON(Action{
 			Type:      "action",
 			Action:    "noop",
+			Platform:  platform,
 			SessionID: event.SessionID,
 			Echo:      "reply_" + event.MessageID,
 		})
@@ -463,21 +797,58 @@ func processEvent(conn *wsConn, event Event, engine *llm.Engine, turn *llm.Sessi
 		logImages,
 	)
 
-	replyWithSnapshot(event, engine, conn, routeSnapshot)
+	replyWithSnapshot(event, engine, conn, routeSnapshot, startEpoch, turn, warningNotice...)
 }
 
-func reply(event Event, engine *llm.Engine, conn *wsConn) {
+func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...string) {
 	var snapshot *modelrouter.Snapshot
 	if engine != nil && engine.ModelRouter != nil {
 		snapshot = engine.ModelRouter.Snapshot()
 	}
-	replyWithSnapshot(event, engine, conn, snapshot)
+	var startEpoch uint64
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+				startEpoch = sess.Epoch()
+			}
+		}
+	}
+	replyWithSnapshot(event, engine, conn, snapshot, startEpoch, nil, warningNotice...)
 }
 
-func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot) {
+func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
+	billingReported := false
+	defer func() {
+		if engine == nil || conn == nil || billingReported {
+			return
+		}
+		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
+			_ = sendDirectReply(event, conn, receipt, turn)
+		}
+	}()
+	defer func() {
+		if turn.Interrupted() {
+			engine.Go(func() { _ = sendTerminalNoopWithSuppress(event, conn) })
+		}
+	}()
+	if conn != nil && conn.mock && conn.isClosed() {
+		return
+	}
+	var notice string
+	if len(warningNotice) > 0 {
+		notice = warningNotice[0]
+	}
 	platform := event.Platform
 	if platform == "" {
 		platform = "astrbot"
+	}
+	securityPlatform := platform
+	if conn.mock {
+		securityPlatform = "mock"
+	}
+	evalCtx := engine.Security.EvaluateContext
+	if conn.mock {
+		evalCtx = engine.Security.EvaluateContextDryRun
 	}
 	routeScope := astrBotRouteScope(event)
 	routeCtx := runtimescope.WithContext(engine.Context(), engine.Scope)
@@ -485,13 +856,43 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		routeCtx = engine.ModelRouter.WithSnapshot(routeCtx, routeSnapshot)
 	}
 	userText := astrBotVisibleText(event)
+	memoryText := userText
+	var memoryImageDescription string
+
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
+		}
+	}
+
+	// Quote lookups occur only after ingress security and reply routing.
+	forceStickerSilence := isProactiveReply(&event) && event.proactiveStickerOnly
+	var quoteChain []astrBotQuoteNode
+	var allowDirectFallback bool
+	if !forceStickerSilence {
+		quoteChain, allowDirectFallback = conn.lookupQuoteChain(event)
+	}
+	// Only IDs validated by parseAstrBotQuote may be inspected by tools. The
+	// direct fallback is deliberately excluded: it lacks group/peer validation.
+	trustedQuoteIDs := trustedQuotedMessageIDs(quoteChain, event)
+	directQuote := directQuotedImageChain(event)
+	if len(quoteChain) == 0 && allowDirectFallback {
+		quoteChain = directQuote
+	} else if len(quoteChain) > 0 && len(directQuote) > 0 {
+		quoteChain[0].ForwardedImages = directQuote[0].Segments
+	}
+	quoteHasImage := false
+	for _, node := range quoteChain {
+		quoteHasImage = quoteHasImage || content.IsContainImage(node.Segments) || len(node.ForwardedImages) > 0
+	}
 
 	// 处理图片等多模态内容描述
 	var imageSegments []content.MessageSegment
-	hasImageAttachment := false
 	for _, att := range event.Attachments {
-		if att.Type == core.AttachmentTypeImage {
-			hasImageAttachment = true
+		if att.MessageID != "" && att.MessageID != event.MessageID {
+			continue
 		}
 		if att.Type == core.AttachmentTypeImage && (len(att.Content) > 0 || att.URL != "") {
 			data := make(map[string]any)
@@ -507,66 +908,136 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
-	visionEnabled := len(imageSegments) > 0 && engine != nil && engine.VisionProvider != nil
+	visionEnabled := engine != nil && engine.VisionProvider != nil && !forceStickerSilence
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
 	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
-	directImageParts := makeAstrBotImageContentParts(event.Attachments)
-	if !(!visionEnabled && dialogueSupportsVision) {
-		directImageParts = nil
+	directVision := !visionEnabled && dialogueSupportsVision && !forceStickerSilence
+	var directImageParts []core.ContentPart
+	if directVision {
+		directImageParts = makeAstrBotImageContentParts(event)
 	}
-	noVisionGuidance := hasImageAttachment && !visionEnabled && !dialogueSupportsVision
+	noVisionGuidance := (astrBotImageSlotCount(event) > 0 || quoteHasImage) && !visionEnabled && !dialogueSupportsVision && !forceStickerSilence
 
-	if len(imageSegments) > 0 && engine != nil && visionEnabled {
-		// 计费检查 (视觉处理前检查)
-		billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
-			bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
-			bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
-			bCancel()
-			if err != nil {
-				if errors.Is(err, billing.ErrInsufficientFunds) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
-					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
+	if (len(imageSegments) > 0 || quoteHasImage) && engine != nil {
+		if visionEnabled {
+			// 计费检查 (视觉处理前检查)
+			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
+			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
+				bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
+				bal, err := engine.BillingClient.Balance(bCtx, billingPlatform, event.UserID)
+				bCancel()
+				if err != nil {
+					if errors.Is(err, billing.ErrInsufficientFunds) {
+						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
+						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+						return
+					}
+					engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
+					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage(), turn)
 					return
 				}
-				engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-				sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage())
-				return
+				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
+					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+					return
+				}
 			}
-			if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
-				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
-				sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0))
-				return
-			}
-		}
 
-		imageDesc := content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
-		if imageDesc != "" {
-			if engine != nil && engine.Security != nil {
-				principal, pErr := security.NewPrincipal(platform, event.UserID)
-				if pErr == nil {
-					decision := engine.Security.EvaluateContext(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
-						Instance: engine.InstanceID,
-						Session:  sessionKey(event),
-					})
-					if security.Blocks(decision.Action) {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含高风险内容，已被安全机制隔离剔除: %s", decision.Reason))
-						imageDesc = ""
+			imageDesc := ""
+			if len(imageSegments) > 0 {
+				imageDesc = content.ProcessImage(routeCtx, imageSegments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
+			}
+			if imageDesc != "" {
+				if engine != nil && engine.Security != nil {
+					principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
+					if pErr == nil {
+						decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+							Instance: engine.InstanceID,
+							Session:  conn.sessionKey(event),
+						})
+						if decision.IsFailure {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
+							imageDesc = ""
+						} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 视觉处理结果包含敏感内容，已被安全机制降级脱敏: %s", decision.Reason))
+							imageDesc = decision.SanitizedContent
+						} else if decision.Action == security.WatchdogWarn && notice == "" {
+							notice = decision.WarningNotice
+						}
 					}
 				}
 			}
+			if imageDesc != "" {
+				memoryImageDescription = imageDesc
+				if turn != nil {
+					turn.StagedGuard().SetImageDescription(imageDesc)
+				}
+				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+			}
 		}
-		if imageDesc != "" {
-			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+	}
+
+	if quoteHasImage && engine.VisionProvider != nil &&
+		(routeSnapshot == nil || !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)) {
+		for i := range quoteChain {
+			if !content.IsContainImage(quoteChain[i].Segments) && len(quoteChain[i].ForwardedImages) == 0 {
+				continue
+			}
+			route := core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID}
+			imageDesc := ""
+			if len(quoteChain[i].ForwardedImages) > 0 {
+				imageDesc = content.ProcessImageWithFallback(routeCtx, quoteChain[i].Segments, quoteChain[i].ForwardedImages, engine.VisionProvider, route)
+			} else {
+				imageDesc = content.ProcessImage(routeCtx, quoteChain[i].Segments, engine.VisionProvider, route)
+			}
+			if imageDesc == "" {
+				continue
+			}
+			if engine.Security != nil {
+				principal, err := security.NewPrincipal(securityPlatform, event.UserID)
+				if err == nil {
+					decision := evalCtx(principal, security.SourceVisionResult, imageDesc, security.AuditEvent{
+						Instance: engine.InstanceID, Session: conn.sessionKey(event),
+					})
+					if decision.IsFailure {
+						imageDesc = ""
+					} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+						imageDesc = decision.SanitizedContent
+					} else if decision.Action == security.WatchdogWarn && notice == "" {
+						notice = decision.WarningNotice
+					}
+				}
+			}
+			if imageDesc != "" {
+				quoteChain[i].Context["image_description"] = imageDesc
+			}
+		}
+	}
+
+	if engine != nil && engine.SessionManager != nil {
+		if sessCore, ok := engine.SessionManager.Get(conn.sessionKey(event)); ok {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
+				return
+			}
 		}
 	}
 
 	var session *llm.SessionContext
 	var groupSnapshot llm.GroupContextSnapshot
 	if engine != nil && engine.SessionManager != nil {
-		session = engine.SessionManager.GetOrCreate(sessionKey(event))
+		if conn != nil && conn.mock && conn.isClosed() {
+			return
+		}
+		session = engine.SessionManager.GetOrCreate(conn.sessionKey(event))
+		if session != nil && event.GroupName != "" {
+			session.SetGroupName(event.GroupName)
+			engine.SessionManager.SetGroupName(conn.sessionKey(event), event.GroupName)
+		}
+		if session != nil && session.Epoch() != startEpoch {
+			return
+		}
 		if event.MessageType == "group" {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
@@ -587,26 +1058,36 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	senderName := senderDisplayName(event)
 	groupName := event.GroupName
 	if engine != nil && engine.Security != nil {
-		principal, pErr := security.NewPrincipal(platform, event.UserID)
+		principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 		if pErr == nil {
 			if senderName != "" {
-				decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
+				decision := evalCtx(principal, security.SourcePlatformMeta, senderName, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称 [%s] 包含高风险内容，已被安全机制隔离剔除", senderName))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
 					senderName = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 发送者名称 [%s] 包含敏感内容，已被安全机制降级脱敏", senderName))
+					senderName = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 			if groupName != "" {
-				decision := engine.Security.EvaluateContext(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
+				decision := evalCtx(principal, security.SourcePlatformMeta, groupName, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称 [%s] 包含高风险内容，已被安全机制隔离剔除", groupName))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称安全审查服务异常 (eval_id=%s)，保守隔离剔除", decision.EvaluationID))
 					groupName = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群名称 [%s] 包含敏感内容，已被安全机制降级脱敏", groupName))
+					groupName = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -646,6 +1127,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	durablePrompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
+	if event.MessageType == "group" {
+		requestPrompt += "\n\n<outbound_message_guidance>\n" + tools.NativeMentionGuidance + "\n</outbound_message_guidance>"
+	}
 	if session != nil {
 		if deliveryFailure := session.TakeDeliveryFailure(); deliveryFailure != nil {
 			deliveryTag := deliveryFailure.FormatDeliveryContext()
@@ -658,15 +1142,20 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if groupSnapshot.RunningSummary != "" {
 		vettedSummary = groupSnapshot.RunningSummary
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal(platform, event.UserID)
+			principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceGroupContext, groupSnapshot.RunningSummary, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要安全审查服务异常 (eval_id=%s)，保守隔离剔除", event.GroupID, decision.EvaluationID))
 					vettedSummary = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 摘要包含敏感内容，已被安全机制降级脱敏", event.GroupID))
+					vettedSummary = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -680,15 +1169,20 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if recentContext := llm.FormatRecentGroupMessagesContext(groupSnapshot.RecentStructuredMessages); recentContext != "" {
 		vettedRecent := recentContext
 		if engine != nil && engine.Security != nil {
-			principal, pErr := security.NewPrincipal(platform, event.UserID)
+			principal, pErr := security.NewPrincipal(securityPlatform, event.UserID)
 			if pErr == nil {
-				decision := engine.Security.EvaluateContext(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
+				decision := evalCtx(principal, security.SourceGroupContext, recentContext, security.AuditEvent{
 					Instance: engine.InstanceID,
-					Session:  sessionKey(event),
+					Session:  conn.sessionKey(event),
 				})
-				if security.Blocks(decision.Action) {
-					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息包含高风险内容，已被安全机制隔离剔除", event.GroupID))
+				if decision.IsFailure {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息安全审查服务异常 (eval_id=%s)，保守隔离剔除", event.GroupID, decision.EvaluationID))
 					vettedRecent = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 群 [%s] 最近历史消息包含敏感内容，已被安全机制降级脱敏", event.GroupID))
+					vettedRecent = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
 				}
 			}
 		}
@@ -696,20 +1190,66 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			requestPrompt += "\n\n" + vettedRecent
 		}
 	}
+	if quotePrompt := astrBotQuotePrompt(quoteChain); quotePrompt != "" {
+		if engine.Security != nil {
+			principal, err := security.NewPrincipal(securityPlatform, event.UserID)
+			if err == nil {
+				decision := evalCtx(principal, security.SourceUserQuote, quotePrompt, security.AuditEvent{
+					Instance: engine.InstanceID, Session: conn.sessionKey(event),
+				})
+				if decision.IsFailure {
+					quotePrompt = ""
+				} else if security.Blocks(decision.Action) || decision.Action == security.WatchdogFilter {
+					quotePrompt = decision.SanitizedContent
+				} else if decision.Action == security.WatchdogWarn && notice == "" {
+					notice = decision.WarningNotice
+				}
+			}
+		}
+		if quotePrompt != "" {
+			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", quotePrompt)
+			if directVision {
+				for _, quote := range quoteChain {
+					quoteSegments := append([]content.MessageSegment(nil), quote.ForwardedImages...)
+					quoteSegments = append(quoteSegments, quote.Segments...)
+					seen := make(map[string]bool)
+					for _, part := range content.ImageContentParts(routeCtx, quoteSegments) {
+						if part.ImageURL != nil && !seen[part.ImageURL.URL] {
+							seen[part.ImageURL.URL] = true
+							directImageParts = append(directImageParts, part)
+						}
+					}
+				}
+			}
+		}
+	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
+	if isProactiveReply(&event) {
+		if engine != nil {
+			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
+		}
+		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+	}
+	if event.botLoopSoft {
+		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
+	}
+
 	var (
-		replyText            string
-		receiptText          string
-		deliveredToolReplies []string
-		runResult            llm.AgentRunResult
+		replyText   string
+		receiptText string
+		runResult   llm.AgentRunResult
 	)
+	deliveries := llm.NewPublicReplyLog(session, startEpoch)
 
 	if engine != nil && session != nil {
 		var billingState *llm.BillingRunState
-		if engine.BillingClient != nil && engine.BillingConfig.Enabled {
+		if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			taskID := parity.BillingTaskID(billingPlatform, event.UserID, event.MessageID)
+			if event.pokeID != "" {
+				taskID = parity.BillingTaskID(billingPlatform, event.UserID, event.pokeID)
+			}
 			billingState = &llm.BillingRunState{
 				Platform:      billingPlatform,
 				ExternalID:    event.UserID,
@@ -719,20 +1259,41 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 		}
 
-		session.AddMessage(core.ChatMessage{Role: core.RoleUser, Content: durablePrompt})
-		messages := session.Snapshot()
+		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
 		if len(messages) > 0 {
 			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
 		}
+		defer func() {
+			if isProactiveReply(&event) {
+				deliveries.CommitDelivered()
+			}
+			deliveries.Finish(turn.Interrupted())
+		}()
 
 		targetID := event.UserID
 		if event.MessageType == "group" {
 			targetID = event.GroupID
 		}
 
+		// Only adapter-owned IDs from this session can be selected. Do not parse
+		// IDs out of user text or forwarded, unverified reply metadata.
+		replyTargets := make(map[string]struct{}, len(trustedQuoteIDs)+len(groupSnapshot.RecentStructuredMessages))
+		for messageID := range trustedQuoteIDs {
+			replyTargets[messageID] = struct{}{}
+		}
+		for _, message := range groupSnapshot.RecentStructuredMessages {
+			if message.Role == "user" && conn.observedReplyTarget(event, message.MessageID) {
+				replyTargets[message.MessageID] = struct{}{}
+			}
+		}
+		canReplyToMessage := func(messageID string) bool {
+			_, ok := replyTargets[messageID]
+			return ok
+		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages []tools.Msg `json:"messages"`
+				Messages            []tools.Msg `json:"messages"`
+				SuppressAutoMention bool        `json:"suppress_auto_mention"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
@@ -742,6 +1303,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			var plainTexts []string
 			var attachments []core.Attachment
 			for _, m := range toolOutput.Messages {
+				if toolOutput.SuppressAutoMention && m.Type == "quote" && !canReplyToMessage(m.MessageID) {
+					return fmt.Errorf("引用消息不在当前会话的可信消息上下文中")
+				}
 				actionMessages = append(actionMessages, actionMessageFromToolMessage(m))
 				switch m.Type {
 				case "plain":
@@ -780,68 +1344,204 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			action := Action{
-				Type:           "action",
-				Action:         "send_message",
-				SessionID:      sessionKey(event),
-				TargetID:       targetID,
-				MessageType:    event.MessageType,
-				GroupID:        event.GroupID,
-				UserID:         event.UserID,
-				Content:        strings.Join(plainTexts, ""),
-				Messages:       actionMessages,
-				Attachments:    attachments,
-				IsIntermediate: true,
-				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
-				ReplyMessageID: event.MessageID,
+				Type:                "action",
+				Action:              "send_message",
+				Platform:            platform,
+				SessionID:           conn.sessionKey(event),
+				TargetID:            targetID,
+				MessageType:         event.MessageType,
+				GroupID:             event.GroupID,
+				UserID:              event.UserID,
+				Content:             strings.Join(plainTexts, ""),
+				Messages:            actionMessages,
+				Attachments:         attachments,
+				IsIntermediate:      true,
+				Echo:                fmt.Sprintf("hook_%s", event.MessageID),
+				ReplyMessageID:      event.replyMessageID(),
+				suppressAutoMention: toolOutput.SuppressAutoMention,
 			}
-			if err := conn.WriteJSON(action); err != nil {
-				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", err))
-				return err
+			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+				return errors.New("会话已重置，取消发送中间消息")
+			}
+			var sendErr error
+			if action.containsSticker() && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) > 0 {
+				if !event.StickerDeliveryReceipt {
+					return errors.New("AstrBot 插件版本不支持表情包投递回执，请更新插件")
+				}
+				sendErr = conn.writeStickerActionAndWaitTurn(action, turn)
+			} else {
+				sendErr = conn.writeTurnJSON(action, turn)
+			}
+			if sendErr != nil {
+				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", sendErr))
+				return sendErr
+			}
+			if session != nil && session.Epoch() != startEpoch {
+				return errors.New("会话已重置，取消发送中间消息")
 			}
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
-				deliveredToolReplies = append(deliveredToolReplies, deliveredReply)
-				if event.MessageType == "group" {
-					appendAssistantGroupMessage(session, engine, owner, deliveredReply, routeScope)
-				}
+				deliveries.Record(deliveredReply, func(live bool) {
+					if event.MessageType == "group" && !conn.mock {
+						ownerTurn := turn
+						if !live || isProactiveReply(&event) {
+							ownerTurn = nil
+						}
+						stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, ownerTurn)
+					}
+				})
 			}
 			return nil
 		}
 
+		var runCtx context.Context
+		if conn != nil && conn.mock {
+			runCtx = conn.Context()
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
-			SessionID:     sessionKey(event),
-			Owner:         owner,
-			OwnerType:     ownerType,
-			ActorUserID:   event.UserID,
-			ActorPlatform: platform,
-			InstanceID:    engine.InstanceID,
-			SendHook:      sendHook,
+			Turn:        turn,
+			Context:     runCtx,
+			Epoch:       startEpoch,
+			SessionID:   conn.sessionKey(event),
+			Owner:       owner,
+			OwnerType:   ownerType,
+			ActorUserID: event.UserID,
+			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
+				MessageID: event.MessageID, SenderID: event.UserID},
+			ActorPlatform:     securityPlatform,
+			AdapterID:         "astrbot",
+			InstanceID:        engine.InstanceID,
+			SendHook:          sendHook,
+			CanReplyToMessage: canReplyToMessage,
+			SecurityNotice:    notice,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},
-			Billing:       billingState,
-			RouteScope:    routeScope,
-			RouteSnapshot: routeSnapshot,
+			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
+				return loadObservedImageFromEvent(ctx, event, trustedQuoteIDs, messageID, imageIndex)
+			},
+			Billing:              billingState,
+			RouteScope:           routeScope,
+			RouteSnapshot:        routeSnapshot,
+			Mock:                 conn.mock,
+			Proactive:            isProactiveReply(&event),
+			ProactiveStickerOnly: event.proactiveStickerOnly,
 		})
 		replyText = runResult.Content
+		if turn.Interrupted() {
+			return
+		}
+		if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+			return
+		}
+
+		if runResult.Banned {
+			if session != nil {
+				session.DropMessage(inputID)
+				if event.MessageType == "group" {
+					var guard *llm.StagedGroupCompactGuard
+					if turn != nil {
+						guard = turn.StagedGuard()
+					}
+					engine.DropRejectedGroupMessage(session, guard, event.MessageID, event.UserID)
+					if engine != nil && engine.GroupCompactor != nil {
+						engine.PauseOnStorageError(engine.GroupCompactor.RollbackPersistence(owner, session.GroupRunningSummary()))
+					}
+				}
+			}
+			if isProactiveReply(&event) {
+				_ = sendTerminalNoopWithSuppress(event, conn)
+			} else {
+				_ = sendDirectReply(event, conn, runResult.Content, turn)
+			}
+			return
+		}
 
 		if billingState != nil && billingState.BillingActive {
-			if runResult.Error != nil && billingState.IterationsBilled == 0 {
-				session.TrimHistory(len(session.Snapshot()) - 1)
-				sendDirectReply(event, conn, runResult.Content)
+			receipt := billingState.Receipt()
+			if runResult.Error != nil && receipt.IterationsBilled == 0 {
+				session.DropMessage(inputID)
+				sendDirectReply(event, conn, runResult.Content, turn)
 				return
 			}
 			receiptText = billing.FormatReceipt(
-				billingState.TotalBilledMinor,
+				receipt.TotalBilledMinor,
 				runResult.Usage.PromptTokens,
 				runResult.Usage.CompletionTokens,
-				billingState.LastBalanceMinor,
-				billingState.WelcomeGranted,
+				receipt.LastBalanceMinor,
+				receipt.WelcomeGranted,
 			)
+		}
+
+		if isProactiveReply(&event) && (runResult.Error != nil || runResult.OutputBlocked) {
+			engine.TrimSession(session)
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.sessionKey(event), runResult.Error, runResult.OutputBlocked))
+			_ = sendTerminalNoopWithSuppress(event, conn)
+			return
 		}
 
 		if runResult.Silent {
 			engine.TrimSession(session)
-			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", sessionKey(event)))
+			if event.MessageType == "group" && !runResult.Banned {
+				if session != nil {
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else if event.MessageID != "" {
+						session.PromoteGroupCompactMessage(event.MessageID)
+					}
+					if engine != nil && engine.GroupCompactor != nil && !conn.mock {
+						engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+					}
+				}
+			}
+			if runResult.StaySilentCalled && (!isProactiveReply(&event) || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+				if event.MessageType == "group" {
+					speakerName := senderDisplayName(event)
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          event.GroupID,
+							SpeakerID:        event.UserID,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        event.MessageID,
+						},
+						{
+							Owner:       owner,
+							OwnerType:   memory.OwnerGroup,
+							ScopeType:   memory.ScopeGroup,
+							GroupID:     event.GroupID,
+							SpeakerID:   event.UserID,
+							SpeakerName: speakerName,
+							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							MessageID:   event.MessageID,
+						},
+					})
+				} else {
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+						},
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+						},
+					})
+				}
+			}
+			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("AstrBot: 本轮保持沉默: session=%s", conn.sessionKey(event)))
+			_ = sendTerminalNoopWithSuppress(event, conn)
 			return
 		}
 
@@ -850,68 +1550,133 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	historyReplyText := replyText
-	if strings.TrimSpace(historyReplyText) == "" && len(deliveredToolReplies) > 0 {
-		historyReplyText = strings.Join(deliveredToolReplies, "\n")
+	if strings.TrimSpace(historyReplyText) == "" {
+		historyReplyText = deliveries.Text()
 	}
 	sentReplyText := composeReplyWithReceipt(replyText, receiptText)
 
 	// AstrBot WebSocket 协议目前为单向动作通知，不具备 OneBot 的同步请求-响应平台 ACK。
 	// 此处 sendDirectReply 校验传输层 Socket 写入成功 (conn.WriteJSON transport-write confirmation)。
-	var sendErr error
-	if strings.TrimSpace(sentReplyText) == "" {
-		sendErr = sendTerminalNoop(event, conn)
-	} else {
-		sendErr = sendDirectReply(event, conn, sentReplyText)
+	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+		return
 	}
-	if sendErr != nil {
-		if session != nil {
-			session.SetDeliveryFailure(llm.DeliveryFailure{
-				Platform: platform,
-				Action:   "send_message",
-				Wording:  sendErr.Error(),
-			})
-			if engine != nil {
-				engine.TrimSession(session)
+	billingReported = receiptText != ""
+	turn.AwaitDelivery(func() {
+		var sendErr error
+		if strings.TrimSpace(sentReplyText) == "" {
+			sendErr = sendTerminalNoop(event, conn)
+		} else {
+			sendErr = sendDirectReply(event, conn, sentReplyText, turn)
+		}
+		if (sendErr != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
+			return
+		}
+		if sendErr != nil {
+			if session != nil {
+				if event.MessageType == "group" {
+					var guard *llm.StagedGroupCompactGuard
+					if turn != nil {
+						guard = turn.StagedGuard()
+					}
+					engine.DropRejectedGroupMessage(session, guard, event.MessageID, event.UserID)
+				}
+				session.SetDeliveryFailure(llm.DeliveryFailure{
+					Platform: platform,
+					Action:   "send_message",
+					Wording:  sendErr.Error(),
+				})
+				if engine != nil {
+					engine.TrimSession(session)
+				}
 			}
+			return
 		}
-		return
-	}
-
-	if engine == nil || session == nil {
-		return
-	}
-
-	if strings.TrimSpace(historyReplyText) != "" {
-		session.AddMessage(core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText})
-	}
-	engine.TrimSession(session)
-
-	if runResult.MemoryWritten {
-		engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
-	} else if strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
-		pendingUserText := userText
-		if event.MessageType == "group" {
-			pendingUserText = formatGroupSpeakerMessage(event, userText)
+		if !conn.mock && strings.TrimSpace(sentReplyText) != "" {
+			engine.RecordBotMessage(false)
 		}
-		engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
-			{
-				Owner:     owner,
-				OwnerType: ownerType,
-				Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-				Message:   core.ChatMessage{Role: core.RoleUser, Content: pendingUserText},
-			},
-			{
-				Owner:     owner,
-				OwnerType: ownerType,
-				Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-				Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
-			},
+
+		if engine == nil || session == nil {
+			return
+		}
+		session.WithEpochCommit(startEpoch, func() {
+			// A noop adds no public message: replace provisional tool history even
+			// if canceled, or reuse CommitDelivered's fallback if it won the race.
+			interruptedFinal := turn.Interrupted() && strings.TrimSpace(sentReplyText) != ""
+			if strings.TrimSpace(historyReplyText) != "" && !deliveries.CommitFinal(historyReplyText, interruptedFinal) {
+				return
+			}
+
+			if event.MessageType == "group" && !runResult.Banned {
+				if session != nil {
+					if turn != nil && turn.StagedGuard() != nil {
+						turn.StagedGuard().Promote()
+					} else if event.MessageID != "" {
+						session.PromoteGroupCompactMessage(event.MessageID)
+					}
+				}
+			}
+			engine.TrimSession(session)
+
+			if runResult.MemoryWritten {
+				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")
+			} else if !conn.mock && strings.TrimSpace(userText) != "" && strings.TrimSpace(historyReplyText) != "" {
+				if event.MessageType == "group" {
+					speakerName := senderDisplayName(event)
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:            owner,
+							OwnerType:        memory.OwnerGroup,
+							ScopeType:        memory.ScopeGroup,
+							GroupID:          event.GroupID,
+							SpeakerID:        event.UserID,
+							SpeakerName:      speakerName,
+							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
+							ImageDescription: memoryImageDescription,
+							MessageID:        event.MessageID,
+						},
+						{
+							Owner:       owner,
+							OwnerType:   memory.OwnerGroup,
+							ScopeType:   memory.ScopeGroup,
+							GroupID:     event.GroupID,
+							SpeakerID:   event.UserID,
+							SpeakerName: speakerName,
+							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+							MessageID:   event.MessageID,
+						},
+					})
+				} else {
+					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleUser, Content: userText},
+						},
+						{
+							Owner:     owner,
+							OwnerType: ownerType,
+							ScopeType: memory.ScopePrivate,
+							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: historyReplyText},
+						},
+					})
+				}
+			}
+
+			if event.MessageType == "group" && !conn.mock {
+				botReply := extractBotReplyText(replyText)
+				if strings.TrimSpace(botReply) != "" {
+					appendAssistantGroupMessage(session, engine, owner, botReply, routeScope)
+				} else if engine != nil && engine.GroupCompactor != nil {
+					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
+				}
+			}
 		})
-	}
-
-	if event.MessageType == "group" {
-		appendAssistantGroupMessage(session, engine, owner, extractBotReplyText(replyText), routeScope)
-	}
+	})
 }
 
 func actionMessageFromToolMessage(m tools.Msg) ActionMessage {
@@ -944,6 +1709,14 @@ func astrBotRouteScope(event Event) modelrouter.Scope {
 	return scope
 }
 
+func isProactiveReply(event *Event) bool {
+	if event == nil || event.Metadata == nil {
+		return false
+	}
+	v, ok := event.Metadata["_frostagent_proactive_reply"].(bool)
+	return ok && v
+}
+
 func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
 	if engine == nil || engine.ModelRouter == nil {
 		return false
@@ -955,10 +1728,10 @@ func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snaps
 	return err == nil && target.HasCapability("vision")
 }
 
-func makeAstrBotImageContentParts(attachments []core.Attachment) []core.ContentPart {
-	parts := make([]core.ContentPart, 0, len(attachments))
-	for _, att := range attachments {
-		if att.Type != core.AttachmentTypeImage {
+func makeAstrBotImageContentParts(event Event) []core.ContentPart {
+	parts := make([]core.ContentPart, 0, len(event.Attachments))
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || (att.MessageID != "" && att.MessageID != event.MessageID) {
 			continue
 		}
 		source := strings.TrimSpace(att.URL)
@@ -975,10 +1748,7 @@ func makeAstrBotImageContentParts(attachments []core.Attachment) []core.ContentP
 		if source == "" {
 			continue
 		}
-		parts = append(parts, core.ContentPart{
-			Type:     string(core.ContentPartTypeImage),
-			ImageURL: &core.ImageURL{URL: source},
-		})
+		parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeImage), ImageURL: &core.ImageURL{URL: source}})
 	}
 	return parts
 }
@@ -994,21 +1764,39 @@ func promptContentWithImages(prompt string, images []core.ContentPart) any {
 }
 
 func sendTerminalNoop(event Event, conn *wsConn) error {
+	return sendTerminalNoopWithOptions(event, conn, isProactiveReply(&event))
+}
+
+func sendTerminalNoopWithSuppress(event Event, conn *wsConn) error {
+	return sendTerminalNoopWithOptions(event, conn, true)
+}
+
+func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) error {
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
 	return conn.WriteJSON(Action{
-		Type:      "action",
-		Action:    "noop",
-		SessionID: sessionKey(event),
-		Echo:      "reply_" + event.MessageID,
+		Type:        "action",
+		Action:      "noop",
+		SuppressLLM: suppressLLM,
+		Platform:    platform,
+		SessionID:   conn.sessionKey(event),
+		Echo:        "reply_" + event.MessageID,
 	})
 }
 
 // sendDirectReply sends a direct message to the AstrBot WebSocket connection.
 // Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
 // This confirms WebSocket transport write success (best-effort delivery).
-func sendDirectReply(event Event, conn *wsConn, text string) error {
+func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.SessionTurn) error {
+	var turn *llm.SessionTurn
+	if len(turns) > 0 {
+		turn = turns[0]
+	}
 	if conn == nil {
 		return errors.New("connection is nil")
 	}
@@ -1019,10 +1807,15 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 	if event.MessageType == "group" {
 		targetID = event.GroupID
 	}
+	platform := event.Platform
+	if platform == "" {
+		platform = "astrbot"
+	}
 	action := Action{
 		Type:           "action",
 		Action:         "send_message",
-		SessionID:      sessionKey(event),
+		Platform:       platform,
+		SessionID:      conn.sessionKey(event),
 		TargetID:       targetID,
 		MessageType:    event.MessageType,
 		GroupID:        event.GroupID,
@@ -1030,9 +1823,9 @@ func sendDirectReply(event Event, conn *wsConn, text string) error {
 		Content:        text,
 		IsIntermediate: false,
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
-		ReplyMessageID: event.MessageID,
+		ReplyMessageID: event.replyMessageID(),
 	}
-	if err := conn.WriteJSON(action); err != nil {
+	if err := conn.writeTurnJSON(action, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))
 		return err
 	}

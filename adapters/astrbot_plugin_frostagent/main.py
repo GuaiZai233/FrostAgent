@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import inspect
+import ipaddress
 import json
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 from urllib.parse import urljoin, urlparse
@@ -30,41 +34,87 @@ class Settings:
     forward_all_group_messages: bool
     heartbeat_interval: int
     reconnect_interval: int
+    ws_mode: str = "reverse"
+    ws_listen_host: str = "127.0.0.1"
+    ws_listen_port: int = 1244
+    ws_access_token: str = ""
+    ws_reverse_token: str = ""
 
 
 class WSURLConfigurationError(ValueError):
-    """Raised when the persisted FrostAgent WebSocket URL needs repair."""
+    """Raised when persisted WebSocket connection settings need repair."""
 
 
 def load_settings(config: dict = None) -> Settings:
     config = config or {}
+    mode = str(config.get("ws_mode") or "reverse").strip()
+    if mode not in ("reverse", "forward"):
+        raise WSURLConfigurationError("ws_mode must be reverse or forward")
     ws_url = str(
         config.get("ws_url") or os.getenv("FROSTAGENT_WS_URL", "")
     ).strip()
-    if not ws_url:
+    if mode == "reverse" and not ws_url:
         raise WSURLConfigurationError(
             "FrostAgent ws_url is required; copy the instance-scoped AstrBot "
-            "WebSocket address from the instance overview"
+            "WebSocket address from the instance connection page"
         )
-    parsed_ws_url = urlparse(ws_url)
-    if (
-        parsed_ws_url.scheme not in ("ws", "wss")
-        or not parsed_ws_url.netloc
-        or not re.fullmatch(
-            r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path
-        )
-    ):
-        raise WSURLConfigurationError(
-            "FrostAgent ws_url must use "
-            "ws(s)://host/instances/<instance-id>/ws/astrbot"
-        )
+    if mode == "reverse":
+        try:
+            parsed_ws_url = urlparse(ws_url)
+            valid_url = (
+                parsed_ws_url.scheme in ("ws", "wss")
+                and parsed_ws_url.hostname
+                and parsed_ws_url.port != 0
+                and not parsed_ws_url.username
+                and not parsed_ws_url.password
+                and not parsed_ws_url.fragment
+                and not any(ord(char) < 32 or ord(char) == 127 for char in ws_url)
+                and re.fullmatch(r"/instances/[a-f0-9]{8}/ws/astrbot", parsed_ws_url.path)
+            )
+        except ValueError:
+            valid_url = False
+        if not valid_url:
+            raise WSURLConfigurationError(
+                "FrostAgent ws_url must use "
+                "ws(s)://host/instances/<instance-id>/ws/astrbot without URL credentials"
+            )
+    host = str(config.get("ws_listen_host") or "127.0.0.1").strip()
+    port = 1244
+    token = str(config.get("ws_access_token") or "")
+    reverse_token = str(config.get("ws_reverse_token") or "")
+    if any(ord(char) < 33 or ord(char) > 126 for char in reverse_token):
+        raise WSURLConfigurationError("ws_reverse_token must contain printable ASCII without spaces")
+    if mode == "forward":
+        try:
+            address = ipaddress.ip_address(host)
+            port = int(config.get("ws_listen_port", 1244))
+        except (ValueError, TypeError):
+            raise WSURLConfigurationError("forward mode requires a numeric listen IP and port") from None
+        if not 1 <= port <= 65535:
+            raise WSURLConfigurationError("ws_listen_port must be between 1 and 65535")
+        if any(ord(char) < 33 or ord(char) > 126 for char in token):
+            raise WSURLConfigurationError("ws_access_token must contain printable ASCII without spaces")
+        if not address.is_loopback and not token:
+            raise WSURLConfigurationError("non-loopback WebSocket listeners require ws_access_token")
+    try:
+        heartbeat_interval = int(config.get("heartbeat_interval", 30))
+        reconnect_interval = int(config.get("reconnect_interval", 5))
+    except (ValueError, TypeError):
+        raise WSURLConfigurationError("heartbeat and reconnect intervals must be positive integers") from None
+    if heartbeat_interval <= 0 or reconnect_interval <= 0:
+        raise WSURLConfigurationError("heartbeat and reconnect intervals must be positive integers")
     return Settings(
         ws_url=ws_url,
         http_base_url=config.get("http_base_url")
         or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),
-        heartbeat_interval=int(config.get("heartbeat_interval", 30)),
-        reconnect_interval=int(config.get("reconnect_interval", 5)),
+        heartbeat_interval=heartbeat_interval,
+        reconnect_interval=reconnect_interval,
+        ws_mode=mode,
+        ws_listen_host=host,
+        ws_listen_port=port,
+        ws_access_token=token,
+        ws_reverse_token=reverse_token,
     )
 
 
@@ -84,8 +134,9 @@ def _load_settings_unvalidated(config: dict = None) -> Settings:
         http_base_url=config.get("http_base_url")
         or os.getenv("FROSTAGENT_HTTP_BASE_URL", "http://127.0.0.1:8080"),
         forward_all_group_messages=config.get("forward_all_group_messages", True),
-        heartbeat_interval=int(config.get("heartbeat_interval", 30)),
-        reconnect_interval=int(config.get("reconnect_interval", 5)),
+        heartbeat_interval=30,
+        reconnect_interval=5,
+        ws_mode=str(config.get("ws_mode") or "reverse"),
     )
 
 
@@ -201,11 +252,14 @@ async def resolve_sticker_sources(action: dict[str, Any], http_base_url: str) ->
     resolved_messages = []
     for message in messages:
         resolved = dict(message)
-        if str(message.get("type") or "") == "image" and message.get("is_sticker"):
+        is_sticker = bool(message.get("is_sticker") or message.get("sub_type") == 1 or message.get("subType") == 1)
+        if str(message.get("type") or "") == "image" and is_sticker:
             source = str(message.get("url") or message.get("path") or "")
             if not source:
                 raise StickerFetchError("sticker message has no image source")
             if source.startswith("base64://"):
+                encoded = source
+            elif (parsed := urlparse(source)).scheme in ("http", "https") and not is_sticker_endpoint_path(parsed.path):
                 encoded = source
             else:
                 image_url = sticker_download_url(source, http_base_url)
@@ -220,7 +274,7 @@ async def resolve_sticker_sources(action: dict[str, Any], http_base_url: str) ->
 
 
 class FrostAgentWSClient:
-    """FrostAgent WebSocket 双向通信客户端，支持自动重连、心跳维持及消息分发。"""
+    """Bidirectional transport: reverse dials FA; forward accepts one FA client."""
 
     def __init__(self, settings: Settings, context: Context):
         self.settings = settings
@@ -229,38 +283,158 @@ class FrostAgentWSClient:
         self._running = False
         self._worker_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._server: Optional[Any] = None
+        self._connection_tasks: set[asyncio.Task] = set()
         # 针对每个消息事件的响应队列：message_id -> asyncio.Queue[dict]
         self._pending_queues: Dict[str, asyncio.Queue] = {}
         self._lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
-        self._running = True
-        self._worker_task = asyncio.create_task(self._connection_loop())
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        async with self._lifecycle_lock:
+            if self._running:
+                return
+            self._running = True
+            try:
+                if self.settings.ws_mode == "forward":
+                    try:
+                        from websockets.asyncio.server import serve
+
+                        authorize = self._authorize_forward_request
+                    except ImportError:
+                        # websockets 12 predates the asyncio implementation.
+                        from websockets.legacy.server import serve
+
+                        authorize = self._authorize_forward
+
+                    self._server = await serve(
+                        self._accept_forward,
+                        self.settings.ws_listen_host,
+                        self.settings.ws_listen_port,
+                        process_request=authorize,
+                        open_timeout=10,
+                        close_timeout=3,
+                        ping_interval=30,
+                        ping_timeout=90,
+                    )
+                    logger.info("[frostagent-adapter] 正向 WebSocket 已监听，等待 FA 客户端连接")
+                else:
+                    self._worker_task = asyncio.create_task(self._connection_loop())
+                self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+            except BaseException:
+                self._running = False
+                if self._server is not None:
+                    self._server.close()
+                    await self._server.wait_closed()
+                    self._server = None
+                raise
 
     async def stop(self) -> None:
-        self._running = False
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-        if self._worker_task:
-            self._worker_task.cancel()
-        if self.ws:
-            await self.ws.close()
+        async with self._lifecycle_lock:
+            self._running = False
+            tasks = [task for task in (self._heartbeat_task, self._worker_task) if task]
+            tasks.extend(self._connection_tasks)
+            for task in tasks:
+                task.cancel()
+            if self._server is not None:
+                self._server.close()
+            ws = self.ws
+            if ws is not None:
+                await ws.close()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            if self._server is not None:
+                await self._server.wait_closed()
+            self.ws = None
+            self._server = None
+            self._worker_task = None
+            self._heartbeat_task = None
+            self._release_waiters()
+
+    async def _authorize_forward(self, path: str, headers: Any) -> Optional[tuple]:
+        def reject(status: HTTPStatus, text: str) -> tuple:
+            return status, [("Content-Type", "text/plain; charset=utf-8")], text.encode("utf-8")
+
+        if path != "/":
+            return reject(HTTPStatus.NOT_FOUND, "WebSocket endpoint is /\n")
+        if not self._running:
+            return reject(HTTPStatus.SERVICE_UNAVAILABLE, "WebSocket listener is stopping\n")
+        # The FA client isn't a browser. Reject browser-originated local requests,
+        # including when a loopback listener has no configured bearer token.
+        if headers.get_all("Origin"):
+            return reject(HTTPStatus.FORBIDDEN, "Browser WebSocket clients aren't accepted\n")
+        if self.settings.ws_access_token:
+            tokens = headers.get_all("Authorization")
+            expected = "Bearer " + self.settings.ws_access_token
+            if len(tokens) != 1 or not hmac.compare_digest(tokens[0].encode(), expected.encode()):
+                return reject(HTTPStatus.UNAUTHORIZED, "Invalid WebSocket access token\n")
+        if self.ws is not None:
+            return reject(HTTPStatus.CONFLICT, "A FrostAgent client is already connected\n")
+        return None
+
+    async def _authorize_forward_request(self, connection: Any, request: Any) -> Any:
+        rejected = await self._authorize_forward(request.path, request.headers)
+        if rejected is None:
+            return None
+        status, _headers, body = rejected
+        return connection.respond(status, body.decode("utf-8"))
+
+    async def _accept_forward(self, ws: Any) -> None:
+        task = asyncio.current_task()
+        self._connection_tasks.add(task)
+        try:
+            async with self._lock:
+                accepted = self._running and self.ws is None
+                if accepted:
+                    self.ws = ws
+            if not accepted:
+                await ws.close(code=1008, reason="Only one FrostAgent client is allowed")
+                return
+            logger.info("[frostagent-adapter] FA 正向 WebSocket 客户端已连接")
+            try:
+                async for raw_msg in ws:
+                    await self._handle_incoming_action(raw_msg)
+            finally:
+                await self._release_connection(ws)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[frostagent-adapter] 正向 WebSocket 连接已结束 ({type(exc).__name__})")
+        finally:
+            self._connection_tasks.discard(task)
+
+    def _release_waiters(self) -> None:
+        queues = list(self._pending_queues.values())
+        self._pending_queues.clear()
+        for queue in queues:
+            queue.put_nowait({"type": "connection_closed"})
+
+    async def _release_connection(self, ws: Any) -> None:
+        async with self._lock:
+            if self.ws is ws:
+                self.ws = None
+                self._release_waiters()
 
     async def _connection_loop(self) -> None:
         while self._running:
             try:
-                logger.info(f"[frostagent-adapter] 正在连接 FrostAgent: {self.settings.ws_url}")
-                async with websockets.connect(self.settings.ws_url) as ws:
+                logger.info("[frostagent-adapter] 正在建立反向 WebSocket 连接（FA 作为服务端）")
+                headers = {"Authorization": "Bearer " + self.settings.ws_reverse_token} if self.settings.ws_reverse_token else {}
+                # websockets 14+ renamed extra_headers on the default client.
+                header_arg = "additional_headers" if "additional_headers" in inspect.signature(websockets.connect).parameters else "extra_headers"
+                async with websockets.connect(self.settings.ws_url, open_timeout=10, close_timeout=3, **{header_arg: headers}) as ws:
                     self.ws = ws
                     logger.info("[frostagent-adapter] 已成功建立与 FrostAgent 的 WebSocket 连接")
-                    async for raw_msg in ws:
-                        await self._handle_incoming_action(raw_msg)
+                    try:
+                        async for raw_msg in ws:
+                            await self._handle_incoming_action(raw_msg)
+                    finally:
+                        await self._release_connection(ws)
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning(
-                    f"[frostagent-adapter] WebSocket 连接异常: {e}，将在 {self.settings.reconnect_interval}s 后重试"
+                    f"[frostagent-adapter] WebSocket 连接异常 ({type(e).__name__})，将在 {self.settings.reconnect_interval}s 后重试"
                 )
             finally:
                 self.ws = None
@@ -270,27 +444,55 @@ class FrostAgentWSClient:
     async def _heartbeat_loop(self) -> None:
         while self._running:
             await asyncio.sleep(self.settings.heartbeat_interval)
-            if is_ws_open(self.ws):
+            ws = self.ws
+            if is_ws_open(ws):
                 try:
                     heartbeat_payload = {
                         "type": "heartbeat",
                         "timestamp": int(time.time()),
                     }
-                    await self.ws.send(json.dumps(heartbeat_payload))
+                    await ws.send(json.dumps(heartbeat_payload))
                 except Exception as e:
-                    logger.debug(f"[frostagent-adapter] 发送心跳失败: {e}")
+                    logger.debug(f"[frostagent-adapter] 发送心跳失败 ({type(e).__name__})")
 
-    async def send_event(self, event_data: dict[str, Any]) -> None:
-        if is_ws_open(self.ws):
-            await self.ws.send(json.dumps(event_data))
-        else:
-            logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
+    async def send_event(self, event_data: dict[str, Any]) -> bool:
+        ws = self.ws
+        if is_ws_open(ws):
+            try:
+                await ws.send(json.dumps(event_data))
+                return True
+            except Exception as exc:
+                logger.warning(f"[frostagent-adapter] 事件发送失败 ({type(exc).__name__})")
+                return False
+        logger.warning("[frostagent-adapter] WebSocket 未连接，丢弃入站事件")
+        return False
+
+    async def send_delivery_result(self, delivery_id: str, delivered: bool, error: str = "") -> None:
+        await self.send_event({
+            "type": "delivery_result",
+            "delivery_id": delivery_id,
+            "delivered": delivered,
+            "error": error,
+        })
 
     async def _handle_incoming_action(self, raw_msg: str) -> None:
         try:
             action = json.loads(raw_msg)
         except Exception as e:
             logger.error(f"[frostagent-adapter] 解析出站动作失败: {e}, 原始数据: {raw_msg}")
+            return
+
+        if action.get("type") == "quote_lookup":
+            event_message_id = str(action.get("event_message_id") or "")
+            queue = self._pending_queues.get(event_message_id)
+            if queue:
+                await queue.put(action)
+            else:
+                await self.send_event({
+                    "type": "quote_lookup_result",
+                    "echo": action.get("echo", ""),
+                    "data": {},
+                })
             return
 
         echo = action.get("echo", "")
@@ -312,6 +514,8 @@ class FrostAgentWSClient:
         group_id = str(action.get("group_id") or "")
         user_id = str(action.get("user_id") or "")
         platform = str(action.get("platform") or "")
+        if not platform:
+            platform = "astrbot"
         message_type = str(action.get("message_type") or "")
         target_id = str(action.get("target_id") or group_id or user_id)
 
@@ -349,12 +553,15 @@ class FrostAgentWSClient:
     "frostagent_adapter",
     "frostfallx",
     "FrostAgent 智能体核心适配器插件，通过 WebSocket 连接实现多平台会话、记忆反思与中间工具输出流转。",
-    "0.1.3",
+    "0.2.2",
 )
 class FrostAgentAdapter(Star):
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context)
         self._configuration_error: Optional[str] = None
+        self._bot_loop_locks: dict[str, asyncio.Lock] = {}
+        self._bot_loop_last_forwarded_sender: dict[str, str] = {}
+        self._bot_loop_interrupted: set[str] = set()
         try:
             self.settings = load_settings(config)
         except WSURLConfigurationError as exc:
@@ -367,39 +574,96 @@ class FrostAgentAdapter(Star):
             self._init_task = None
             logger.error(
                 f"[frostagent-adapter] {self._configuration_error}. "
-                "插件已保持加载但暂停连接；请在插件配置中复制目标实例概览里的 "
+                "插件已保持加载但暂停连接；请修正插件的连接模式、监听设置或从目标实例连接页复制 "
                 "AstrBot WebSocket 地址，然后重新加载插件。"
             )
             return
         self.client = FrostAgentWSClient(self.settings, context)
-        self._init_task = asyncio.create_task(self.client.start())
+        self._init_task = asyncio.create_task(self._start_transport())
+
+    async def _start_transport(self) -> None:
+        try:
+            await self.client.start()
+        except Exception as exc:
+            logger.error(f"[frostagent-adapter] WebSocket 启动失败 ({type(exc).__name__})；请检查监听端口后重新加载插件")
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def forward_to_frostagent(self, event: AstrMessageEvent) -> AsyncGenerator[Any, None]:
+        is_runtime_info = is_runtime_info_command(event)
+        if is_runtime_info:
+            # The reserved command belongs to FrostAgent even when transport or
+            # configuration fails, or the backend rejects/does not answer it.
+            event.should_call_llm(True)
         if self._configuration_error:
             return
 
-        payload = await build_frostagent_payload(event)
-        msg_id = payload["message_id"]
-
-        if not payload.get("content") and not payload.get("attachments"):
-            is_group_interaction = payload.get("message_type") == "group" and (
-                payload.get("is_wake") or payload.get("is_at")
-            )
-            if not is_group_interaction:
-                return
-
-        if payload.get("message_type") == "group" and not self.settings.forward_all_group_messages:
-            if not payload.get("is_wake") and not payload.get("is_at"):
-                return
-
-        # 注册该事件的响应队列
-        queue = self.client.register_waiter(msg_id)
+        # Serialize local sender tracking through the actual send for this session.
+        # Filtered group messages never leave the plugin.
+        if not hasattr(self, "_bot_loop_locks"):
+            self._bot_loop_locks = {}
+            self._bot_loop_last_forwarded_sender = {}
+            self._bot_loop_interrupted = set()
+        group_id = extract_group_id(event)
+        session_key = f"{_extract_platform_name(event)}:group:{group_id}" if group_id else ""
+        lock = self._bot_loop_locks.setdefault(session_key, asyncio.Lock()) if session_key else asyncio.Lock()
+        queue = None
+        msg_id = ""
         try:
-            await self.client.send_event(payload)
+            async with lock:
+                payload = await build_frostagent_payload(event)
+                payload["sticker_delivery_receipt"] = True
+                msg_id = payload["message_id"]
+                if session_key:
+                    previous = self._bot_loop_last_forwarded_sender.get(session_key)
+                    if previous is not None and previous != payload["user_id"]:
+                        self._bot_loop_interrupted.add(session_key)
+
+                is_poke = payload.get("event_type") == "notice"
+                if is_poke and (
+                    payload.get("notice_type") != "notify" or payload.get("sub_type") != "poke"
+                    or not payload.get("self_id") or payload.get("target_id") != payload["self_id"]
+                    or payload.get("user_id") == payload["self_id"]
+                ):
+                    return
+                if is_poke:
+                    # A poke is owned by FrostAgent even when routing rejects it,
+                    # transport fails, or the response times out.
+                    event.should_call_llm(True)
+                unreadable_group_sticker = (
+                    payload.get("message_type") == "group"
+                    and payload.get("metadata", {}).get("sticker_only") is True
+                )
+                if not is_poke and not payload.get("content") and not payload.get("attachments") and not unreadable_group_sticker:
+                    is_group_interaction = payload.get("message_type") == "group" and (
+                        payload.get("is_wake") or payload.get("is_at")
+                    )
+                    if not is_group_interaction:
+                        return
+
+                if session_key and not is_poke and not is_runtime_info and not self.settings.forward_all_group_messages:
+                    if not payload.get("is_wake") and not payload.get("is_at"):
+                        return
+
+                if session_key:
+                    payload["bot_loop_interrupted"] = (
+                        previous is None or session_key in self._bot_loop_interrupted
+                    )
+                queue = self.client.register_waiter(msg_id)
+                try:
+                    sent = await self.client.send_event(payload)
+                except Exception as exc:
+                    if not is_runtime_info:
+                        raise
+                    logger.warning(f"[frostagent-adapter] 运行信息指令发送失败: {exc}")
+                    return
+                if not sent:
+                    return
+                if session_key:
+                    self._bot_loop_last_forwarded_sender[session_key] = payload["user_id"]
+                    self._bot_loop_interrupted.discard(session_key)
 
             # 等待接收 FrostAgent 的回复（包括 sendHook 中间消息与最终回复）
-            frostagent_replied = False
+            frostagent_replied = is_poke or is_runtime_info
             while True:
                 try:
                     action = await asyncio.wait_for(queue.get(), timeout=120.0)
@@ -407,20 +671,57 @@ class FrostAgentAdapter(Star):
                     logger.warning(f"[frostagent-adapter] 等待 FrostAgent 响应超时 (msg_id: {msg_id})")
                     break
 
-                # 如果收到 noop 动作，说明后端已将该群聊消息捕获进 compact 但无需回复，结束等待
+                if action.get("type") == "connection_closed":
+                    break
+
+                if action.get("type") == "quote_lookup":
+                    quote_data = {}
+                    if (
+                        not is_runtime_info
+                        and _extract_platform_name(event) == "aiocqhttp"
+                        and action.get("event_message_id") == msg_id
+                    ):
+                        quote_data = await lookup_reply_onebot_message(
+                            event, str(action.get("message_id") or "")
+                        )
+                    await self.client.send_event({
+                        "type": "quote_lookup_result",
+                        "echo": action.get("echo", ""),
+                        "data": quote_data,
+                    })
+                    continue
+
+                # 如果收到 noop 动作：
+                # 若为管理员指令静默丢弃 (admin_silent_drop / suppress_llm)，需抑制 AstrBot 默认 LLM 处理，
+                # 防止下游产生回复、产生 Token 消耗及污染会话历史；
+                # 若为普通群聊压缩缓冲的 noop，则保持原有事件传播语义。
                 if action.get("action") == "noop":
+                    if (action.get("subtype") == "admin_silent_drop" or action.get("suppress_llm")) and not frostagent_replied:
+                        event.should_call_llm(True)
                     break
 
                 try:
                     action = await resolve_sticker_sources(action, self.settings.http_base_url)
                 except StickerFetchError as e:
                     logger.error(f"[frostagent-adapter] 表情包获取失败，已取消发送: {e}")
+                    if action.get("delivery_id"):
+                        await self.client.send_delivery_result(action["delivery_id"], False, str(e))
                     if not action.get("is_intermediate", False):
                         break
                     continue
 
                 contains_sticker = action_contains_sticker(action)
-                responses = await deliver_action_to_astrbot(event, action)
+                try:
+                    responses = await deliver_action_to_astrbot(event, action)
+                except Exception as e:
+                    logger.error(f"[frostagent-adapter] 表情包发送失败: {e}", exc_info=True)
+                    if action.get("delivery_id"):
+                        await self.client.send_delivery_result(action["delivery_id"], False, str(e))
+                    if not action.get("is_intermediate", False):
+                        break
+                    continue
+                if action.get("delivery_id"):
+                    await self.client.send_delivery_result(action["delivery_id"], True)
                 if (responses or contains_sticker) and not frostagent_replied:
                     # FrostAgent 已接管本次回复，仅阻止 AstrBot 默认 LLM 再处理同一事件。
                     event.should_call_llm(True)
@@ -433,18 +734,41 @@ class FrostAgentAdapter(Star):
                 if not action.get("is_intermediate", False):
                     break
         finally:
-            self.client.unregister_waiter(msg_id)
+            if queue is not None:
+                self.client.unregister_waiter(msg_id)
 
     async def terminate(self):
+        if self._init_task is not None:
+            self._init_task.cancel()
+            await asyncio.gather(self._init_task, return_exceptions=True)
         await self.client.stop()
 
 
 async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
     """从 AstrBot 事件中构造符合 FrostAgent 专有协议的 Event 结构。"""
+    raw_event = first_attr(getattr_chain(event, "message_obj"), "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    if _extract_platform_name(event) == "aiocqhttp" and isinstance(raw_event, dict) and raw_event.get("post_type") == "notice":
+        group_id = str(raw_event.get("group_id") or "")
+        return {
+            "type": "event", "event_type": "notice",
+            "notice_type": str(raw_event.get("notice_type") or ""),
+            "sub_type": str(raw_event.get("sub_type") or ""),
+            "self_id": str(raw_event.get("self_id") or ""),
+            "target_id": str(raw_event.get("target_id") or ""),
+            "user_id": str(raw_event.get("user_id") or ""),
+            "group_id": group_id,
+            "message_type": "group" if group_id else "private",
+            "platform": "aiocqhttp",
+            "message_id": str(getattr_chain(event, "message_obj", "message_id") or uuid.uuid4().hex),
+            "content": "", "attachments": [], "timestamp": int(time.time()),
+        }
     user_id = extract_sender_id(event)
     group_id = extract_group_id(event)
     message_type = "group" if group_id else "private"
-    content = extract_message_text(event)
+    is_runtime_info = is_runtime_info_command(event)
+    content = "#fa" if is_runtime_info else extract_message_text(event)
     is_wake, is_at = check_is_at_or_wake(event)
 
     msg_id = str(
@@ -452,8 +776,16 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         or getattr(event, "message_id", "")
         or f"ast_{int(time.time() * 1000)}"
     )
-    attachments = await extract_attachments(event, msg_id)
-    reply_message_id = extract_reply_message_id(event)
+    # A diagnostic command does not need quoted history or media. In particular,
+    # do not download/forward images from a Reply component's nested chain.
+    image_slot_counts: dict[str, int] = {}
+    sticker_only = is_sticker_only_message(event)
+    attachments = (
+        []
+        if is_runtime_info
+        else await extract_attachments(event, msg_id, image_slot_counts)
+    )
+    reply_message_id = "" if is_runtime_info else extract_reply_message_id(event)
     platform = _extract_platform_name(event)
 
     sender_name = ""
@@ -471,7 +803,7 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
 
     session_id = f"{platform}:group:{group_id}" if message_type == "group" else f"{platform}:private:{user_id}"
     self_id = extract_self_id(event)
-    has_other_mention, has_other_content, has_media_content = extract_interaction_metadata(event, self_id)
+    has_other_mention, has_other_content, has_media_content, mentioned_user_ids = extract_interaction_metadata(event, self_id)
     if attachments:
         has_media_content = True
 
@@ -493,14 +825,21 @@ async def build_frostagent_payload(event: AstrMessageEvent) -> dict[str, Any]:
         "is_at": is_at,
         "timestamp": int(time.time()),
     }
+    if image_slot_counts:
+        payload["image_slot_counts"] = image_slot_counts
     metadata: dict[str, Any] = {
+        "runtime_info_command": is_runtime_info,
+        "sticker_only": sticker_only,
         "has_other_mention": has_other_mention,
         "has_other_content": has_other_content,
         "has_media_content": has_media_content,
         "has_images": has_media_content,
+        "mentioned_user_ids": mentioned_user_ids,
     }
     if reply_message_id:
         metadata["reply_message_id"] = reply_message_id
+        if platform == "aiocqhttp" and callable(getattr(first_attr(event, "bot"), "call_action", None)):
+            metadata["quote_lookup_supported"] = True
     payload["metadata"] = metadata
     return payload
 
@@ -538,15 +877,17 @@ def extract_self_id(event: AstrMessageEvent) -> str:
 def extract_interaction_metadata(
     event: AstrMessageEvent,
     self_id: str,
-) -> tuple[bool, bool, bool]:
+) -> tuple[bool, bool, bool, list[str]]:
     """提取入站消息结构特征，用于跨适配器 mention-only 等语义判定：
     - has_other_mention: 是否包含除 Bot 之外的其他 @ 提及（如 @其他群友 或 @全体成员）
     - has_other_content: 是否包含非文本、非图片、非引用、非提及的其它消息组件（如 Face, Record, Video, File 等）
     - has_media_content: 是否包含图片或表情等多媒体结构（Image, MFace），无论媒体附件是否成功提取/下载
+    - mentioned_user_ids: 除 Bot 自身之外所提及的所有目标用户 ID 列表（保持顺序）
     """
     has_other_mention = False
     has_other_content = False
     has_media_content = False
+    mentioned_user_ids: list[str] = []
 
     components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
     if isinstance(components, list) and components:
@@ -556,6 +897,8 @@ def extract_interaction_metadata(
                 target_qq = str(first_attr(comp, "qq", "target_id", "user_id") or "").strip()
                 if not self_id or target_qq != self_id:
                     has_other_mention = True
+                    if target_qq and target_qq not in mentioned_user_ids:
+                        mentioned_user_ids.append(target_qq)
             elif "plain" in comp_type or "reply" in comp_type:
                 continue
             elif "image" in comp_type or "mface" in comp_type:
@@ -577,6 +920,8 @@ def extract_interaction_metadata(
                 target_qq = str(first_attr(data, "qq", "target_id", "user_id") or "").strip()
                 if not self_id or target_qq != self_id:
                     has_other_mention = True
+                    if target_qq and target_qq not in mentioned_user_ids:
+                        mentioned_user_ids.append(target_qq)
             elif seg_type in ("text", "reply"):
                 continue
             elif seg_type in ("image", "mface"):
@@ -584,18 +929,16 @@ def extract_interaction_metadata(
             else:
                 has_other_content = True
 
-    return has_other_mention, has_other_content, has_media_content
+    return has_other_mention, has_other_content, has_media_content, mentioned_user_ids
 
 
 def check_is_at_or_wake(event: AstrMessageEvent) -> tuple[bool, bool]:
-    """检测当前事件是否带有唤醒词、@机器人 或 引用了机器人。
+    """仅将 @机器人或引用机器人转换为 FrostAgent 的唤醒信号。
 
-    注意：不读取 event.is_wake，因为 AstrBot 的 WakingCheckStage 会在
-    handler filter 匹配时将其置为 True（我们注册了 EventMessageType.ALL，
-    导致所有消息的 is_wake 均为 True）。仅使用 is_at_or_wake_command，
-    它只在真正的 @机器人、唤醒词前缀或私聊时为 True。
+    AstrBot 的 is_wake / is_at_or_wake_command 包含自身 handler、命令和
+    唤醒词语义，不能作为 FrostAgent 的唤醒信号。名称和别名由后端判断。
     """
-    is_wake = bool(getattr(event, "is_at_or_wake_command", False))
+    is_wake = False
     is_at = False
 
     self_id = extract_self_id(event)
@@ -671,6 +1014,121 @@ def extract_message_text(event: AstrMessageEvent) -> str:
     return ""
 
 
+def is_runtime_info_command(event: AstrMessageEvent) -> bool:
+    """Recognize #fa only from current group message text, never string fallbacks.
+
+    Normalized components and raw OneBot segments, when both are available,
+    must agree. Reply markers are allowed, but their quoted text is not read.
+    """
+    if not extract_group_id(event):
+        return False
+    raw_event = first_attr(getattr_chain(event, "message_obj"), "raw_message", "raw_msg")
+    if raw_event is None:
+        raw_event = first_attr(event, "raw_message", "raw_msg")
+    if isinstance(raw_event, dict) and raw_event.get("post_type", "message") != "message":
+        return False
+
+    self_id = extract_self_id(event)
+    texts: list[str] = []
+    components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
+    if isinstance(components, list) and components:
+        text_parts: list[str] = []
+        for comp in components:
+            comp_type = type(comp).__name__.lower()
+            if comp_type == "plain":
+                value = first_attr(comp, "text")
+                if not isinstance(value, str):
+                    return False
+                text_parts.append(value)
+            elif comp_type == "at":
+                target = str(first_attr(comp, "qq", "target_id", "user_id") or "").strip()
+                if not self_id or target != self_id:
+                    return False
+            elif comp_type != "reply":
+                return False
+        texts.append("".join(text_parts))
+
+    raw_segments = first_attr(raw_event, "message")
+    if raw_segments is None:
+        raw_segments = first_attr(first_attr(raw_event, "data"), "message")
+    if isinstance(raw_segments, str):
+        try:
+            raw_segments = json.loads(raw_segments)
+        except json.JSONDecodeError:
+            raw_segments = None
+    if isinstance(raw_segments, list) and raw_segments:
+        text_parts = []
+        for segment in raw_segments:
+            if not isinstance(segment, dict):
+                return False
+            segment_type = str(segment.get("type") or "").lower()
+            data = segment.get("data")
+            if not isinstance(data, dict):
+                return False
+            if segment_type == "text":
+                value = data.get("text")
+                if not isinstance(value, str):
+                    return False
+                text_parts.append(value)
+            elif segment_type == "at":
+                target = str(first_attr(data, "qq", "target_id", "user_id") or "").strip()
+                if not self_id or target != self_id:
+                    return False
+            elif segment_type != "reply":
+                return False
+        texts.append("".join(text_parts))
+    return bool(texts) and all(text.strip() == "#fa" for text in texts)
+
+
+def is_sticker_only_message(event: AstrMessageEvent) -> bool:
+    """Classify the current chain before media loss/deduplication, not quoted chains.
+
+    Raw OneBot segments retain subtype markers that normalized Image components
+    can lose. No content, filename, GIF, or rendered-placeholder guessing is used.
+    """
+    segments = raw_onebot_segments(event)
+    if segments:
+        found = False
+        for segment in segments:
+            kind = str(segment.get("type") or "").lower()
+            data = segment.get("data") or {}
+            if not isinstance(data, dict):
+                return False
+            if kind == "text":
+                value = data.get("text")
+                if not isinstance(value, str) or value.strip():
+                    return False
+            elif kind == "reply":
+                continue
+            elif onebot_segment_is_sticker(segment):
+                found = True
+            else:
+                return False
+        return found
+
+    components = getattr_chain(event, "message_obj", "message") or getattr(event, "message", [])
+    if not isinstance(components, list):
+        return False
+    found = False
+    for component in components:
+        kind = type(component).__name__.lower()
+        if "plain" in kind:
+            value = first_attr(component, "text")
+            if not isinstance(value, str) or value.strip():
+                return False
+        elif kind == "reply":
+            continue
+        elif kind in ("mface", "sticker") or ("image" in kind and (
+            first_attr(component, "is_sticker") is True
+            or any(is_sticker_sub_type(first_attr(component, key)) for key in ("sub_type", "subType", "subtype"))
+            or is_market_face_data(component_image_data(component))
+        )):
+            found = True
+        else:
+            return False
+    return found
+
+
 def extract_reply_message_id(event: AstrMessageEvent) -> str:
     message_obj = getattr_chain(event, "message_obj")
     components = getattr(message_obj, "message", []) or getattr(event, "message", [])
@@ -714,37 +1172,58 @@ def is_market_face_data(data: Any, segment_type: str = "image") -> bool:
 
 
 def is_sticker_sub_type(value: Any) -> bool:
-    try:
-        return int(value) == 1
-    except (TypeError, ValueError):
-        return False
+    # Do not coerce booleans or fractional unknown subtypes into sticker markers.
+    return (type(value) in (int, float) and value == 1) or (
+        isinstance(value, str) and value.strip() == "1"
+    )
 
 
 def onebot_segment_is_sticker(segment: dict[str, Any] | None) -> bool:
     if not isinstance(segment, dict):
         return False
     segment_type = str(first_attr(segment, "type") or "").lower()
-    data = first_attr(segment, "data")
+    data = first_attr(segment, "data") or {}
     if not isinstance(data, dict):
         return False
-    return segment_type == "mface" or (
+    return segment_type in ("mface", "sticker") or (
         segment_type == "image"
         and (
-            is_sticker_sub_type(first_attr(data, "sub_type", "subtype", "subType"))
+            data.get("is_sticker") is True
+            or any(is_sticker_sub_type(data.get(key)) for key in ("sub_type", "subtype", "subType"))
             or is_market_face_data(data, segment_type)
         )
     )
 
 
-def pop_matching_onebot_segment(
-    segments: list[dict[str, Any]],
-    component_type: str,
-) -> dict[str, Any] | None:
-    expected_type = "mface" if component_type == "mface" else "image"
-    for index, segment in enumerate(segments):
-        if str(first_attr(segment, "type") or "").lower() == expected_type:
-            return segments.pop(index)
-    return None
+def match_onebot_image_slots(
+    slots: list[tuple[int, dict[str, Any]]],
+    components: list[Any],
+) -> list[tuple[int, dict[str, Any]] | None]:
+    """Match the whole image sequence, leaving unidentifiable raw slots intact."""
+    original_slots = list(slots)
+    matches: list[tuple[int, dict[str, Any]] | None] = [None] * len(components)
+    # Resolve every source match before any positional fallback can consume a
+    # later component's raw slot.
+    for component_index, comp in enumerate(components):
+        source = image_source_from_data(component_image_data(comp))
+        if not source:
+            continue
+        for index, (_, segment) in enumerate(slots):
+            if image_source_from_data(first_attr(segment, "data") or {}) == source:
+                matches[component_index] = slots.pop(index)
+                break
+    # Source-less/rewritten components can reuse positional slots only for a
+    # complete sequence whose known identities agree with the original order.
+    # With partial normalization, even the first raw sticker may have no Image
+    # component. Leave ambiguous components unmatched rather than inherit that
+    # sticker's subtype; the caller allocates separate slots for them.
+    if len(components) == len(original_slots) and all(
+        slot is None or slot[0] == original_slots[index][0]
+        for index, slot in enumerate(matches)
+    ):
+        slots.clear()
+        return original_slots
+    return matches
 
 
 async def source_image_attachment(
@@ -823,6 +1302,7 @@ async def image_attachment(
     comp_type = type(comp).__name__.lower()
     if (
         onebot_segment_is_sticker(raw_segment)
+        or comp_type in ("mface", "sticker")
         or is_market_face_data(data, "mface" if comp_type == "mface" else "image")
     ):
         sub_type = 1
@@ -866,14 +1346,14 @@ def raw_onebot_segments(event: AstrMessageEvent) -> list[dict[str, Any]]:
     return onebot_segments_from_payload(raw_event)
 
 
-async def lookup_reply_onebot_segments(
+async def lookup_reply_onebot_message(
     event: AstrMessageEvent,
     message_id: str,
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     bot = first_attr(event, "bot")
     call_action = getattr(bot, "call_action", None)
-    if not callable(call_action):
-        return []
+    if not callable(call_action) or not message_id:
+        return {}
 
     lookup_id: int | str = message_id
     if re.fullmatch(r"-?\d+", message_id):
@@ -896,80 +1376,122 @@ async def lookup_reply_onebot_segments(
                 timeout=REPLY_LOOKUP_TIMEOUT_SECONDS,
             )
     except Exception as exc:
-        logger.warning(
-            f"[frostagent-adapter] 回查引用消息 {message_id} 失败，"
-            f"无法恢复可能被 AstrBot 丢弃的 mface: {exc}"
-        )
-        return []
-    return onebot_segments_from_payload(response)
+        logger.warning(f"[frostagent-adapter] 回查引用消息 {message_id} 失败: {exc}")
+        return {}
+
+    if first_attr(response, "retcode") not in (None, 0):
+        return {}
+    if first_attr(response, "status") not in (None, "ok"):
+        return {}
+    data = first_attr(response, "data")
+    if data is None:
+        data = response
+    result = {}
+    for key in (
+        "message_id", "message_type", "group_id", "user_id",
+        "target_id", "peer_id", "time", "message",
+    ):
+        value = first_attr(data, key)
+        if value is not None:
+            result[key] = value
+    return result
 
 
-async def sticker_attachments_from_segments(
-    segments: list[dict[str, Any]],
+async def lookup_reply_onebot_segments(
+    event: AstrMessageEvent,
     message_id: str,
-    handled_sources: set[str],
 ) -> list[dict[str, Any]]:
-    attachments = []
-    for segment in segments:
-        data = first_attr(segment, "data")
-        if not isinstance(data, dict):
-            continue
+    return onebot_segments_from_payload(
+        await lookup_reply_onebot_message(event, message_id)
+    )
+
+async def append_sticker_attachments_from_segments(
+    slots: list[tuple[int, dict[str, Any]]],
+    message_id: str,
+    attachments: list[dict[str, Any]],
+) -> None:
+    for image_index, segment in slots:
         if not onebot_segment_is_sticker(segment):
             continue
-        source = image_source_from_data(data)
+        source = image_source_from_data(first_attr(segment, "data") or {})
         if not source:
-            logger.warning("[frostagent-adapter] 表情包消息缺少可读取的数据，已忽略")
-            continue
-        if source in handled_sources:
+            logger.warning("[frostagent-adapter] 表情包消息缺少可读取的数据，保留图片槽位")
             continue
         try:
             attachment = await source_image_attachment(source, message_id, 1)
         except Exception as exc:
             logger.warning(f"[frostagent-adapter] 表情包转换 Base64 失败: {exc}")
             continue
-        if attachment:
-            attachments.append(attachment)
-    return attachments
+        append_unique_attachment(attachments, attachment, image_index)
+
+
+def reserve_image_slot(
+    message_id: str,
+    image_indexes: dict[str, int],
+) -> int:
+    # Consume the original image-segment ordinal before conversion/dedup so
+    # unreadable slots and repeated identical images keep their model-visible
+    # positions.
+    message_id = str(message_id or "")
+    image_index = image_indexes.get(message_id, 0)
+    image_indexes[message_id] = image_index + 1
+    return image_index
+
+
+def reserve_raw_image_slots(
+    segments: list[dict[str, Any]],
+    message_id: str,
+    image_indexes: dict[str, int],
+) -> list[tuple[int, dict[str, Any]]]:
+    # Raw ordinals are allocated once, before normalized components are matched.
+    # Unmatched/failed slots must not disappear or move behind readable images.
+    return [
+        (reserve_image_slot(message_id, image_indexes), segment)
+        for segment in segments
+        if str(first_attr(segment, "type") or "").lower() in ("image", "mface", "sticker")
+    ]
 
 
 def append_unique_attachment(
     attachments: list[dict[str, Any]],
     attachment: dict[str, Any] | None,
+    image_index: int,
 ) -> None:
     if attachment is None:
         return
+    attachment["image_indices"] = [image_index]
     for existing in attachments:
         if (
             existing.get("message_id") == attachment.get("message_id")
             and existing.get("content") == attachment.get("content")
         ):
+            indices = existing.setdefault("image_indices", [])
+            if image_index not in indices:
+                indices.append(image_index)
+                indices.sort()
             if attachment.get("sub_type") == 1:
                 existing["sub_type"] = 1
             return
     attachments.append(attachment)
 
 
-async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[dict[str, Any]]:
+async def extract_attachments(
+    event: AstrMessageEvent,
+    message_id: str,
+    image_slot_counts: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
     attachments = []
-    handled_sticker_sources: set[str] = set()
+    image_indexes: dict[str, int] = {}
+    current_images: list[Any] = []
     reply_image_components: dict[str, list[Any]] = {}
-    unmatched_raw_segments = list(raw_onebot_segments(event))
+    unmatched_raw_segments = reserve_raw_image_slots(raw_onebot_segments(event), message_id, image_indexes)
     message_obj = getattr_chain(event, "message_obj")
     components = getattr(message_obj, "message", []) or getattr(event, "message", [])
     if isinstance(components, list):
         for comp in components:
             comp_type = type(comp).__name__.lower()
-            if "image" in comp_type or comp_type == "mface":
-                raw_segment = pop_matching_onebot_segment(
-                    unmatched_raw_segments,
-                    comp_type,
-                )
-                attachment = await image_attachment(comp, message_id, raw_segment)
-                append_unique_attachment(attachments, attachment)
-                if attachment and attachment.get("sub_type") == 1:
-                    source = image_source_from_data(component_image_data(comp))
-                    if source:
-                        handled_sticker_sources.add(source)
+            if "image" in comp_type or comp_type in ("mface", "sticker"):
+                current_images.append(comp)
             elif comp_type == "reply":
                 reply_id = str(first_attr(comp, "id", "message_id") or "").strip()
                 if not reply_id:
@@ -980,36 +1502,39 @@ async def extract_attachments(event: AstrMessageEvent, message_id: str) -> list[
                     continue
                 for quoted_comp in chain:
                     quoted_type = type(quoted_comp).__name__.lower()
-                    if "image" not in quoted_type and quoted_type != "mface":
+                    if "image" not in quoted_type and quoted_type not in ("mface", "sticker"):
                         continue
                     quoted_images.append(quoted_comp)
-    for attachment in await sticker_attachments_from_segments(
+    current_slots = match_onebot_image_slots(unmatched_raw_segments, current_images)
+    for comp, slot in zip(current_images, current_slots):
+        image_index, raw_segment = slot if slot is not None else (reserve_image_slot(message_id, image_indexes), None)
+        attachment = await image_attachment(comp, message_id, raw_segment)
+        append_unique_attachment(attachments, attachment, image_index)
+    await append_sticker_attachments_from_segments(
         unmatched_raw_segments,
         message_id,
-        handled_sticker_sources,
-    ):
-        append_unique_attachment(attachments, attachment)
+        attachments,
+    )
     for reply_id, quoted_images in reply_image_components.items():
-        unmatched_reply_segments = await lookup_reply_onebot_segments(event, reply_id)
-        handled_sources: set[str] = set()
-        for quoted_comp in quoted_images:
-            quoted_type = type(quoted_comp).__name__.lower()
-            raw_segment = pop_matching_onebot_segment(
-                unmatched_reply_segments,
-                quoted_type,
-            )
+        unmatched_reply_segments = reserve_raw_image_slots(
+            await lookup_reply_onebot_segments(event, reply_id), reply_id, image_indexes,
+        )
+        quoted_slots = match_onebot_image_slots(unmatched_reply_segments, quoted_images)
+        for quoted_comp, slot in zip(quoted_images, quoted_slots):
+            image_index, raw_segment = slot if slot is not None else (reserve_image_slot(reply_id, image_indexes), None)
             attachment = await image_attachment(quoted_comp, reply_id, raw_segment)
-            append_unique_attachment(attachments, attachment)
-            if attachment and attachment.get("sub_type") == 1:
-                source = image_source_from_data(component_image_data(quoted_comp))
-                if source:
-                    handled_sources.add(source)
-        for attachment in await sticker_attachments_from_segments(
+            append_unique_attachment(attachments, attachment, image_index)
+        await append_sticker_attachments_from_segments(
             unmatched_reply_segments,
             reply_id,
-            handled_sources,
-        ):
-            append_unique_attachment(attachments, attachment)
+            attachments,
+        )
+    message_order = {message_id: index for index, message_id in enumerate(image_indexes)}
+    attachments.sort(key=lambda attachment: (
+        message_order[str(attachment.get("message_id") or "")], attachment["image_indices"][0],
+    ))
+    if image_slot_counts is not None:
+        image_slot_counts.update(image_indexes)
     return attachments
 
 
@@ -1048,18 +1573,20 @@ async def deliver_action_to_astrbot(
     # AstrBot's RespondStage treats unregistered custom component classes as an
     # empty chain. Send StickerImage directly so aiocqhttp can serialize its
     # OneBot sticker subtype payload instead of dropping it before delivery.
-    try:
-        await event.send(MessageChain(parts))
-        logger.info("[frostagent-adapter] 表情包已交付平台发送")
-    except Exception as e:
-        logger.error(f"[frostagent-adapter] 表情包发送失败: {e}", exc_info=True)
+    await event.send(MessageChain(parts))
+    logger.info("[frostagent-adapter] 表情包已交付平台发送")
     return []
 
 
 def action_contains_sticker(action: dict[str, Any]) -> bool:
     return any(
-        str(message.get("type") or "") == "image" and message.get("is_sticker")
+        str(message.get("type") or "") == "image"
+        and (message.get("is_sticker") or message.get("sub_type") == 1 or message.get("subType") == 1)
         for message in action.get("messages") or []
+    ) or any(
+        str(attachment.get("type") or "") == "image"
+        and (attachment.get("is_sticker") or attachment.get("sub_type") == 1 or attachment.get("subType") == 1)
+        for attachment in action.get("attachments") or []
     )
 
 
@@ -1086,7 +1613,7 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
             elif message_type == "image":
                 source = str(message.get("url") or message.get("path") or "")
                 if source:
-                    if message.get("is_sticker"):
+                    if message.get("is_sticker") or message.get("sub_type") == 1 or message.get("subType") == 1:
                         parts.append(StickerImage(source))
                     else:
                         parts.append(Image(source))
@@ -1099,7 +1626,10 @@ def action_to_message_components(action: dict[str, Any]) -> list[Any]:
         parts.append(Plain(str(content)))
     for attachment in action.get("attachments") or []:
         if attachment.get("type") == "image" and attachment.get("url"):
-            parts.append(Image(str(attachment["url"])))
+            if attachment.get("is_sticker") or attachment.get("sub_type") == 1 or attachment.get("subType") == 1:
+                parts.append(StickerImage(str(attachment["url"])))
+            else:
+                parts.append(Image(str(attachment["url"])))
     return parts
 
 

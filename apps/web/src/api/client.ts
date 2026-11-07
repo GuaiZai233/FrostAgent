@@ -1,4 +1,6 @@
 import { instanceState } from '../instance-state';
+import { getControlToken } from './control-auth';
+export { getControlToken, setControlToken } from './control-auth';
 import { createClient } from '@connectrpc/connect';
 import type { Client, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
@@ -38,6 +40,13 @@ import {
   type ExportMemoriesResponse,
   type ImportMemoriesResponse,
   type TriggerReflectionResponse,
+  type ListGroupsResponse,
+  type GetGroupProfileResponse,
+  type UpdateGroupProfileResponse,
+  type UpdateMemberProfileResponse,
+  type GroupSummary,
+  type GroupProfile,
+  type MemberProfile,
   type ModelRouterConfiguration,
   type GetStateResponse,
   type SaveDraftResponse,
@@ -64,36 +73,75 @@ export interface EnvVarUpdate {
   isSecret: boolean;
 }
 
-export type { MCPServerInfo, MCPToolInfo };
-
-const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
-
-export function getControlToken(): string {
-  try {
-    return localStorage.getItem(CONTROL_TOKEN_STORAGE_KEY) || '';
-  } catch {
-    return '';
-  }
+export interface ExtraEnvEntry {
+  key: string;
+  value: string;
 }
 
-export function setControlToken(token: string): void {
-  try {
-    const trimmed = token.trim();
-    if (trimmed) {
-      localStorage.setItem(CONTROL_TOKEN_STORAGE_KEY, trimmed);
-    } else {
-      localStorage.removeItem(CONTROL_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // localStorage errors ignored
+async function extraEnvRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  headers.set('Accept', 'application/json');
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/instances/global/extra-env${path}`, {
+    ...init,
+    headers,
+    signal: init.signal ? AbortSignal.any([instanceState.signal, init.signal]) : instanceState.signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
   }
+  return (await response.json()) as T;
 }
+
+export const extraEnvAPI = {
+  async list(): Promise<ExtraEnvEntry[]> {
+    const response = await extraEnvRequest<{ entries: ExtraEnvEntry[] }>('', { method: 'GET' });
+    return response.entries;
+  },
+  async put(entry: ExtraEnvEntry, signal?: AbortSignal): Promise<void> {
+    await extraEnvRequest('', { method: 'PUT', body: JSON.stringify(entry), signal });
+  },
+  async delete(key: string, signal?: AbortSignal): Promise<void> {
+    await extraEnvRequest(`/${encodeURIComponent(key)}`, { method: 'DELETE', signal });
+  },
+};
+
+async function globalSettingsRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = getControlToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (init.body) headers.set('Content-Type', 'application/json');
+  const response = await fetch(`/api/instances/global/${path}`, {
+    ...init,
+    headers,
+    signal: instanceState.signal,
+  });
+  if (!response.ok) {
+    throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
+  }
+  return response;
+}
+
+export const globalSettingsAPI = {
+  async download(): Promise<Blob> {
+    return (await globalSettingsRequest('backup/settings')).blob();
+  },
+  async import(settings: unknown): Promise<void> {
+    await globalSettingsRequest('import/settings', { method: 'POST', body: JSON.stringify(settings) });
+  },
+};
+
+export type { MCPServerInfo, MCPToolInfo, GroupSummary, GroupProfile, MemberProfile };
 
 export interface LockedPrincipal {
   principal: { platform: string; user_id: string };
   reason?: string;
   locked_at?: string;
 }
+
+export type SecurityControlMode = 'off' | 'simple' | 'aggressive';
 
 // Security controls belong to the control plane, never to a selected instance.
 async function securityRequest<T>(path: string, body?: unknown): Promise<T> {
@@ -123,6 +171,409 @@ export const securityAPI = {
   ): Promise<{ unlocked: LockedPrincipal['principal'] }> {
     return securityRequest('unlock', { platform, user_id: userID });
   },
+  getMode(): Promise<{ mode: SecurityControlMode }> {
+    return securityRequest('mode');
+  },
+  setMode(mode: SecurityControlMode): Promise<{ mode: SecurityControlMode }> {
+    return securityRequest('mode', { mode });
+  },
+};
+
+export interface ActionsCatStatus {
+  disabled?: boolean;
+  configured: boolean;
+  healthy: boolean;
+  authenticated?: boolean;
+  endpoint: string;
+  error?: string;
+}
+
+export interface ActionsCatAction {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  active_version_id?: string;
+  active_build_id?: string;
+  max_concurrency?: number;
+  schedule?: string;
+  timeout_sec?: number;
+  capabilities?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ActionsCatRun {
+  id: string;
+  action_id: string;
+  status: string;
+  trigger_type: string;
+  exit_code?: number;
+  duration_ms: number;
+  stdout?: string;
+  stderr?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ActionsCatRunLogs {
+  stdout: string;
+  stderr: string;
+}
+
+export interface ActionsCatVersion {
+  id: string;
+  action_id: string;
+  version_number: number;
+  source_digest: string;
+  source_path?: string;
+  build_spec?: {
+    language?: string;
+    toolchain_requirement?: string;
+    command?: string;
+    network?: boolean;
+  };
+  runtime_spec?: {
+    entrypoint?: string;
+    timeout_seconds?: number;
+    memory_limit_mb?: number;
+    cpu_limit?: number;
+    network?: {
+      mode: string;
+      allow?: Array<{ host: string; port: number }>;
+    };
+  };
+  state_injections?: Array<{
+    state_path: string;
+    env_var: string;
+    optional?: boolean;
+  }>;
+  runtime_capabilities?: string[];
+  created_at: string;
+}
+
+export interface ActionsCatBuild {
+  id: string;
+  action_id: string;
+  version_id: string;
+  build_number: number;
+  status: string;
+  builder_profile?: string;
+  toolchain_version?: string;
+  build_command?: string;
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+  artifact_digest?: string;
+  artifact_size?: number;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface ActionsCatBuildLogs {
+  stdout: string;
+  stderr: string;
+}
+
+export interface CreateActionRequest {
+  name: string;
+  description?: string;
+  max_concurrency?: number;
+}
+
+export interface CreateVersionRequest {
+  files: Record<string, string>;
+  encodings?: Record<string, string>;
+  build_spec?: {
+    language?: string;
+    toolchain_requirement?: string;
+    command?: string;
+    network?: boolean;
+  };
+  runtime_spec?: {
+    entrypoint?: string;
+    timeout_seconds?: number;
+    memory_limit_mb?: number;
+    cpu_limit?: number;
+    network?: {
+      mode: string;
+      allow?: Array<{ host: string; port: number }>;
+    };
+  };
+  state_injections?: Array<{
+    state_path: string;
+    env_var: string;
+    optional?: boolean;
+  }>;
+  runtime_capabilities?: string[];
+}
+
+export interface SetActiveBuildRequest {
+  version_id: string;
+  build_id: string;
+}
+
+export interface TriggerActionRunRequest {
+  extra_env?: Record<string, string>;
+  trigger_metadata?: Record<string, string>;
+}
+
+export interface ActionsCatSchedule {
+  id: string;
+  action_id: string;
+  cron_expr: string;
+  timezone: string;
+  next_run_at: string;
+  last_run_at?: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateScheduleRequest {
+  cron_expr: string;
+  timezone?: string;
+  enabled?: boolean;
+}
+
+export interface ActionsCatMatcher {
+  id: string;
+  action_id: string;
+  name: string;
+  match_type: string;
+  pattern: string;
+  target_field: string;
+  capture_env_map?: Record<string, string>;
+  priority: number;
+  continue_matching: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMatcherRequest {
+  name: string;
+  match_type: string;
+  pattern: string;
+  target_field?: string;
+  capture_env_map?: Record<string, string>;
+  priority?: number;
+  continue_matching?: boolean;
+  enabled?: boolean;
+}
+
+async function actionsCatRequest<T>(
+  path: string,
+  options: RequestInit = {},
+): Promise<T> {
+  const instanceID = instanceState.selected?.id;
+  const selectionSignal = instanceState.signal;
+  selectionSignal.throwIfAborted();
+  if (!instanceID) {
+    throw new Error('请先选择实例');
+  }
+
+  const token = getControlToken();
+  const headers = new Headers(options.headers);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  if (!headers.has('Accept')) {
+    headers.set('Accept', 'application/json');
+  }
+
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const url = `/instances/${instanceID}/api/actionscat${cleanPath}`;
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, selectionSignal])
+    : selectionSignal;
+
+  const response = await fetch(url, { ...options, headers, signal });
+  if (!response.ok) {
+    let errMsg = '';
+    try {
+      const errJson = await response.json();
+      errMsg = errJson.error || errJson.message || '';
+    } catch {
+      errMsg = (await response.text()).trim();
+    }
+    throw new Error(errMsg || response.statusText || `HTTP ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+export const actionsCatAPI = {
+  getStatus(): Promise<ActionsCatStatus> {
+    return actionsCatRequest<ActionsCatStatus>('/status');
+  },
+  listActions(): Promise<ActionsCatAction[]> {
+    return actionsCatRequest<ActionsCatAction[]>('/actions');
+  },
+  createAction(req: CreateActionRequest): Promise<ActionsCatAction> {
+    return actionsCatRequest<ActionsCatAction>('/actions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  },
+  getAction(actionID: string): Promise<ActionsCatAction> {
+    return actionsCatRequest<ActionsCatAction>(
+      `/actions/${encodeURIComponent(actionID)}`,
+    );
+  },
+  triggerRun(
+    actionID: string,
+    req?: TriggerActionRunRequest,
+  ): Promise<ActionsCatRun> {
+    return actionsCatRequest<ActionsCatRun>(
+      `/actions/${encodeURIComponent(actionID)}/runs`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req || {}),
+      },
+    );
+  },
+  listRuns(
+    actionID: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ActionsCatRun[]> {
+    return actionsCatRequest<ActionsCatRun[]>(
+      `/actions/${encodeURIComponent(actionID)}/runs?limit=${limit}&offset=${offset}`,
+    );
+  },
+  getRun(actionID: string, runID: string): Promise<ActionsCatRun> {
+    return actionsCatRequest<ActionsCatRun>(
+      `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}`,
+    );
+  },
+  getRunLogs(actionID: string, runID: string): Promise<ActionsCatRunLogs> {
+    return actionsCatRequest<ActionsCatRunLogs>(
+      `/actions/${encodeURIComponent(actionID)}/runs/${encodeURIComponent(runID)}/logs`,
+    );
+  },
+  listVersions(actionID: string): Promise<ActionsCatVersion[]> {
+    return actionsCatRequest<ActionsCatVersion[]>(
+      `/actions/${encodeURIComponent(actionID)}/versions`,
+    );
+  },
+  createVersion(
+    actionID: string,
+    req: CreateVersionRequest,
+  ): Promise<ActionsCatVersion> {
+    return actionsCatRequest<ActionsCatVersion>(
+      `/actions/${encodeURIComponent(actionID)}/versions`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  getVersion(actionID: string, versionID: string): Promise<ActionsCatVersion> {
+    return actionsCatRequest<ActionsCatVersion>(
+      `/actions/${encodeURIComponent(actionID)}/versions/${encodeURIComponent(versionID)}`,
+    );
+  },
+  buildVersion(
+    actionID: string,
+    versionID: string,
+  ): Promise<ActionsCatBuild> {
+    return actionsCatRequest<ActionsCatBuild>(
+      `/actions/${encodeURIComponent(actionID)}/versions/${encodeURIComponent(versionID)}/builds`,
+      {
+        method: 'POST',
+      },
+    );
+  },
+  listBuilds(actionID: string): Promise<ActionsCatBuild[]> {
+    return actionsCatRequest<ActionsCatBuild[]>(
+      `/actions/${encodeURIComponent(actionID)}/builds`,
+    );
+  },
+  getBuild(actionID: string, buildID: string): Promise<ActionsCatBuild> {
+    return actionsCatRequest<ActionsCatBuild>(
+      `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}`,
+    );
+  },
+  getBuildLogs(actionID: string, buildID: string): Promise<ActionsCatBuildLogs> {
+    return actionsCatRequest<ActionsCatBuildLogs>(
+      `/actions/${encodeURIComponent(actionID)}/builds/${encodeURIComponent(buildID)}/logs`,
+    );
+  },
+  activateBuild(
+    actionID: string,
+    req: SetActiveBuildRequest,
+  ): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/actions/${encodeURIComponent(actionID)}/active-build`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  listSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
+    return actionsCatRequest<ActionsCatSchedule[]>(
+      `/actions/${encodeURIComponent(actionID)}/schedules`,
+    );
+  },
+  createSchedule(
+    actionID: string,
+    req: CreateScheduleRequest,
+  ): Promise<ActionsCatSchedule> {
+    return actionsCatRequest<ActionsCatSchedule>(
+      `/actions/${encodeURIComponent(actionID)}/schedules`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  deleteSchedule(scheduleID: string): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/schedules/${encodeURIComponent(scheduleID)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  },
+  listMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
+    return actionsCatRequest<ActionsCatMatcher[]>(
+      `/actions/${encodeURIComponent(actionID)}/matchers`,
+    );
+  },
+  createMatcher(
+    actionID: string,
+    req: CreateMatcherRequest,
+  ): Promise<ActionsCatMatcher> {
+    return actionsCatRequest<ActionsCatMatcher>(
+      `/actions/${encodeURIComponent(actionID)}/matchers`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      },
+    );
+  },
+  deleteMatcher(matcherID: string): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>(
+      `/matchers/${encodeURIComponent(matcherID)}`,
+      {
+        method: 'DELETE',
+      },
+    );
+  },
+  dispatch(payload: Record<string, unknown>): Promise<{ ok: boolean }> {
+    return actionsCatRequest<{ ok: boolean }>('/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  },
 };
 
 const authInterceptor: Interceptor = (next) => async (req) => {
@@ -133,7 +584,8 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
-export function createInstanceAPI() {
+export function createInstanceAPI(options: { globalModelCatalog?: boolean; catalogDraftOwner?: string } = {}) {
+  let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
   const selectionSignal = instanceState.signal;
   const transport = createConnectTransport({
@@ -185,7 +637,20 @@ export function createInstanceAPI() {
 
   const modelRouterClient: Client<typeof ModelRouterService> = createClient(
     ModelRouterService,
-    transport,
+    options.globalModelCatalog
+      ? createConnectTransport({
+          baseUrl: window.location.origin,
+          interceptors: [authInterceptor],
+          fetch: (input, init) => {
+            selectionSignal.throwIfAborted();
+            const request = new Request(input, init);
+            if (options.catalogDraftOwner) request.headers.set('X-FrostAgent-Catalog-Draft', options.catalogDraftOwner);
+            return fetch(new Request(request, {
+              signal: AbortSignal.any([request.signal, selectionSignal]),
+            }));
+          },
+        })
+      : transport,
   );
 
   const dialogueClient: Client<typeof DialogueService> = createClient(
@@ -271,6 +736,8 @@ export function createInstanceAPI() {
     },
 
     // Settings & Env Vars
+    listEnvVarsWithStorage() { return settingsClient.listEnvVars({}); },
+
     listEnvVars(): Promise<EnvVar[]> {
       return settingsClient
         .listEnvVars({})
@@ -291,6 +758,13 @@ export function createInstanceAPI() {
 
     deleteEnvVar(key: string): Promise<{ success: boolean; error: string }> {
       return settingsClient.deleteEnvVar({ key });
+    },
+
+    updateEnvVars(changes: { key: string; value: string | null; isSecret: boolean }[], signal?: AbortSignal): Promise<{ success: boolean; error: string }> {
+      return settingsClient.updateEnvVars({
+        updates: changes.filter((change) => change.value !== null).map(({ key, value, isSecret }) => ({ key, value: value!, isSecret })),
+        clearKeys: changes.filter((change) => change.value === null).map(({ key }) => key),
+      }, { signal });
     },
 
     getRawEnvFile(): Promise<string> {
@@ -331,8 +805,14 @@ export function createInstanceAPI() {
       return modelRouterClient.discardDraft({}).then((res) => res.draft);
     },
 
-    publishModelRouter(): Promise<PublishResponse> {
-      return modelRouterClient.publish({});
+    resetSharedCatalogDraft(): Promise<ModelRouterConfiguration | undefined> {
+      if (!options.globalModelCatalog) throw new Error('只能在共享供应商页面重置草稿');
+      return modelRouterClient.discardDraft({}, { headers: { 'X-FrostAgent-Catalog-Draft-Reset': 'true' } })
+        .then((res) => res.draft);
+    },
+
+    publishModelRouter(expectedConfiguration?: ModelRouterConfiguration): Promise<PublishResponse> {
+      return modelRouterClient.publish({ expectedConfiguration });
     },
 
     listUpstreamModels(
@@ -346,33 +826,44 @@ export function createInstanceAPI() {
     },
 
     // Memory
+    setMemoryPlatform(platform: string): void { memoryPlatform = platform; },
     listMemories(
       pageSize: number,
       pageToken = '',
       owner = '',
+      scope = '',
+      groupId = '',
     ): Promise<ListMemoriesResponse> {
       return memoryClient.listMemories({
         pagination: { pageSize, pageToken },
         owner,
+        scope,
+        groupId,
+        platform: memoryPlatform,
       });
     },
 
-    deleteMemory(id: string): Promise<DeleteMemoryResponse> {
-      return memoryClient.deleteMemory({ id });
+    deleteMemory(id: string, scope = '', groupId = ''): Promise<DeleteMemoryResponse> {
+      return memoryClient.deleteMemory({ id, scope, groupId, platform: memoryPlatform });
     },
 
-    getMemoryStats(): Promise<GetMemoryStatsResponse> {
-      return memoryClient.getMemoryStats({});
+    getMemoryStats(scope = '', groupId = ''): Promise<GetMemoryStatsResponse> {
+      return memoryClient.getMemoryStats({ scope, groupId, platform: memoryPlatform });
     },
 
     searchMemories(
       query: string,
       pageSize: number,
       pageToken = '',
+      scope = '',
+      groupId = '',
     ): Promise<SearchMemoriesResponse> {
       return memoryClient.searchMemories({
         query,
         pagination: { pageSize, pageToken },
+        scope,
+        groupId,
+        platform: memoryPlatform,
       });
     },
 
@@ -380,38 +871,65 @@ export function createInstanceAPI() {
       owner: string,
       content: string,
       tags: string[],
-      visibility: string,
+      scope = '',
+      groupId = '',
     ): Promise<AddMemoryResponse> {
-      return memoryClient.addMemory({ owner, content, tags, visibility });
+      return memoryClient.addMemory({ owner, content, tags, scope, groupId, platform: memoryPlatform });
     },
 
     updateMemory(
       id: string,
       content: string,
       tags: string[],
-      visibility: string,
+      scope = '',
+      groupId = '',
     ): Promise<UpdateMemoryResponse> {
       return memoryClient.updateMemory({
         id,
         content,
         tags,
-        visibility,
+        scope,
+        groupId,
+        platform: memoryPlatform,
       });
     },
 
-    exportMemories(): Promise<ExportMemoriesResponse> {
-      return memoryClient.exportMemories({});
+    exportMemories(scope = '', groupId = ''): Promise<ExportMemoriesResponse> {
+      return memoryClient.exportMemories({ scope, groupId, platform: memoryPlatform });
     },
 
     importMemories(
       jsonContent: string,
       overwrite: boolean,
+      scope = '',
+      groupId = '',
     ): Promise<ImportMemoriesResponse> {
-      return memoryClient.importMemories({ jsonContent, overwrite });
+      return memoryClient.importMemories({ jsonContent, overwrite, scope, groupId, platform: memoryPlatform });
     },
 
-    triggerMemoryReflection(owner = ''): Promise<TriggerReflectionResponse> {
-      return memoryClient.triggerReflection({ owner });
+    triggerMemoryReflection(owner = '', scope = '', groupId = ''): Promise<TriggerReflectionResponse> {
+      return memoryClient.triggerReflection({ owner, scope, groupId, platform: memoryPlatform });
+    },
+
+    listGroups(): Promise<ListGroupsResponse> {
+      return memoryClient.listGroups({});
+    },
+
+    getGroupProfile(groupId: string): Promise<GetGroupProfileResponse> {
+      return memoryClient.getGroupProfile({ groupId, platform: memoryPlatform });
+    },
+
+    updateGroupProfile(groupId: string, groupName: string): Promise<UpdateGroupProfileResponse> {
+      return memoryClient.updateGroupProfile({ groupId, groupName, platform: memoryPlatform });
+    },
+
+    updateMemberProfile(
+      groupId: string,
+      userId: string,
+      preferredName: string,
+      aliases: string[],
+    ): Promise<UpdateMemberProfileResponse> {
+      return memoryClient.updateMemberProfile({ groupId, userId, preferredName, aliases, platform: memoryPlatform });
     },
 
     // Dialogue Examples
@@ -439,11 +957,15 @@ export function createInstanceAPI() {
       pageToken = '',
       statusFilter = '',
       search = '',
+      sortBy = '',
+      descending = false,
     ): Promise<ListStickersResponse> {
       return stickerClient.listStickers({
         pagination: { pageSize, pageToken },
         statusFilter,
         search,
+        sortBy,
+        descending,
       });
     },
 
@@ -517,6 +1039,71 @@ export function createInstanceAPI() {
     },
     syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
       return mcpClient.syncMCPServer({ id });
+    },
+
+    // ActionsCat
+    getActionsCatStatus(): Promise<ActionsCatStatus> {
+      return actionsCatAPI.getStatus();
+    },
+    listActionsCatActions(): Promise<ActionsCatAction[]> {
+      return actionsCatAPI.listActions();
+    },
+    createActionsCatAction(req: CreateActionRequest): Promise<ActionsCatAction> {
+      return actionsCatAPI.createAction(req);
+    },
+    getActionCatAction(actionID: string): Promise<ActionsCatAction> {
+      return actionsCatAPI.getAction(actionID);
+    },
+    triggerActionsCatRun(
+      actionID: string,
+      req?: TriggerActionRunRequest,
+    ): Promise<ActionsCatRun> {
+      return actionsCatAPI.triggerRun(actionID, req);
+    },
+    listActionsCatRuns(
+      actionID: string,
+      limit = 50,
+      offset = 0,
+    ): Promise<ActionsCatRun[]> {
+      return actionsCatAPI.listRuns(actionID, limit, offset);
+    },
+    getActionsCatRun(actionID: string, runID: string): Promise<ActionsCatRun> {
+      return actionsCatAPI.getRun(actionID, runID);
+    },
+    getActionsCatRunLogs(
+      actionID: string,
+      runID: string,
+    ): Promise<ActionsCatRunLogs> {
+      return actionsCatAPI.getRunLogs(actionID, runID);
+    },
+    dispatchActionsCat(
+      payload: Record<string, unknown>,
+    ): Promise<{ ok: boolean }> {
+      return actionsCatAPI.dispatch(payload);
+    },
+    listActionsCatSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
+      return actionsCatAPI.listSchedules(actionID);
+    },
+    createActionsCatSchedule(
+      actionID: string,
+      req: CreateScheduleRequest,
+    ): Promise<ActionsCatSchedule> {
+      return actionsCatAPI.createSchedule(actionID, req);
+    },
+    deleteActionsCatSchedule(scheduleID: string): Promise<{ ok: boolean }> {
+      return actionsCatAPI.deleteSchedule(scheduleID);
+    },
+    listActionsCatMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
+      return actionsCatAPI.listMatchers(actionID);
+    },
+    createActionsCatMatcher(
+      actionID: string,
+      req: CreateMatcherRequest,
+    ): Promise<ActionsCatMatcher> {
+      return actionsCatAPI.createMatcher(actionID, req);
+    },
+    deleteActionsCatMatcher(matcherID: string): Promise<{ ok: boolean }> {
+      return actionsCatAPI.deleteMatcher(matcherID);
     },
   };
 }

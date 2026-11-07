@@ -1,0 +1,20 @@
+# Standalone alternative for Linux host networking (not a bridge override).
+# Docker Desktop requires explicit host-network support; see README.
+services:
+  frostagent:
+    build:
+      context: .
+      args:
+        DOCKER_LISTEN_ADDR: "127.0.0.1:8080"
+        DOCKER_MANAGEMENT_LOOPBACK_ONLY: "true"
+        DOCKER_WS_LISTEN_ADDR: "127.0.0.1:11023"
+    image: frostagent:host
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    network_mode: host
+    volumes:
+      - frostagent-data:/app/data
+
+volumes:
+  frostagent-data:

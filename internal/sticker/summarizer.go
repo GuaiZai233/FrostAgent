@@ -1,11 +1,11 @@
 package sticker
 
 import (
-	"FrostAgent/internal/logs"
-	"FrostAgent/internal/runtimescope"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"os"
 	"strings"
 	"sync"
