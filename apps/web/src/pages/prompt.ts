@@ -535,18 +535,25 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     toggleEditorLabel.textContent = isEditorExpanded ? '收起输入' : '自定义输入';
   });
 
-  applyInputBtn.addEventListener('click', async () => {
+  const applyParsedInput = (value: string) => {
+    if (isUnmounted) return;
+    sessionContextRequestSeq += 1;
+    currentPromptText = value;
+    renderInspector(parsePrompt(value, botName), '自定义输入 Prompt');
+    toast.success('已更新 Prompt 检查视图');
+  };
+
+  applyInputBtn.addEventListener('click', () => {
     const val = rawInput.value.trim();
     if (!val) {
       toast.info('输入为空');
       return;
     }
-    await botNameReady;
-    if (isUnmounted) return;
-    sessionContextRequestSeq += 1;
-    currentPromptText = val;
-    renderInspector(parsePrompt(currentPromptText, botName), '自定义输入 Prompt');
-    toast.success('已更新 Prompt 检查视图');
+    if (botNameLoaded) {
+      applyParsedInput(val);
+      return;
+    }
+    void botNameReady.then(() => applyParsedInput(val));
   });
 
   clearInputBtn.addEventListener('click', () => {

@@ -20,6 +20,8 @@ func TestContainsBotName(t *testing.T) {
 		{"Chinese spaces ignored", "霜 降你好", []string{"霜降"}, true},
 		{"Chinese alias spaces ignored", "霜降你好", []string{"霜 降"}, true},
 		{"numeric spaces ignored", "1 2 3", []string{"123"}, true},
+		{"numeric alias exact", "123", []string{"123"}, true},
+		{"numeric alias not inside larger number", "3123", []string{"123"}, false},
 		{"literal punctuation", "F R O S T . B O T", []string{"Frost.Bot"}, true},
 		{"punctuation is not wildcard", "frostXbot", []string{"Frost.Bot"}, false},
 		{"regex alias literal", "普通聊天", []string{".*"}, false},

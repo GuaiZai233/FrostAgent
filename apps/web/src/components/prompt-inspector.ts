@@ -49,18 +49,49 @@ export const DEFAULT_BOT_NAME = '助手';
 /** Default aliases used to recognize bot-authored sender lines. */
 export const DEFAULT_BOT_ALIASES = ['Assistant', 'Bot'];
 
+const ZS_PATTERN = /\p{Zs}/u;
+
 function normalizeBotIdentity(value: string): string {
-  return value.toLowerCase().replace(/\s+/g, '');
+  return value.toLowerCase().replace(/\p{Zs}/gu, '');
+}
+
+function isASCIIAlphanumericName(value: string): boolean {
+  return value.length > 0 && /^[a-z0-9]+$/.test(value);
+}
+
+function isASCIIWordChar(value: string): boolean {
+  return /^[a-z0-9_\-[\]]$/i.test(value);
+}
+
+function startsWithASCIIWord(value: string, word: string): boolean {
+  const runes = Array.from(value);
+  const wordRunes = Array.from(word);
+  let wordIndex = 0;
+  let lastMatched = -1;
+  for (let i = 0; i < runes.length && wordIndex < wordRunes.length; i += 1) {
+    const rune = runes[i];
+    if (ZS_PATTERN.test(rune)) continue;
+    if (rune.toLowerCase() !== wordRunes[wordIndex]) return false;
+    lastMatched = i;
+    wordIndex += 1;
+  }
+  if (wordIndex !== wordRunes.length) return false;
+  const next = runes[lastMatched + 1];
+  return next === undefined || !isASCIIWordChar(next);
 }
 
 function looksLikeAssistantIdentity(value: string, botName?: string): boolean {
-  const normalized = normalizeBotIdentity(value.trim());
-  if (!normalized) return false;
   const candidates = [botName, DEFAULT_BOT_NAME, ...DEFAULT_BOT_ALIASES]
     .filter((candidate): candidate is string => typeof candidate === 'string')
     .map(normalizeBotIdentity)
     .filter(Boolean);
-  return candidates.some((candidate) => normalized.startsWith(candidate));
+  const normalizedValue = normalizeBotIdentity(value);
+  const trimmedValue = value.trim();
+  return candidates.some((candidate) =>
+    isASCIIAlphanumericName(candidate)
+      ? startsWithASCIIWord(trimmedValue, candidate)
+      : normalizedValue.startsWith(candidate),
+  );
 }
 
 export interface ParsedPrompt {

@@ -8,6 +8,12 @@ import {
 import { isGroupSession, isPrivateSession } from '../src/utils/formatters';
 
 assert.equal(parseMessageLine('Configured Fox: hi', 'Configured Fox').role, 'assistant');
+assert.equal(parseMessageLine('Fox: hi', 'Fox').role, 'assistant');
+assert.equal(parseMessageLine('Foxconn: hi', 'Fox').role, 'user');
+assert.equal(parseMessageLine('Bot Master: hi').role, 'assistant');
+assert.equal(parseMessageLine('Botanical: hi').role, 'user');
+assert.equal(parseMessageLine('123: hi', '123').role, 'assistant');
+assert.equal(parseMessageLine('1234: hi', '123').role, 'user');
 assert.equal(parseMessageLine('assistant: hi').role, 'assistant');
 assert.equal(parseMessageLine('路人: hi').role, 'user');
 

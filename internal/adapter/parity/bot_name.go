@@ -36,18 +36,16 @@ func ContainsBotName(text string, names []string) bool {
 }
 
 func isASCIIAlphanumericName(value string) bool {
-	hasLetter := false
+	if value == "" {
+		return false
+	}
 	for i := 0; i < len(value); i++ {
 		c := value[i]
-		switch {
-		case c >= 'a' && c <= 'z':
-			hasLetter = true
-		case c >= '0' && c <= '9':
-		default:
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
 			return false
 		}
 	}
-	return hasLetter
+	return true
 }
 
 func containsASCIIWord(text, word string) bool {
