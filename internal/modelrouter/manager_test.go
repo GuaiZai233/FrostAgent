@@ -43,6 +43,27 @@ func TestFollowDialogueUsesEffectiveGroupDialogue(t *testing.T) {
 	}
 }
 
+func TestResolvedTargetCarriesModelCapabilities(t *testing.T) {
+	cfg := defaultConfiguration()
+	cfg.Endpoints = []Endpoint{{ID: "endpoint", DisplayName: "Endpoint", BaseURL: "https://example.com/v1", Enabled: true}}
+	cfg.Models = []Model{{
+		ID: "dialogue", DisplayName: "Dialogue", EndpointID: "endpoint", UpstreamModel: "dialogue", Enabled: true,
+		Capabilities: []string{"text", "Vision"},
+	}}
+	cfg.GlobalBindings[WorkloadDialogue] = Binding{Mode: BindingModel, ModelID: "dialogue"}
+
+	target, err := resolveConfiguration(cfg, WorkloadDialogue, Scope{Platform: "onebot"})
+	if err != nil {
+		t.Fatalf("resolve dialogue: %v", err)
+	}
+	if !target.HasCapability(" vision ") {
+		t.Fatalf("resolved target lost vision capability: %+v", target.Capabilities)
+	}
+	if target.HasCapability("audio") {
+		t.Fatal("unexpected audio capability")
+	}
+}
+
 func TestGroupOverridePlatformParity(t *testing.T) {
 	cfg := defaultConfiguration()
 	cfg.Endpoints = []Endpoint{{ID: "endpoint", DisplayName: "Endpoint", BaseURL: "https://example.com/v1", Enabled: true}}

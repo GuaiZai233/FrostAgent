@@ -10,9 +10,11 @@ Bot 连续对话防循环由后端按会话为每个标记 Bot 独立累计额�
 
 ## 名称与别名的文本匹配
 
-OneBot 和 AstrBot 后端对 `BOT_NAME` 与 `BOT_ALIASES` 使用相同的字面子串匹配规则。名称或别名包含英文字母时，匹配双方忽略英文字母大小写和空格（含全角空格），例如 `FrostAgent`、`frostagent`、`FROST AGENT` 与 `Frost Agent` 等价；中英混合别名也适用。纯中文等不含英文字母的名称仍按字面匹配。
+OneBot 和 AstrBot 后端对 `BOT_NAME` 与 `BOT_ALIASES` 使用相同的字面子串匹配规则。匹配双方忽略英文字母大小写和空格（含全角空格），例如 `FrostAgent`、`frostagent`、`FROST AGENT` 与 `Frost Agent` 等价；纯中文、中英混合及纯数字别名同样忽略空格。纯 ASCII 字母数字名称只在 ASCII 词边界命中，方括号角色标签（如 `[assistant]`）、连字符、下划线及更大英文单词（如 `AstrBot`、`chatbot`）都不会误唤醒。未配置时默认名称为 `助手`，默认别名为 `Assistant,Bot`。
 
 标点符号不作为正则表达式，制表符、换行和消息段边界不会被忽略；匹配过程不修改配置值或消息正文。
+
+名称/别名唤醒命中后，适配器会在本轮 `response_context`/`system_context` 中注入核对语义的 guidance：要求模型确认用户确实在呼唤 Bot，而不是其他含义；若不确定则调用 `stay_silent` 保持沉默，避免答非所问。
 
 ## 运行信息诊断例外
 

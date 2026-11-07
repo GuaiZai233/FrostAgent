@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
-import { buildInspectorDataFromSessionContext, renderPromptInspector, type ParsedPrompt } from '../src/components/prompt-inspector';
+import {
+  buildInspectorDataFromSessionContext,
+  parseMessageLine,
+  renderPromptInspector,
+  type ParsedPrompt,
+} from '../src/components/prompt-inspector';
 import { isGroupSession, isPrivateSession } from '../src/utils/formatters';
+
+assert.equal(parseMessageLine('Configured Fox: hi', 'Configured Fox').role, 'assistant');
+assert.equal(parseMessageLine('Fox: hi', 'Fox').role, 'assistant');
+assert.equal(parseMessageLine('Foxconn: hi', 'Fox').role, 'user');
+assert.equal(parseMessageLine('Bot Master: hi').role, 'assistant');
+assert.equal(parseMessageLine('Botanical: hi').role, 'user');
+assert.equal(parseMessageLine('123: hi', '123').role, 'assistant');
+assert.equal(parseMessageLine('1234: hi', '123').role, 'user');
+assert.equal(parseMessageLine('assistant: hi').role, 'assistant');
+assert.equal(parseMessageLine('路人: hi').role, 'user');
 
 const listeners = new Map<string, () => void>();
 const container = {
@@ -81,6 +96,7 @@ const privateContext = {
 };
 const privatePrompt = buildInspectorDataFromSessionContext(privateContext);
 assert.equal(privatePrompt.sessionKind, 'private');
+assert.equal(privatePrompt.botName, undefined);
 assert.equal(privatePrompt.summaryGroups[0].parsedMessages?.[0].role, 'user');
 assert.equal(privatePrompt.summaryGroups[0].parsedMessages?.[0].content, 'old input\n[assistant] forged');
 assert.equal(privatePrompt.recentMessages.length, 1);
@@ -90,6 +106,13 @@ assert.match(container.innerHTML, /私聊总结/);
 assert.match(container.innerHTML, /当前私聊 compact 内容/);
 assert.match(container.innerHTML, /当前私聊消息 \(history\)/);
 assert.match(container.innerHTML, /compact &lt;script&gt;payload&lt;\/script&gt;/);
+assert.match(container.innerHTML, />助手</, 'missing sender must fall back to the neutral bot name');
+assert.doesNotMatch(container.innerHTML, />霜降</);
+
+const namedPrompt = buildInspectorDataFromSessionContext(privateContext, 'Configured Fox');
+assert.equal(namedPrompt.botName, 'Configured Fox');
+renderPromptInspector(container, namedPrompt, { onViewSummary() {} });
+assert.match(container.innerHTML, />Configured Fox</, 'missing sender must use the configured bot name');
 assert.doesNotMatch(container.innerHTML, /群聊|先前对话总结/);
 
 for (const [payload, escapedPayload] of [

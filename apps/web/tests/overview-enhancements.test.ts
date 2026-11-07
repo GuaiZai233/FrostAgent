@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { renderOverviewTools } from '../src/pages/overview-tools';
+import { renderOverviewTools, renderOverviewToolsAction } from '../src/pages/overview-tools';
 import { renderInstanceLabel, renderInstanceStatus } from '../src/components/instance-label';
 import { instanceState } from '../src/instance-state';
 
@@ -12,12 +12,13 @@ for (const count of [1, 10]) {
   const html = renderOverviewTools(tools.slice(0, count));
   assert.equal((html.match(/<article /g) || []).length, count);
   assert.doesNotMatch(html, /overview-all-tools/);
+  assert.equal(renderOverviewToolsAction(count), '');
 }
 const preview = renderOverviewTools(tools);
 assert.equal((preview.match(/<article /g) || []).length, 10);
-assert.match(preview, /展示所有/);
+assert.doesNotMatch(preview, /展示所有/);
 assert.doesNotMatch(preview, /tool_10/);
-assert.ok(preview.lastIndexOf('展示所有') > preview.lastIndexOf('</article>'));
+assert.match(renderOverviewToolsAction(tools.length), /展示所有/);
 const all = renderOverviewTools(tools, false);
 assert.equal((all.match(/<article /g) || []).length, 12);
 assert.match(all, /tool_11/);

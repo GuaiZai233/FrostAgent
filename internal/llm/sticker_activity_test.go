@@ -5,6 +5,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,63 @@ import (
 type stickerActivityProvider struct {
 	responses []core.ChatMessage
 	requests  []core.ChatRequest
+}
+
+func TestStickerActivityNoticePreservesImageParts(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "10")
+	t.Setenv(sticker.ActivityModeEnvKey, sticker.ActivityBotTurns)
+	image := core.ContentPart{Type: "image_url", ImageURL: &core.ImageURL{URL: "data:image/gif;base64,R0lGODlh"}}
+	for _, tc := range []struct {
+		name  string
+		parts []core.ContentPart
+	}{
+		{"image only", []core.ContentPart{image}},
+		{"image before text", []core.ContentPart{image, {Type: "text", Text: "current text"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &stickerActivityProvider{responses: []core.ChatMessage{{
+				Role: core.RoleAssistant,
+				ToolCalls: []core.ToolCall{{ID: "synthetic-call", Type: "function", Function: core.ToolCallFunction{
+					Name: "fixture", Arguments: `{}`,
+				}}},
+			}}}
+			engine := &Engine{Provider: provider, ToolRegistry: map[string]ToolExecutor{
+				"send_sticker": &staticTool{name: "send_sticker"},
+				"fixture":      &staticTool{name: "fixture"},
+			}}
+			original := append([]core.ContentPart(nil), tc.parts...)
+			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: tc.parts}}, RunContext{})
+			if result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			if len(provider.requests) != 2 {
+				t.Fatalf("requests=%d, want 2", len(provider.requests))
+			}
+			imageIndex, textIndex := 0, 1
+			wantText := engine.stickerActivityPrompt() + "\n\ncurrent text"
+			if tc.name == "image only" {
+				imageIndex, textIndex = 1, 0
+				wantText = engine.stickerActivityPrompt()
+			}
+			for round, req := range provider.requests {
+				for _, message := range req.Messages {
+					if message.Role != core.RoleUser {
+						continue
+					}
+					parts, ok := message.Content.([]core.ContentPart)
+					if !ok || len(parts) != 2 {
+						t.Fatalf("round %d lost multimodal content: %+v", round, message)
+					}
+					if parts[textIndex].Type != "text" || parts[textIndex].Text != wantText || !reflect.DeepEqual(parts[imageIndex], image) {
+						t.Fatalf("round %d notice or image changed: %+v", round, parts)
+					}
+				}
+			}
+			if !reflect.DeepEqual(tc.parts, original) {
+				t.Fatalf("caller content mutated: %+v", tc.parts)
+			}
+		})
+	}
 }
 
 func (p *stickerActivityProvider) Chat(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -40,7 +98,7 @@ func TestStickerActivityIntervalsAndGrace(t *testing.T) {
 		}
 	}
 	t.Setenv(sticker.ActivityEnvKey, "10")
-	e := &Engine{}
+	e := &Engine{ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
@@ -70,7 +128,7 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 		{Role: core.RoleAssistant, Content: "third"},
 		{Role: core.RoleAssistant, Content: "after forgiveness"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
@@ -92,7 +150,7 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 		t.Fatal("missing transient countdown")
 	}
 	last := p.requests[3]
-	if len(last.Tools) != 0 {
+	if len(last.Tools) != 1 || last.Tools[0].Name != "send_sticker" {
 		t.Fatal("internal forgiveness changed tool schemas")
 	}
 	var sawToolCall, sawReply bool
@@ -118,7 +176,7 @@ func TestStickerEnforcementMarkerForgivesImmediately(t *testing.T) {
 		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
 		{Role: core.RoleAssistant, Content: "ordinary reply"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
@@ -138,7 +196,7 @@ func TestStickerEnforcementConflictStillReachesForgiveness(t *testing.T) {
 		conflict, conflict, conflict,
 		{Role: core.RoleAssistant, Content: "after forgiveness"},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 5 {
 		e.RecordBotTurn()
 	}
@@ -415,7 +473,7 @@ func TestConcurrentStickerTurnsCountOnceEach(t *testing.T) {
 func TestStickerActivityCountModesAndReset(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	t.Setenv(sticker.ActivityModeEnvKey, "")
-	e := &Engine{}
+	e := &Engine{ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 3 {
 		e.RecordIncomingMessage()
 	}
@@ -479,7 +537,7 @@ func TestBillingReceiptOnlyFinalUsesStickerQuota(t *testing.T) {
 		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
 		{Role: core.RoleAssistant},
 	}}
-	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{}}
+	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
