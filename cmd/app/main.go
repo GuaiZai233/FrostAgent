@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
+	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
 	"github.com/GuaiZai233/FrostAgent/internal/frontend"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/updatecheck"
 	"maps"
 	"net/http"
 	"os"
@@ -148,9 +150,17 @@ func restoreGlobalSettings(global *instanceconfig.Store, previous map[string]str
 }
 
 func managementMux(manager http.Handler) http.Handler {
+	return managementMuxWithUpdateSource(manager, updatecheck.Source{
+		Current: updatecheck.Build{Display: buildinfo.DisplayVersion(), Version: buildinfo.Version, Commit: buildinfo.SourceCommit()},
+	})
+}
+
+func managementMuxWithUpdateSource(manager http.Handler, source updatecheck.Source) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/storage", manager)
 	mux.Handle("/api/instances", manager)
+	mux.Handle("/api/update-check", managementReadHandler(manager, updatecheck.Handler(source)))
+	mux.Handle("/api/version", managementReadHandler(manager, updatecheck.VersionHandler(source)))
 	if gateway, ok := manager.(interface{ SecurityHandler() http.Handler }); ok {
 		mux.Handle("/api/security/", gateway.SecurityHandler())
 	} else if registry, ok := manager.(*instance.Manager); ok {

@@ -37,3 +37,19 @@ func TestDisplayVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestSourceCommitRetainsFullRevision(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	vcs := &debug.BuildInfo{Settings: []debug.BuildSetting{{Key: "vcs.revision", Value: sha}}}
+	for _, tc := range []struct {
+		commit string
+		info   *debug.BuildInfo
+		want   string
+	}{
+		{strings.ToUpper(sha), nil, sha}, {"invalid", vcs, sha}, {"", vcs, sha}, {sha[:7], nil, ""}, {"", nil, ""},
+	} {
+		if got := sourceCommit(tc.commit, tc.info); got != tc.want {
+			t.Fatalf("sourceCommit = %q, want %q", got, tc.want)
+		}
+	}
+}

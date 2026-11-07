@@ -1,6 +1,7 @@
 import { instanceState } from './instance-state';
 import { openInstanceManagement } from './components/instances';
 import { renderInstanceLabel } from './components/instance-label';
+import { mountInstanceRequired } from './components/instance-required';
 import logoURL from '../../../assets/logo.png';
 import { mountAuthenticatedResources } from './components/authenticated-resources';
 import './styles/app.css';
@@ -284,6 +285,7 @@ function initAppShell(): void {
   router.register('/dialogue', '人格设定', mountDialoguePage);
   router.register('/prompt', '会话与 Prompt', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
+  router.register('/chat', '直接对话', mountChatPage);
   router.register('/skills', 'Skills', mountSkillsPage);
   router.register('/logs', '日志查询', mountLogsPage);
   router.register('/settings', '系统设置', mountSettingsPage);
@@ -314,31 +316,21 @@ function initAppShell(): void {
 
   const register = router.register.bind(router);
   const guardedPaths = [
-    '/overview',
     '/connections',
-    '/sessions',
-    '/memory',
     '/dialogue',
-    '/prompt',
-    '/stickers',
     '/mcp',
     '/actionscat',
-    '/chat',
     '/settings/backend',
+    '/settings/behavior',
     '/settings/backup',
     '/settings/commands',
   ];
   const mounts = [
-    mountOverviewPage,
     mountConnectionsPage,
-    mountPromptPage,
-    mountMemoryPage,
     mountDialoguePage,
-    mountPromptPage,
-    mountStickersPage,
     mountMCPPage,
     mountActionsCatPage,
-    mountChatPage,
+    mountBackendSettingsPage,
     mountBackendSettingsPage,
     mountBackupRestorePage,
     mountCommandSettingsPage,
@@ -349,10 +341,8 @@ function initAppShell(): void {
       navItems.find((n) => n.path === path)?.label || '设置',
       (container) => {
         if (instanceState.selected) return mounts[index](container);
-        container.innerHTML = `<div class="page-container"><article class="card p-6"><h1 class="page-title">请选择实例</h1><p class="text-sm text-muted mt-1">FrostAgent Control Plane 正在运行。创建或选择实例后，即可管理它的配置与数据。</p><button class="btn btn-primary mt-4" id="empty-manage">实例管理</button></article></div>`;
-        container
-          .querySelector('#empty-manage')!
-          .addEventListener('click', () => void openInstanceManagement());
+        container.innerHTML = '<div class="page-container"></div>';
+        mountInstanceRequired(container.firstElementChild as HTMLElement);
       },
     ),
   );
