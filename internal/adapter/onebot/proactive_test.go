@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/gorilla/websocket"
 )
 
@@ -113,7 +114,7 @@ func TestDetectGroupWakeSignalsProactive(t *testing.T) {
 			GroupID:     10001,
 			UserID:      20001,
 			SelfID:      30001,
-			Message:     json.RawMessage(`[{"type":"text","data":{"text":"霜降狐 你好呀"}}]`),
+			Message:     json.RawMessage(`[{"type":"text","data":{"text":"助手 你好呀"}}]`),
 		}
 		scope := newTestScopeWithEnv(t, map[string]string{
 			"PROACTIVE_REPLY_PROBABILITY": "1.00",
@@ -139,6 +140,24 @@ func TestBuildResponseContextWithProactive(t *testing.T) {
 	}
 	if !strings.Contains(ctxStr, proactive.PromptPrefix[:10]) && !strings.Contains(ctxStr, "stay_silent") {
 		t.Fatalf("expected silence guidance in response context: %s", ctxStr)
+	}
+}
+
+func TestBuildResponseContextWithAliasGuidance(t *testing.T) {
+	event := model.OneBotEvent{
+		MessageType: "group",
+		GroupID:     10001,
+	}
+	ctxStr := buildResponseContext(event, GroupWakeSignals{Alias: true}, false)
+	if !strings.Contains(ctxStr, parity.AliasWakeGuidance) {
+		t.Fatalf("expected alias guidance in response context, got: %s", ctxStr)
+	}
+	if !strings.Contains(ctxStr, `"alias"`) {
+		t.Fatalf("expected alias trigger in response context, got: %s", ctxStr)
+	}
+	noAlias := buildResponseContext(event, GroupWakeSignals{}, false)
+	if strings.Contains(noAlias, parity.AliasWakeGuidance) {
+		t.Fatalf("alias guidance must not appear without an alias wake: %s", noAlias)
 	}
 }
 

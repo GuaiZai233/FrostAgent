@@ -2776,7 +2776,7 @@ func TestWSGroupMessage_AssistantReplyAppendedOnSendSuccess(t *testing.T) {
 		if strings.Contains(m, "[user] 测试群友 (1234567):") && strings.Contains(m, "你好呀") {
 			foundUser = true
 		}
-		if strings.Contains(m, "[assistant] 霜降狐: 你好呀！我是霜降，很高兴认识大家~") {
+		if strings.Contains(m, "[assistant] 助手: 你好呀！我是霜降，很高兴认识大家~") {
 			foundAssistant = true
 		}
 	}

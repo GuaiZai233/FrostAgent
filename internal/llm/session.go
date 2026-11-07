@@ -43,7 +43,7 @@ func (m GroupCompactMessage) FormatDisplay() string {
 	if m.Role == "assistant" {
 		botName := m.Sender
 		if botName == "" {
-			botName = "霜降"
+			botName = "助手"
 		}
 		return fmt.Sprintf("[assistant] %s: %s", botName, body)
 	}
