@@ -7,6 +7,9 @@ import "frostagent/v1/common.proto";
 // BotStatusService provides bot overview and session management.
 service BotStatusService {
   rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
+  rpc SetToolEnabled(SetToolEnabledRequest) returns (SetToolEnabledResponse);
+  rpc GetBalanceQueryConfig(GetBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
+  rpc SaveBalanceQueryConfig(SaveBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
@@ -21,6 +24,38 @@ enum BotStatus {
 }
 
 message GetOverviewRequest {}
+
+message SetToolEnabledRequest {
+  string name = 1;
+  bool enabled = 2;
+}
+
+message SetToolEnabledResponse {}
+
+message GetBalanceQueryConfigRequest {}
+
+message SaveBalanceQueryConfigRequest {
+  string curl = 1;
+  // Write-only. Empty preserves the existing manually configured key.
+  string api_key = 2;
+  reserved 3;
+  reserved "clear_api_key";
+  // Published provider whose current credential is resolved by the backend.
+  string provider_id = 4;
+}
+
+message BalanceQueryConfigResponse {
+  string curl = 1;
+  bool api_key_configured = 2;
+  string provider_id = 3;
+  repeated BalanceQueryProvider providers = 4;
+}
+
+message BalanceQueryProvider {
+  string id = 1;
+  string display_name = 2;
+  bool available = 3;
+}
 
 message GetOverviewResponse {
   string bot_name = 1;

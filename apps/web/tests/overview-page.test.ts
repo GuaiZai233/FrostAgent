@@ -20,14 +20,25 @@ const source = { ...instance, id: 'fixture-b', name: 'Source' };
 let pending: (() => void) | undefined;
 let deferOverview = false;
 let overviewLoads = 0;
-globalThis.fetch = async (input) => {
+let toolEnabled = true;
+let rejectToggle = false;
+let toggleCalls = 0;
+globalThis.fetch = async (input, init) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
   if (path === '/api/version') return Response.json({ display: 'synthetic-version', version: '', commit: '' });
   if (path === '/api/instances') return Response.json({ instances: [instance, source], next_name: 'Example' });
+  if (path.endsWith('/SetToolEnabled')) {
+    toggleCalls++;
+    if (rejectToggle) return Response.json({ code: 'internal', message: 'synthetic failure' }, { status: 500 });
+    const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
+    assert.equal(body.name, 'tool-0');
+    toolEnabled = body.enabled ?? false;
+    return Response.json({});
+  }
   assert.ok(path.endsWith('/GetOverview'), path);
   overviewLoads++;
   if (deferOverview) await new Promise<void>((resolve) => { pending = resolve; });
-  return Response.json({ tokenUsage: { available: true, modules: [{ module: 'dialogue', requests: '1', total: { value: '15' } }] }, status: 2, botName: 'Example', uptimeSeconds: '1', totalMessagesProcessed: '3', tools: Array.from({ length: 16 }, (_, i) => ({ name: `tool-${i}`, description: '<img src=x onerror=alert(1)> Example' })) });
+  return Response.json({ tokenUsage: { available: true, modules: [{ module: 'dialogue', requests: '1', total: { value: '15' } }] }, status: 2, botName: 'Example', uptimeSeconds: '1', totalMessagesProcessed: '3', tools: Array.from({ length: 16 }, (_, i) => ({ name: `tool-${i}`, description: '<img src=x onerror=alert(1)> Example', enabled: i === 0 ? toolEnabled : true, available: true })) });
 };
 const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
 
@@ -48,6 +59,24 @@ try {
   await flush();
   assert.equal(root.querySelector<HTMLElement>('.token-usage-table-wrap')!.scrollLeft, 240, 'polling must preserve usage scroll');
   assert.equal(document.activeElement?.classList.contains('token-usage-table-wrap'), true, 'polling must preserve table keyboard focus');
+  const firstCard = root.querySelector<HTMLElement>('#overview-tools-strip article')!;
+  firstCard.click();
+  assert.equal(document.querySelectorAll('dialog').length, 0, 'unconfigurable cards must not open a dialog');
+  assert.equal(firstCard.querySelector('[data-tool-config]'), null);
+  let toggle = firstCard.querySelector<HTMLInputElement>('[data-tool-toggle]')!;
+  toggle.click();
+  await flush();
+  assert.equal(toolEnabled, false, 'switch must save the disabled state');
+  assert.equal(toggleCalls, 1);
+  rejectToggle = true;
+  toggle.click();
+  await flush();
+  assert.equal(toggle.checked, false, 'failed save must restore the prior switch state');
+  rejectToggle = false;
+  toggle.focus();
+  tick();
+  await flush();
+  assert.equal((document.activeElement as HTMLElement)?.dataset.toolToggle, 'tool-0', 'polling must preserve switch keyboard focus');
   const versionControl = root.querySelector<HTMLButtonElement>('#check-updates')!;
   assert.equal(root.querySelectorAll('#build-version').length, 1, 'header must have a single version badge');
   assert.equal(root.querySelector('#build-version')!.textContent, 'synthetic-version');
@@ -58,6 +87,8 @@ try {
   assert.equal(root.querySelector('#check-updates'), versionControl, 'polling must not replace the version control');
   assert.equal(document.activeElement, versionControl, 'polling must preserve keyboard focus on update control');
   let rail = root.querySelector<HTMLElement>('#overview-tools-strip')!;
+  assert.equal(rail.querySelector('#overview-all-tools'), null, 'show all must not require scrolling through the tool cards');
+  assert.ok(root.querySelector('#overview-tools > div:first-child > #overview-all-tools:last-child'), 'show all must be at the right end of the tools heading');
   rail.scrollLeft = 512;
   root.querySelector<HTMLButtonElement>('#overview-all-tools')!.focus();
   tick();
@@ -67,6 +98,12 @@ try {
   assert.equal(document.activeElement?.id, 'overview-all-tools', 'polling must preserve tool-list keyboard focus');
   root.querySelector<HTMLButtonElement>('#overview-all-tools')!.click();
   assert.equal(document.querySelectorAll('dialog .overview-all-tools article').length, 16);
+  toggle = document.querySelector<HTMLInputElement>('dialog [data-tool-toggle="tool-0"]')!;
+  assert.equal(toggle.checked, false, 'disabled card must remain in all-tools dialog');
+  toggle.click();
+  await flush();
+  assert.equal(toolEnabled, true, 'all-tools dialog switch must save');
+  assert.equal(root.querySelector<HTMLInputElement>('[data-tool-toggle="tool-0"]')!.checked, true, 'preview and dialog switches must agree');
   cleanup();
   assert.equal(document.querySelectorAll('dialog').length, 0, 'leaving overview must close its tool dialog');
 

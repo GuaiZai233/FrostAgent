@@ -43,7 +43,10 @@ func FormatEnvEntry(key, value string) (string, error) {
 	if canBeUnquoted {
 		formatted = key + "=" + value
 	} else if canBeSingleQuoted && startsQuote {
-		formatted = key + "='" + value + "'"
+		// This branch excludes apostrophes. Escape defensively as well so the
+		// quoted substring stays safe if the branch conditions are extended.
+		quotedValue := strings.ReplaceAll(value, "'", `\'`)
+		formatted = key + "='" + quotedValue + "'"
 	} else {
 		var b strings.Builder
 		b.WriteString(key)
