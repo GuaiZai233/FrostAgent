@@ -75,9 +75,16 @@ func TestPostgresTokenUsagePersistence(t *testing.T) {
 	if got := row(t, other, "embedding"); got.Requests != 0 {
 		t.Fatal("instance isolation failed")
 	}
-	// Invalid accounting metadata exercises the immediate SQL failure marker.
-	if err := a.Record("unsupported", nil); err == nil {
-		t.Fatal("invalid module accepted")
+	// PostgreSQL aborts a transaction on a statement error. The marker must
+	// be written only after rollback, without waiting for another response.
+	if _, err := db.SQL.Exec(`ALTER TABLE settings ADD CONSTRAINT reject_usage CHECK (scope <> 'token_usage' OR key <> 'dialogue')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Record("dialogue", nil); err == nil {
+		t.Fatal("expected SQL accounting failure")
+	}
+	if _, err := db.SQL.Exec(`ALTER TABLE settings DROP CONSTRAINT reject_usage`); err != nil {
+		t.Fatal(err)
 	}
 	reopened, _ := New(db, "synthetic-a", "")
 	snap, err := reopened.Snapshot(context.Background())
