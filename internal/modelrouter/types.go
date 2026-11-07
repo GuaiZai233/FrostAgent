@@ -110,6 +110,23 @@ type Target struct {
 	BaseURL             string
 	UpstreamModel       string
 	MaxInputTokens      int
+	Capabilities        []string
+}
+
+// HasCapability reports whether the resolved model advertises a capability.
+// Capability labels are administrator metadata, so matching ignores case and
+// surrounding whitespace.
+func (t Target) HasCapability(capability string) bool {
+	want := strings.ToLower(strings.TrimSpace(capability))
+	if want == "" {
+		return false
+	}
+	for _, value := range t.Capabilities {
+		if strings.ToLower(strings.TrimSpace(value)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 type EffectiveBinding struct {
