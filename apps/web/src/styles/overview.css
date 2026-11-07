@@ -21,9 +21,19 @@
   position: relative;
 }
 
-.overview-tool-heading h3 {
+.overview-tool-name {
   flex: 1;
   min-width: 0;
+}
+
+.overview-tool-configurable {
+  display: block;
+  margin-top: 0.125rem;
+}
+
+#balance-query-providers[hidden],
+#balance-query-manual-key[hidden] {
+  display: none;
 }
 
 .overview-tool-toggle {

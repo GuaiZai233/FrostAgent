@@ -15,9 +15,12 @@ const (
 )
 
 type Config struct {
-	Curl   string `json:"curl"`
-	APIKey string `json:"api_key"`
+	Curl       string `json:"curl"`
+	APIKey     string `json:"api_key,omitempty"`
+	ProviderID string `json:"provider_id,omitempty"`
 }
+
+type KeyResolver func(providerID string) (string, error)
 
 func Load(get func(string) string) (Config, error) {
 	cfg := Config{Curl: DefaultCurl}
@@ -42,7 +45,30 @@ func (c Config) Validate() error {
 	return err
 }
 
-func Configured(get func(string) string) bool {
+// LoadResolved reads a provider credential for this request without persisting it.
+func LoadResolved(get func(string) string, resolve KeyResolver) (Config, error) {
 	cfg, err := Load(get)
+	if err != nil {
+		return Config{}, err
+	}
+	if cfg.ProviderID != "" {
+		if resolve == nil {
+			return Config{}, errors.New("额度查询 Provider 不可用，请联系管理员")
+		}
+		key, err := resolve(cfg.ProviderID)
+		if err != nil || key == "" {
+			return Config{}, errors.New("额度查询 Provider 的 API Key 不可用，请联系管理员")
+		}
+		cfg.APIKey, cfg.ProviderID = key, ""
+	}
+	return cfg, nil
+}
+
+func Configured(get func(string) string, resolvers ...KeyResolver) bool {
+	var resolve KeyResolver
+	if len(resolvers) > 0 {
+		resolve = resolvers[0]
+	}
+	cfg, err := LoadResolved(get, resolve)
 	return err == nil && cfg.APIKey != "" && cfg.Validate() == nil
 }

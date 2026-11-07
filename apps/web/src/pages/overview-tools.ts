@@ -8,7 +8,7 @@ function renderTool(tool: ToolCapability, preview: boolean): string {
   return `<article class="card overview-tool-card p-3.5 flex flex-col gap-2${preview ? ' overview-tool-preview' : ''}">
     <div class="overview-tool-heading flex items-center gap-2">
       <span class="text-primary flex items-center">${icon('wrench', 'w-4 h-4')}</span>
-      <h3 class="text-xs font-semibold text-foreground">${escapeHtml(tool.name)}</h3>
+      <div class="overview-tool-name"><h3 class="text-xs font-semibold text-foreground">${escapeHtml(tool.name)}</h3>${tool.configurable ? '<span class="overview-tool-configurable text-xs text-muted">可配置</span>' : ''}</div>
       <label class="instance-toggle overview-tool-toggle"><input type="checkbox" role="switch" aria-label="启用 ${escapeHtml(tool.name)}" data-tool-toggle="${escapeHtml(tool.name)}" ${tool.enabled !== false ? 'checked' : ''}><span></span></label>
     </div>
     <p class="text-xs text-muted leading-relaxed">${escapeHtml(tool.description || '无描述')}</p>

@@ -246,6 +246,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       const cfg = await api.getBalanceQueryConfig();
       if (isUnmounted) return;
       let saving = false;
+      const providers = cfg.providers.map((provider) => `<label class="flex items-center gap-2 text-sm"><input type="radio" name="balance-query-provider" value="${escapeHtml(provider.id)}" data-available="${provider.available}" ${provider.id === cfg.providerId ? 'checked' : ''} ${provider.available ? '' : 'disabled'}><span>${escapeHtml(provider.displayName || provider.id)}${provider.available ? '' : '（未启用或未配置 API Key）'}</span></label>`).join('');
+      const missingProvider = cfg.providerId && !cfg.providers.some((provider) => provider.id === cfg.providerId);
       await openDialog({
         title: '配置 balance_query',
         description: 'FrostAgent 使用已保存的请求查询额度，模型不能传入或修改请求参数。',
@@ -254,8 +256,9 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         bodyHtml: `<form id="balance-query-form" class="flex flex-col gap-4">
           <label class="form-group"><span class="form-label">curl 请求模板</span><textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></label>
           <p class="text-xs text-muted">用 {{API_KEY}} 代替密钥，支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。不会执行 shell、读取文件或跟随重定向。</p>
-          <label class="form-group"><span class="form-label">API key</span><input id="balance-query-key" class="input" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured ? '已配置；留空保留原密钥' : '填写查询接口的 API key'}"></label>
-          <label class="flex items-center gap-2 text-sm"><input id="balance-query-clear-key" type="checkbox" class="checkbox">清除已保存的 API key</label>
+          <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 API Key</label>
+          <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
+          <label id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><span class="form-label">API Key</span><input id="balance-query-key" class="input" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"></label>
           <p class="text-xs text-muted">凭据只用于后端请求，不加入模型工具定义和调用参数。模型收到接口的原始响应正文；包含密钥的响应会被拦截。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
@@ -263,27 +266,41 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         onMount: (dialog, close) => {
           closeConfigDialog = close;
           const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
-          const clearKey = dialog.querySelector<HTMLInputElement>('#balance-query-clear-key')!;
+          const reuseKey = dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
+          const providerGroup = dialog.querySelector<HTMLFieldSetElement>('#balance-query-providers')!;
+          const providerInputs = providerGroup.querySelectorAll<HTMLInputElement>('input');
+          const manualKey = dialog.querySelector<HTMLElement>('#balance-query-manual-key')!;
           const curl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
           const save = dialog.querySelector<HTMLButtonElement>('#balance-query-save')!;
+          const syncCredentials = () => {
+            providerGroup.hidden = !reuseKey.checked;
+            manualKey.hidden = reuseKey.checked;
+            key.disabled = saving || reuseKey.checked;
+            key.required = !reuseKey.checked && (!cfg.apiKeyConfigured || !!cfg.providerId);
+            reuseKey.disabled = saving;
+            providerInputs.forEach((input) => { input.disabled = saving || input.dataset.available !== 'true'; });
+          };
           const setSaving = (pending: boolean) => {
             saving = pending;
             save.disabled = pending;
             save.textContent = pending ? '保存中...' : '保存';
             dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn').forEach((button) => { button.disabled = pending; });
             curl.disabled = pending;
-            clearKey.disabled = pending;
-            key.disabled = pending || clearKey.checked;
+            syncCredentials();
           };
-          clearKey.onchange = () => { key.disabled = clearKey.checked; if (clearKey.checked) key.value = ''; };
+          reuseKey.onchange = syncCredentials;
+          syncCredentials();
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
             if (saving) return;
-            setSaving(true);
             const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
             error.textContent = '';
+            const provider = providerGroup.querySelector<HTMLInputElement>('input:checked:not(:disabled)');
+            if (reuseKey.checked && !provider) { error.textContent = '请选择已启用且已配置 API Key 的 Provider'; return; }
+            if (!reuseKey.checked && key.required && !key.value) { error.textContent = '请填写 API Key'; return; }
+            setSaving(true);
             try {
-              await api.saveBalanceQueryConfig(curl.value, key.value, clearKey.checked);
+              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '');
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
               key.value = '';

@@ -10,8 +10,23 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 )
 
-func balanceConfigResponse(cfg balancequery.Config) *connect.Response[v1.BalanceQueryConfigResponse] {
-	return connect.NewResponse(&v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != ""})
+func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Response[v1.BalanceQueryConfigResponse] {
+	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID}
+	if s.engine.ModelRouter != nil {
+		if catalog, err := s.engine.ModelRouter.ActiveChecked(); err == nil {
+			for _, endpoint := range catalog.Endpoints {
+				response.Providers = append(response.Providers, &v1.BalanceQueryProvider{
+					Id: endpoint.ID, DisplayName: endpoint.DisplayName,
+					Available: endpoint.Enabled && endpoint.APIKeyConfigured,
+				})
+			}
+		}
+	}
+	if cfg.ProviderID != "" {
+		key, err := s.engine.ModelRouter.EndpointAPIKey(cfg.ProviderID)
+		response.ApiKeyConfigured = err == nil && key != ""
+	}
+	return connect.NewResponse(response)
 }
 
 func (s *Service) balanceConfig() (balancequery.Config, error) {
@@ -30,7 +45,7 @@ func (s *Service) GetBalanceQueryConfig(ctx context.Context, req *connect.Reques
 	if err != nil {
 		return nil, err
 	}
-	return balanceConfigResponse(cfg), nil
+	return s.balanceConfigResponse(cfg), nil
 }
 
 func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Request[v1.SaveBalanceQueryConfigRequest]) (*connect.Response[v1.BalanceQueryConfigResponse], error) {
@@ -40,21 +55,34 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if err != nil {
 		return nil, err
 	}
-	if req.Msg.ClearApiKey && req.Msg.ApiKey != "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("不能同时更新和清除 API key"))
+	if req.Msg.ProviderId != "" && req.Msg.ApiKey != "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("复用 Provider 时无需填写 API Key"))
 	}
 	cfg.Curl = req.Msg.Curl
-	if req.Msg.ClearApiKey {
-		cfg.APIKey = ""
-	} else if req.Msg.ApiKey != "" {
-		cfg.APIKey = req.Msg.ApiKey
+	validated := cfg
+	if req.Msg.ProviderId != "" {
+		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("请选择已启用且已配置 API Key 的 Provider"))
+		}
+		cfg.ProviderID, cfg.APIKey = req.Msg.ProviderId, ""
+		validated = balancequery.Config{Curl: cfg.Curl, APIKey: key}
+	} else {
+		if cfg.ProviderID != "" && req.Msg.ApiKey == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("切换为手动配置时请填写 API Key"))
+		}
+		cfg.ProviderID = ""
+		if req.Msg.ApiKey != "" {
+			cfg.APIKey = req.Msg.ApiKey
+		}
+		validated = cfg
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := validated.Validate(); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	raw, _ := json.Marshal(cfg)
 	if err := s.engine.Config.Update(balancequery.ConfigKey, string(raw), false); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("保存额度查询配置失败"))
 	}
-	return balanceConfigResponse(cfg), nil
+	return s.balanceConfigResponse(cfg), nil
 }

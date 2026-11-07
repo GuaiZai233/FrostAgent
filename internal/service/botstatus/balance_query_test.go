@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -78,7 +79,7 @@ func TestBalanceQueryConfigCredentialLifecycle(t *testing.T) {
 		name    string
 		request *v1.SaveBalanceQueryConfigRequest
 	}{
-		{"replace and clear", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey, ClearApiKey: true}},
+		{"provider and manual key", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey, ProviderId: "fixture-provider"}},
 		{"literal credential", &v1.SaveBalanceQueryConfigRequest{Curl: "curl https://example.invalid/" + firstKey}},
 		{"redirect option", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl + " -L"}},
 		{"invalid credential", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey + "\n"}},
@@ -101,9 +102,6 @@ func TestBalanceQueryConfigCredentialLifecycle(t *testing.T) {
 	save(&v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey}, true)
 	get(customCurl, true)
 	checkStored(t, nextKey)
-	save(&v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ClearApiKey: true}, false)
-	get(customCurl, false)
-	checkStored(t, "")
 }
 
 func TestBalanceQueryConfigUnavailableOrCorrupt(t *testing.T) {
@@ -137,5 +135,79 @@ func TestBalanceQueryConfigUnavailableOrCorrupt(t *testing.T) {
 				t.Fatal("unavailable save overwrote the corrupt configuration")
 			}
 		})
+	}
+}
+
+func TestBalanceQueryConfigReferencesProviderWithoutCopyingKey(t *testing.T) {
+	dir := t.TempDir()
+	config, err := instanceconfig.Open(filepath.Join(dir, "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := runtimescope.New(config, nil, nil)
+	t.Cleanup(scope.Cancel)
+	router := modelrouter.New(filepath.Join(dir, "router.json"), scope)
+	catalog := router.Draft()
+	catalog.Endpoints = []modelrouter.Endpoint{
+		{ID: "fixture-provider", DisplayName: "Fixture provider", BaseURL: "https://example.invalid/v1", Enabled: true},
+		{ID: "no-key", DisplayName: "No key", BaseURL: "https://example.invalid/v1", Enabled: true},
+		{ID: "disabled", DisplayName: "Disabled", BaseURL: "https://example.invalid/v1"},
+	}
+	if err := router.SaveDraft(catalog); err != nil {
+		t.Fatal(err)
+	}
+	const key = "synthetic-reused-provider-key"
+	if _, err := router.SetDraftEndpointSecret("fixture-provider", key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	service := New(&llm.Engine{Scope: scope, ModelRouter: router}, "test", "")
+	ctx := context.Background()
+	for _, id := range []string{"no-key", "disabled", "missing"} {
+		response, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: balancequery.DefaultCurl, ProviderId: id}))
+		if response != nil || connect.CodeOf(err) != connect.CodeInvalidArgument || config.Get(balancequery.ConfigKey) != "" {
+			t.Fatalf("invalid provider selection changed config: %v", err)
+		}
+	}
+	response, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: balancequery.DefaultCurl, ProviderId: "fixture-provider"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Msg.ProviderId != "fixture-provider" || !response.Msg.ApiKeyConfigured || len(response.Msg.Providers) != 3 {
+		t.Fatalf("provider metadata missing: %v", response.Msg)
+	}
+	for _, provider := range response.Msg.Providers {
+		if provider.Available != (provider.Id == "fixture-provider") {
+			t.Fatal("provider selection did not preserve availability")
+		}
+	}
+	public, _ := protojson.Marshal(response.Msg)
+	if strings.Contains(string(public), key) || strings.Contains(config.Get(balancequery.ConfigKey), key) {
+		t.Fatal("provider credential copied into response or balance configuration")
+	}
+	stored, err := balancequery.Load(config.Get)
+	if err != nil || stored.ProviderID != "fixture-provider" || stored.APIKey != "" {
+		t.Fatal("provider reference was not persisted without its credential")
+	}
+	for _, request := range []*v1.SaveBalanceQueryConfigRequest{
+		{Curl: balancequery.DefaultCurl},
+		{Curl: "curl https://example.invalid/" + key, ProviderId: "fixture-provider"},
+	} {
+		before := config.Get(balancequery.ConfigKey)
+		if _, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(request)); connect.CodeOf(err) != connect.CodeInvalidArgument || strings.Contains(err.Error(), key) {
+			t.Fatalf("invalid provider edit was accepted or exposed key: %v", err)
+		}
+		if config.Get(balancequery.ConfigKey) != before {
+			t.Fatal("invalid edit changed the provider reference")
+		}
+	}
+	if _, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: balancequery.DefaultCurl, ApiKey: "synthetic-manual-key"})); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = balancequery.Load(config.Get)
+	if stored.ProviderID != "" || stored.APIKey != "synthetic-manual-key" {
+		t.Fatal("switching to manual credentials retained the provider reference")
 	}
 }

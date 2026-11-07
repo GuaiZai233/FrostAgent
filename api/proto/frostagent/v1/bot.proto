@@ -36,14 +36,25 @@ message GetBalanceQueryConfigRequest {}
 
 message SaveBalanceQueryConfigRequest {
   string curl = 1;
-  // Write-only. Empty preserves the existing key unless clear_api_key is set.
+  // Write-only. Empty preserves the existing manually configured key.
   string api_key = 2;
-  bool clear_api_key = 3;
+  reserved 3;
+  reserved "clear_api_key";
+  // Published provider whose current credential is resolved by the backend.
+  string provider_id = 4;
 }
 
 message BalanceQueryConfigResponse {
   string curl = 1;
   bool api_key_configured = 2;
+  string provider_id = 3;
+  repeated BalanceQueryProvider providers = 4;
+}
+
+message BalanceQueryProvider {
+  string id = 1;
+  string display_name = 2;
+  bool available = 3;
 }
 
 message GetOverviewResponse {
