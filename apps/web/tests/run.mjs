@@ -12,6 +12,7 @@ for (const testFile of [
   'overview-enhancements.test.ts',
   'overview-page.test.ts',
   'balance-query-page.test.ts',
+  'empty-instance-pages.test.ts',
   'stickers-page.test.ts',
   'frontend-editors.test.ts',
   'actionscat-disabled.test.ts',

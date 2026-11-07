@@ -26,7 +26,8 @@ let releaseGet: (() => void) | undefined;
 const saves: Record<string, unknown>[] = [];
 globalThis.fetch = async (input, init) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
-  assert.ok(path === '/api/instances' || path.startsWith(`/instances/${instance.id}/`), 'balance request escaped its instance');
+  assert.ok(path === '/api/version' || path === '/api/instances' || path.startsWith(`/instances/${instance.id}/`), 'balance request escaped its instance');
+  if (path === '/api/version') return Response.json({ display: 'synthetic-version' });
   if (path === '/api/instances') return Response.json({ instances: [instance] });
   if (path.endsWith('/GetOverview')) { overviewLoads++; return Response.json({ status: 2, tools: [
     { name: 'ban_user', description: 'Synthetic ordinary tool', enabled: true, available: true },

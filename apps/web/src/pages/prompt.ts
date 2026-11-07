@@ -150,6 +150,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   // 1. Fetch Session List
   async function loadSessions(): Promise<boolean> {
     if (isUnmounted) return false;
+    if (!instanceID) { renderSessionList(); return false; }
     const requestSeq = ++sessionsRequestSeq;
     sessionsLoading = true;
     renderSessionList();
@@ -183,7 +184,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   }
 
   async function loadSearchSessions(): Promise<void> {
-    if (isUnmounted || searchSessions !== null || searchSessionsLoading) return;
+    if (!instanceID || isUnmounted || searchSessions !== null || searchSessionsLoading) return;
     const requestSeq = ++searchSessionsRequestSeq;
     searchSessionsLoading = true;
     renderSessionList();
@@ -539,6 +540,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   });
 
   // Initial Load
+  sessionsRefreshBtn.disabled = !instanceID;
   void loadSessions();
   renderEmptyState();
 

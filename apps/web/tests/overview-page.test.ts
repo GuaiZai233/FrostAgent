@@ -25,6 +25,7 @@ let rejectToggle = false;
 let toggleCalls = 0;
 globalThis.fetch = async (input, init) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
+  if (path === '/api/version') return Response.json({ display: 'synthetic-version', version: '', commit: '' });
   if (path === '/api/instances') return Response.json({ instances: [instance, source], next_name: 'Example' });
   if (path.endsWith('/SetToolEnabled')) {
     toggleCalls++;
@@ -68,6 +69,15 @@ try {
   tick();
   await flush();
   assert.equal((document.activeElement as HTMLElement)?.dataset.toolToggle, 'tool-0', 'polling must preserve switch keyboard focus');
+  const versionControl = root.querySelector<HTMLButtonElement>('#check-updates')!;
+  assert.equal(root.querySelectorAll('#build-version').length, 1, 'header must have a single version badge');
+  assert.equal(root.querySelector('#build-version')!.textContent, 'synthetic-version');
+  assert.ok(root.querySelector('header #check-updates'), 'updates must be integrated in the existing header');
+  versionControl.focus();
+  tick();
+  await flush();
+  assert.equal(root.querySelector('#check-updates'), versionControl, 'polling must not replace the version control');
+  assert.equal(document.activeElement, versionControl, 'polling must preserve keyboard focus on update control');
   let rail = root.querySelector<HTMLElement>('#overview-tools-strip')!;
   rail.scrollLeft = 512;
   root.querySelector<HTMLButtonElement>('#overview-all-tools')!.focus();

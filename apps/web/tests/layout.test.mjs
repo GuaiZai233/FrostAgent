@@ -20,8 +20,10 @@ const connections = await readFile(
   new URL('../src/pages/connections.ts', import.meta.url),
   'utf8',
 );
-assert.doesNotMatch(overview, /v\$\{escapeHtml\(version\)\}/, 'source revisions must not get a version prefix');
-assert.match(overview, /\$\{escapeHtml\(version\)\}/, 'overview must render the backend build identity');
+const versionControl = await readFile(new URL('../src/components/version-panel.ts', import.meta.url), 'utf8');
+assert.match(versionControl, /version.textContent = build.display \|\| 'unknown'/, 'version control must render the backend build identity without adding a version prefix');
+assert.doesNotMatch(versionControl, /仅查询 GitHub 仓库|检查结果缓存/, 'update dialog must not include the removed explanatory copy');
+assert.doesNotMatch(versionControl, /icon\('refresh|animate-spin|spinner/, 'update control must not use a circular refresh or spinning icon');
 const chat = await readFile(
   new URL('../src/pages/chat.ts', import.meta.url),
   'utf8',
@@ -106,8 +108,14 @@ assert.match(
 
 assert.doesNotMatch(overview, /instanceWebSocketURL|copyToClipboard|data-copy-url/, 'connection addresses belong on the connection page');
 assert.match(main, /path: '\/overview'[^\n]+\n\s*\{ path: '\/connections', label: '连接'/, 'connection navigation must immediately follow overview');
-assert.match(main, /const guardedPaths = \[\s*'\/overview',\s*'\/connections'/, 'connections must require a selected instance');
-assert.match(main, /const mounts = \[\s*mountOverviewPage,\s*mountConnectionsPage/);
+const guardedPaths = main.match(/const guardedPaths = \[([\s\S]*?)\];/)?.[1] || '';
+for (const path of ['/connections', '/dialogue', '/mcp', '/actionscat', '/settings/backend', '/settings/behavior', '/settings/backup', '/settings/commands']) {
+  assert.ok(guardedPaths.includes(`'${path}'`), `${path} must require a selected instance`);
+}
+for (const path of ['/overview', '/prompt', '/sessions', '/memory', '/stickers', '/chat']) {
+  assert.ok(!guardedPaths.includes(`'${path}'`), `${path} must retain its framework without an instance`);
+}
+assert.match(overview, /mountInstanceRequired\(content\)/, 'overview must keep instance selection guidance alongside the version control');
 assert.match(connections, /正向 WebSocket（FA 作为客户端）/);
 assert.match(connections, /反向 WebSocket（FA 作为服务端）/);
 assert.match(connections, /id="\$\{adapter.id\}-enabled" type="checkbox"/, 'each adapter needs its own enable checkbox');

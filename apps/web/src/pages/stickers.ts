@@ -1,4 +1,5 @@
 import { instanceURL, instanceState } from '../instance-state';
+import { disableInstanceControls } from '../components/instance-required';
 import { createInstanceAPI } from '../api/client';
 import type { StickerItem, GetStickerStatsResponse } from '@frostagent/proto';
 import { escapeHtml } from '../utils/formatters';
@@ -42,7 +43,7 @@ export function mountStickersPage(
           <h1 class="page-title">表情包摘取</h1>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <a class="btn btn-outline" href="/api/instances/${instanceState.selected!.id}/backup/stickers" download="stickers.zip">下载贴图备份</a>
+          ${instanceState.selected ? `<a class="btn btn-outline" href="/api/instances/${instanceState.selected.id}/backup/stickers" download="stickers.zip">下载贴图备份</a>` : '<button class="btn btn-outline" disabled>下载贴图备份</button>'}
           <div class="flex items-center gap-1" style="width: 13rem;">
             <input
               type="search"
@@ -196,6 +197,12 @@ export function mountStickersPage(
       }
     </style>
   `;
+
+  if (!instanceState.selected) {
+    container.querySelector<HTMLElement>('#sticker-grid')!.innerHTML = '<p class="text-center text-muted p-6" style="grid-column: 1 / -1;">暂无表情包记录。</p>';
+    disableInstanceControls(container);
+    return () => { isUnmounted = true; lifecycle.abort(); };
+  }
 
   const searchInput = container.querySelector<HTMLInputElement>(
     '#sticker-search-input',

@@ -1,5 +1,6 @@
 import { createInstanceAPI } from '../api/client';
 import { instanceState } from '../instance-state';
+import { disableInstanceControls } from '../components/instance-required';
 import { memoryDisplayContent, memoryEvidenceText } from './memory-display';
 import {
   MemoryEntry,
@@ -50,7 +51,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             <h1 class="page-title">记忆管理</h1>
           </div>
           <div class="flex items-center gap-2 flex-wrap" id="memory-header-actions">
-            <a class="btn btn-outline" href="/api/instances/${instanceState.selected!.id}/backup/memories" download="memory.json">下载记忆备份</a>
+            ${instanceState.selected ? `<a class="btn btn-outline" href="/api/instances/${instanceState.selected.id}/backup/memories" download="memory.json">下载记忆备份</a>` : '<button class="btn btn-outline" disabled>下载记忆备份</button>'}
             <a class="btn btn-outline" href="#/settings/backup">快速导入</a>
             <div class="flex items-center gap-1" style="width: 13rem;">
               <input
@@ -152,7 +153,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       </div>
     `;
 
-    attachHeaderEvents();
+    if (instanceState.selected) attachHeaderEvents();
   }
 
   function attachHeaderEvents() {
@@ -454,7 +455,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       </div>
     `;
 
-    attachTableEvents(el);
+    if (instanceState.selected) attachTableEvents(el);
   }
 
   function renderGroupContent(el: HTMLElement) {
@@ -1449,6 +1450,12 @@ export function mountMemoryPage(container: HTMLElement): () => void {
 
   // Initial load
   renderSkeleton();
+  if (!instanceState.selected) {
+    renderScopeContent();
+    renderGroupSelector();
+    disableInstanceControls(container);
+    return () => { isUnmounted = true; };
+  }
   void loadStats();
   void loadMemories();
 

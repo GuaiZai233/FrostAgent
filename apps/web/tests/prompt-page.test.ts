@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { create } from '@bufbuild/protobuf';
 import { ModelRouterConfigurationSchema } from '@frostagent/proto';
 import { mountPromptPage } from '../src/pages/prompt';
+import { instanceState } from '../src/instance-state';
 import { toast } from '../src/components/toast';
 import type { createInstanceAPI } from '../src/api/client';
 
@@ -61,6 +62,7 @@ const dialogs: MockDialog[] = [];
 const root = new MockElement();
 Object.assign(globalThis, {
   document: {
+    querySelectorAll: () => [],
     body: { appendChild() {} },
     createElement: (tag: string) => {
       const el = tag === 'dialog' ? new MockDialog() : new MockElement();
@@ -69,6 +71,12 @@ Object.assign(globalThis, {
     },
   },
 });
+
+const previousWindow = globalThis.window;
+const previousEvent = globalThis.Event;
+const selectionEvents = new EventTarget();
+Object.assign(globalThis, { window: selectionEvents });
+instanceState.select({ id: 'synthetic-prompt-instance', name: 'Prompt fixture', enabled: true, created_at: '' });
 
 const errors: string[] = [];
 const successes: string[] = [];
@@ -234,3 +242,5 @@ assert.doesNotMatch(privateList.innerHTML, /astrbot:private:test_user/);
 assert.match(privateList.innerHTML, /onebot:group:123/);
 cleanupPrivate();
 process.stdout.write('PASS: private filter, context rendering, fresh read-only summary, and group-only actions\n');
+instanceState.select(null);
+Object.assign(globalThis, { window: previousWindow, Event: previousEvent });
