@@ -2,6 +2,9 @@ package onebot
 
 import (
 	"encoding/json"
+	"time"
+
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 )
 
@@ -38,7 +41,7 @@ func buildResponseContext(
 		"mode":              event.MessageType,
 		"triggers":          triggers,
 		"silence_available": true,
-		"guidance":          "请结合用户消息与已有上下文自行决定是否回复；确实无需回应时，单独调用 stay_silent。用户明确要求回应时应正常回答。",
+		"guidance":          "请结合用户消息与已有上下文自行决定是否回复；确实无需回应时，单独调用 stay_silent。用户明确要求回应时应正常回答。" + parity.CurrentTimeGuidance(time.Now()),
 	}
 	encoded, _ := json.Marshal(context)
 	return string(encoded)

@@ -118,11 +118,11 @@ func TestEngine_RunMessagesWithContext_SetsPromptTrace(t *testing.T) {
 	if savedModel != "test-llm-model" {
 		t.Errorf("expected model 'test-llm-model', got %q", savedModel)
 	}
-	if !strings.HasPrefix(savedSys, "Stable system instructions\n\nFew-shot dialogue examples\n\n当前系统时间：") {
-		t.Errorf("expected stable instructions and persona before dynamic time, got %q", savedSys)
+	if !strings.HasPrefix(savedSys, "Stable system instructions\n\nFew-shot dialogue examples") {
+		t.Errorf("expected stable instructions and persona, got %q", savedSys)
 	}
-	if !strings.Contains(savedSys, "星期") {
-		t.Errorf("expected saved system prompt to contain dynamic time, got %q", savedSys)
+	if strings.Contains(savedSys, "当前系统时间：") {
+		t.Errorf("system prompt must not contain per-turn time, got %q", savedSys)
 	}
 	if len(provider.lastRequest.Messages) != 2 || provider.lastRequest.Messages[0].Role != core.RoleSystem || provider.lastRequest.Messages[0].Content != savedSys {
 		t.Errorf("prompt trace must match the system prompt sent to the provider, got %+v", provider.lastRequest.Messages)
