@@ -27,7 +27,7 @@ globalThis.fetch = async (input) => {
   assert.ok(path.endsWith('/GetOverview'), path);
   overviewLoads++;
   if (deferOverview) await new Promise<void>((resolve) => { pending = resolve; });
-  return Response.json({ status: 2, botName: 'Example', uptimeSeconds: '1', totalMessagesProcessed: '3', tools: Array.from({ length: 16 }, (_, i) => ({ name: `tool-${i}`, description: '<img src=x onerror=alert(1)> Example' })) });
+  return Response.json({ tokenUsage: { available: true, modules: [{ module: 'dialogue', requests: '1', total: { value: '15' } }] }, status: 2, botName: 'Example', uptimeSeconds: '1', totalMessagesProcessed: '3', tools: Array.from({ length: 16 }, (_, i) => ({ name: `tool-${i}`, description: '<img src=x onerror=alert(1)> Example' })) });
 };
 const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
 
@@ -40,6 +40,14 @@ try {
   assert.equal(root.querySelector<HTMLElement>('#overview-error')!.style.display, 'none', 'merged overview must load without stale event handlers');
   assert.equal(root.querySelectorAll('#overview-tools-strip article').length, 10);
   assert.equal(root.querySelectorAll('#overview-tools-strip img').length, 0, 'tool descriptions must remain escaped');
+  assert.ok(root.querySelector('#token-usage-title')!.compareDocumentPosition(root.querySelector('#overview-resources-title')!) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'usage must appear before resources');
+  const usageTable = root.querySelector<HTMLElement>('.token-usage-table-wrap')!;
+  usageTable.scrollLeft = 240;
+  usageTable.focus();
+  tick();
+  await flush();
+  assert.equal(root.querySelector<HTMLElement>('.token-usage-table-wrap')!.scrollLeft, 240, 'polling must preserve usage scroll');
+  assert.equal(document.activeElement?.classList.contains('token-usage-table-wrap'), true, 'polling must preserve table keyboard focus');
   const versionControl = root.querySelector<HTMLButtonElement>('#check-updates')!;
   assert.equal(root.querySelectorAll('#build-version').length, 1, 'header must have a single version badge');
   assert.equal(root.querySelector('#build-version')!.textContent, 'synthetic-version');

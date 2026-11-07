@@ -56,13 +56,14 @@ func (c *Client) Embed(ctx context.Context, req core.EmbeddingRequest) (*core.Em
 			Index     int       `json:"index"`
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
-		Usage *struct {
-			PromptTokens int `json:"prompt_tokens"`
-			TotalTokens  int `json:"total_tokens"`
-		} `json:"usage"`
+		Usage *apiUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("parse embedding response: %w", err)
+	}
+	usage := payload.Usage.coreUsage(true)
+	if c.ObserveUsage != nil {
+		c.ObserveUsage(usage)
 	}
 	if len(payload.Data) != len(req.Input) {
 		return nil, fmt.Errorf("embedding result count does not match input")
@@ -91,9 +92,7 @@ func (c *Client) Embed(ctx context.Context, req core.EmbeddingRequest) (*core.Em
 		}
 		result.Vectors[item.Index] = item.Embedding
 	}
-	if payload.Usage != nil {
-		result.Usage = &core.Usage{PromptTokens: payload.Usage.PromptTokens, TotalTokens: payload.Usage.TotalTokens}
-	}
+	result.Usage = usage
 	return result, nil
 }
 

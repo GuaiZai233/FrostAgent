@@ -35,6 +35,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"os"
@@ -102,6 +103,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 		scope.Log().Error(logs.SYSTEM, fmt.Sprintf("模型路由配置不可用，已进入未配置状态: %v", err))
 	}
+	tokenUsage, usageErr := tokenusage.New(db, instanceID, filepath.Join(dir, "token_usage.json"))
+	if usageErr != nil {
+		scope.Log().Error(logs.SYSTEM, fmt.Sprintf("Token 用量无法读取，统计暂不可用: %v", usageErr))
+	}
+	routerManager.SetUsageStore(tokenUsage)
 	foregroundProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, 120*time.Second)
 	visionProvider := routerManager.Provider(modelrouter.WorkloadVision, false, 120*time.Second)
 	subagentProvider := routerManager.Provider(modelrouter.WorkloadSubagent, false, 120*time.Second)
@@ -346,6 +352,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		ToolRegistry:   executorMap,
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,
+		TokenUsage:     tokenUsage,
 		ModelRouter:    routerManager,
 		ModelName:      "model-router",
 		SessionManager: sessionManager,

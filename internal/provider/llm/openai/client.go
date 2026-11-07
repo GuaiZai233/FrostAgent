@@ -41,11 +41,7 @@ type chatResponse struct {
 	Choices []struct {
 		Message chatMessage `json:"message"`
 	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage,omitempty"`
+	Usage *apiUsage `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -57,6 +53,9 @@ type Client struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
+	// ObserveUsage is called once for each decoded successful API response,
+	// even if its content cannot be used by the caller.
+	ObserveUsage func(*core.Usage)
 }
 
 // HTTPError preserves the upstream response body so the agent can relay the
@@ -203,13 +202,9 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("API returned error: %s", openAIResp.Error.Message)
 	}
 
-	var usage *core.Usage
-	if openAIResp.Usage != nil {
-		usage = &core.Usage{
-			PromptTokens:     openAIResp.Usage.PromptTokens,
-			CompletionTokens: openAIResp.Usage.CompletionTokens,
-			TotalTokens:      openAIResp.Usage.TotalTokens,
-		}
+	usage := openAIResp.Usage.coreUsage(false)
+	if c.ObserveUsage != nil {
+		c.ObserveUsage(usage)
 	}
 
 	if len(openAIResp.Choices) == 0 {

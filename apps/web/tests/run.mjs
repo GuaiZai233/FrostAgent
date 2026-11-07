@@ -11,6 +11,7 @@ for (const testFile of [
   'chat-navigation.test.ts',
   'overview-enhancements.test.ts',
   'overview-page.test.ts',
+  'token-usage.test.ts',
   'empty-instance-pages.test.ts',
   'stickers-page.test.ts',
   'frontend-editors.test.ts',

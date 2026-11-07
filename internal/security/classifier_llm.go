@@ -101,7 +101,8 @@ func (l *LLMClassifier) Classify(ctx context.Context, input ClassificationInput)
 	}
 
 	resp, err := l.provider.Chat(evalCtx, core.ChatRequest{
-		Model: l.model,
+		UsageModule: "security",
+		Model:       l.model,
 		Messages: []core.ChatMessage{
 			{Role: core.RoleSystem, Content: securityGatewayPrompt},
 			{Role: core.RoleUser, Content: userPrompt},

@@ -32,6 +32,7 @@ message GetOverviewResponse {
   BotStatus status = 7;
   repeated ToolInfo tools = 8;
   string ws_listen_addr = 9;
+  TokenUsageOverview token_usage = 10;
 }
 
 message GetSessionsRequest {
@@ -95,4 +96,26 @@ message GetSessionContextResponse {
   string system_prompt = 8;
   string model = 9;
   repeated GroupMessageInfoProto recent_structured_messages = 10;
+}
+
+// Known provider values are retained alongside calls whose value was omitted.
+message TokenUsageCounter {
+  int64 value = 1;
+  int64 unestimated_requests = 2;
+}
+
+message TokenUsageModule {
+  string module = 1;
+  int64 requests = 2;
+  TokenUsageCounter input = 3;
+  TokenUsageCounter output = 4;
+  TokenUsageCounter total = 5;
+  TokenUsageCounter cached = 6;
+  TokenUsageCounter cache_hits = 7;
+}
+
+message TokenUsageOverview {
+  repeated TokenUsageModule modules = 1;
+  bool incomplete = 2;
+  bool available = 3;
 }

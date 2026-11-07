@@ -9,6 +9,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strings"
 	"time"
@@ -93,6 +94,7 @@ func (s *Service) GetOverview(
 		Status:                 status,
 		Tools:                  toolInfos,
 		WsListenAddr:           s.wsListenAddr,
+		TokenUsage:             s.tokenUsage(ctx),
 	}
 
 	return connect.NewResponse(resp), nil
@@ -483,4 +485,23 @@ func derivePlatform(sessionID string) string {
 		}
 	}
 	return "unknown"
+}
+
+func (s *Service) tokenUsage(ctx context.Context) *v1.TokenUsageOverview {
+	if s.engine.TokenUsage == nil {
+		return nil
+	}
+	snapshot, err := s.engine.TokenUsage.Snapshot(ctx)
+	if err != nil {
+		return &v1.TokenUsageOverview{Incomplete: true}
+	}
+	result := &v1.TokenUsageOverview{Available: true, Incomplete: snapshot.Incomplete}
+	counter := func(c tokenusage.Counter) *v1.TokenUsageCounter {
+		return &v1.TokenUsageCounter{Value: c.Value, UnestimatedRequests: c.UnestimatedRequests}
+	}
+	for _, row := range snapshot.Modules {
+		result.Modules = append(result.Modules, &v1.TokenUsageModule{Module: row.Module, Requests: row.Requests,
+			Input: counter(row.Input), Output: counter(row.Output), Total: counter(row.Total), Cached: counter(row.Cached), CacheHits: counter(row.CacheHits)})
+	}
+	return result
 }

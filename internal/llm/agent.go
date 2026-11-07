@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,7 +118,8 @@ func (e *Engine) isToolAllowedForProactive(name string) bool {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
-	PokeGate poke.Gate
+	TokenUsage *tokenusage.Store
+	PokeGate   poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor

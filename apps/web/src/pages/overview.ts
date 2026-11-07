@@ -6,6 +6,7 @@ import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
 import { icon } from '../components/icons';
 import { renderOverviewTools } from './overview-tools';
+import { renderTokenUsage } from '../components/token-usage';
 import { mountVersionControl } from '../components/version-panel';
 import { mountInstanceRequired } from '../components/instance-required';
 import '../styles/overview.css';
@@ -97,6 +98,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       const toolsHadFocus = contentEl.querySelector('#overview-tools-strip')?.contains(document.activeElement);
       const focusedToolID = toolsHadFocus ? (document.activeElement as HTMLElement)?.id : '';
 
+      const usageFocused = document.activeElement?.classList.contains('token-usage-table-wrap');
+      const usageScroll = contentEl.querySelector<HTMLElement>('.token-usage-table-wrap')?.scrollLeft || 0;
       contentEl.innerHTML = `
         <!-- KPI Summary Cards -->
         <section class="grid grid-cols-1 instance-kpis gap-3.5" aria-label="Bot statistics">
@@ -148,6 +151,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           </div>
         </section>
 
+        ${renderTokenUsage(data.tokenUsage)}
+
         <section class="flex flex-col gap-3" aria-labelledby="overview-resources-title">
           <h2 id="overview-resources-title" class="text-sm font-semibold text-foreground">资源</h2>
           <div class="overview-resources">
@@ -160,6 +165,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           </div>
         </section>
       `;
+      const usageTable = contentEl.querySelector<HTMLElement>('.token-usage-table-wrap');
+      if (usageTable) {
+        usageTable.scrollLeft = usageScroll;
+        if (usageFocused) usageTable.focus({ preventScroll: true });
+      }
       contentEl.querySelector<HTMLElement>('#overview-tools-strip')!.scrollLeft = toolsScroll;
       if (focusedToolID) contentEl.querySelector<HTMLElement>(`#${focusedToolID}`)?.focus({ preventScroll: true });
       contentEl.querySelector('#overview-all-tools')?.addEventListener('click', () => {
