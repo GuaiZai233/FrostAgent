@@ -105,6 +105,25 @@ export function mountSettingsPage(container: HTMLElement): () => void {
         </a>
 
         <a
+          href="#/settings/credentials"
+          class="card p-4 hover-bg transition-colors text-foreground"
+          style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none; width: 100%;"
+        >
+          <div style="display: flex; align-items: center; gap: 0.875rem; min-width: 0;">
+            <div class="flex items-center justify-center w-9 h-9 rounded-md bg-muted text-primary" style="flex-shrink: 0;">
+              ${icon('lock', 'w-4 h-4')}
+            </div>
+            <div style="min-width: 0;">
+              <h2 class="text-sm font-semibold text-foreground">访问凭据</h2>
+              <p class="text-xs text-muted mt-0.5">管理当前浏览器访问 API 和控制平面的凭据</p>
+            </div>
+          </div>
+          <div style="display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-left: auto; color: var(--muted-foreground);">
+            ${icon('chevron_right', 'w-4 h-4')}
+          </div>
+        </a>
+
+        <a
           href="#/settings/commands"
           class="card p-4 hover-bg transition-colors text-foreground"
           style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 1rem; text-decoration: none; width: 100%;"
