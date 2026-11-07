@@ -104,7 +104,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
   - 平台出站确认门禁 (Platform ACK Gating)：严格区分传输层写入与平台层送达。对于具备同步请求-响应确认机制的平台（如 OneBot v11），机器人回复发送后必须通过 `SendActionAndWait` 等待平台返回确认 ACK（`status == "ok"` 且 `retcode == 0`）。只有平台确认送达后，才允许将回复写入会话持久历史（`Session.History`）、摄入群聊压缩缓冲区（`groupCompactBuffer`）以及触发记忆提取；同时，中间消息工具（`send_message`）的调用也严格同步等待平台 ACK 确认，若平台拒绝（如禁言或错误码）、ACK 超时或网络断开，则向大模型工具执行循环明确反馈真实错误原因，杜绝在发送失败时产生假成功；对于暂未提供端到端 ACK 响应的轻量协议（如 AstrBot WebSocket），当前通过传输层写入确认（Transport-Write Confirmation）进行尽力而为的送达控制；
   - 发送失败与防脑补隔离 (Delivery Failure Context)：当平台返回错误码（如禁言、风控、参数非法）、ACK 超时或传输层断开时，系统坚决不向 `Session.History` 与 `groupCompactBuffer` 提交该 assistant 消息，保留原始 user 输入，同步执行 `TrimSession` 防止受限历史无界膨胀，并在会话中记录瞬时 `DeliveryFailure`。在下一轮对话生成时，以一次性瞬态方式向大模型注入 `<delivery_context>`（包含平台、错误原因与 `Do not assume the user saw or received that response.` 指令）告知上次发送未送达，并在使用后原子清空，杜绝机器人“自以为发出了其实被屏蔽”的平行世界幻觉；
   - 压缩提示词边界与事实隔离：提示词明确界定 `assistant` 仅作为对话演进背景参考，严禁将智能体单方面推测或陈述升级为群友事实或群内共识（除非后续群友确认），并准确提炼群友对智能体的纠正与反馈；
-  - Visual Inspector 角色渲染与正文不透明度保证：Web 控制台 Prompt 检查组件结构化解析角色前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮，同时保持用户原始正文的不透明度，绝不破坏性正则裁剪合法正文。
+  - Visual Inspector 角色渲染与正文不透明度保证：Web 控制台 Prompt 检查组件结构化解析角色前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮，机器人消息缺少 sender 时显示当前实例 `BOT_NAME`（无实例或未配置时回退 `助手`），同时保持用户原始正文的不透明度，绝不破坏性正则裁剪合法正文。
 - **未压缩原消息即时注入 (`recent_group_messages`)**：
   - 在触发回复时，原子获取当前 `group_running_summary` 与尚未被压缩的最新群聊原消息快照（条数严格与 Compact Buffer Size 保持 1:1 对齐，并受 `GROUP_RAW_CONTEXT_MAX_CHARS` 字符上限约束）；
   - 注入主 Agent 时同样使用单行 JSONL 记录承载可信 `role` / `sender` 元数据，并将正文保留为不透明 `content` 字符串；正文中的换行和伪造角色标签不会再生成额外历史消息边界；
@@ -114,13 +114,13 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
   - 会话持久历史（`Session.AddMessage`）仅记录干净的用户输入与模型回复，不包含动态群聊摘要与未压缩原消息；
   - 群聊摘要与最新原消息仅作为单次 LLM 请求的临时上下文（Transient Context）注入在内存请求副本中，避免多轮对话下历史消息反复膨胀与重复污染。
 - **摘要分组显式关联与会话上下文 Inspector (Summary Groups & Session Context Inspector)**：
-  - 私聊检查：会话列表支持单独筛选私聊，并展示当前私聊历史及最近一次成功 `compact` 的摘要和输入批次；摘要注入的 user/assistant 消息通过内部序列标识与真实对话区分，不通过用户文本猜测。仅保留最新批次的内存检查信息；会话重置、清空或摘要从历史中裁剪后不再展示，不新增私聊持久化或自动压缩。私聊摘要弹窗只读，群聊的总结删除和分群模型配置入口保持原有范围。
+  - 私聊检查：会话列表支持单独筛选私聊，并展示当前私聊历史及最近一次成功 `compact` 的摘要和输入批次；摘要注入的 user/assistant 消息通过内部序列标识与真实对话区分，不通过用户文本猜测。仅保留最新批次的内存检查信息；会话重置、清空或摘要从历史中裁剪后不再展示，不新增私聊持久化或自动压缩。私聊摘要弹窗只读，群聊的总结删除和分群模型配置入口保持原有范围。可视化仅拆分私聊用户消息末尾符合适配器格式的 `response_context` / `system_context` 包装，正文中的同名标签保持完整；附加上下文默认折叠，原始文本保持完整。
   - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时有界保留最近一次压缩批次的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出；该批次关联的是处理完成后的累计 running summary，不宣称保存全部历史原消息，避免前端文本模糊匹配和无界内存增长；
   - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 `aiohttp`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
   - 群级模型页内配置：「会话与 Prompt」中的群聊模型配置入口直接打开当前页弹窗，六个工作负载使用与实例默认配置相同的模型下拉选项，并支持继承实例默认；保存并发布仅更新当前群的覆盖，保留其他群和默认路由，以已发布配置为基线避免带入其他草稿；QQ 平台别名按后端规则匹配，发布成功后刷新当前会话上下文。
   - 实例路由发布冲突保护：`ModelRouterService.Publish` 必须携带调用者保存的 `expected_configuration`；后端在发布锁内同时核对活动版本与草稿路由，草稿被另一页面替换或版本已更新时拒绝发布，保留活动配置和替换后的草稿。旧网页及直接调用接口的脚本缺少校验信息时提示刷新后重试。前端发布携带原始保存请求的配置，不能信任两步调用之间可能已被替换的 SaveDraft 响应；SQL 实例只比较自身路由，共享供应商目录继续按编辑页面 owner 管理，不引入持久化格式或迁移。
   - 群级模型发布状态：发布 RPC 发出后禁用弹窗取消、关闭、Esc 与遮罩关闭，直到发布成功关闭并刷新当前上下文，或失败后显示错误并恢复操作；页面卸载仍强制清理弹窗，失效页面不会接收异步刷新。
-  - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含当前时间、基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
+  - 动态系统提示词追踪与回显（`LastPromptTrace`）：`Agent.RunMessagesWithContext` 在首次组装完成动态系统提示词（含基础人设、Few-Shot 对话、记忆主题目录与召回记忆）后原子记录至 `SessionContext`，并通过 `GetSessionContext` ConnectRPC 接口输出真实 `system_prompt` 与 `model`，消除前端静态伪造与信息不对齐；
   - 结构化视觉呈现：条目化展示群聊消息（时间、发送者、ID、内容）；最近一次压缩批次统一使用浅蓝底色（`--summary-group-bg`）与动态自适应高度的 SVG 矢量右大括号 `}`；悬停消息或大括号时以轻量级 Popover 浮动卡片展示该批次处理后的累计 `group_running_summary`，具备视口边缘防碰撞与响应式换行定位能力；未压缩消息段清晰呈现且无大括号干扰；支持自定义 Prompt 编辑输入与原始文本无缝切换。
 
 ### 人设系统：系统提示词与少样本示例 (Persona System: System Prompt & Few-Shot Dialogues)
@@ -130,7 +130,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **系统提示词（`SYSTEM_PROMPT`）**：彻底与 Control Plane 全局环境变量解耦，作为实例级核心环境变量存储于 `data/instance_<id>/.env` 中。新建实例时由 `instanceconfig.Template` 赋予默认基础助手设定（`SYSTEM_PROMPT=你是一个乐于助人的助手。`），在 Web 设置页中归属「当前实例」与「立即生效」作用域，修改后通过 Runtime Scope 实时内存映射即时热生效而无需重启实例。
 - **引导提示词**：`以下是示例对话，请仿照句子格式、语气等回应接下来的用户输入。`
 - **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范，持久化保存于各实例的 `data/instance_<id>/dialogue.yml`。
-- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：系统时间 -> 实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。
+- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。OneBot 与 AstrBot 将当前系统时间追加到用户消息的 `response_context.guidance` 末尾，统一按 UTC+8 动态生成（例如 `当前系统时间：2026-11-7 23:43(UTC+8)。`），系统提示词不再注入每轮时间。
 - **实例级生命周期与模板初始化**：创建新实例时，系统自动从模板路径（默认为 `eval/dialogue/dialogue.yml`，可通过 Control Plane 的 `DEFAULT_DIALOGUE_TEMPLATE` 环境变量自定义）拷贝生成初始 `dialogue.yml`，并写入默认 `SYSTEM_PROMPT`；实例删除时彻底清理，不留孤儿数据。
 - **快速配置（Copy）两阶段事务**：在实例克隆复制过程中，包含 `SYSTEM_PROMPT` 的 `.env` 与 `dialogue.yml` 共同纳入事务配置清单，经历暂存（Stage）、校验、预备提交与崩溃恢复保障，确保整套人设（提示词与对话示例）与环境配置同步原子转移。
 - **并发安全与内存热重载**：每个实例运行时启动时预先解析 YAML 并缓存于 `Engine.DialoguePrompt`，通过读写锁 `sync.RWMutex` 保护，彻底消除每轮对话中的重复磁盘 I/O。Web 端通过 `/instances/<id>/...` 保存或更新原始 YAML 时，原子落盘并即时刷新内存提示词，热重载无缝生效。

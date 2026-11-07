@@ -376,6 +376,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
+	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
+	directVision := !visionEnabled && dialogueSupportsVision && !forceStickerSilence
+	var directImageParts []core.ContentPart
+	if directVision {
+		directImageParts = content.ImageContentParts(routeCtx, segments)
+	}
+	noVisionGuidance := (currentHasImage || replyHasImage) && !visionEnabled && !dialogueSupportsVision && !forceStickerSilence
 
 	if engine != nil && engine.SessionManager != nil {
 		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
@@ -409,9 +416,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 
 	// Backend silence keeps the original marker for history and memory buffering.
 	if currentHasImage && !forceStickerSilence {
-		if !visionEnabled {
-			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
-		} else {
+		if visionEnabled {
 			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
 				if engine != nil && engine.Security != nil {
@@ -501,6 +506,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if event.MetaEventType != "" {
 		contextMap["meta_event_type"] = event.MetaEventType
+	}
+	if noVisionGuidance {
+		contextMap["interaction_guidance"] = parity.NoVisionGuidance
 	}
 	if event.MessageType != "" {
 		contextMap["message_type"] = event.MessageType
@@ -720,6 +728,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		if vettedReply != "" {
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
+			if directVision {
+				for _, quote := range quoteNodes {
+					directImageParts = append(directImageParts, content.ImageContentParts(routeCtx, quote.Segments)...)
+				}
+			}
 		}
 	}
 
@@ -766,6 +779,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
+		if len(messages) > 0 {
+			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
+		}
 
 		deliveries = llm.NewPublicReplyLog(session, startEpoch)
 		defer func() {
@@ -1353,6 +1369,27 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
 		}
 	})
+}
+
+func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
+	if engine == nil || engine.ModelRouter == nil {
+		return false
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	return err == nil && target.HasCapability("vision")
+}
+
+func promptContentWithImages(prompt string, images []core.ContentPart) any {
+	if len(images) == 0 {
+		return prompt
+	}
+	parts := make([]core.ContentPart, 0, len(images)+1)
+	parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: prompt})
+	parts = append(parts, images...)
+	return parts
 }
 
 func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {

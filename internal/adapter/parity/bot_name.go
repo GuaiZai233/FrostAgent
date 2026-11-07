@@ -5,35 +5,106 @@ import (
 	"unicode"
 )
 
-// ContainsBotName matches literal names within one text segment. Names containing
-// English letters ignore ASCII letter case and Unicode spaces on both sides.
-// Names without English letters retain exact matching; punctuation, tabs and
-// line breaks are always literal.
+// AliasWakeGuidance is injected when a group message wakes the bot through a
+// configured name or alias rather than an explicit @. The model must verify the
+// user's intent and may stay silent to avoid answering an ambiguous mention.
+const AliasWakeGuidance = "此为别名唤醒命中，请仔细核对用户语义，是否确实呼唤 Bot 而不是其他意思，避免答非所问和莫名其妙。如果不是，请调用`stay_silent`工具保持沉默。"
+
+// ContainsBotName matches literal names within one text segment. Matching
+// ignores ASCII letter case and Unicode spaces (including full-width spaces) on
+// both sides. Purely ASCII alphanumeric names only match at ASCII word
+// boundaries, so short aliases such as "Bot" do not wake on "AstrBot" or
+// "chatbot". Punctuation, tabs and line breaks are always literal.
 func ContainsBotName(text string, names []string) bool {
 	var normalizedText string
-	normalized := false
+	textNormalized := false
 	for _, name := range names {
-		if name == "" {
+		normalizedName := normalizeBotName(name)
+		if normalizedName == "" {
 			continue
 		}
-		if !strings.ContainsAny(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") {
-			if strings.Contains(text, name) {
+		if !textNormalized {
+			normalizedText = normalizeBotName(text)
+			textNormalized = true
+		}
+		if isASCIIAlphanumericName(normalizedName) {
+			if containsASCIIWord(text, normalizedName) {
 				return true
 			}
 			continue
 		}
-		if !normalized {
-			normalizedText = normalizeEnglishBotName(text)
-			normalized = true
-		}
-		if strings.Contains(normalizedText, normalizeEnglishBotName(name)) {
+		if strings.Contains(normalizedText, normalizedName) {
 			return true
 		}
 	}
 	return false
 }
 
-func normalizeEnglishBotName(value string) string {
+func isASCIIAlphanumericName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func containsASCIIWord(text, word string) bool {
+	runes := []rune(text)
+	cleaned := make([]rune, 0, len(runes))
+	origins := make([]int, 0, len(runes))
+	for i, r := range runes {
+		if unicode.Is(unicode.Zs, r) {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			r += 'a' - 'A'
+		}
+		cleaned = append(cleaned, r)
+		origins = append(origins, i)
+	}
+	wordRunes := []rune(word)
+	if len(wordRunes) == 0 || len(wordRunes) > len(cleaned) {
+		return false
+	}
+	for start := 0; start+len(wordRunes) <= len(cleaned); start++ {
+		matched := true
+		for i, expected := range wordRunes {
+			if cleaned[start+i] != expected {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		origStart := origins[start]
+		origEnd := origins[start+len(wordRunes)-1]
+		beforeOK := origStart == 0 || !isASCIIWordRune(runes[origStart-1])
+		afterOK := origEnd == len(runes)-1 || !isASCIIWordRune(runes[origEnd+1])
+		if beforeOK && afterOK {
+			return true
+		}
+	}
+	return false
+}
+
+// isASCIIWordRune treats hyphen, underscore and square brackets as part of an
+// ASCII word. This prevents "Bot" from matching role tags such as "[assistant]"
+// or hyphenated compounds such as "forged-bot".
+func isASCIIWordRune(r rune) bool {
+	return isASCIILetterOrDigitRune(r) || r == '-' || r == '_' || r == '[' || r == ']'
+}
+
+func isASCIILetterOrDigitRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+}
+
+func normalizeBotName(value string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'A' && r <= 'Z':

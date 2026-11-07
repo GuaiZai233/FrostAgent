@@ -120,7 +120,21 @@ func (e *Engine) grantStickerGrace() {
 	}
 }
 
+func (e *Engine) stickerToolAvailable() bool {
+	tool, ok := e.findToolExecutor("send_sticker")
+	if !ok {
+		return false
+	}
+	if availability, ok := tool.(interface{ IsEnabled() bool }); ok {
+		return availability.IsEnabled()
+	}
+	return true
+}
+
 func (e *Engine) stickerActivityPrompt() string {
+	if !e.stickerToolAvailable() {
+		return ""
+	}
 	interval, remaining, grace := e.stickerActivitySnapshot()
 	if interval == 0 {
 		return ""

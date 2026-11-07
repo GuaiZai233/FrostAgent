@@ -10,6 +10,7 @@ import { confirmDialog } from '../components/confirm';
 import { attachPaginationEvents, renderPagination } from '../components/pagination';
 import { copyToClipboard } from '../utils/clipboard';
 import {
+  DEFAULT_BOT_NAME,
   renderPromptInspector,
   buildInspectorDataFromSessionContext,
   parsePrompt,
@@ -42,6 +43,22 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   let summaryDialogClose: (() => void) | null = null;
   let modelDialogClose: (() => void) | null = null;
   const pageAbortController = new AbortController();
+  let botName = DEFAULT_BOT_NAME;
+  let botNameLoaded = false;
+  const botNameReady = (async () => {
+    if (!instanceID) {
+      botNameLoaded = true;
+      return;
+    }
+    try {
+      const overview = await api.getOverview();
+      if (!isUnmounted) botName = overview.botName?.trim() || DEFAULT_BOT_NAME;
+    } catch {
+      // Bot name is display-only here; keep the neutral default on failure.
+    } finally {
+      botNameLoaded = true;
+    }
+  })();
 
   container.innerHTML = `
     <div class="page-container fade-in">
@@ -367,6 +384,11 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       </div>
     `;
 
+    if (!botNameLoaded) {
+      await botNameReady;
+      if (isUnmounted || requestSeq !== sessionContextRequestSeq) return;
+    }
+
     try {
       const resp = await api.getSessionContext(sessionId, 60);
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
@@ -375,7 +397,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       if (selectedSession?.sessionId === sessionId && typeof resp.runningSummary === 'string') {
         selectedSession.groupSummary = resp.runningSummary;
       }
-      const parsed = buildInspectorDataFromSessionContext(resp);
+      const parsed = buildInspectorDataFromSessionContext(resp, botName);
       renderInspector(parsed, `会话上下文预览 (${sessionId})`, selectedSession?.sessionId === sessionId ? selectedSession : undefined);
     } catch (err) {
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
@@ -398,6 +420,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, {
       showRawToggle: true,
       title,
+      botName,
       modelConfigHref: session && !groupId ? '#/model-router' : undefined,
       onConfigureModel: session && groupId
         ? () => {
@@ -512,16 +535,25 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     toggleEditorLabel.textContent = isEditorExpanded ? '收起输入' : '自定义输入';
   });
 
+  const applyParsedInput = (value: string) => {
+    if (isUnmounted) return;
+    sessionContextRequestSeq += 1;
+    currentPromptText = value;
+    renderInspector(parsePrompt(value, botName), '自定义输入 Prompt');
+    toast.success('已更新 Prompt 检查视图');
+  };
+
   applyInputBtn.addEventListener('click', () => {
     const val = rawInput.value.trim();
     if (!val) {
       toast.info('输入为空');
       return;
     }
-    sessionContextRequestSeq += 1;
-    currentPromptText = val;
-    renderInspector(parsePrompt(currentPromptText), '自定义输入 Prompt');
-    toast.success('已更新 Prompt 检查视图');
+    if (botNameLoaded) {
+      applyParsedInput(val);
+      return;
+    }
+    void botNameReady.then(() => applyParsedInput(val));
   });
 
   clearInputBtn.addEventListener('click', () => {

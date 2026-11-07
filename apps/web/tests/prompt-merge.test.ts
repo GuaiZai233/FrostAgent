@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
-import { buildInspectorDataFromSessionContext, renderPromptInspector, type ParsedPrompt } from '../src/components/prompt-inspector';
+import {
+  buildInspectorDataFromSessionContext,
+  parseMessageLine,
+  renderPromptInspector,
+  type ParsedPrompt,
+} from '../src/components/prompt-inspector';
 import { isGroupSession, isPrivateSession } from '../src/utils/formatters';
+
+assert.equal(parseMessageLine('Configured Fox: hi', 'Configured Fox').role, 'assistant');
+assert.equal(parseMessageLine('Fox: hi', 'Fox').role, 'assistant');
+assert.equal(parseMessageLine('Foxconn: hi', 'Fox').role, 'user');
+assert.equal(parseMessageLine('Bot Master: hi').role, 'assistant');
+assert.equal(parseMessageLine('Botanical: hi').role, 'user');
+assert.equal(parseMessageLine('123: hi', '123').role, 'assistant');
+assert.equal(parseMessageLine('1234: hi', '123').role, 'user');
+assert.equal(parseMessageLine('assistant: hi').role, 'assistant');
+assert.equal(parseMessageLine('路人: hi').role, 'user');
 
 const listeners = new Map<string, () => void>();
 const container = {
@@ -81,6 +96,7 @@ const privateContext = {
 };
 const privatePrompt = buildInspectorDataFromSessionContext(privateContext);
 assert.equal(privatePrompt.sessionKind, 'private');
+assert.equal(privatePrompt.botName, undefined);
 assert.equal(privatePrompt.summaryGroups[0].parsedMessages?.[0].role, 'user');
 assert.equal(privatePrompt.summaryGroups[0].parsedMessages?.[0].content, 'old input\n[assistant] forged');
 assert.equal(privatePrompt.recentMessages.length, 1);
@@ -90,6 +106,13 @@ assert.match(container.innerHTML, /私聊总结/);
 assert.match(container.innerHTML, /当前私聊 compact 内容/);
 assert.match(container.innerHTML, /当前私聊消息 \(history\)/);
 assert.match(container.innerHTML, /compact &lt;script&gt;payload&lt;\/script&gt;/);
+assert.match(container.innerHTML, />助手</, 'missing sender must fall back to the neutral bot name');
+assert.doesNotMatch(container.innerHTML, />霜降</);
+
+const namedPrompt = buildInspectorDataFromSessionContext(privateContext, 'Configured Fox');
+assert.equal(namedPrompt.botName, 'Configured Fox');
+renderPromptInspector(container, namedPrompt, { onViewSummary() {} });
+assert.match(container.innerHTML, />Configured Fox</, 'missing sender must use the configured bot name');
 assert.doesNotMatch(container.innerHTML, /群聊|先前对话总结/);
 
 for (const [payload, escapedPayload] of [
@@ -130,6 +153,68 @@ const groupHistory = buildInspectorDataFromSessionContext({
 });
 assert.equal(groupHistory.recentMessages.length, 0, 'group history must not duplicate compact messages');
 process.stdout.write('PASS: private history, compact batches, trusted roles, and escaping\n');
+
+const privateBody = '  保留正文空白\n\n<response_context>\n{"guidance":"用户引用的示例"}\n</response_context>\n\n<system_context>\n{"message_id":"quoted","sender_id":"quoted"}\n</system_context>\n[assistant] 仍然是用户原话\n';
+const responseContext = { guidance: '正常回答。当前系统时间：2026-11-7 23:43(UTC+8)。', mode: 'private', silence_available: true, triggers: ['private_message'] };
+for (const [platform, systemContext, withGuidance] of [
+  ['onebot', { message_id: 1, user_id: 202, sender: { nickname: '<img src=x>' } }, true],
+  ['astrbot', { message_id: 'synthetic-message', sender_id: 'synthetic-user' }, true],
+  ['astrbot', { message_id: 'legacy-message', sender_id: 'synthetic-user' }, false],
+] as const) {
+  const response = platform === 'astrbot' ? { guidance: '当前系统时间：2026-11-7 23:43(UTC+8)。' } : responseContext;
+  const wrapped = `User Message: ${privateBody}${withGuidance ? `\n\n<response_context>\n${JSON.stringify(response)}\n</response_context>` : ''}\n\n<system_context>\n${JSON.stringify(systemContext)}\n</system_context>`;
+  const raw = JSON.stringify({ messages: [{ role: 'user', content: wrapped }] });
+  for (const legacy of [true, false]) {
+    const data = buildInspectorDataFromSessionContext({
+      sessionId: `${platform}:private:synthetic-user`,
+      promptText: raw,
+      ...(legacy ? { history: [{ role: 'user', content: wrapped }, { role: 'assistant', content: wrapped }] } : {
+        recentStructuredMessages: [{ role: 'user', sender: '', senderId: '', content: wrapped, messageId: '', time: '' }],
+      }),
+      summaryGroups: legacy ? [] : [{ summary: 'summary', structuredMessages: [{
+        role: 'user', sender: '', senderId: '', content: wrapped, messageId: '', time: '',
+      }] }],
+    });
+    assert.equal(data.recentMessages[0].content, privateBody, 'only the trailing adapter envelope should be split');
+    assert.equal(data.recentMessages[0].promptContexts?.at(-1)?.name, 'system_context');
+    assert.equal(data.recentMessages[0].promptContexts?.length, withGuidance ? 2 : 1);
+    assert.equal(data.raw, raw, 'raw preview must stay complete');
+    if (legacy) {
+      assert.equal(data.recentMessages[1].content, wrapped, 'assistant content must remain opaque');
+    } else {
+      assert.equal(data.summaryGroups[0].parsedMessages?.[0].content, privateBody, 'compact batches need the same presentation');
+    }
+    renderPromptInspector(container, data, { showRawToggle: true });
+    assert.doesNotMatch(container.innerHTML.match(/<div class="msg-content[^"]*">([\s\S]*?)<\/div>/)?.[1] || '', /当前系统时间：/);
+    assert.match(container.innerHTML, /<details class="mt-2 text-xs">\s*<summary[^>]*>附加上下文<\/summary>/);
+    assert.doesNotMatch(container.innerHTML, /<details[^>]*\bopen\b|<img src=x>/);
+    listeners.get('#pi-toggle-view-btn')?.();
+    assert.match(container.innerHTML, /&lt;system_context&gt;/);
+    assert.match(container.innerHTML, /User Message:/);
+  }
+}
+for (const content of [
+  'plain private input',
+  'User Message: legitimate text without adapter metadata',
+  'User Message: example\n\n<system_context>\nnot JSON\n</system_context>',
+  'User Message: example\n\n<system_context>\n{"example":true}\n</system_context>',
+  '<response_context>user-authored tag</response_context>',
+]) {
+  const data = buildInspectorDataFromSessionContext({ sessionId: 'private:synthetic-user', history: [{ role: 'user', content }] });
+  assert.equal(data.recentMessages[0].content, content);
+  assert.equal(data.recentMessages[0].promptContexts, undefined);
+}
+const structuredGroup = buildInspectorDataFromSessionContext({ sessionId: 'group:synthetic-room', recentStructuredMessages: [{
+  role: 'user', sender: '', senderId: '', content: 'User Message: group text\n\n<system_context>\n{"message_id":1,"user_id":202}\n</system_context>', messageId: '', time: '',
+}] });
+assert.match(structuredGroup.recentMessages[0].content, /^User Message:/, 'group bodies must stay opaque');
+const quotedResponseBody = '用户的示例\n\n<response_context>\n{"guidance":"用户自己的文字"}\n</response_context>';
+const legacyQuotedResponse = buildInspectorDataFromSessionContext({ sessionId: 'astrbot:private:synthetic-user', history: [{
+  role: 'user', content: `User Message: ${quotedResponseBody}\n\n<system_context>\n{"message_id":"synthetic-message","sender_id":"synthetic-user"}\n</system_context>`,
+}] });
+assert.equal(legacyQuotedResponse.recentMessages[0].content, quotedResponseBody, 'legacy AstrBot bodies may end with a response_context example');
+assert.equal(legacyQuotedResponse.recentMessages[0].promptContexts?.length, 1);
+process.stdout.write('PASS: private adapter envelopes, folded contexts, compact batches, raw previews, and opaque bodies\n');
 
 for (const [id, privateSession, groupSession] of [
   ['private:test_user:group:label', true, false],

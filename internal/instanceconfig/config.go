@@ -434,8 +434,8 @@ func WriteAtomicDurable(path string, data []byte, mode os.FileMode) (committed b
 func SyncDirectory(path string) error { return syncDirectory(path) }
 
 const Template = `# Default values for new SQL instances.
-BOT_NAME=霜降狐
-BOT_ALIASES=霜降,FrostAgent
+BOT_NAME=助手
+BOT_ALIASES=Assistant,Bot
 ADMIN_QQ_IDS=
 SYSTEM_PROMPT=你是一个乐于助人的助手。
 MAX_CONTEXT_MESSAGES=20

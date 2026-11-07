@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -12,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
@@ -24,6 +26,7 @@ type Service struct {
 	engine       *llm.Engine
 	version      string
 	wsListenAddr string
+	settingsMu   sync.Mutex
 }
 
 // New creates a new BotStatusService.
@@ -61,12 +64,16 @@ func (s *Service) GetOverview(
 	// Build tool list
 	var toolInfos []*v1.ToolInfo
 	for _, t := range s.engine.ToolRegistry {
-		if availability, ok := t.(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
-			continue
+		available := true
+		if availability, ok := t.(interface{ IsEnabled() bool }); ok {
+			available = availability.IsEnabled()
 		}
 		toolInfos = append(toolInfos, &v1.ToolInfo{
-			Name:        t.Name(),
-			Description: t.Description(),
+			Name:         t.Name(),
+			Description:  t.Description(),
+			Enabled:      s.engine.ToolEnabled(t.Name()),
+			Available:    available,
+			Configurable: t.Name() == balancequery.ToolName,
 		})
 	}
 
@@ -85,7 +92,7 @@ func (s *Service) GetOverview(
 	})
 
 	resp := &v1.GetOverviewResponse{
-		BotName:                envOrDefault(s.engine, "BOT_NAME", "FrostAgent"),
+		BotName:                envOrDefault(s.engine, "BOT_NAME", "助手"),
 		Version:                s.version,
 		UptimeSeconds:          uptime,
 		TotalMessagesProcessed: s.engine.TotalMessagesProcessed.Load(),
