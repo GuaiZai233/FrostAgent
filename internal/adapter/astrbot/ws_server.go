@@ -542,6 +542,30 @@ func isBotNameMentioned(text string, scopes ...*runtimescope.Scope) bool {
 	return parity.ContainsBotName(text, configuredBotNames(scopes...))
 }
 
+// hasBotNameWake reports whether the group message woke the bot through a
+// configured name or alias rather than an explicit @.
+func hasBotNameWake(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.MessageType != "group" {
+		return false
+	}
+	if isBotNameMentioned(event.Content, scopes...) {
+		return true
+	}
+	return slices.ContainsFunc(event.Messages, func(text string) bool {
+		return isBotNameMentioned(text, scopes...)
+	})
+}
+
+// addAliasGuidance asks the model to verify ambiguous name/alias wakes and
+// stay silent instead of forcing an irrelevant reply.
+func addAliasGuidance(contextData map[string]any, event Event, scopes ...*runtimescope.Scope) {
+	if !hasBotNameWake(event, scopes...) {
+		return
+	}
+	contextData["alias_wake"] = true
+	contextData["guidance"] = parity.AliasWakeGuidance
+}
+
 func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 	scope := runtimescope.First(scopes)
 	name, nameSet := scope.LookupEnv("BOT_NAME")
@@ -591,13 +615,7 @@ func isExplicitWake(event *Event, scopes ...*runtimescope.Scope) bool {
 	if event.IsWake || event.IsAt {
 		return true
 	}
-	if isBotNameMentioned(event.Content, scope) {
-		return true
-	}
-	if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
-		return true
-	}
-	return false
+	return hasBotNameWake(*event, scope)
 }
 
 func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescope.Scope) bool {
@@ -622,10 +640,7 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 		if event.IsWake || event.IsAt {
 			return true
 		}
-		if isBotNameMentioned(event.Content, scope) {
-			return true
-		}
-		if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+		if hasBotNameWake(*event, scope) {
 			return true
 		}
 		var getenv func(string) string
@@ -1112,6 +1127,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if mentionOnly {
 			contextData["interaction_guidance"] = parity.MentionOnlyGuidance
 		}
+		addAliasGuidance(contextData, event, engine.Scope)
 	}
 	contextBytes, _ := json.Marshal(contextData)
 

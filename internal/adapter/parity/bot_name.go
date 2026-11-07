@@ -5,6 +5,11 @@ import (
 	"unicode"
 )
 
+// AliasWakeGuidance is injected when a group message wakes the bot through a
+// configured name or alias rather than an explicit @. The model must verify the
+// user's intent and may stay silent to avoid answering an ambiguous mention.
+const AliasWakeGuidance = "此为别名唤醒命中，请仔细核对用户语义，是否确实呼唤 Bot 而不是其他意思，避免答非所问和莫名其妙。如果不是，请调用`stay_silent`工具保持沉默。"
+
 // ContainsBotName matches literal names within one text segment. Matching
 // ignores ASCII letter case and Unicode spaces (including full-width spaces) on
 // both sides. Purely ASCII alphanumeric names only match at ASCII word

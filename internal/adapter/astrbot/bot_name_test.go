@@ -1,6 +1,35 @@
 package astrbot
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+)
+
+func TestAliasWakeGuidance(t *testing.T) {
+	scope := newTestScopeWithEnv(t, nil)
+	aliasEvent := Event{MessageType: "group", Content: "助手 你好"}
+	if !hasBotNameWake(aliasEvent, scope) {
+		t.Fatal("expected default name to wake")
+	}
+	contextData := map[string]any{}
+	addAliasGuidance(contextData, aliasEvent, scope)
+	if contextData["guidance"] != parity.AliasWakeGuidance {
+		t.Fatalf("guidance = %v, want %q", contextData["guidance"], parity.AliasWakeGuidance)
+	}
+	if contextData["alias_wake"] != true {
+		t.Fatalf("alias_wake = %v, want true", contextData["alias_wake"])
+	}
+
+	plainData := map[string]any{}
+	addAliasGuidance(plainData, Event{MessageType: "group", Content: "普通聊天"}, scope)
+	if len(plainData) != 0 {
+		t.Fatalf("plain message must not inject alias guidance: %+v", plainData)
+	}
+	if hasBotNameWake(Event{MessageType: "private", Content: "助手"}, scope) {
+		t.Fatal("private messages must not be treated as alias wakes")
+	}
+}
 
 func TestBotNameWakeMatching(t *testing.T) {
 	scope := newTestScopeWithEnv(t, map[string]string{

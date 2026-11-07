@@ -14,6 +14,8 @@ OneBot 和 AstrBot 后端对 `BOT_NAME` 与 `BOT_ALIASES` 使用相同的字面�
 
 标点符号不作为正则表达式，制表符、换行和消息段边界不会被忽略；匹配过程不修改配置值或消息正文。
 
+名称/别名唤醒命中后，适配器会在本轮 `response_context`/`system_context` 中注入核对语义的 guidance：要求模型确认用户确实在呼唤 Bot，而不是其他含义；若不确定则调用 `stay_silent` 保持沉默，避免答非所问。
+
 ## 运行信息诊断例外
 
 从插件 0.1.5 起，当前群消息顶层文本去除首尾空白后精确等于 `#fa` 时，作为 FrostAgent 保留诊断指令转发，不要求 @或管理员身份，也不受 `forward_all_group_messages=false` 过滤。可以带真实 @Bot 或引用标记；非 Bot 提及、媒体、未知组件及其他文本均不识别为诊断。识别只读取当前 Plain/text 组件；若同时存在标准化组件与原始 OneBot 消息段，两者必须一致，绝不从 `get_message_str()` 等字符串回退、引用链或历史正文中推断命令。
