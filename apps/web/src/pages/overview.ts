@@ -233,10 +233,12 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     try {
       const cfg = await api.getBalanceQueryConfig();
       if (isUnmounted) return;
+      let saving = false;
       await openDialog({
         title: '配置 balance_query',
         description: 'FrostAgent 使用已保存的请求查询额度，模型不能传入或修改请求参数。',
         maxWidth: '42rem',
+        canDismiss: () => !saving,
         bodyHtml: `<form id="balance-query-form" class="flex flex-col gap-4">
           <label class="form-group"><span class="form-label">curl 请求模板</span><textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></label>
           <p class="text-xs text-muted">用 {{API_KEY}} 代替密钥，支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。不会执行 shell、读取文件或跟随重定向。</p>
@@ -250,16 +252,26 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           closeConfigDialog = close;
           const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
           const clearKey = dialog.querySelector<HTMLInputElement>('#balance-query-clear-key')!;
+          const curl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+          const save = dialog.querySelector<HTMLButtonElement>('#balance-query-save')!;
+          const setSaving = (pending: boolean) => {
+            saving = pending;
+            save.disabled = pending;
+            save.textContent = pending ? '保存中...' : '保存';
+            dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn').forEach((button) => { button.disabled = pending; });
+            curl.disabled = pending;
+            clearKey.disabled = pending;
+            key.disabled = pending || clearKey.checked;
+          };
           clearKey.onchange = () => { key.disabled = clearKey.checked; if (clearKey.checked) key.value = ''; };
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
-            const save = dialog.querySelector<HTMLButtonElement>('#balance-query-save')!;
-            if (save.disabled) return;
-            save.disabled = true;
+            if (saving) return;
+            setSaving(true);
             const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
             error.textContent = '';
             try {
-              await api.saveBalanceQueryConfig(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, key.value, clearKey.checked);
+              await api.saveBalanceQueryConfig(curl.value, key.value, clearKey.checked);
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
               key.value = '';
@@ -268,7 +280,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               toast.success('额度查询配置已保存');
             } catch (err) {
               if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
-            } finally { save.disabled = false; }
+            } finally { setSaving(false); }
           };
         },
         onClose: () => { closeConfigDialog = undefined; },
