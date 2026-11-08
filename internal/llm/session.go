@@ -148,7 +148,7 @@ type GroupContextSnapshot struct {
 	RecentStructuredMessages []GroupCompactMessage `json:"recent_structured_messages,omitempty"`
 	SummaryGroups            []SummaryGroup        `json:"summary_groups,omitempty"`
 	// CompactDisabled is set when the group is outside the group compact whitelist.
-	// Such a snapshot carries no group context; the bot is still woken normally.
+	// Such a snapshot carries no running summary; uncompacted recent messages are kept.
 	CompactDisabled bool `json:"compact_disabled,omitempty"`
 }
 

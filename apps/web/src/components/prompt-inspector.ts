@@ -771,7 +771,7 @@ export function renderPromptInspector(
                 <span>群聊 compact 已禁用</span>
               </div>
             </div>
-            <div class="card p-3 text-xs leading-relaxed text-muted">本群未在群聊压缩白名单中：不触发群聊压缩，也不注入群聊总结与未压缩群消息上下文；Bot 仍会被正常唤醒。</div>
+            <div class="card p-3 text-xs leading-relaxed text-muted">本群未在群聊压缩白名单中：不触发群聊压缩，也不注入群聊总结；未压缩的最近群消息仍会提供；Bot 仍会被正常唤醒。</div>
           </div>
         `
             : ''

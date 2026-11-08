@@ -333,7 +333,7 @@ func (s *Service) GetSessionContext(
 				} else {
 					history = sess.Snapshot()
 					if !llm.GroupCompactAllowed(s.engine.Getenv, sessionID) {
-						snap = llm.DisabledGroupContextSnapshot()
+						snap = llm.WithoutCompactSummary(snap)
 						groupCompactDisabled = true
 					}
 				}

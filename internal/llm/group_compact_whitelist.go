@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
@@ -14,11 +13,8 @@ const (
 	EnvGroupCompactWhitelist = "GROUP_COMPACT_WHITELIST"
 
 	// GroupCompactStatusPrompt is injected into a group turn's prompt when compaction is disabled for that group.
-	GroupCompactStatusPrompt = "<group_compact_status>群聊 compact 已禁用：本群未在群聊压缩白名单中，本轮不提供群聊压缩总结与未压缩群消息上下文，请仅依据当前消息作答。</group_compact_status>"
+	GroupCompactStatusPrompt = "<group_compact_status>群聊 compact 已禁用：本群未在群聊压缩白名单中，本轮不提供群聊压缩总结，仅保留未压缩的最近群消息。</group_compact_status>"
 )
-
-// ErrGroupCompactDisabled is returned when a compaction is requested for a group outside the whitelist.
-var ErrGroupCompactDisabled = errors.New("该群未在群聊压缩白名单中，已禁用群聊压缩")
 
 // GroupCompactAllowed reports whether running compact may operate on the conversation.
 // It reuses the proactive reply whitelist semantics: when the switch is unset, a non-empty list
@@ -38,10 +34,13 @@ func GroupCompactAllowed(getenv func(string) string, conversationID string) bool
 	return proactive.IsGroupAllowedWith(getenv, EnvGroupCompactWhitelistEnabled, EnvGroupCompactWhitelist, identity)
 }
 
-// DisabledGroupContextSnapshot is the context given to a group outside the compact whitelist:
-// no running summary and no uncompacted recent messages, flagged so prompts can say so.
-func DisabledGroupContextSnapshot() GroupContextSnapshot {
-	return GroupContextSnapshot{RecentMessages: []string{}, CompactDisabled: true}
+// WithoutCompactSummary removes the running summary and summary groups from a group context
+// snapshot for a group outside the compact whitelist. Uncompacted recent messages are kept.
+func WithoutCompactSummary(snap GroupContextSnapshot) GroupContextSnapshot {
+	snap.RunningSummary = ""
+	snap.SummaryGroups = nil
+	snap.CompactDisabled = true
+	return snap
 }
 
 // groupIdentityFromConversationID converts a session conversation ID into the identity used by

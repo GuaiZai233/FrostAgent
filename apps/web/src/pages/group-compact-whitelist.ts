@@ -33,7 +33,7 @@ export function mountGroupCompactWhitelist(parent: HTMLElement, deps: CompactWhi
         </label>
       </div>
       <p class="text-[11px] text-muted">
-        启用后仅白名单群触发群聊压缩。其余群不压缩，也不再获得群聊总结与未压缩群消息上下文，但仍正常被唤醒；白名单为空时所有群均不压缩。
+        启用后仅白名单群触发群聊压缩。其余群不压缩、不注入群聊总结，但仍保留未压缩的最近群消息并正常被唤醒；白名单为空时所有群均不压缩。管理员手动 /compact 不受此限制。
       </p>
       <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
         <select id="compact-whitelist-select" class="input input-sm text-xs flex-1 min-w-[200px]" aria-label="从最近会话选择群聊">

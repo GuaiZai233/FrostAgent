@@ -154,8 +154,8 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **代数隔离与重置安全**：清空或删除群聊总结时递增 `generation`，自动失效任何处于 In-Flight 状态的异步压缩结果与持久化，防止过期数据写回覆盖。
 - **群聊压缩白名单门禁 (Group Compact Whitelist Gate)**：
   - 实例设置 `ENABLE_GROUP_COMPACT_WHITELIST` 与 `GROUP_COMPACT_WHITELIST` 控制群聊压缩的生效范围，判定语义与主动回复白名单完全一致（复用 `proactive.IsWhitelistEnabledWith` / `IsGroupAllowedWith`，包括显隐式边界、平台前缀与 QQ 裸 ID 归一）；开关未设置且列表非空时隐式启用，启用后空列表拒绝所有群；
-  - 硬门禁位于 `GroupCompactor.TriggerWithScope` 与 `ForceCompact`（`/compact` 指令同样受限，返回 `ErrGroupCompactDisabled`）：非白名单群永远不启动 LLM 压缩，也不产生总结；唤醒 Bot 的正常回复路径不受影响；
-  - 非白名单群在对话快照中被置为 `DisabledGroupContextSnapshot`：不注入 `group_running_summary`，也不注入未压缩群消息，并在本轮 Prompt 中附加 `<group_compact_status>` 标签；会话列表与会话上下文预览同步隐藏旧总结，`GetSessionContextResponse.group_compact_disabled` 向前端标注禁用状态，Prompt 检查器渲染“群聊 compact 已禁用”提示；
+  - 硬门禁位于自动触发入口 `GroupCompactor.TriggerWithScope`：非白名单群不启动自动 LLM 压缩，也不产生总结；管理员 `/compact` 经 `ForceCompact` 手动触发，不受白名单限制；唤醒 Bot 的正常回复路径不受影响；
+  - 非白名单群在对话快照中经 `WithoutCompactSummary` 处理：移除 `group_running_summary` 与摘要批次，但保留未压缩的最近群消息（原始消息仍随请求注入），并在本轮 Prompt 中附加 `<group_compact_status>` 标签；会话列表与会话上下文预览同步隐藏旧总结，`GetSessionContextResponse.group_compact_disabled` 向前端标注禁用状态，Prompt 检查器渲染“群聊 compact 已禁用”提示；
   - 控制台位于「记忆与压缩」分区，复用主动回复的白名单交互（开关、群下拉、手动群号、群名缓存展示），草稿写入规则由 `planCompactGroupChange` 统一保证：未显式设置的开关在改动群列表前先固定为当前生效状态。
 
 ### 适配器与消息分发系统 (Adapter & Dispatcher)

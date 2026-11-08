@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -59,7 +58,7 @@ func TestGroupIdentityFromConversationID(t *testing.T) {
 	}
 }
 
-func TestGroupCompactorSkipsNonWhitelistedGroup(t *testing.T) {
+func TestGroupCompactorAutoTriggerSkipsNonWhitelistedGroup(t *testing.T) {
 	t.Setenv(EnvGroupCompactWhitelistEnabled, "true")
 	t.Setenv(EnvGroupCompactWhitelist, "111")
 
@@ -72,23 +71,28 @@ func TestGroupCompactorSkipsNonWhitelistedGroup(t *testing.T) {
 	session.AppendGroupCompactMessage("msg", 10)
 
 	compactor.TriggerWithScope(session, "owner", modelrouter.Scope{})
-	if err := compactor.ForceCompact(session, "owner", modelrouter.Scope{}); !errors.Is(err, ErrGroupCompactDisabled) {
-		t.Fatalf("ForceCompact error = %v, want ErrGroupCompactDisabled", err)
-	}
 
 	time.Sleep(30 * time.Millisecond)
 	if n := llm.CallCount(); n != 0 {
-		t.Fatalf("compaction called the model %d times for a non-whitelisted group", n)
+		t.Fatalf("automatic compaction called the model %d times for a non-whitelisted group", n)
 	}
 	if summary := session.GroupRunningSummary(); summary != "" {
 		t.Fatalf("expected no running summary for a non-whitelisted group, got %q", summary)
 	}
 }
 
-func TestDisabledGroupContextSnapshotCarriesNoContext(t *testing.T) {
-	snap := DisabledGroupContextSnapshot()
-	if !snap.CompactDisabled || snap.RunningSummary != "" || len(snap.RecentMessages) != 0 ||
-		len(snap.RecentStructuredMessages) != 0 || len(snap.SummaryGroups) != 0 {
-		t.Fatalf("disabled snapshot must carry no group context: %+v", snap)
+func TestWithoutCompactSummaryKeepsRecentMessages(t *testing.T) {
+	in := GroupContextSnapshot{
+		RunningSummary:           "old summary",
+		RecentMessages:           []string{"User1: hi"},
+		RecentStructuredMessages: []GroupCompactMessage{{Role: "user", Content: "hi"}},
+		SummaryGroups:            []SummaryGroup{{Summary: "batch"}},
+	}
+	snap := WithoutCompactSummary(in)
+	if !snap.CompactDisabled || snap.RunningSummary != "" || len(snap.SummaryGroups) != 0 {
+		t.Fatalf("summary must be stripped and flagged: %+v", snap)
+	}
+	if len(snap.RecentMessages) != 1 || len(snap.RecentStructuredMessages) != 1 {
+		t.Fatalf("uncompacted recent messages must be kept: %+v", snap)
 	}
 }

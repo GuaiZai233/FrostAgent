@@ -371,9 +371,7 @@ func (c *GroupCompactor) ForceCompact(
 	if c == nil || session == nil || c.provider == nil || c.model == "" || owner == "" {
 		return errors.New("group compactor unavailable")
 	}
-	if !c.compactAllowed(session) {
-		return ErrGroupCompactDisabled
-	}
+	// Manual compaction (admin /compact) bypasses the group compact whitelist by design.
 	key := session.ConversationID
 
 	c.mu.Lock()

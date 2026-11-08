@@ -1059,7 +1059,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			maxChars := engine.GroupRawMaxChars()
 			groupSnapshot = session.SnapshotGroupContext(limit, maxChars, event.MessageID)
 			if !llm.GroupCompactAllowed(engine.Getenv, session.ConversationID) {
-				groupSnapshot = llm.DisabledGroupContextSnapshot()
+				groupSnapshot = llm.WithoutCompactSummary(groupSnapshot)
 			}
 		}
 	}

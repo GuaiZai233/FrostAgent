@@ -626,7 +626,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			groupSnapshot = session.SnapshotGroupContext(limit, maxChars, msgID)
 			if !llm.GroupCompactAllowed(engine.Getenv, session.ConversationID) {
-				groupSnapshot = llm.DisabledGroupContextSnapshot()
+				groupSnapshot = llm.WithoutCompactSummary(groupSnapshot)
 			}
 		}
 	}
