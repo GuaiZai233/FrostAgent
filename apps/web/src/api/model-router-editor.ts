@@ -2,6 +2,7 @@ import { create, toJsonString } from '@bufbuild/protobuf';
 import { ModelRouterConfigurationSchema, type ModelRouterConfiguration } from '@frostagent/proto';
 import { createInstanceAPI } from './client';
 import { instanceState } from '../instance-state';
+import { randomUUID } from '../utils/random-id';
 
 type RouterAPI = Pick<ReturnType<typeof createInstanceAPI>,
   'getModelRouterState' | 'saveModelRouterDraft' | 'publishModelRouter' | 'discardModelRouterDraft'
@@ -33,11 +34,11 @@ function catalogDraftOwner() {
   try {
     const existing = sessionStorage.getItem(key);
     if (existing) return existing;
-    const owner = crypto.randomUUID();
+    const owner = randomUUID();
     sessionStorage.setItem(key, owner);
     return owner;
   } catch {
-    return crypto.randomUUID();
+    return randomUUID();
   }
 }
 

@@ -136,6 +136,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **并发安全与内存热重载**：每个实例运行时启动时预先解析 YAML 并缓存于 `Engine.DialoguePrompt`，通过读写锁 `sync.RWMutex` 保护，彻底消除每轮对话中的重复磁盘 I/O。Web 端通过 `/instances/<id>/...` 保存或更新原始 YAML 时，原子落盘并即时刷新内存提示词，热重载无缝生效。
 - **升级兼容性边界与无隐式迁移（Breaking Migration Boundary）**：系统提示词下沉为实例级配置属于显式的破坏性迁移。系统坚决不执行隐式数据回填或跨层穿透读取：Control Plane 不再暴露全局 `SYSTEM_PROMPT`，存量实例目录中的 `.env` 若未定义 `SYSTEM_PROMPT`，在升级后将解析为空，绝不会隐式继承或持久化根级旧配置，避免造成隐蔽的状态污染；用户需在 Web 设置面板中显式为其赋予独立提示词。新建实例则由模板自动赋予默认助手设定。
 - **Web UI 管理与响应式排版**：前端控制台提供「人设对话」管理页面与「后端设置」页面，严格绑定当前选中的实例，支持可视化卡片增删改查、排序、实时提示词片段预览、直接编辑原始 YAML 以及实例专属环境变量热修改。在「后端设置」中针对环境变量表（特别是超长提示词 `SYSTEM_PROMPT` 等长文本字段）引入固定表格布局（Fixed Table Layout）、层叠顶端对齐（`.table.env-table td { vertical-align: top; }` 优先于基础表格居中规则）与自适应断字换行规范（`table-layout: fixed`、`overflow-wrap: anywhere`、`word-break: break-all`、`whitespace-pre-wrap`），确保超宽文本无论在何种视口下均自动折行，杜绝横向滚动挤占，并使编辑与删除操作按键始终常驻于可视屏幕顶端范围内。
+- **非安全上下文兼容的客户端 ID 生成**：浏览器仅在安全上下文（HTTPS 或 localhost）中暴露 `crypto.randomUUID()`，控制台若经局域网 HTTP 地址访问，该函数为 `undefined`。模型路由页面的草稿 owner 与模型名称 ID 统一经 `apps/web/src/utils/random-id.ts` 的 `randomUUID()` 生成：优先使用原生 `randomUUID`，不可用时基于 `crypto.getRandomValues`（所有上下文均可用）按 RFC 4122 v4 格式拼装。此前该缺陷会导致模型路由页面在 HTTP 访问时显示「页面加载失败」，且因 `sessionStorage` 未写入而刷新无效。
 
 ### 群聊滚动总结与容错压缩系统 (Group Running Compactor)
 
