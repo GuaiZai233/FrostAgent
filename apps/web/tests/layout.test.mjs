@@ -116,8 +116,8 @@ for (const path of ['/overview', '/prompt', '/sessions', '/memory', '/stickers',
   assert.ok(!guardedPaths.includes(`'${path}'`), `${path} must retain its framework without an instance`);
 }
 assert.match(overview, /mountInstanceRequired\(content\)/, 'overview must keep instance selection guidance alongside the version control');
-assert.match(connections, /正向 WebSocket（FA 作为客户端）/);
-assert.match(connections, /反向 WebSocket（FA 作为服务端）/);
+assert.match(connections, /<option value="forward">正向 WebSocket（FrostAgent 作为客户端）<\/option>/);
+assert.match(connections, /<option value="reverse">反向 WebSocket（FrostAgent 作为服务端）<\/option>/);
 assert.match(connections, /id="\$\{adapter.id\}-enabled" type="checkbox"/, 'each adapter needs its own enable checkbox');
 assert.match(connections, /copyToClipboard\(address\)/, 'connection addresses must be copyable');
 
