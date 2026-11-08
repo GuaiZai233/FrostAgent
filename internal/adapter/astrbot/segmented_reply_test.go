@@ -3,6 +3,7 @@ package astrbot
 import (
 	"context"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
@@ -400,5 +401,60 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		})
+	}
+}
+
+// Only the first segment of a group reply quotes and mentions the trigger; the
+// follow-up segments are plain messages that do not inherit that decoration.
+func TestSegmentedReplyFollowUpsStayPlain(t *testing.T) {
+	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		replyformat.EnvKey:          "true",
+		"STICKER_ACTIVITY":          "0",
+		"ENABLE_AT_IN_GROUP_MSG":    "true",
+		"ENABLE_REPLY_IN_GROUP_MSG": "true",
+	} {
+		if err := config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	output := "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third"
+	engine := newTestEngine(&mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: output}}}})
+	engine.Scope = runtimescope.New(config, nil, nil)
+	srv, _, url := startWSTestServer(engine)
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		srv.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close(); engine.Scope.Cancel(); engine.Scope.Wait(); srv.Close() })
+	// Synthetic IDs only.
+	event := Event{Type: "event", EventType: "message", Platform: "astrbot", MessageType: "group", GroupID: "synthetic-group", MessageID: "synthetic-msg", UserID: "synthetic-user", Content: "hello", IsAt: true}
+	if err := conn.WriteJSON(event); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	for index, want := range []string{"first", "second", "third"} {
+		var action Action
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Content != want {
+			t.Fatalf("part %d content=%q want %q", index, action.Content, want)
+		}
+		var quote, mention bool
+		for _, message := range action.Messages {
+			quote = quote || parity.IsQuoteType(message.Type)
+			mention = mention || parity.IsMentionType(message.Type)
+		}
+		if index == 0 && (!quote || !mention) {
+			t.Fatalf("first segment lost quote/mention: %+v", action.Messages)
+		}
+		if index > 0 && (quote || mention) {
+			t.Fatalf("follow-up segment %d inherited decoration: %+v", index, action.Messages)
+		}
 	}
 }

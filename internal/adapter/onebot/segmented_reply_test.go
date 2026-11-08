@@ -97,7 +97,13 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 				}
 				params := action.Params.(map[string]any)
 				body := params["message"]
-				if tc.group {
+				if tc.group && index > 0 {
+					// Follow-up segments are plain text, never a quote/mention chain.
+					if _, plain := body.(string); !plain {
+						t.Fatalf("follow-up segment %d is not plain text: %v", index, body)
+					}
+				}
+				if tc.group && index == 0 {
 					raw, _ := json.Marshal(body)
 					var chain []struct {
 						Type string
@@ -119,7 +125,7 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 						}
 					}
 					if !quote || !mention {
-						t.Fatalf("lost group decoration: %s", raw)
+						t.Fatalf("lost group decoration on first segment: %s", raw)
 					}
 					body = strings.TrimSpace(text.String())
 				}

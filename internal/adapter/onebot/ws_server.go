@@ -1008,7 +1008,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			replyText = filterProactiveStickerCQ(replyText)
 		}
 		if structured, _ := parseFinalMessages(replyText); len(structured) == 0 {
-			replyParts = replyformat.Split(replyText, engine.Getenv(replyformat.EnvKey) == "true")
+			replyParts = replyformat.SplitLimited(replyText, engine.Getenv(replyformat.EnvKey) == "true", replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey)))
 			replyText = strings.Join(replyParts, "\n\n")
 		}
 		if turn.Interrupted() {
@@ -1267,9 +1267,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				replyParts = []string{replyText}
 			}
 			actions = nil
-			for _, part := range replyformat.WithReceipt(replyParts, receiptText) {
+			for index, part := range replyformat.WithReceipt(replyParts, receiptText) {
 				var body any = part
-				if event.MessageType == "group" && strings.TrimSpace(replyText) != "" {
+				// Only the first segment of a turn carries the reply/@ decoration;
+				// later segments are plain messages that do not inherit it.
+				if index == 0 && event.MessageType == "group" && strings.TrimSpace(replyText) != "" {
 					base := []tools.OneBotSegment{{Type: "text", Data: map[string]any{"text": part}}}
 					if engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true" || engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true" {
 						body = wrapGroupReply(base, event, engine.Scope)

@@ -606,6 +606,13 @@ multiSegment.emit('change');
 el('settings-draft-save').click();
 await settle();
 assert.equal(writes.at(-1)?.find((item) => item.key === 'ENABLE_MULTI_SEGMENT_REPLY')?.value, 'false');
+const maxSegments = el('multi-segment-max-segments');
+assert.equal(maxSegments.placeholder, '0', 'segment cap defaults to unlimited');
+maxSegments.value = '2';
+maxSegments.emit('input');
+el('settings-draft-save').click();
+await settle();
+assert.equal(writes.at(-1)?.find((item) => item.key === 'MULTI_SEGMENT_REPLY_MAX_SEGMENTS')?.value, '2');
 cleanup();
 
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);
