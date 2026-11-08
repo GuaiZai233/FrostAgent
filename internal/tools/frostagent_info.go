@@ -50,7 +50,7 @@ type FrostAgentInfoSource struct {
 	Platforms func() []string
 	// DialogueModel returns only the upstream model name of the dialogue workload.
 	// Errors are reported to the model as a generic unavailable state.
-	DialogueModel func() (string, error)
+	DialogueModel func(ctx context.Context) (string, error)
 	// Features reports availability keyed by the Feature* constants.
 	Features func() map[string]bool
 	// Now is optional and exists so tests can fix the clock.
@@ -76,7 +76,7 @@ func FrostAgentInfoTool(source FrostAgentInfoSource) Tool {
 			"required":             []string{"section"},
 			"additionalProperties": false,
 		},
-		executeContext: func(_ context.Context, args string) (string, error) {
+		executeContext: func(ctx context.Context, args string) (string, error) {
 			section, err := parseFrostInfoSection(args)
 			if err != nil {
 				return "", err
@@ -85,7 +85,7 @@ func FrostAgentInfoTool(source FrostAgentInfoSource) Tool {
 			case frostInfoSectionOverview:
 				return marshalFrostInfo(frostInfoOverview(source))
 			case frostInfoSectionModel:
-				return marshalFrostInfo(frostInfoModel(source))
+				return marshalFrostInfo(frostInfoModel(ctx, source))
 			default:
 				return marshalFrostInfo(frostInfoFeatures(source))
 			}
@@ -183,11 +183,11 @@ type frostInfoModelResult struct {
 	Reason        string `json:"reason,omitempty"`
 }
 
-func frostInfoModel(source FrostAgentInfoSource) frostInfoModelResult {
+func frostInfoModel(ctx context.Context, source FrostAgentInfoSource) frostInfoModelResult {
 	if source.DialogueModel == nil {
 		return frostInfoModelResult{Available: false, Reason: "主对话模型未配置"}
 	}
-	name, err := source.DialogueModel()
+	name, err := source.DialogueModel(ctx)
 	name = strings.TrimSpace(name)
 	if err != nil || name == "" {
 		return frostInfoModelResult{Available: false, Reason: "主对话模型未配置或已禁用"}

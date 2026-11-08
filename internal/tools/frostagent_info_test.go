@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -17,7 +18,7 @@ func fixedFrostInfoSource() FrostAgentInfoSource {
 		StartedAt: func() time.Time { return started },
 		Now:       func() time.Time { return started.Add(2*24*time.Hour + 3*time.Hour + 4*time.Minute + 30*time.Second) },
 		Platforms: func() []string { return []string{"onebot"} },
-		DialogueModel: func() (string, error) {
+		DialogueModel: func(context.Context) (string, error) {
 			return "upstream-chat-model", nil
 		},
 		Features: func() map[string]bool {
@@ -123,7 +124,7 @@ func TestFrostAgentInfoModelReturnsOnlyUpstreamName(t *testing.T) {
 
 func TestFrostAgentInfoModelDoesNotEchoResolverErrors(t *testing.T) {
 	secret := "https://internal.example/v1?key=synthetic-secret"
-	source := FrostAgentInfoSource{DialogueModel: func() (string, error) {
+	source := FrostAgentInfoSource{DialogueModel: func(context.Context) (string, error) {
 		return "", errors.New(secret)
 	}}
 	raw, err := FrostAgentInfoTool(source).Execute(`{"section":"model"}`)

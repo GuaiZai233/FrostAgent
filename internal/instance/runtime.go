@@ -503,15 +503,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			}
 			return platforms
 		},
-		DialogueModel: func() (string, error) {
-			if engine.ModelRouter == nil {
-				return "", nil
-			}
-			target, err := engine.ModelRouter.Resolve(modelrouter.WorkloadDialogue, modelrouter.Scope{})
-			if err != nil {
-				return "", err
-			}
-			return target.UpstreamModel, nil
+		DialogueModel: func(ctx context.Context) (string, error) {
+			return llm.DialogueModelForRun(ctx, engine.ModelRouter)
 		},
 		Features: func() map[string]bool {
 			sandboxEnabled := dynamicSandbox != nil && sandboxManager != nil && sandboxManager.Get().Enabled
