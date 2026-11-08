@@ -484,6 +484,57 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)
 	dispatcher.RegisterAdapter(ab)
+	// Read-only self-description. Registered after the adapters so it can report
+	// live platform connections; every value is read at call time.
+	frostInfoTool := tools.FrostAgentInfoTool(tools.FrostAgentInfoSource{
+		BotName: func() string { return engine.Getenv("BOT_NAME") },
+		Aliases: func() []string { return strings.Split(engine.Getenv("BOT_ALIASES"), ",") },
+		Version: func() string { return engine.Version },
+		StartedAt: func() time.Time {
+			return engine.StartedAt
+		},
+		Platforms: func() []string {
+			var platforms []string
+			if ob.ConnectionCount() > 0 {
+				platforms = append(platforms, "onebot")
+			}
+			if ab.ConnectionCount() > 0 {
+				platforms = append(platforms, "astrbot")
+			}
+			return platforms
+		},
+		DialogueModel: func() (string, error) {
+			if engine.ModelRouter == nil {
+				return "", nil
+			}
+			target, err := engine.ModelRouter.Resolve(modelrouter.WorkloadDialogue, modelrouter.Scope{})
+			if err != nil {
+				return "", err
+			}
+			return target.UpstreamModel, nil
+		},
+		Features: func() map[string]bool {
+			sandboxEnabled := dynamicSandbox != nil && sandboxManager != nil && sandboxManager.Get().Enabled
+			mcpConnected := false
+			if mcpManager != nil {
+				for _, server := range mcpManager.ListServers() {
+					if server.Status() == mcp.StatusConnected {
+						mcpConnected = true
+						break
+					}
+				}
+			}
+			return map[string]bool{
+				tools.FeatureMemory:          engine.MemoryReader != nil,
+				tools.FeatureVectorRetrieval: engine.MemoryEmbeddings != nil,
+				tools.FeatureSandbox:         sandboxEnabled,
+				tools.FeatureMCP:             mcpConnected,
+				tools.FeatureActionsCat:      actionsCatClient.IsEnabled() && actionsCatClient.IsConfigured(),
+				tools.FeatureSticker:         stickerStore != nil,
+			}
+		},
+	})
+	engine.ToolRegistry[frostInfoTool.Name()] = frostInfoTool
 	// Keep both endpoints for reverse connections and browser mock sessions.
 	// Each adapter rejects real inbound connections in forward mode.
 	mux.HandleFunc("/ws/onebot", ob.Handler())

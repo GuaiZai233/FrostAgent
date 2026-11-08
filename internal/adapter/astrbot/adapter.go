@@ -199,6 +199,13 @@ func (a *Adapter) unregisterConn(c *wsConn) {
 	delete(a.conns, c)
 }
 
+// ConnectionCount reports live AstrBot WebSocket sessions. It is read-only.
+func (a *Adapter) ConnectionCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.conns)
+}
+
 // Send 将 core.OutgoingMessage 转换为 AstrBot Action 并发送到活跃连接。
 func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 	a.mu.RLock()

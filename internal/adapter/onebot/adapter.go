@@ -127,6 +127,13 @@ func (a *Adapter) unregisterConn(c *wsConnection) {
 	delete(a.conns, c)
 }
 
+// ConnectionCount reports live OneBot WebSocket sessions. It is read-only.
+func (a *Adapter) ConnectionCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.conns)
+}
+
 // Send 将 core.OutgoingMessage 转换为 OneBot Action 并发送到活跃连接。
 // 注意：在当前 Stage 1 阶段，若存在多个活跃 OneBot 连接且未在 Metadata 中指定连接标识，
 // Send 将向所有活跃连接发送以确保送达；未来多实例场景可通过 Metadata["self_id"] 等精细路由。
