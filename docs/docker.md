@@ -19,7 +19,7 @@ Host/Origin 检查仍然生效，适配器端口 `11023` 仍不提供管理路�
    docker compose up -d --build
    ```
 
-4. 打开 http://127.0.0.1:8080/#/settings/frontend，在「API / 控制平面访问凭据」
+4. 打开 http://127.0.0.1:8080/#/settings/credentials（设置 → 访问凭据），在「API / 控制平面访问凭据」
    中填写同一令牌并保存，刷新页面。此页面无需先创建或选择实例。
 
 如果 SQL 中已有非空 `MCP_CONTROL_TOKEN`，或作为回退的 `ADMIN_TOKEN`，初始化输入

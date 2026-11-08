@@ -62,7 +62,7 @@ For the first deployment, copy `docker.env.example` to `.env` and set `FROSTAGEN
 docker compose up -d --build
 ```
 
-Open [http://127.0.0.1:8080/#/settings/frontend](http://127.0.0.1:8080/#/settings/frontend) and save the same token under "API / Control Plane Access Credentials".
+Open [http://127.0.0.1:8080/#/settings/credentials](http://127.0.0.1:8080/#/settings/credentials) (Settings → Access credentials) and save the same token under "API / Control Plane Access Credentials".
 
 ## Adapters
 

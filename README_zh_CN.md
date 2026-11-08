@@ -61,7 +61,7 @@ go run ./cmd/app
 docker compose up -d --build
 ```
 
-打开 `http://127.0.0.1:8080/#/settings/frontend`，在「API / 控制平面访问凭据」中
+打开 `http://127.0.0.1:8080/#/settings/credentials`（设置 → 访问凭据），在「API / 控制平面访问凭据」中
 填写同一令牌并保存。
 
 ## 适配器
