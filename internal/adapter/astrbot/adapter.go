@@ -445,6 +445,12 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			continue
 		}
 
+		if c.mock && a.engine != nil && a.engine.SessionManager != nil {
+			// Mark at intake, before reservation, bot-loop tracking or any LLM run,
+			// so Direct Chat sessions are never observable as real sessions.
+			a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).MarkMock()
+		}
+
 		if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
 			normalized, accepted := a.normalizePoke(event, c.mock)
 			if !accepted {

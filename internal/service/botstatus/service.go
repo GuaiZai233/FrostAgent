@@ -58,7 +58,7 @@ func (s *Service) GetOverview(
 
 	activeSessions := int32(0)
 	if s.engine.SessionManager != nil {
-		activeSessions = int32(s.engine.SessionManager.Count())
+		activeSessions = int32(s.engine.SessionManager.CountVisible())
 	}
 
 	// Build tool list
@@ -165,6 +165,9 @@ func (s *Service) GetSessions(
 	viewsByID := make(map[string]sessionView)
 	sessions := s.engine.SessionManager.ListSessions(0, 0)
 	for _, sess := range sessions {
+		if sess.IsMock() {
+			continue
+		}
 		platform := derivePlatform(sess.ConversationID)
 
 		sess.Lock()
@@ -320,9 +323,11 @@ func (s *Service) GetSessionContext(
 	var recentStructuredMessages []llm.GroupCompactMessage
 	var historyMsgs []*v1.SessionHistoryMessageProto
 
+	// Mock (Direct Chat) sessions are ephemeral debug state: never expose
+	// their history or last prompt through the session inspector.
 	if s.engine.SessionManager != nil {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
-			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
+			if sess, isSess := sessCore.(*llm.SessionContext); isSess && !sess.IsMock() {
 				snap := sess.SnapshotGroupContext(limit, 100000, "")
 				var history []llm.ChatMessage
 				if isPrivateSession(sessionID) {

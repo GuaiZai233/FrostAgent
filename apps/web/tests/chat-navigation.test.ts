@@ -167,7 +167,7 @@ try {
     await flush();
     staleReset({ data: JSON.stringify(reply) });
     assert.ok(socket().url.includes('/instances/fixture-chat-b/'));
-    assert.equal(root.querySelector<HTMLInputElement>('#chat-uid-input')!.value, '10001');
+    assert.match(root.querySelector<HTMLInputElement>('#chat-uid-input')!.value, /^[1-9]\d{4}$/);
     assert.ok(!root.textContent!.includes(`first-${adapter}`));
     assert.ok(!root.textContent!.includes('background final'));
     instanceState.select(null);

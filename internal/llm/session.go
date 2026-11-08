@@ -264,6 +264,7 @@ func (f *DeliveryFailure) FormatDeliveryContext() string {
 
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
+	mock           atomic.Bool // set only by trusted Direct Chat (mock) runs
 	activeSkills   map[string]activeSkill
 	ConversationID string
 	History        []ChatMessage
@@ -318,6 +319,13 @@ type SessionContext struct {
 }
 
 // GroupName returns the cached group name for this session, if any.
+// MarkMock flags the session as produced by a Direct Chat (mock) run. The flag
+// is set from the trusted RunContext, never derived from the session ID.
+func (s *SessionContext) MarkMock() { s.mock.Store(true) }
+
+// IsMock reports whether the session was produced by a Direct Chat run.
+func (s *SessionContext) IsMock() bool { return s != nil && s.mock.Load() }
+
 func (s *SessionContext) GroupName() string {
 	if s == nil {
 		return ""
@@ -2746,6 +2754,21 @@ func (sm *SessionManager) Count() int {
 }
 
 // ListSessions returns a paginated slice of session contexts.
+// CountVisible returns the number of sessions that are not Direct Chat (mock)
+// sessions. It only reads the trusted atomic flag, without sorting or locking
+// individual sessions, so it is cheap enough for the overview poll.
+func (sm *SessionManager) CountVisible() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	n := 0
+	for _, sess := range sm.sessions {
+		if !sess.IsMock() {
+			n++
+		}
+	}
+	return n
+}
+
 func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
