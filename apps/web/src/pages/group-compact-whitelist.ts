@@ -67,6 +67,9 @@ export function mountGroupCompactWhitelist(parent: HTMLElement, deps: CompactWhi
   const input = parent.querySelector<HTMLInputElement>('#compact-whitelist-input')!;
   const addBtn = parent.querySelector<HTMLButtonElement>('#compact-whitelist-add-btn')!;
 
+  // Always derive from the live draft: each write must see the previous one, and the card
+  // is re-mounted afterwards so its tags and handlers reflect the new state.
+  const currentGroups = () => parseWhitelistGroups(deps.get(COMPACT_WHITELIST_GROUPS_KEY) ?? '');
   const apply = (nextGroups: string[]) => {
     if (!deps.canEdit()) return;
     const changes = planCompactGroupChange(
@@ -74,12 +77,11 @@ export function mountGroupCompactWhitelist(parent: HTMLElement, deps: CompactWhi
       nextGroups,
     );
     for (const { key, value } of changes) deps.change(key, value);
+    mountGroupCompactWhitelist(parent, deps);
   };
   const add = () => {
     if (!input.value.trim()) return;
-    apply(parseWhitelistGroups([...groups, input.value].join(',')));
-    input.value = '';
-    select.value = '';
+    apply(parseWhitelistGroups([...currentGroups(), input.value].join(',')));
   };
 
   cb.addEventListener('change', () => {
@@ -93,7 +95,7 @@ export function mountGroupCompactWhitelist(parent: HTMLElement, deps: CompactWhi
   });
   parent.querySelectorAll<HTMLButtonElement>('[data-compact-group-id]').forEach((button) => {
     button.addEventListener('click', () => {
-      apply(groups.filter((id) => id !== button.dataset.compactGroupId));
+      apply(currentGroups().filter((id) => id !== button.dataset.compactGroupId));
     });
   });
 }

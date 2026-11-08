@@ -203,6 +203,11 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
+				// Persisted summaries are subject to the same group compact whitelist as live ones.
+				recordSummary := record.Summary
+				if !llm.GroupCompactAllowed(s.engine.Getenv, record.SessionID) {
+					recordSummary = ""
+				}
 				targetID := ""
 				if _, ok := viewsByID[record.SessionID]; ok {
 					targetID = record.SessionID
@@ -217,7 +222,7 @@ func (s *Service) GetSessions(
 				if targetID != "" {
 					existing := viewsByID[targetID]
 					if existing.info.GroupSummary == "" {
-						existing.info.GroupSummary = record.Summary
+						existing.info.GroupSummary = recordSummary
 					}
 					if existing.info.GroupName == "" && s.engine.SessionManager != nil {
 						existing.info.GroupName = s.engine.SessionManager.GetGroupName(record.SessionID)
@@ -243,7 +248,7 @@ func (s *Service) GetSessions(
 						Platform:     derivePlatform(record.SessionID),
 						CreatedAt:    record.CreatedAt.Format(time.RFC3339),
 						LastActive:   record.UpdatedAt.Format(time.RFC3339),
-						GroupSummary: record.Summary,
+						GroupSummary: recordSummary,
 						GroupName:    gName,
 					},
 					createdAt: record.CreatedAt,
@@ -321,7 +326,9 @@ func (s *Service) GetSessionContext(
 	var recentMessages []string
 	var recentStructuredMessages []llm.GroupCompactMessage
 	var historyMsgs []*v1.SessionHistoryMessageProto
-	var groupCompactDisabled bool
+	// Decided per session ID, independent of whether a live session exists, so the durable
+	// fallback below cannot resurrect a summary for a non-whitelisted group.
+	groupCompactDisabled := !llm.GroupCompactAllowed(s.engine.Getenv, sessionID)
 
 	if s.engine.SessionManager != nil {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
@@ -332,9 +339,8 @@ func (s *Service) GetSessionContext(
 					snap, history = sess.SnapshotPrivateContext(limit)
 				} else {
 					history = sess.Snapshot()
-					if !llm.GroupCompactAllowed(s.engine.Getenv, sessionID) {
+					if groupCompactDisabled {
 						snap = llm.WithoutCompactSummary(snap)
-						groupCompactDisabled = true
 					}
 				}
 				runningSummary = snap.RunningSummary
