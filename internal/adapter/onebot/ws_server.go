@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
@@ -272,7 +273,10 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 		if !wakeSignals.Any() {
 			return
 		}
-		replyContext := conn.lookupReplyContext(event)
+		var replyContext resolvedReplyContext
+		if !wakeSignals.Proactive || !wakeSignals.StickerOnly {
+			replyContext = conn.lookupReplyContext(event)
+		}
 		conn.observeResolvedReply(event, replyContext)
 		if engine != nil && engine.SessionManager != nil {
 			if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
@@ -310,9 +314,9 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 
 // reply records terminal silence without sending or batching memory.
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, warningNotice ...string) {
-	billingReported := false
+	var billingReported atomic.Bool
 	defer func() {
-		if engine == nil || conn == nil || billingReported {
+		if engine == nil || conn == nil || billingReported.Load() {
 			return
 		}
 		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
@@ -367,10 +371,18 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			break
 		}
 	}
-	visionEnabled := engine != nil && engine.VisionProvider != nil
+	forceStickerSilence := wakeSignals.Proactive && wakeSignals.StickerOnly
+	visionEnabled := engine != nil && engine.VisionProvider != nil && !forceStickerSilence
 	if visionEnabled && routeSnapshot != nil {
 		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
 	}
+	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
+	directVision := !visionEnabled && dialogueSupportsVision && !forceStickerSilence
+	var directImageParts []core.ContentPart
+	if directVision {
+		directImageParts = content.ImageContentParts(routeCtx, segments)
+	}
+	noVisionGuidance := (currentHasImage || replyHasImage) && !visionEnabled && !dialogueSupportsVision && !forceStickerSilence
 
 	if engine != nil && engine.SessionManager != nil {
 		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
@@ -402,10 +414,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
-	if currentHasImage {
-		if !visionEnabled {
-			userText = strings.TrimSpace(strings.ReplaceAll(userText, "[图片]", ""))
-		} else {
+	// Backend silence keeps the original marker for history and memory buffering.
+	if currentHasImage && !forceStickerSilence {
+		if visionEnabled {
 			imageDesc := content.ProcessImage(routeCtx, segments, engine.VisionProvider, core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID})
 			if imageDesc != "" {
 				if engine != nil && engine.Security != nil {
@@ -495,6 +506,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if event.MetaEventType != "" {
 		contextMap["meta_event_type"] = event.MetaEventType
+	}
+	if noVisionGuidance {
+		contextMap["interaction_guidance"] = parity.NoVisionGuidance
 	}
 	if event.MessageType != "" {
 		contextMap["message_type"] = event.MessageType
@@ -714,6 +728,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		if vettedReply != "" {
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
+			if directVision {
+				for _, quote := range quoteNodes {
+					directImageParts = append(directImageParts, content.ImageContentParts(routeCtx, quote.Segments)...)
+				}
+			}
 		}
 	}
 
@@ -730,9 +749,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// 4. Call the agent engine with history
 	var (
 		replyText    string
+		replyParts   []string
 		receiptText  string
 		runResult    llm.AgentRunResult
 		finalSticker bool
+		deliveries   *llm.PublicReplyLog
 	)
 	commitAssistantHistory := func(string, bool) {}
 
@@ -758,12 +779,21 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
+		if len(messages) > 0 {
+			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
+		}
 
-		deliveries := llm.NewPublicReplyLog(session, startEpoch)
-		defer func() { deliveries.Finish(turn.Interrupted()) }()
+		deliveries = llm.NewPublicReplyLog(session, startEpoch)
+		defer func() {
+			if wakeSignals.Proactive {
+				deliveries.CommitDelivered()
+			}
+			deliveries.Finish(turn.Interrupted())
+		}()
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages []tools.Msg `json:"messages"`
+				Messages            []tools.Msg `json:"messages"`
+				SuppressAutoMention bool        `json:"suppress_auto_mention"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
@@ -781,7 +811,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("消息内容为空")
 			}
 			if event.MessageType == "group" {
-				oneBotSegments = wrapGroupReply(oneBotSegments, event, engine.Scope)
+				decorationEvent := event
+				if toolOutput.SuppressAutoMention {
+					decorationEvent.UserID = 0
+				}
+				oneBotSegments = wrapGroupReply(oneBotSegments, decorationEvent, engine.Scope)
 			}
 			botAction := model.OneBotAction{
 				Action: action,
@@ -825,7 +859,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 						}
 						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
-						if live && turn != nil && turn.StagedGuard() != nil {
+						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
 							turn.StagedGuard().AddSequence(seq)
 						} else {
 							session.PromoteGroupCompactSlot(seq, "")
@@ -846,7 +880,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					return
 				}
 
-				deliveries.CommitFinal(replyText, turn.Interrupted())
+				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
+					return
+				}
 				engine.TrimSession(session)
 
 				if event.MessageType == "group" {
@@ -956,10 +992,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ActorUserID: strconv.FormatInt(event.UserID, 10),
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
-			ActorPlatform:    securityPlatform,
-			AdapterID:        "onebot",
-			InstanceID:       engine.InstanceID,
-			SendHook:         sendHook,
+			ActorPlatform:  securityPlatform,
+			AdapterID:      "onebot",
+			InstanceID:     engine.InstanceID,
+			SendHook:       sendHook,
+			FinalReplyText: plainFinalReplyText,
+			CanReplyToMessage: func(messageID string) bool {
+				mid, ok := numericMessageID(messageID)
+				return ok && conn.messageSessionMatches(mid, conn.historyKey(event))
+			},
 			ObservationScope: conn.generation,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return conn.loadObservedSticker(ctx, event, replyContext, segments, messageID, stickerIndex)
@@ -967,16 +1008,24 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
 				return conn.loadObservedImage(ctx, event, replyContext, segments, messageID, imageIndex)
 			},
-			Billing:        billingState,
-			RouteScope:     routeScope,
-			RouteSnapshot:  routeSnapshot,
-			SecurityNotice: notice,
-			Mock:           conn.mock,
-			Proactive:      wakeSignals.Proactive,
+			Billing:              billingState,
+			RouteScope:           routeScope,
+			RouteSnapshot:        routeSnapshot,
+			SecurityNotice:       notice,
+			Mock:                 conn.mock,
+			Proactive:            wakeSignals.Proactive,
+			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
 		replyText = runResult.Content
+		if engine.Getenv(replyformat.EnvKey) != "true" {
+			replyText = filterStructuredSegmentMarks(replyText)
+		}
 		if wakeSignals.Proactive {
 			replyText = filterProactiveStickerCQ(replyText)
+		}
+		if structured, _ := parseFinalMessages(replyText); len(structured) == 0 {
+			replyParts = replyformat.Split(replyText, engine.Getenv(replyformat.EnvKey) == "true")
+			replyText = strings.Join(replyParts, "\n\n")
 		}
 		if turn.Interrupted() {
 			return
@@ -1042,6 +1091,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			// Suppress only the LLM error body; settled usage still needs a receipt.
 			replyText = ""
+			replyParts = nil
 		}
 
 		// A deliberate terminal silence keeps only the user turn in history. It
@@ -1063,7 +1113,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
 			}
-			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			if runResult.StaySilentCalled && (!wakeSignals.Proactive || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
@@ -1157,14 +1207,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	// (Note: Terminal model output security inspection is centrally owned by llm.Engine at StageModelOutput).
 	var finalMessage any
 
-	var toolOutput struct {
-		Messages []tools.Msg `json:"messages"`
-	}
-	if json.Unmarshal([]byte(replyText), &toolOutput) == nil {
-		for _, message := range toolOutput.Messages {
+	finalMessages, parseErr := parseFinalMessages(replyText)
+	if parseErr == nil {
+		for _, message := range finalMessages {
 			if message.IsSticker && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
 				replyText = "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"
-				toolOutput.Messages = nil
+				finalMessages = nil
 				break
 			}
 			if message.Type == "image" && message.IsSticker {
@@ -1173,10 +1221,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
-	if len(toolOutput.Messages) > 0 {
+	if len(finalMessages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
-		if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
+		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
 			if wakeSignals.Proactive {
 				engine.TrimSession(session)
@@ -1185,7 +1233,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error(), turn)
 			return
 		}
-		oneBotSegments, buildErr := tools.BuildOneBotMessage(toolOutput.Messages)
+		oneBotSegments, buildErr := tools.BuildOneBotMessage(finalMessages)
 		if buildErr != nil {
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
 			if wakeSignals.Proactive {
@@ -1213,40 +1261,6 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			finalMessage = displayText
 		}
-	} else {
-		// B. It's plain text
-		displayText := replyText
-		if receiptText != "" {
-			if strings.TrimSpace(displayText) == "" {
-				displayText = receiptText
-			} else {
-				displayText = displayText + "\n\n" + receiptText
-			}
-		}
-
-		if event.MessageType == "group" {
-			// 群聊回复：按开关前置 reply 段（引用原消息）与 at 段。
-			// 计费回执可能是空最终回复的唯一正文，不应因此 @ 用户。
-			if strings.TrimSpace(replyText) == "" {
-				finalMessage = displayText
-			} else {
-				enableAt := engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
-				enableReply := engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
-				if enableAt || enableReply {
-					textSeg := tools.OneBotSegment{
-						Type: "text",
-						Data: map[string]any{"text": displayText},
-					}
-					finalMessage = wrapGroupReply([]tools.OneBotSegment{textSeg}, event, engine.Scope)
-				} else {
-					finalMessage = displayText
-				}
-			}
-
-		} else {
-			// Just plain text for private messages
-			finalMessage = displayText
-		}
 	}
 
 	// 6. Build and send the final OneBot Action, waiting for platform ACK response
@@ -1262,22 +1276,64 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 		return
 	}
-	billingReported = receiptText != ""
 	turn.AwaitDelivery(func() {
-		ackResp, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+		actions := []model.OneBotAction{botAction}
+		if len(finalMessages) == 0 {
+			if replyParts == nil && strings.TrimSpace(replyText) != "" {
+				replyParts = []string{replyText}
+			}
+			actions = nil
+			for _, part := range replyformat.WithReceipt(replyParts, receiptText) {
+				var body any = part
+				if event.MessageType == "group" && strings.TrimSpace(replyText) != "" {
+					base := []tools.OneBotSegment{{Type: "text", Data: map[string]any{"text": part}}}
+					if engine.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true" || engine.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true" {
+						body = wrapGroupReply(base, event, engine.Scope)
+					}
+				}
+				actions = append(actions, model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": body}, Echo: echo})
+			}
+		}
+		var delivered []string
+		completed := false
+		defer func() {
+			if !completed && len(delivered) > 0 {
+				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", strings.Join(delivered, "\n\n"))
+			}
+		}()
+		var ackResp oneBotAPIResponse
+		var err error
+		for index, partAction := range actions {
+			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+				return
+			}
+			if index == len(actions)-1 {
+				billingReported.Store(receiptText != "")
+			}
+			ackResp, err = conn.sendActionAndWaitTurn(partAction, actionACKTimeout(conn.Scope), turn)
+			if err != nil {
+				break
+			}
+			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			if index < len(replyParts) {
+				delivered = append(delivered, replyParts[index])
+				deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
+			}
+			if !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
+				engine.RecordBotMessage(finalSticker)
+			}
+		}
 		if (err != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
 			return
 		}
 		if err == nil {
-			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
-			if !conn.mock && (strings.TrimSpace(replyText) != "" || receiptText != "") {
-				engine.RecordBotMessage(finalSticker)
-			}
+			completed = true
 			// 只有平台确认发送成功 (status == "ok", retcode == 0) 后才提交 assistant 历史与记忆
 			commitAssistantHistory(replyText, false)
 		} else {
-			// 平台发送失败 (retcode != 0 或超时或写入失败)：不记录 assistant history，不写入 compact buffer，不进入 memory extraction
-			if event.MessageType == "group" && session != nil {
+			// Do not record the failed suffix. The deferred callback preserves
+			// any acknowledged prefix without automatic memory extraction.
+			if event.MessageType == "group" && session != nil && len(delivered) == 0 {
 				var msgID string
 				if event.MessageID != 0 {
 					msgID = strconv.FormatInt(int64(event.MessageID), 10)
@@ -1313,6 +1369,27 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
 		}
 	})
+}
+
+func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
+	if engine == nil || engine.ModelRouter == nil {
+		return false
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	return err == nil && target.HasCapability("vision")
+}
+
+func promptContentWithImages(prompt string, images []core.ContentPart) any {
+	if len(images) == 0 {
+		return prompt
+	}
+	parts := make([]core.ContentPart, 0, len(images)+1)
+	parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: prompt})
+	parts = append(parts, images...)
+	return parts
 }
 
 func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {

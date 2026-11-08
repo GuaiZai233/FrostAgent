@@ -95,6 +95,7 @@ URL.createObjectURL = (blob) => { savedBlob = blob as Blob; return 'blob:synthet
 URL.revokeObjectURL = () => { released = true; };
 await downloadControlPlaneFile('/api/instances/a1b2c3d4/backup', 'backup.zip');
 assert.equal(calls.at(-1)?.header, 'Bearer synthetic-control-token');
+assert.equal(calls.at(-1)?.method, 'POST');
 assert.equal(clicked, true);
 assert.equal(downloaded, 'backup.zip');
 assert.equal(released, false, 'download URL released before the browser received it');

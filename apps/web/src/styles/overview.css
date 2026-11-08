@@ -12,8 +12,53 @@
 }
 
 .overview-tool-card {
+  position: relative;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.overview-tool-heading {
+  position: relative;
+}
+
+.overview-tool-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.overview-tool-configurable {
+  display: block;
+  margin-top: 0.125rem;
+}
+
+#balance-query-providers[hidden],
+#balance-query-manual-key[hidden] {
+  display: none;
+}
+
+.overview-tool-toggle {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+}
+
+.overview-tool-config {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.overview-tool-config:hover {
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+}
+
+.overview-tool-config:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .overview-tool-card > p {
@@ -23,15 +68,6 @@
 
 .overview-tool-preview > p {
   max-height: 6rem;
-}
-
-.overview-tools-more {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 1.25rem;
-  cursor: pointer;
 }
 
 .overview-all-tools {
@@ -57,3 +93,19 @@
 .overview-resource > svg:last-child {
   margin-left: auto;
 }
+
+.token-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+  gap: 0.75rem;
+}
+
+.token-usage-value { font-size: 1.2rem; overflow-wrap: anywhere; }
+.token-usage-unknown { color: var(--muted-foreground); font-size: 0.75rem; font-weight: 500; }
+.token-usage-table-wrap { overflow-x: auto; }
+.token-usage-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+.token-usage-table th, .token-usage-table td { padding: 0.65rem 0.85rem; text-align: right; white-space: nowrap; }
+.token-usage-table th:first-child { text-align: left; }
+.token-usage-table thead { color: var(--muted-foreground); }
+.token-usage-table tbody tr { border-top: 1px solid var(--border); }
+.token-usage-table tbody th { font-weight: 500; }

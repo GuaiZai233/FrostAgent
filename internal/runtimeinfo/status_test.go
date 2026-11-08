@@ -2,7 +2,7 @@ package runtimeinfo
 
 import (
 	"fmt"
-	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,11 +25,31 @@ func TestFormat(t *testing.T) {
 		{"future-start", now.Add(time.Hour), "", "0d 0h 0m", "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want := fmt.Sprintf("FrostAgent 运行状态\n[ 200 OK ]\nArch: %s\nUptime: %s\n\nVer: %s", runtime.GOARCH, tc.uptime, tc.wantVersion)
-			if got := Format(tc.version, tc.start, now); got != want {
-				t.Fatalf("got %q, want %q", got, want)
+			got := Format(tc.version, tc.start, now)
+			if !strings.Contains(got, "FrostAgent 运行状态\n[ 200 OK ]\n架构: ") ||
+				!strings.Contains(got, fmt.Sprintf("运行时长: %s\n\n版本: %s", tc.uptime, tc.wantVersion)) {
+				t.Fatalf("got %q", got)
 			}
 		})
+	}
+}
+
+func TestArchitecture(t *testing.T) {
+	for _, tc := range []struct {
+		goos, goarch string
+		docker       bool
+		want         string
+	}{
+		{"linux", "amd64", false, "amd64-Linux"},
+		{"windows", "arm64", false, "arm64-Windows"},
+		{"darwin", "arm64", false, "arm64-macOS"},
+		{"plan9", "wasm", false, "wasm-Unknown"},
+		{"linux", "amd64", true, "amd64-Docker"},
+		{"", "", false, "Unknown-Unknown"},
+	} {
+		if got := architecture(tc.goos, tc.goarch, tc.docker); got != tc.want {
+			t.Fatalf("architecture(%q, %q, %v) = %q, want %q", tc.goos, tc.goarch, tc.docker, got, tc.want)
+		}
 	}
 }
 

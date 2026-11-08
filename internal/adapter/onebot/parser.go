@@ -12,18 +12,19 @@ import (
 )
 
 const (
-	defaultBotName    = "霜降狐"
-	defaultBotAliases = "霜降,FrostAgent"
+	defaultBotName    = "助手"
+	defaultBotAliases = "Assistant,Bot"
 )
 
 // GroupWakeSignals records the equivalent observable reasons that caused a
 // group message to enter the LLM response path. The fields are descriptive
 // context only and do not establish a priority between at and alias matches.
 type GroupWakeSignals struct {
-	AtBot     bool
-	Alias     bool
-	Proactive bool
-	Poke      bool
+	AtBot       bool
+	Alias       bool
+	Proactive   bool
+	Poke        bool
+	StickerOnly bool // Classification of the pristine inbound message, not a wake signal.
 }
 
 // Explicit reports whether the bot was explicitly addressed (via at or alias/name).
@@ -72,9 +73,10 @@ func DetectGroupWakeSignalsWithRNG(event model.OneBotEvent, rng func() float64, 
 		groupIDStr = strconv.FormatInt(event.GroupID, 10)
 	}
 	return GroupWakeSignals{
-		AtBot:     atBot,
-		Alias:     alias,
-		Proactive: proactive.RollGroupWithRand(getenv, groupIDStr, rng, "onebot"),
+		AtBot:       atBot,
+		Alias:       alias,
+		Proactive:   proactive.RollGroupWithRand(getenv, groupIDStr, rng, "onebot"),
+		StickerOnly: isStickerOnlyEvent(event),
 	}
 }
 

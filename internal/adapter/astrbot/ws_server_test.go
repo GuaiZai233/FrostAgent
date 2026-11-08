@@ -587,6 +587,7 @@ func TestAstrBotSendHook(t *testing.T) {
 	}
 
 	engine := newTestEngine(toolProvider)
+	engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 	sendTool := tools.SendMsgTool()
 	engine.ToolRegistry[sendTool.Name()] = sendTool
 
@@ -676,6 +677,7 @@ func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
 			}}
 			engine := newTestEngine(provider)
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+			engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 			engine.RecordBotTurn()
 			engine.RecordBotTurn()
 			srv, _, wsURL := startWSTestServer(engine)
@@ -2259,9 +2261,11 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	mockLLM := &mockLLMProvider{
 		customChat: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 			mu.Lock()
-			for _, m := range req.Messages {
-				if m.Role == core.RoleUser {
-					llmReceivedMessages = append(llmReceivedMessages, fmt.Sprint(m.Content))
+			// Count only this request's input, not user messages replayed in history.
+			for i := len(req.Messages) - 1; i >= 0; i-- {
+				if req.Messages[i].Role == core.RoleUser {
+					llmReceivedMessages = append(llmReceivedMessages, fmt.Sprint(req.Messages[i].Content))
+					break
 				}
 			}
 			mu.Unlock()
@@ -2280,7 +2284,10 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	storePath := filepath.Join(tmpDir, "brain.json")
 	store := memory.NewStore(storePath)
 	engine.MemoryWriter = memory.NewWriter(store)
-	summaryStore, _ := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	summaryStore, err := groupsummary.NewStore(filepath.Join(tmpDir, "summaries.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	engine.GroupSummaryStore = summaryStore
 	engine.Security = security.NewController(tmpDir)
 	engine.Security.SetClassifier(&mockClassifier{
@@ -2303,7 +2310,35 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	}
 	defer conn.Close()
 
-	// 2. 发送 /ban 888888 命令 (即使发送者为管理员 usr_admin_1)
+	waitReply := func(event Event) {
+		t.Helper()
+		action := readBotLoopAction(t, conn)
+		if action.Action != "send_message" || action.IsIntermediate || action.Echo != "reply_"+event.MessageID || action.Content != "收到对话" {
+			t.Fatalf("unexpected reply to %s: %+v", event.MessageID, action)
+		}
+		// Socket delivery precedes deferred turn completion. A following explicit
+		// wake could otherwise interrupt that tail and leave a stale noop frame.
+		// Resolve the connection-scoped mock session from the reply, not the
+		// production session key or the scope (which also tracks the open socket).
+		sessionCore, ok := engine.SessionManager.Get(action.SessionID)
+		if !ok || !strings.HasPrefix(action.SessionID, "mock:") {
+			t.Fatalf("reply has no isolated mock session: %q", action.SessionID)
+		}
+		session, ok := sessionCore.(*llm.SessionContext)
+		if !ok {
+			t.Fatalf("unexpected mock session type: %T", sessionCore)
+		}
+		barrier := session.ReserveSequenceTurn("sender:"+event.Platform+":"+event.UserID, false, false)
+		completed := make(chan struct{})
+		go func() { barrier.Wait(); barrier.Done(); close(completed) }()
+		select {
+		case <-completed:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("mock command %s did not finish", event.MessageID)
+		}
+	}
+
+	// 2. 发送 ban 命令 (即使发送者为管理员 usr_admin_1)
 	banEvent := Event{
 		Type:        "event",
 		EventType:   "message",
@@ -2321,12 +2356,7 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 		t.Fatalf("发送 ban 消息失败: %v", err)
 	}
 
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取 ban 消息回复失败: %v", err)
-	}
-	var act Action
-	_ = json.Unmarshal(respBytes, &act)
+	waitReply(banEvent)
 
 	// 验证 888888 未被封禁 (未执行 admin ban)
 	targetPrincipal, _ := security.NewPrincipal("astrbot", "888888")
@@ -2351,10 +2381,7 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	if err := conn.WriteMessage(websocket.TextMessage, unbanBytes); err != nil {
 		t.Fatalf("发送 unban 消息失败: %v", err)
 	}
-	_, _, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取 unban 消息回复失败: %v", err)
-	}
+	waitReply(unbanEvent)
 
 	// 4. 发送 /reflect
 	reflectEvent := Event{
@@ -2373,10 +2400,7 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	if err := conn.WriteMessage(websocket.TextMessage, reflectBytes); err != nil {
 		t.Fatalf("发送 reflect 消息失败: %v", err)
 	}
-	_, _, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取 reflect 消息回复失败: %v", err)
-	}
+	waitReply(reflectEvent)
 
 	// 5. 群聊发送 /compact
 	compactEvent := Event{
@@ -2397,13 +2421,12 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	if err := conn.WriteMessage(websocket.TextMessage, compactBytes); err != nil {
 		t.Fatalf("发送 compact 消息失败: %v", err)
 	}
-	_, _, err = conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取 compact 消息回复失败: %v", err)
-	}
+	waitReply(compactEvent)
 
 	// 验证群聊总结库中无任何持久化记录
-	if rec, found, _ := summaryStore.Get("group:grp_mock_999"); found {
+	if rec, found, err := summaryStore.Get("group:grp_mock_999"); err != nil {
+		t.Fatal(err)
+	} else if found {
 		t.Fatalf("Mock 模式下严禁将总结持久化到生产 group summary: %s", rec.Summary)
 	}
 
@@ -2411,8 +2434,13 @@ func TestAstrBot_MockConnectionAdminCommandsBypassed(t *testing.T) {
 	mu.Lock()
 	msgs := append([]string(nil), llmReceivedMessages...)
 	mu.Unlock()
-	if len(msgs) < 4 {
+	if len(msgs) != 4 {
 		t.Fatalf("期望 4 条指令均作为普通文本传递给 LLM，实际收到=%d 条: %v", len(msgs), msgs)
+	}
+	for i, event := range []Event{banEvent, unbanEvent, reflectEvent, compactEvent} {
+		if !strings.HasPrefix(msgs[i], "User Message: "+event.Content+"\n") {
+			t.Errorf("request %d did not carry command %q: %s", i, event.Content, msgs[i])
+		}
 	}
 }
 

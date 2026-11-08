@@ -17,6 +17,8 @@ const button = new Button();
 let handleClick: ((event: MouseEvent) => void) | undefined;
 let requests = 0;
 let header: string | null = null;
+let method: string | undefined;
+let downloadMode: string | null = null;
 let finish: ((response: Response) => void) | undefined;
 const saved: { href: string; filename: string }[] = [];
 const errors: string[] = [];
@@ -43,6 +45,8 @@ URL.createObjectURL = () => 'blob:synthetic-full-backup';
 globalThis.fetch = async (_url: RequestInfo | URL, init?: RequestInit) => {
   requests++;
   header = new Headers(init?.headers).get('Authorization');
+  method = init?.method;
+  downloadMode = new Headers(init?.headers).get('X-FrostAgent-Download');
   return new Promise<Response>((resolve) => { finish = resolve; });
 };
 mountAuthenticatedResources();
@@ -56,6 +60,8 @@ assert.equal(button.disabled, true);
 assert.equal(button.attributes.get('aria-busy'), 'true');
 assert.equal(requests, 1);
 assert.equal(header, 'Bearer synthetic-control-token');
+assert.equal(method, 'POST');
+assert.equal(downloadMode, 'blob');
 assert.equal(click(), true);
 assert.equal(requests, 1, 'repeated clicks started duplicate full backups');
 assert.deepEqual(saved, [], 'browser was handed the HTTP download before it completed');
@@ -76,4 +82,9 @@ button.dataset.controlDownload = 'https://external.example/api/instances/a1b2c3d
 assert.equal(click(), false);
 assert.equal(requests, 2, 'external download received control-plane credentials');
 assert.equal(button.disabled, false);
+
+button.dataset.controlDownload = '/api/instances/global/backup/security';
+assert.equal(click(), true);
+assert.equal(method, undefined, 'global security download must keep its GET endpoint');
+assert.equal(downloadMode, null);
 console.log('PASS: backup buttons authenticate, wait for complete bytes, reject errors, and prevent duplicate downloads');

@@ -17,7 +17,9 @@ import (
 )
 
 func isRuntimeStatusCommand(event model.OneBotEvent) bool {
-	if event.PostType != "message" || event.MessageType != "group" || event.PokeID != "" {
+	if event.PostType != "message" ||
+		(event.MessageType != "group" && event.MessageType != "private") ||
+		event.PokeID != "" {
 		return false
 	}
 	var text strings.Builder
@@ -60,19 +62,28 @@ func handleRuntimeStatusCommand(conn *wsConnection, event model.OneBotEvent, eng
 		return true
 	}
 	engine.RecordIncomingMessage()
-	if !runtimeinfo.Enabled(engine.Getenv(runtimeinfo.EnabledEnv)) || event.GroupID <= 0 ||
-		event.UserID <= 0 || event.UserID == event.SelfID {
+	if !runtimeinfo.Enabled(engine.Getenv(runtimeinfo.EnabledEnv)) || event.UserID <= 0 ||
+		event.UserID == event.SelfID ||
+		(event.MessageType == "group" && event.GroupID <= 0) {
 		return true
 	}
 	principal, err := security.NewPrincipal("onebot", strconv.FormatInt(event.UserID, 10))
 	if err != nil || engine.Security.CheckAccess(principal) != nil {
 		return true
 	}
-	// Write only to the originating transport, without group reply decorations.
+	actionName := "send_private_msg"
+	idKey := "user_id"
+	id := event.UserID
+	if event.MessageType == "group" {
+		actionName = "send_group_msg"
+		idKey = "group_id"
+		id = event.GroupID
+	}
+	// Write only to the originating transport, without reply decorations.
 	action := model.OneBotAction{
-		Action: "send_group_msg",
+		Action: actionName,
 		Params: map[string]any{
-			"group_id": event.GroupID,
+			idKey: id,
 			"message": []tools.OneBotSegment{{Type: "text", Data: map[string]any{
 				"text": runtimeinfo.Format(engine.Version, engine.StartedAt, time.Now()),
 			}}},

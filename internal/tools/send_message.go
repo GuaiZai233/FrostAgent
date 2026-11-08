@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"os"
@@ -37,8 +40,9 @@ const nativeMentionExample = `{"messages":[{"type":"mention_user","mention_user_
 
 func SendMsgTool() Tool {
 	return Tool{
-		name:        "send_message",
-		description: "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
+		name:             "send_message",
+		description:      "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Omit session for mention_specific. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
+		proactiveAllowed: true,
 		//json schema
 		parameter: map[string]any{
 			"type": "object",
@@ -52,7 +56,7 @@ func SendMsgTool() Tool {
 						"properties": map[string]any{
 							"type": map[string]any{
 								"type":        "string",
-								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote"},
+								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote", "mention_specific"},
 								"description": "The component type. Use `mention_user` for a platform-native user mention.",
 							},
 							"text": map[string]any{
@@ -73,7 +77,7 @@ func SendMsgTool() Tool {
 							},
 							"message_id": map[string]any{
 								"type":        "string",
-								"description": "The ID of the message to quote/reply to (required when type is `quote`).",
+								"description": "The exact trusted message ID to quote/reply to (required for `quote` or `mention_specific`). mention_specific must be the first component and targets only the active conversation.",
 							},
 						},
 						"required": []string{"type"},
@@ -88,9 +92,14 @@ func SendMsgTool() Tool {
 		},
 
 		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
+			run, _ := llm.RunContextFromContext(ctx)
+			if run.Proactive && !proactive.IsSpecificReply(args) {
+				return textResult(""), fmt.Errorf("主动回复只允许 mention_specific 加 plain，且不能指定其他会话")
+			}
 			var payload struct {
-				Messages []Msg  `json:"messages"`
-				Session  string `json:"session,omitempty"`
+				Messages            []Msg  `json:"messages"`
+				Session             string `json:"session,omitempty"`
+				SuppressAutoMention bool   `json:"suppress_auto_mention,omitempty"`
 			}
 
 			if err := json.Unmarshal([]byte(args), &payload); err != nil {
@@ -99,6 +108,8 @@ func SendMsgTool() Tool {
 			if len(payload.Messages) == 0 {
 				return textResult(""), fmt.Errorf("send_message 至少需要一条 messages")
 			}
+			// This internal delivery flag is derived here, not accepted from the model.
+			payload.SuppressAutoMention = false
 
 			for i, msg := range payload.Messages {
 				if msg.IsSticker && sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
@@ -106,6 +117,10 @@ func SendMsgTool() Tool {
 				}
 				switch msg.Type {
 				case "plain":
+					if runtimescope.FromContext(ctx).Getenv(replyformat.EnvKey) != "true" {
+						msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
+						payload.Messages[i].Text = msg.Text
+					}
 					if strings.TrimSpace(msg.Text) == "" {
 						return textResult(""), fmt.Errorf("messages[%d].text 不能为空", i)
 					}
@@ -114,9 +129,22 @@ func SendMsgTool() Tool {
 						return textResult(""), fmt.Errorf("messages[%d].mention_user_id 不能为空", i)
 					}
 				case "quote":
+					if payload.SuppressAutoMention {
+						return textResult(""), fmt.Errorf("mention_specific 不能与其他引用混用")
+					}
 					if strings.TrimSpace(msg.MessageID) == "" {
 						return textResult(""), fmt.Errorf("messages[%d].message_id 不能为空", i)
 					}
+				case "mention_specific":
+					messageID := strings.TrimSpace(msg.MessageID)
+					if i != 0 || len(payload.Messages) < 2 || payload.Session != "" {
+						return textResult(""), fmt.Errorf("mention_specific 必须位于消息链开头并附带回复内容，且不能指定 session")
+					}
+					if messageID == "" || run.SessionID == "" || run.CanReplyToMessage == nil || !run.CanReplyToMessage(messageID) {
+						return textResult(""), fmt.Errorf("mention_specific 的 message_id 不在当前会话的可信消息上下文中")
+					}
+					payload.Messages[i] = Msg{Type: "quote", MessageID: messageID}
+					payload.SuppressAutoMention = true
 				case "image", "record", "video", "file":
 					if strings.TrimSpace(msg.Path) == "" && strings.TrimSpace(msg.URL) == "" {
 						return textResult(""), fmt.Errorf("messages[%d] 需要 path 或 url", i)

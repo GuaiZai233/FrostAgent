@@ -38,6 +38,7 @@ type Event struct {
 	Metadata               map[string]any    `json:"metadata,omitempty"`             // 扩展元数据
 	StickerDeliveryReceipt bool              `json:"sticker_delivery_receipt,omitempty"`
 	botLoopSoft            bool
+	proactiveStickerOnly   bool
 }
 
 // ActionMessage represents one ordered component in an outbound AstrBot message chain.
@@ -67,10 +68,12 @@ type Action struct {
 	Content        string            `json:"content,omitempty"`         // 回复文本内容
 	Messages       []ActionMessage   `json:"messages,omitempty"`        // 有序消息链（plain、mention_user、媒体等）
 	Attachments    []core.Attachment `json:"attachments,omitempty"`     // 附件列表 (图片等)
-	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 是否为工具调用产生的中间消息 (sendHook)
+	IsIntermediate bool              `json:"is_intermediate,omitempty"` // 工具消息或尚有后续分段的消息
 	Echo           string            `json:"echo,omitempty"`            // 回显标识
 	DeliveryID     string            `json:"delivery_id,omitempty"`
 	ReplyMessageID string            `json:"-"` // 当前回复对应的入站消息 ID，仅用于出站规范化
+
+	suppressAutoMention bool // A specific reply must not automatically mention the triggering sender.
 }
 
 // MarshalJSON preserves the legacy process-env normalization path for callers
@@ -120,6 +123,9 @@ func (a Action) withConfiguredGroupMention() Action {
 }
 
 func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Action {
+	if a.suppressAutoMention {
+		return a
+	}
 	enableAt := scope.Getenv("ENABLE_AT_IN_GROUP_MSG") == "true"
 	isGroup := a.Action == "send_message" && a.MessageType == "group"
 	plan := parity.PlanGroupDecoration(
@@ -146,6 +152,9 @@ func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Actio
 		messages = append(messages, a.Messages[:insertAt]...)
 		messages = append(messages, mention)
 		messages = append(messages, a.Messages[insertAt:]...)
+		if next := insertAt + 1; next < len(messages) && (messages[next].Type == "plain" || messages[next].Type == "text") {
+			messages[next].Text = parity.SeparateMentionText(messages[next].Text)
+		}
 		a.Messages = messages
 		return a
 	}
@@ -156,7 +165,7 @@ func (a Action) withConfiguredGroupMentionScope(scope *runtimescope.Scope) Actio
 	if strings.TrimSpace(a.Content) != "" {
 		a.Messages = []ActionMessage{
 			mention,
-			{Type: "plain", Text: a.Content},
+			{Type: "plain", Text: parity.SeparateMentionText(a.Content)},
 		}
 	}
 	return a

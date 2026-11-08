@@ -7,6 +7,9 @@ import "frostagent/v1/common.proto";
 // BotStatusService provides bot overview and session management.
 service BotStatusService {
   rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
+  rpc SetToolEnabled(SetToolEnabledRequest) returns (SetToolEnabledResponse);
+  rpc GetBalanceQueryConfig(GetBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
+  rpc SaveBalanceQueryConfig(SaveBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
@@ -22,6 +25,38 @@ enum BotStatus {
 
 message GetOverviewRequest {}
 
+message SetToolEnabledRequest {
+  string name = 1;
+  bool enabled = 2;
+}
+
+message SetToolEnabledResponse {}
+
+message GetBalanceQueryConfigRequest {}
+
+message SaveBalanceQueryConfigRequest {
+  string curl = 1;
+  // Write-only. Empty preserves the existing manually configured key.
+  string api_key = 2;
+  reserved 3;
+  reserved "clear_api_key";
+  // Published provider whose current credential is resolved by the backend.
+  string provider_id = 4;
+}
+
+message BalanceQueryConfigResponse {
+  string curl = 1;
+  bool api_key_configured = 2;
+  string provider_id = 3;
+  repeated BalanceQueryProvider providers = 4;
+}
+
+message BalanceQueryProvider {
+  string id = 1;
+  string display_name = 2;
+  bool available = 3;
+}
+
 message GetOverviewResponse {
   string bot_name = 1;
   string version = 2;
@@ -32,6 +67,7 @@ message GetOverviewResponse {
   BotStatus status = 7;
   repeated ToolInfo tools = 8;
   string ws_listen_addr = 9;
+  TokenUsageOverview token_usage = 10;
 }
 
 message GetSessionsRequest {
@@ -95,4 +131,26 @@ message GetSessionContextResponse {
   string system_prompt = 8;
   string model = 9;
   repeated GroupMessageInfoProto recent_structured_messages = 10;
+}
+
+// Known provider values are retained alongside calls whose value was omitted.
+message TokenUsageCounter {
+  int64 value = 1;
+  int64 unestimated_requests = 2;
+}
+
+message TokenUsageModule {
+  string module = 1;
+  int64 requests = 2;
+  TokenUsageCounter input = 3;
+  TokenUsageCounter output = 4;
+  TokenUsageCounter total = 5;
+  TokenUsageCounter cached = 6;
+  TokenUsageCounter cache_hits = 7;
+}
+
+message TokenUsageOverview {
+  repeated TokenUsageModule modules = 1;
+  bool incomplete = 2;
+  bool available = 3;
 }

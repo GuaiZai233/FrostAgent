@@ -16,6 +16,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
@@ -98,6 +99,10 @@ type wsConn struct {
 	mockSessions      sync.Map
 	pendingDeliveries sync.Map
 	pendingQuotes     sync.Map
+
+	replyTargetsMu   sync.Mutex
+	replyTargets     map[replyTargetKey]struct{}
+	replyTargetOrder []replyTargetKey
 }
 
 func newWSConn(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConn {
@@ -371,7 +376,7 @@ func stageAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine,
 
 	botName := engine.Getenv("BOT_NAME")
 	if botName == "" {
-		botName = "霜降"
+		botName = "助手"
 	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
@@ -469,7 +474,7 @@ func formatGroupSpeakerMessage(event Event, text string) string {
 
 func formatGroupAssistantMessage(botName, text string) string {
 	if botName == "" {
-		botName = "霜降"
+		botName = "助手"
 	}
 	return fmt.Sprintf("[assistant] %s: %s", botName, strings.TrimSpace(text))
 }
@@ -501,7 +506,7 @@ func appendAssistantGroupMessage(session *llm.SessionContext, engine *llm.Engine
 
 	botName := engine.Getenv("BOT_NAME")
 	if botName == "" {
-		botName = "霜降"
+		botName = "助手"
 	}
 	var maxBufferSize int
 	if engine.GroupCompactor != nil {
@@ -538,15 +543,39 @@ func isBotNameMentioned(text string, scopes ...*runtimescope.Scope) bool {
 	return parity.ContainsBotName(text, configuredBotNames(scopes...))
 }
 
+// hasBotNameWake reports whether the group message woke the bot through a
+// configured name or alias rather than an explicit @.
+func hasBotNameWake(event Event, scopes ...*runtimescope.Scope) bool {
+	if event.MessageType != "group" {
+		return false
+	}
+	if isBotNameMentioned(event.Content, scopes...) {
+		return true
+	}
+	return slices.ContainsFunc(event.Messages, func(text string) bool {
+		return isBotNameMentioned(text, scopes...)
+	})
+}
+
+// addAliasGuidance asks the model to verify ambiguous name/alias wakes and
+// stay silent instead of forcing an irrelevant reply.
+func addAliasGuidance(contextData map[string]any, event Event, scopes ...*runtimescope.Scope) {
+	if !hasBotNameWake(event, scopes...) {
+		return
+	}
+	contextData["alias_wake"] = true
+	contextData["guidance"] = parity.AliasWakeGuidance
+}
+
 func configuredBotNames(scopes ...*runtimescope.Scope) []string {
 	scope := runtimescope.First(scopes)
 	name, nameSet := scope.LookupEnv("BOT_NAME")
 	if !nameSet {
-		name = "霜降狐"
+		name = "助手"
 	}
 	aliases, aliasesSet := scope.LookupEnv("BOT_ALIASES")
 	if !aliasesSet {
-		aliases = "霜降,FrostAgent"
+		aliases = "Assistant,Bot"
 	}
 
 	values := append([]string{name}, strings.Split(aliases, ",")...)
@@ -587,13 +616,7 @@ func isExplicitWake(event *Event, scopes ...*runtimescope.Scope) bool {
 	if event.IsWake || event.IsAt {
 		return true
 	}
-	if isBotNameMentioned(event.Content, scope) {
-		return true
-	}
-	if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
-		return true
-	}
-	return false
+	return hasBotNameWake(*event, scope)
 }
 
 func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescope.Scope) bool {
@@ -618,10 +641,7 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 		if event.IsWake || event.IsAt {
 			return true
 		}
-		if isBotNameMentioned(event.Content, scope) {
-			return true
-		}
-		if slices.ContainsFunc(event.Messages, func(text string) bool { return isBotNameMentioned(text, scope) }) {
+		if hasBotNameWake(*event, scope) {
 			return true
 		}
 		var getenv func(string) string
@@ -637,6 +657,7 @@ func shouldReplyWithRNG(event *Event, rng func() float64, scopes ...*runtimescop
 				event.Metadata = make(map[string]any)
 			}
 			event.Metadata["_frostagent_proactive_reply"] = true
+			event.proactiveStickerOnly = isStickerOnlyEvent(*event)
 			return true
 		}
 		return false
@@ -812,9 +833,9 @@ func reply(event Event, engine *llm.Engine, conn *wsConn, warningNotice ...strin
 }
 
 func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, warningNotice ...string) {
-	billingReported := false
+	var billingReported atomic.Bool
 	defer func() {
-		if engine == nil || conn == nil || billingReported {
+		if engine == nil || conn == nil || billingReported.Load() {
 			return
 		}
 		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
@@ -863,7 +884,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 
 	// Quote lookups occur only after ingress security and reply routing.
-	quoteChain, allowDirectFallback := conn.lookupQuoteChain(event)
+	forceStickerSilence := isProactiveReply(&event) && event.proactiveStickerOnly
+	var quoteChain []astrBotQuoteNode
+	var allowDirectFallback bool
+	if !forceStickerSilence {
+		quoteChain, allowDirectFallback = conn.lookupQuoteChain(event)
+	}
 	// Only IDs validated by parseAstrBotQuote may be inspected by tools. The
 	// direct fallback is deliberately excluded: it lacks group/peer validation.
 	trustedQuoteIDs := trustedQuotedMessageIDs(quoteChain, event)
@@ -898,14 +924,20 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 	}
 
+	visionEnabled := engine != nil && engine.VisionProvider != nil && !forceStickerSilence
+	if visionEnabled && routeSnapshot != nil {
+		visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
+	}
+	dialogueSupportsVision := dialogueModelSupportsVision(engine, routeSnapshot, routeScope)
+	directVision := !visionEnabled && dialogueSupportsVision && !forceStickerSilence
+	var directImageParts []core.ContentPart
+	if directVision {
+		directImageParts = makeAstrBotImageContentParts(event)
+	}
+	noVisionGuidance := (astrBotImageSlotCount(event) > 0 || quoteHasImage) && !visionEnabled && !dialogueSupportsVision && !forceStickerSilence
+
 	if (len(imageSegments) > 0 || quoteHasImage) && engine != nil {
-		visionEnabled := engine.VisionProvider != nil
-		if visionEnabled && routeSnapshot != nil {
-			visionEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadVision, routeScope)
-		}
-		if !visionEnabled {
-			imageSegments = nil
-		} else {
+		if visionEnabled {
 			// 计费检查 (视觉处理前检查)
 			billingPlatform := parity.CanonicalBillingPlatform(event.Platform)
 			if engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !isProactiveReply(&event) {
@@ -1102,10 +1134,16 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if mentionOnly {
 			contextData["interaction_guidance"] = parity.MentionOnlyGuidance
 		}
+		addAliasGuidance(contextData, event, engine.Scope)
+	}
+	if noVisionGuidance {
+		contextData["interaction_guidance"] = parity.NoVisionGuidance
 	}
 	contextBytes, _ := json.Marshal(contextData)
 
-	durablePrompt := fmt.Sprintf("User Message: %s\n\n<system_context>\n%s\n</system_context>", userText, string(contextBytes))
+	responseContext, _ := json.Marshal(map[string]string{"guidance": parity.CurrentTimeGuidance(time.Now())})
+	responseTag := fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
+	durablePrompt := fmt.Sprintf("User Message: %s%s\n\n<system_context>\n%s\n</system_context>", userText, responseTag, string(contextBytes))
 
 	requestPrompt := fmt.Sprintf("User Message: %s", userText)
 	if event.MessageType == "group" {
@@ -1189,8 +1227,22 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		if quotePrompt != "" {
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", quotePrompt)
+			if directVision {
+				for _, quote := range quoteChain {
+					quoteSegments := append([]content.MessageSegment(nil), quote.ForwardedImages...)
+					quoteSegments = append(quoteSegments, quote.Segments...)
+					seen := make(map[string]bool)
+					for _, part := range content.ImageContentParts(routeCtx, quoteSegments) {
+						if part.ImageURL != nil && !seen[part.ImageURL.URL] {
+							seen[part.ImageURL.URL] = true
+							directImageParts = append(directImageParts, part)
+						}
+					}
+				}
+			}
 		}
 	}
+	requestPrompt += responseTag
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
 
 	if isProactiveReply(&event) {
@@ -1228,16 +1280,40 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
-		defer func() { deliveries.Finish(turn.Interrupted()) }()
+		if len(messages) > 0 {
+			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
+		}
+		defer func() {
+			if isProactiveReply(&event) {
+				deliveries.CommitDelivered()
+			}
+			deliveries.Finish(turn.Interrupted())
+		}()
 
 		targetID := event.UserID
 		if event.MessageType == "group" {
 			targetID = event.GroupID
 		}
 
+		// Only adapter-owned IDs from this session can be selected. Do not parse
+		// IDs out of user text or forwarded, unverified reply metadata.
+		replyTargets := make(map[string]struct{}, len(trustedQuoteIDs)+len(groupSnapshot.RecentStructuredMessages))
+		for messageID := range trustedQuoteIDs {
+			replyTargets[messageID] = struct{}{}
+		}
+		for _, message := range groupSnapshot.RecentStructuredMessages {
+			if message.Role == "user" && conn.observedReplyTarget(event, message.MessageID) {
+				replyTargets[message.MessageID] = struct{}{}
+			}
+		}
+		canReplyToMessage := func(messageID string) bool {
+			_, ok := replyTargets[messageID]
+			return ok
+		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages []tools.Msg `json:"messages"`
+				Messages            []tools.Msg `json:"messages"`
+				SuppressAutoMention bool        `json:"suppress_auto_mention"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 解析 send_message 结果失败: %v", err))
@@ -1247,6 +1323,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			var plainTexts []string
 			var attachments []core.Attachment
 			for _, m := range toolOutput.Messages {
+				if toolOutput.SuppressAutoMention && m.Type == "quote" && !canReplyToMessage(m.MessageID) {
+					return fmt.Errorf("引用消息不在当前会话的可信消息上下文中")
+				}
 				actionMessages = append(actionMessages, actionMessageFromToolMessage(m))
 				switch m.Type {
 				case "plain":
@@ -1285,20 +1364,21 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 			action := Action{
-				Type:           "action",
-				Action:         "send_message",
-				Platform:       platform,
-				SessionID:      conn.sessionKey(event),
-				TargetID:       targetID,
-				MessageType:    event.MessageType,
-				GroupID:        event.GroupID,
-				UserID:         event.UserID,
-				Content:        strings.Join(plainTexts, ""),
-				Messages:       actionMessages,
-				Attachments:    attachments,
-				IsIntermediate: true,
-				Echo:           fmt.Sprintf("hook_%s", event.MessageID),
-				ReplyMessageID: event.replyMessageID(),
+				Type:                "action",
+				Action:              "send_message",
+				Platform:            platform,
+				SessionID:           conn.sessionKey(event),
+				TargetID:            targetID,
+				MessageType:         event.MessageType,
+				GroupID:             event.GroupID,
+				UserID:              event.UserID,
+				Content:             strings.Join(plainTexts, ""),
+				Messages:            actionMessages,
+				Attachments:         attachments,
+				IsIntermediate:      true,
+				Echo:                fmt.Sprintf("hook_%s", event.MessageID),
+				ReplyMessageID:      event.replyMessageID(),
+				suppressAutoMention: toolOutput.SuppressAutoMention,
 			}
 			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 				return errors.New("会话已重置，取消发送中间消息")
@@ -1323,7 +1403,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				deliveries.Record(deliveredReply, func(live bool) {
 					if event.MessageType == "group" && !conn.mock {
 						ownerTurn := turn
-						if !live {
+						if !live || isProactiveReply(&event) {
 							ownerTurn = nil
 						}
 						stageAssistantGroupMessage(session, engine, deliveredReply, event.MessageID, ownerTurn)
@@ -1347,22 +1427,24 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			ActorUserID: event.UserID,
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: event.MessageID, SenderID: event.UserID},
-			ActorPlatform:  securityPlatform,
-			AdapterID:      "astrbot",
-			InstanceID:     engine.InstanceID,
-			SendHook:       sendHook,
-			SecurityNotice: notice,
+			ActorPlatform:     securityPlatform,
+			AdapterID:         "astrbot",
+			InstanceID:        engine.InstanceID,
+			SendHook:          sendHook,
+			CanReplyToMessage: canReplyToMessage,
+			SecurityNotice:    notice,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {
 				return loadObservedStickerFromEvent(ctx, event, messageID, stickerIndex)
 			},
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
 				return loadObservedImageFromEvent(ctx, event, trustedQuoteIDs, messageID, imageIndex)
 			},
-			Billing:       billingState,
-			RouteScope:    routeScope,
-			RouteSnapshot: routeSnapshot,
-			Mock:          conn.mock,
-			Proactive:     isProactiveReply(&event),
+			Billing:              billingState,
+			RouteScope:           routeScope,
+			RouteSnapshot:        routeSnapshot,
+			Mock:                 conn.mock,
+			Proactive:            isProactiveReply(&event),
+			ProactiveStickerOnly: event.proactiveStickerOnly,
 		})
 		replyText = runResult.Content
 		if turn.Interrupted() {
@@ -1431,7 +1513,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			if runResult.StaySilentCalled && (!isProactiveReply(&event) || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					speakerName := senderDisplayName(event)
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
@@ -1487,6 +1569,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		replyText = "智能体引擎未就绪"
 	}
 
+	replyParts := replyformat.Split(replyText, engine != nil && engine.Getenv(replyformat.EnvKey) == "true")
+	replyText = strings.Join(replyParts, "\n\n")
 	historyReplyText := replyText
 	if strings.TrimSpace(historyReplyText) == "" {
 		historyReplyText = deliveries.Text()
@@ -1498,20 +1582,46 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 		return
 	}
-	billingReported = receiptText != ""
 	turn.AwaitDelivery(func() {
 		var sendErr error
+		var delivered []string
+		completed := false
+		defer func() {
+			if !completed && len(delivered) > 0 {
+				recordPartialReply(session, engine, startEpoch, event, strings.Join(delivered, "\n\n"))
+			}
+		}()
 		if strings.TrimSpace(sentReplyText) == "" {
 			sendErr = sendTerminalNoop(event, conn)
 		} else {
-			sendErr = sendDirectReply(event, conn, sentReplyText, turn)
+			parts := replyformat.WithReceipt(replyParts, receiptText)
+			for index, part := range parts {
+				if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
+					return
+				}
+				last := index == len(parts)-1
+				if last {
+					billingReported.Store(receiptText != "")
+				}
+				sendErr = sendReplyPart(event, conn, part, !last, turn)
+				if sendErr != nil {
+					break
+				}
+				if index < len(replyParts) {
+					delivered = append(delivered, replyParts[index])
+					deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
+				}
+				if !conn.mock {
+					engine.RecordBotMessage(false)
+				}
+			}
 		}
 		if (sendErr != nil && turn.Interrupted()) || (session != nil && session.Epoch() != startEpoch) {
 			return
 		}
 		if sendErr != nil {
 			if session != nil {
-				if event.MessageType == "group" {
+				if event.MessageType == "group" && len(delivered) == 0 {
 					var guard *llm.StagedGroupCompactGuard
 					if turn != nil {
 						guard = turn.StagedGuard()
@@ -1529,14 +1639,18 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 			return
 		}
-		if !conn.mock && strings.TrimSpace(sentReplyText) != "" {
-			engine.RecordBotMessage(false)
-		}
+		completed = true
 
 		if engine == nil || session == nil {
 			return
 		}
 		session.WithEpochCommit(startEpoch, func() {
+			// A noop adds no public message: replace provisional tool history even
+			// if canceled, or reuse CommitDelivered's fallback if it won the race.
+			interruptedFinal := turn.Interrupted() && strings.TrimSpace(sentReplyText) != ""
+			if strings.TrimSpace(historyReplyText) != "" && !deliveries.CommitFinal(historyReplyText, interruptedFinal) {
+				return
+			}
 
 			if event.MessageType == "group" && !runResult.Banned {
 				if session != nil {
@@ -1546,9 +1660,6 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 						session.PromoteGroupCompactMessage(event.MessageID)
 					}
 				}
-			}
-			if strings.TrimSpace(historyReplyText) != "" {
-				deliveries.CommitFinal(historyReplyText, turn.Interrupted())
 			}
 			engine.TrimSession(session)
 
@@ -1652,6 +1763,52 @@ func isProactiveReply(event *Event) bool {
 	return ok && v
 }
 
+func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) bool {
+	if engine == nil || engine.ModelRouter == nil {
+		return false
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	return err == nil && target.HasCapability("vision")
+}
+
+func makeAstrBotImageContentParts(event Event) []core.ContentPart {
+	parts := make([]core.ContentPart, 0, len(event.Attachments))
+	for _, att := range event.Attachments {
+		if att.Type != core.AttachmentTypeImage || (att.MessageID != "" && att.MessageID != event.MessageID) {
+			continue
+		}
+		source := strings.TrimSpace(att.URL)
+		if len(att.Content) > 0 {
+			mimeType := strings.TrimSpace(att.MimeType)
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = http.DetectContentType(att.Content)
+			}
+			if !strings.HasPrefix(mimeType, "image/") {
+				mimeType = "image/jpeg"
+			}
+			source = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(att.Content)
+		}
+		if source == "" {
+			continue
+		}
+		parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeImage), ImageURL: &core.ImageURL{URL: source}})
+	}
+	return parts
+}
+
+func promptContentWithImages(prompt string, images []core.ContentPart) any {
+	if len(images) == 0 {
+		return prompt
+	}
+	parts := make([]core.ContentPart, 0, len(images)+1)
+	parts = append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: prompt})
+	parts = append(parts, images...)
+	return parts
+}
+
 func sendTerminalNoop(event Event, conn *wsConn) error {
 	return sendTerminalNoopWithOptions(event, conn, isProactiveReply(&event))
 }
@@ -1682,6 +1839,10 @@ func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) er
 // Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
 // This confirms WebSocket transport write success (best-effort delivery).
 func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.SessionTurn) error {
+	return sendReplyPart(event, conn, text, false, turns...)
+}
+
+func sendReplyPart(event Event, conn *wsConn, text string, intermediate bool, turns ...*llm.SessionTurn) error {
 	var turn *llm.SessionTurn
 	if len(turns) > 0 {
 		turn = turns[0]
@@ -1710,7 +1871,7 @@ func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.Sessi
 		GroupID:        event.GroupID,
 		UserID:         event.UserID,
 		Content:        text,
-		IsIntermediate: false,
+		IsIntermediate: intermediate,
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
 		ReplyMessageID: event.replyMessageID(),
 	}

@@ -133,7 +133,7 @@ func TestDecorationNormalWrap(t *testing.T) {
 	if res[1].Type != "at" || res[1].Data["qq"] != "2002" {
 		t.Errorf("expected second segment to be at: %+v", res[1])
 	}
-	if res[2].Type != "text" || res[2].Data["text"] != "Hello world" {
+	if res[2].Type != "text" || res[2].Data["text"] != " Hello world" {
 		t.Errorf("expected third segment to be text: %+v", res[2])
 	}
 }

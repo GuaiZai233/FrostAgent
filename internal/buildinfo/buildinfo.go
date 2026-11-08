@@ -25,6 +25,27 @@ func DisplayVersion() string {
 	return displayVersion(Version, Commit, info)
 }
 
+// SourceCommit returns the complete source revision injected at build time or
+// embedded by Go's VCS metadata. It is empty when the build has no revision.
+func SourceCommit() string {
+	info, _ := debug.ReadBuildInfo()
+	return sourceCommit(Commit, info)
+}
+
+func sourceCommit(commit string, info *debug.BuildInfo) string {
+	if revisionPattern.MatchString(commit) {
+		return strings.ToLower(commit)
+	}
+	if info != nil {
+		for _, setting := range info.Settings {
+			if setting.Key == "vcs.revision" && revisionPattern.MatchString(setting.Value) {
+				return strings.ToLower(setting.Value)
+			}
+		}
+	}
+	return ""
+}
+
 func displayVersion(version, commit string, info *debug.BuildInfo) string {
 	if version != "" {
 		return strings.TrimPrefix(version, "v")

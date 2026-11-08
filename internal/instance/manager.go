@@ -1617,6 +1617,13 @@ func writeError(w http.ResponseWriter, err error) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "code": "aborted", "message": err.Error()})
 }
+
+const blobDownloadHeader = "X-FrostAgent-Download"
+
+func isBlobDownloadRequest(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.EqualFold(strings.TrimSpace(r.Header.Get(blobDownloadHeader)), "blob")
+}
+
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
 	if m.db != nil && path == "global/import/settings" && r.Method == http.MethodPost {
@@ -1764,26 +1771,30 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 			m.handleMemoryImport(w, r, parts[0])
 			return
 		}
-		if len(parts) == 3 && parts[1] == "backup" && r.Method == http.MethodGet {
+		if len(parts) == 3 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
 			data, mediaType, fileName, err := m.InstancePart(parts[0], parts[2])
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", mediaType)
-			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+			if !isBlobDownloadRequest(r) {
+				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+			}
 			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write(data)
 			return
 		}
-		if len(parts) == 2 && parts[1] == "backup" && r.Method == http.MethodGet {
+		if len(parts) == 2 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
 			data, err := m.InstanceZIP(parts[0])
 			if err != nil {
 				writeError(w, err)
 				return
 			}
 			w.Header().Set("Content-Type", "application/zip")
-			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frostagent-%s.zip"`, parts[0]))
+			if !isBlobDownloadRequest(r) {
+				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frostagent-%s.zip"`, parts[0]))
+			}
 			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write(data)
 			return

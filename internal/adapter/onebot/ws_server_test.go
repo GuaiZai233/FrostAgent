@@ -827,6 +827,7 @@ func TestOneBotFinalStickerRespectsActivityAndResetsQuota(t *testing.T) {
 			t.Setenv(sticker.ActivityEnvKey, tc.level)
 			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: rawSticker}}}}
 			engine := newTestEngine(provider)
+			engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 			if tc.wantSticker {
 				for range 4 {
 					engine.RecordBotTurn()
@@ -905,6 +906,7 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 	}
 	engine := newTestEngine(provider)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
 
@@ -1019,6 +1021,7 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	}
 	engine := newTestEngine(provider)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+	engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
 
@@ -2776,7 +2779,7 @@ func TestWSGroupMessage_AssistantReplyAppendedOnSendSuccess(t *testing.T) {
 		if strings.Contains(m, "[user] 测试群友 (1234567):") && strings.Contains(m, "你好呀") {
 			foundUser = true
 		}
-		if strings.Contains(m, "[assistant] 霜降狐: 你好呀！我是霜降，很高兴认识大家~") {
+		if strings.Contains(m, "[assistant] 助手: 你好呀！我是霜降，很高兴认识大家~") {
 			foundAssistant = true
 		}
 	}

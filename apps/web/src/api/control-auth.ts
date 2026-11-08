@@ -49,8 +49,23 @@ export async function controlPlaneFetch(input: RequestInfo | URL, init: RequestI
   return response;
 }
 
+function isInstanceBackupURL(url: URL): boolean {
+  const parts = url.pathname.split('/').filter(Boolean);
+  return parts.length >= 4 && parts.length <= 5 &&
+    parts[0] === 'api' && parts[1] === 'instances' && parts[2] !== 'global' && parts[3] === 'backup';
+}
+
 export async function downloadControlPlaneFile(url: string, filename: string): Promise<void> {
-  const response = await controlPlaneFetch(url);
+  const requestURL = new URL(url, window.location.origin);
+  // Keep instance backup responses out of browser download interception
+  // helpers (for example, 迅雷). The server treats this authenticated POST as
+  // a byte fetch and omits Content-Disposition; the Blob is downloaded locally
+  // only after the complete response has arrived. Other control-plane files
+  // keep their existing GET/attachment behavior.
+  const response = await controlPlaneFetch(url, isInstanceBackupURL(requestURL) ? {
+    method: 'POST',
+    headers: { 'X-FrostAgent-Download': 'blob' },
+  } : undefined);
   if (!response.ok) throw new Error((await response.text()).trim() || `HTTP ${response.status}`);
   saveDownloadedBlob(await response.blob(), filename);
 }

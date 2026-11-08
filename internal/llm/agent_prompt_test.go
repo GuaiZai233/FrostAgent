@@ -5,32 +5,24 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
-func TestBuildContextSystemPromptStablePrefixAcrossMinutes(t *testing.T) {
-	now := time.Date(2026, time.October, 12, 18, 43, 0, 0, time.FixedZone("CST", 8*60*60))
+func TestBuildContextSystemPromptContainsOnlyStableInstructions(t *testing.T) {
 	for _, tc := range []struct {
 		name, system, dialogue, prefix string
 	}{
-		{"system and persona", "固定设定", "固定人设", "固定设定\n\n固定人设\n\n"},
-		{"system only", "固定设定", "", "固定设定\n\n"},
-		{"persona only", "", "固定人设", "固定人设\n\n"},
+		{"system and persona", "固定设定", "固定人设", "固定设定\n\n固定人设"},
+		{"system only", "固定设定", "", "固定设定"},
+		{"persona only", "", "固定人设", "固定人设"},
 		{"no stable instructions", "", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, instant := range []time.Time{now, now.Add(time.Minute)} {
-				prompt := buildContextSystemPrompt(tc.system, tc.dialogue, instant)
-				prefix, label, ok := strings.Cut(prompt, "当前系统时间：")
-				if !ok || prefix != tc.prefix {
-					t.Fatalf("stable prefix changed: got %q, want %q", prefix, tc.prefix)
-				}
-				if label != memory.CurrentTimeLabel(instant) {
-					t.Fatalf("current time missing or stale: got %q, want %q", label, memory.CurrentTimeLabel(instant))
-				}
+			prompt := buildContextSystemPrompt(tc.system, tc.dialogue)
+			if prompt != tc.prefix {
+				t.Fatalf("system instructions changed: got %q, want %q", prompt, tc.prefix)
 			}
 		})
 	}
@@ -108,7 +100,7 @@ func TestEngineContextPromptMemoryIsolation(t *testing.T) {
 				t.Fatalf("expected one system and one user message, got %+v", provider.lastRequest.Messages)
 			}
 			prompt := provider.lastRequest.Messages[0].Content.(string)
-			if !strings.HasPrefix(prompt, system+"\n\n"+dialogue+"\n\n当前系统时间：") {
+			if !strings.HasPrefix(prompt, system+"\n\n"+dialogue+"\n\n") || strings.Contains(prompt, "当前系统时间：") {
 				t.Fatalf("dynamic memory changed the stable prefix: %q", prompt)
 			}
 			for _, expected := range []string{tc.topic, tc.fact, tc.memberName} {
@@ -149,7 +141,7 @@ func TestEngineContextPromptMemoryIsolation(t *testing.T) {
 		t.Fatal(result.Error)
 	}
 	prompt := provider.lastRequest.Messages[0].Content.(string)
-	if !strings.HasPrefix(prompt, system+"\n\n"+dialogue+"\n\n当前系统时间：") ||
+	if !strings.HasPrefix(prompt, system+"\n\n"+dialogue+"\n\n") || strings.Contains(prompt, "当前系统时间：") ||
 		!strings.Contains(prompt, "updated-topic") || !strings.Contains(prompt, "updated-memory") ||
 		strings.Contains(prompt, "alice-topic") || strings.Contains(prompt, "alice-only-memory") {
 		t.Fatalf("updated memory must follow the same stable prefix without stale context: %q", prompt)
@@ -167,7 +159,7 @@ func TestEngineContextPromptSecurityNoticeRequestLocal(t *testing.T) {
 			t.Fatal(result.Error)
 		}
 		request := provider.lastRequest.Messages
-		if !strings.HasPrefix(request[0].Content.(string), "固定系统设定\n\n当前系统时间：") {
+		if request[0].Content != "固定系统设定" {
 			t.Fatalf("security notice changed the stable prompt prefix: %+v", request)
 		}
 		if notice != "" {

@@ -1,6 +1,7 @@
 package frontend
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,15 +90,23 @@ func TestHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("favicon.ico served directly", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
+	for _, path := range []string{"/favicon.ico", "/favicon.ico?v=fox-scarf"} {
+		t.Run(path+" served directly", func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 OK for favicon.ico, got %d", rec.Code)
-		}
-	})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200 OK for favicon.ico, got %d", rec.Code)
+			}
+			if !strings.HasPrefix(rec.Header().Get("Content-Type"), "image/") {
+				t.Fatalf("expected an image, got %q", rec.Header().Get("Content-Type"))
+			}
+			if !bytes.HasPrefix(rec.Body.Bytes(), []byte{0, 0, 1, 0}) {
+				t.Fatal("expected ICO bytes rather than an HTML fallback")
+			}
+		})
+	}
 
 	t.Run("redirect legacy zh-Hans prefix", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/zh-Hans/settings", nil)

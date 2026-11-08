@@ -41,7 +41,8 @@ func (v *LLMVisionCaller) Describe(imageBase64, mimeType string) (string, []stri
 	}
 
 	req := core.ChatRequest{
-		Model: model,
+		Model:       model,
+		UsageModule: "sticker_summary",
 		Messages: []core.ChatMessage{
 			{Role: core.RoleUser, Content: contentParts},
 		},
