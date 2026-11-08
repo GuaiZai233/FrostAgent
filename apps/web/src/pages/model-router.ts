@@ -16,6 +16,7 @@ import { confirmDialog } from '../components/confirm';
 import { openDialog } from '../components/dialog';
 import { icon } from '../components/icons';
 import { toast } from '../components/toast';
+import { randomUUID } from '../utils/random-id';
 import { escapeHtml } from '../utils/formatters';
 import { bindingFor, bindingOptions, setBinding, workloads } from '../utils/model-bindings';
 
@@ -25,7 +26,7 @@ const apiKeyStorageSecretFile = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_SECRET_
 const apiKeyStorageWindowsCredentialManager = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_WINDOWS_CREDENTIAL_MANAGER;
 
 function newId(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
+  return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
 }
 
 function cloneConfiguration(config: ModelRouterConfiguration): ModelRouterConfiguration {
