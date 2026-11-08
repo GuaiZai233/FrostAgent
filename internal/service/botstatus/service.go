@@ -176,6 +176,8 @@ func (s *Service) GetSessions(
 		summary := sess.GroupRunningSummary()
 		if isPrivateSession(sess.ConversationID) {
 			summary = sess.PrivateRunningSummary()
+		} else if !llm.GroupCompactAllowed(s.engine.Getenv, sess.ConversationID) {
+			summary = ""
 		}
 		if groupName == "" && s.engine.SessionManager != nil {
 			groupName = s.engine.SessionManager.GetGroupName(sess.ConversationID)
@@ -319,6 +321,7 @@ func (s *Service) GetSessionContext(
 	var recentMessages []string
 	var recentStructuredMessages []llm.GroupCompactMessage
 	var historyMsgs []*v1.SessionHistoryMessageProto
+	var groupCompactDisabled bool
 
 	if s.engine.SessionManager != nil {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
@@ -329,6 +332,10 @@ func (s *Service) GetSessionContext(
 					snap, history = sess.SnapshotPrivateContext(limit)
 				} else {
 					history = sess.Snapshot()
+					if !llm.GroupCompactAllowed(s.engine.Getenv, sessionID) {
+						snap = llm.DisabledGroupContextSnapshot()
+						groupCompactDisabled = true
+					}
 				}
 				runningSummary = snap.RunningSummary
 				summaryGroups = snap.SummaryGroups
@@ -351,7 +358,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	// Fallback to durable summary store if active summary is empty
-	if isGroupSession(sessionID) && runningSummary == "" && s.engine.GroupSummaryStore != nil {
+	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil {
 		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
 			runningSummary = rec.Summary
 		}
@@ -360,6 +367,7 @@ func (s *Service) GetSessionContext(
 	resp.RunningSummary = runningSummary
 	resp.RecentMessages = recentMessages
 	resp.History = historyMsgs
+	resp.GroupCompactDisabled = groupCompactDisabled
 
 	for _, g := range summaryGroups {
 		groupInfo := &v1.SummaryGroupInfoProto{

@@ -625,6 +625,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				msgID = strconv.FormatInt(int64(event.MessageID), 10)
 			}
 			groupSnapshot = session.SnapshotGroupContext(limit, maxChars, msgID)
+			if !llm.GroupCompactAllowed(engine.Getenv, session.ConversationID) {
+				groupSnapshot = llm.DisabledGroupContextSnapshot()
+			}
 		}
 	}
 
@@ -671,6 +674,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 			}
 		}
+	}
+	if groupSnapshot.CompactDisabled {
+		requestPrompt += "\n\n" + llm.GroupCompactStatusPrompt
 	}
 	if vettedSummary != "" {
 		requestPrompt += fmt.Sprintf(

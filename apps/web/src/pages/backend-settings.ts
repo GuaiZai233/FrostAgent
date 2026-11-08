@@ -30,6 +30,7 @@ import {
   formatGroupOption,
   isWhitelistEnabled,
 } from './proactive-whitelist';
+import { mountGroupCompactWhitelist } from './group-compact-whitelist';
 import {
   groupProbabilitiesKey,
   groupProbabilityIdentity,
@@ -408,7 +409,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function invalidNumbers(): HTMLInputElement[] {
     return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
   }
-  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || invalidNumbers().length > 0; }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || !!settingsRoot.querySelector<HTMLInputElement>('#compact-whitelist-input')?.value || invalidNumbers().length > 0; }
   function updateBanner(): void {
     banner.hidden = !dirty();
     saveBtn.disabled = saving || loading || !draft;
@@ -429,6 +430,25 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       return;
     }
     renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change);
+    mountCompactWhitelistCard();
+  }
+
+  // The group compact whitelist lives inside the 记忆与压缩 section, next to its numeric settings.
+  function mountCompactWhitelistCard(): void {
+    const article = [...settingsRoot.querySelectorAll<HTMLElement>('article')]
+      .find((el) => el.querySelector('h2')?.textContent?.trim() === '记忆与压缩');
+    const grid = article?.querySelector<HTMLElement>('.grid');
+    if (!grid || !draft) return;
+    const slot = document.createElement('div');
+    slot.className = 'col-span-full min-w-0';
+    grid.appendChild(slot);
+    mountGroupCompactWhitelist(slot, {
+      get: (key) => draft?.get(key),
+      change,
+      canEdit: () => !!draft && !saving && !loading,
+      sessionGroups: () => sessionGroupMap,
+      effectiveEnabled: isWhitelistEnabled,
+    });
   }
 
   function renderGroups(): void {
