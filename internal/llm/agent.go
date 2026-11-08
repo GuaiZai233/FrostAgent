@@ -468,6 +468,9 @@ func (e *Engine) RunMessagesWithContext(
 	if sessionID != "" && e.SessionManager != nil {
 		if sessCore, ok := e.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*SessionContext); isSess {
+				if runContext.Mock {
+					sess.MarkMock()
+				}
 				// Mock (Direct Chat) runs never publish their prompt to the
 				// session-level Prompt Inspector.
 				if sysContent, ok := messages[0].Content.(string); ok && !runContext.Mock {
