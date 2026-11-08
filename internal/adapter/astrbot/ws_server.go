@@ -1569,7 +1569,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		replyText = "智能体引擎未就绪"
 	}
 
-	replyParts := replyformat.Split(replyText, engine != nil && engine.Getenv(replyformat.EnvKey) == "true")
+	multiSegment, segmentLimit := false, 0
+	if engine != nil {
+		multiSegment = engine.Getenv(replyformat.EnvKey) == "true"
+		segmentLimit = replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))
+	}
+	replyParts := replyformat.SplitLimited(replyText, multiSegment, segmentLimit)
 	replyText = strings.Join(replyParts, "\n\n")
 	historyReplyText := replyText
 	if strings.TrimSpace(historyReplyText) == "" {
@@ -1603,7 +1608,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if last {
 					billingReported.Store(receiptText != "")
 				}
-				sendErr = sendReplyPart(event, conn, part, !last, turn)
+				// Only the first segment of a turn carries the reply/@ decoration.
+				sendErr = sendReplyPart(event, conn, part, !last, index == 0, turn)
 				if sendErr != nil {
 					break
 				}
@@ -1839,10 +1845,12 @@ func sendTerminalNoopWithOptions(event Event, conn *wsConn, suppressLLM bool) er
 // Note: AstrBot WS protocol does not have a request-response platform delivery ACK.
 // This confirms WebSocket transport write success (best-effort delivery).
 func sendDirectReply(event Event, conn *wsConn, text string, turns ...*llm.SessionTurn) error {
-	return sendReplyPart(event, conn, text, false, turns...)
+	return sendReplyPart(event, conn, text, false, true, turns...)
 }
 
-func sendReplyPart(event Event, conn *wsConn, text string, intermediate bool, turns ...*llm.SessionTurn) error {
+// sendReplyPart sends one reply segment. When decorate is false the segment is a
+// plain message: it neither quotes the trigger nor mentions the sender.
+func sendReplyPart(event Event, conn *wsConn, text string, intermediate, decorate bool, turns ...*llm.SessionTurn) error {
 	var turn *llm.SessionTurn
 	if len(turns) > 0 {
 		turn = turns[0]
@@ -1874,6 +1882,9 @@ func sendReplyPart(event Event, conn *wsConn, text string, intermediate bool, tu
 		IsIntermediate: intermediate,
 		Echo:           fmt.Sprintf("reply_%s", event.MessageID),
 		ReplyMessageID: event.replyMessageID(),
+
+		suppressAutoReply:   !decorate,
+		suppressAutoMention: !decorate,
 	}
 	if err := conn.writeTurnJSON(action, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot 发送回复失败: %v", err))

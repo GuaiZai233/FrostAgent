@@ -35,6 +35,45 @@ func TestSplit(t *testing.T) {
 		})
 	}
 }
+func TestParseLimit(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int
+	}{{"", 0}, {"0", 0}, {"-1", 0}, {"abc", 0}, {"2", 2}, {" 3 ", 3}, {"21", 0}} {
+		if got := ParseLimit(tc.value); got != tc.want {
+			t.Fatalf("ParseLimit(%q)=%d want %d", tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestSplitLimitedKeepsRandomSubsetInOrder(t *testing.T) {
+	text := "a" + SegmentMark + "b" + SegmentMark + "c" + SegmentMark + "d"
+	if got := SplitLimited(text, true, 0); len(got) != 4 {
+		t.Fatalf("no cap must keep all segments: %q", got)
+	}
+	if got := SplitLimited(text, true, 9); len(got) != 4 {
+		t.Fatalf("cap above count must keep all segments: %q", got)
+	}
+	if got := SplitLimited(text, false, 2); !reflect.DeepEqual(got, []string{"abcd"}) {
+		t.Fatalf("disabled segmentation must ignore the cap: %q", got)
+	}
+	seen := map[string]bool{}
+	for range 200 {
+		got := SplitLimited(text, true, 2)
+		if len(got) != 2 {
+			t.Fatalf("cap 2 kept %q", got)
+		}
+		// Segments are single letters a<b<c<d, so kept order must be ascending.
+		if got[0] >= got[1] {
+			t.Fatalf("kept segments out of order: %q", got)
+		}
+		seen[strings.Join(got, "")] = true
+	}
+	if len(seen) < 2 {
+		t.Fatal("selection never varied across runs")
+	}
+}
+
 func TestReceiptIsNotSegmented(t *testing.T) {
 	parts := Split("a"+SegmentMark+"b", true)
 	got := WithReceipt(parts, "receipt\n\nmore")

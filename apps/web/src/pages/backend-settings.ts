@@ -101,6 +101,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
               <label class="toggle-switch"><input type="checkbox" id="multi-segment-reply-cb" role="switch" aria-label="允许多段回复" /><span aria-hidden="true"></span></label>
               <label for="multi-segment-reply-cb" class="text-xs font-semibold text-foreground">允许多段回复</label>
             </div>
+            <label class="flex flex-col gap-1.5">
+              <span class="text-xs font-medium">分段消息上限（0 或留空为不限制；超出时随机保留上限数量的分段，其余丢弃）</span>
+              <input id="multi-segment-max-segments" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="0" max="20" step="1" placeholder="0" />
+            </label>
           </div>
           <div class="mb-4 pb-4 border-b border-border" id="poke-card">
             <div class="flex items-center gap-2.5 mb-3">
@@ -620,6 +624,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     quoteDepth.disabled = !quote.checked;
     renderBotUsers();
     element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
+    element<HTMLInputElement>('multi-segment-max-segments').value = value('MULTI_SEGMENT_REPLY_MAX_SEGMENTS');
     const loopMode = element<HTMLSelectElement>('bot-loop-mode');
     loopMode.value = value('BOT_LOOP_MODE');
     loopMode.dataset.default = String(!loopMode.value);
@@ -808,6 +813,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   const texts: Record<string, string> = {
     'poke-cooldown': 'POKE_COOLDOWN_SECONDS',
     'bot-loop-max-turns': 'BOT_LOOP_MAX_TURNS', 'quote-trace-depth': 'QUOTE_TRACE_DEPTH',
+    'multi-segment-max-segments': 'MULTI_SEGMENT_REPLY_MAX_SEGMENTS',
   };
   for (const [id, key] of Object.entries(texts)) {
     const input = element<HTMLInputElement>(id);

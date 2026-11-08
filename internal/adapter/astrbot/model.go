@@ -74,6 +74,7 @@ type Action struct {
 	ReplyMessageID string            `json:"-"` // 当前回复对应的入站消息 ID，仅用于出站规范化
 
 	suppressAutoMention bool // A specific reply must not automatically mention the triggering sender.
+	suppressAutoReply   bool // Follow-up segments of one reply must not quote the trigger again.
 }
 
 // MarshalJSON preserves the legacy process-env normalization path for callers
@@ -176,6 +177,9 @@ func (a Action) withConfiguredGroupReply() Action {
 }
 
 func (a Action) withConfiguredGroupReplyScope(scope *runtimescope.Scope) Action {
+	if a.suppressAutoReply {
+		return a
+	}
 	enableReply := scope.Getenv("ENABLE_REPLY_IN_GROUP_MSG") == "true"
 	isGroup := a.Action == "send_message" && a.MessageType == "group"
 	plan := parity.PlanGroupDecoration(
