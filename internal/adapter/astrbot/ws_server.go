@@ -1058,6 +1058,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
 			groupSnapshot = session.SnapshotGroupContext(limit, maxChars, event.MessageID)
+			if !llm.GroupCompactAllowed(engine.Getenv, session.ConversationID) {
+				groupSnapshot = llm.WithoutCompactSummary(groupSnapshot)
+			}
 		}
 	}
 
@@ -1178,6 +1181,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				}
 			}
 		}
+	}
+	if groupSnapshot.CompactDisabled {
+		requestPrompt += "\n\n" + llm.GroupCompactStatusPrompt
 	}
 	if vettedSummary != "" {
 		requestPrompt += fmt.Sprintf(

@@ -315,6 +315,9 @@ func (c *GroupCompactor) TriggerWithScope(session *SessionContext, owner string,
 	if c == nil || session == nil || c.provider == nil || c.model == "" || owner == "" {
 		return
 	}
+	if !c.compactAllowed(session) {
+		return
+	}
 	key := session.ConversationID
 
 	c.mu.Lock()
@@ -368,6 +371,7 @@ func (c *GroupCompactor) ForceCompact(
 	if c == nil || session == nil || c.provider == nil || c.model == "" || owner == "" {
 		return errors.New("group compactor unavailable")
 	}
+	// Manual compaction (admin /compact) bypasses the group compact whitelist by design.
 	key := session.ConversationID
 
 	c.mu.Lock()
@@ -400,6 +404,12 @@ func (c *GroupCompactor) ForceCompact(
 }
 
 // IsCompacting reports whether compaction is currently in-flight for the given conversation ID.
+// compactAllowed applies the group compact whitelist to a session. Groups outside the
+// whitelist never start compaction; the bot itself is still woken normally.
+func (c *GroupCompactor) compactAllowed(session *SessionContext) bool {
+	return GroupCompactAllowed(c.Getenv, session.ConversationID)
+}
+
 func (c *GroupCompactor) IsCompacting(conversationID string) bool {
 	if c == nil {
 		return false

@@ -179,6 +179,8 @@ func (s *Service) GetSessions(
 		summary := sess.GroupRunningSummary()
 		if isPrivateSession(sess.ConversationID) {
 			summary = sess.PrivateRunningSummary()
+		} else if !llm.GroupCompactAllowed(s.engine.Getenv, sess.ConversationID) {
+			summary = ""
 		}
 		if groupName == "" && s.engine.SessionManager != nil {
 			groupName = s.engine.SessionManager.GetGroupName(sess.ConversationID)
@@ -204,6 +206,11 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
+				// Persisted summaries are subject to the same group compact whitelist as live ones.
+				recordSummary := record.Summary
+				if !llm.GroupCompactAllowed(s.engine.Getenv, record.SessionID) {
+					recordSummary = ""
+				}
 				targetID := ""
 				if _, ok := viewsByID[record.SessionID]; ok {
 					targetID = record.SessionID
@@ -218,7 +225,7 @@ func (s *Service) GetSessions(
 				if targetID != "" {
 					existing := viewsByID[targetID]
 					if existing.info.GroupSummary == "" {
-						existing.info.GroupSummary = record.Summary
+						existing.info.GroupSummary = recordSummary
 					}
 					if existing.info.GroupName == "" && s.engine.SessionManager != nil {
 						existing.info.GroupName = s.engine.SessionManager.GetGroupName(record.SessionID)
@@ -244,7 +251,7 @@ func (s *Service) GetSessions(
 						Platform:     derivePlatform(record.SessionID),
 						CreatedAt:    record.CreatedAt.Format(time.RFC3339),
 						LastActive:   record.UpdatedAt.Format(time.RFC3339),
-						GroupSummary: record.Summary,
+						GroupSummary: recordSummary,
 						GroupName:    gName,
 					},
 					createdAt: record.CreatedAt,
@@ -322,6 +329,9 @@ func (s *Service) GetSessionContext(
 	var recentMessages []string
 	var recentStructuredMessages []llm.GroupCompactMessage
 	var historyMsgs []*v1.SessionHistoryMessageProto
+	// Decided per session ID, independent of whether a live session exists, so the durable
+	// fallback below cannot resurrect a summary for a non-whitelisted group.
+	groupCompactDisabled := !llm.GroupCompactAllowed(s.engine.Getenv, sessionID)
 
 	// Mock (Direct Chat) sessions are ephemeral debug state: never expose
 	// their history or last prompt through the session inspector.
@@ -334,6 +344,9 @@ func (s *Service) GetSessionContext(
 					snap, history = sess.SnapshotPrivateContext(limit)
 				} else {
 					history = sess.Snapshot()
+					if groupCompactDisabled {
+						snap = llm.WithoutCompactSummary(snap)
+					}
 				}
 				runningSummary = snap.RunningSummary
 				summaryGroups = snap.SummaryGroups
@@ -356,7 +369,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	// Fallback to durable summary store if active summary is empty
-	if isGroupSession(sessionID) && runningSummary == "" && s.engine.GroupSummaryStore != nil {
+	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil {
 		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
 			runningSummary = rec.Summary
 		}
@@ -365,6 +378,7 @@ func (s *Service) GetSessionContext(
 	resp.RunningSummary = runningSummary
 	resp.RecentMessages = recentMessages
 	resp.History = historyMsgs
+	resp.GroupCompactDisabled = groupCompactDisabled
 
 	for _, g := range summaryGroups {
 		groupInfo := &v1.SummaryGroupInfoProto{

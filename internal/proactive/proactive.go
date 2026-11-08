@@ -120,17 +120,23 @@ func ParseGroupWhitelist(raw string) map[string]struct{} {
 // Returns false if ENABLE_PROACTIVE_REPLY_WHITELIST is "false".
 // If unset, returns true if PROACTIVE_REPLY_GROUP_WHITELIST contains at least one non-empty entry.
 func IsWhitelistEnabled(getenv func(string) string) bool {
+	return IsWhitelistEnabledWith(getenv, EnvWhitelistEnabled, EnvGroupWhitelist)
+}
+
+// IsWhitelistEnabledWith is IsWhitelistEnabled for an arbitrary pair of switch and list keys,
+// so other features (e.g. group compact) can reuse the same switch semantics.
+func IsWhitelistEnabledWith(getenv func(string) string, enabledKey, listKey string) bool {
 	if getenv == nil {
 		return false
 	}
-	en := strings.TrimSpace(getenv(EnvWhitelistEnabled))
+	en := strings.TrimSpace(getenv(enabledKey))
 	if strings.EqualFold(en, "true") {
 		return true
 	}
 	if strings.EqualFold(en, "false") {
 		return false
 	}
-	whitelist := ParseGroupWhitelist(getenv(EnvGroupWhitelist))
+	whitelist := ParseGroupWhitelist(getenv(listKey))
 	return len(whitelist) > 0
 }
 
@@ -154,14 +160,19 @@ func NormalizePlatform(platform string) string {
 // - Bare IDs in the whitelist are strictly isolated to the QQ family (Option B).
 // - Empty whitelist under enabled mode rejects all groups.
 func IsGroupAllowed(getenv func(string) string, groupID string, platforms ...string) bool {
-	if !IsWhitelistEnabled(getenv) {
+	return IsGroupAllowedWith(getenv, EnvWhitelistEnabled, EnvGroupWhitelist, groupID, platforms...)
+}
+
+// IsGroupAllowedWith is IsGroupAllowed for an arbitrary pair of switch and list keys.
+func IsGroupAllowedWith(getenv func(string) string, enabledKey, listKey, groupID string, platforms ...string) bool {
+	if !IsWhitelistEnabledWith(getenv, enabledKey, listKey) {
 		return true
 	}
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" {
 		return false
 	}
-	whitelist := ParseGroupWhitelist(getenv(EnvGroupWhitelist))
+	whitelist := ParseGroupWhitelist(getenv(listKey))
 	if len(whitelist) == 0 {
 		return false
 	}

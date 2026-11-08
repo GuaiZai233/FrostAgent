@@ -147,6 +147,9 @@ type GroupContextSnapshot struct {
 	RecentMessages           []string              `json:"recent_messages"`
 	RecentStructuredMessages []GroupCompactMessage `json:"recent_structured_messages,omitempty"`
 	SummaryGroups            []SummaryGroup        `json:"summary_groups,omitempty"`
+	// CompactDisabled is set when the group is outside the group compact whitelist.
+	// Such a snapshot carries no running summary; uncompacted recent messages are kept.
+	CompactDisabled bool `json:"compact_disabled,omitempty"`
 }
 
 // GroupCompactSnapshot is an immutable batch sent to the asynchronous

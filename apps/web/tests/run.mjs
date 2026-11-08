@@ -26,6 +26,7 @@ for (const testFile of [
   'dialogue-page.test.ts',
   'skills.test.ts',
   'backend-settings-page.test.ts',
+  'group-compact-whitelist-card.test.ts',
   'connections-page.test.ts',
   'command-settings-page.test.ts',
   'bot-user-id-list.test.ts',

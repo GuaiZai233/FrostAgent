@@ -102,6 +102,8 @@ export interface ParsedPrompt {
   systemPrompt?: string;
   userMessage?: string;
   runningSummary?: string;
+  /** Group compact is disabled for this group (outside the group compact whitelist). */
+  compactDisabled?: boolean;
   recentMessages: GroupMessageItem[];
   summaryGroups: SummaryGroupInfo[];
   responseContext?: string;
@@ -296,6 +298,7 @@ export function buildInspectorDataFromSessionContext(context: {
   platform?: string;
   botName?: string;
   runningSummary?: string;
+  groupCompactDisabled?: boolean;
   recentMessages?: string[];
   summaryGroups?: Array<{
     summary: string;
@@ -364,6 +367,7 @@ export function buildInspectorDataFromSessionContext(context: {
     model: context.model,
     systemPrompt: context.systemPrompt,
     runningSummary: context.runningSummary,
+    compactDisabled: !privateSession && !!context.groupCompactDisabled,
     recentMessages,
     summaryGroups,
     images: [],
@@ -448,6 +452,9 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
   );
   if (runningSummaryMatch) {
     result.runningSummary = runningSummaryMatch[1].trim();
+  }
+  if (/<group_compact_status>[\s\S]*?<\/group_compact_status>/i.test(textToParse)) {
+    result.compactDisabled = true;
   }
 
   const responseContextMatch = textToParse.match(
@@ -748,6 +755,23 @@ export function renderPromptInspector(
             <div class="card p-3 text-xs leading-relaxed select-text bg-info-bg/30 border-info-border/40 text-foreground whitespace-pre-wrap">${escapeHtml(
               parsed.runningSummary,
             )}</div>
+          </div>
+        `
+            : ''
+        }
+
+        <!-- Section 2b: Group compact disabled by the group compact whitelist -->
+        ${
+          parsed.compactDisabled && !privateSession
+            ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">
+                <span class="text-warning flex items-center">${icon('sparkles', 'w-3.5 h-3.5')}</span>
+                <span>群聊 compact 已禁用</span>
+              </div>
+            </div>
+            <div class="card p-3 text-xs leading-relaxed text-muted">本群未在群聊压缩白名单中：不触发群聊压缩，也不注入群聊总结；未压缩的最近群消息仍会提供；Bot 仍会被正常唤醒。</div>
           </div>
         `
             : ''

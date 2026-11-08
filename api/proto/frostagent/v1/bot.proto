@@ -131,6 +131,8 @@ message GetSessionContextResponse {
   string system_prompt = 8;
   string model = 9;
   repeated GroupMessageInfoProto recent_structured_messages = 10;
+  // True when the group is outside the group compact whitelist: no summary or raw group context is provided.
+  bool group_compact_disabled = 11;
 }
 
 // Known provider values are retained alongside calls whose value was omitted.
