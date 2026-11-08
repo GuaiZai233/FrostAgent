@@ -23,9 +23,18 @@ markers are removed but paragraph breaks and backtick-protected markers remain.
 The existing structured tool message chain is not segmented; disabled-mode
 filtering also covers its plain text components.
 
+The optional **分段消息上限** (`MULTI_SEGMENT_REPLY_MAX_SEGMENTS`, 0–20, default
+0 = unlimited, applies only while segmentation is enabled) caps delivered
+segments. When the model returns more segments than the cap, the runtime keeps a
+random subset of the cap size in original order and discards the rest before
+delivery, so dropped segments never reach history or the platform.
+
 Both OneBot and AstrBot send segments in order, using existing session-turn and
-epoch guards. Group quote/mention settings apply to each message. Billing
-receipts attach only to the last segment and are not parsed as model output.
+epoch guards. Group quote/mention settings apply only to the first segment of a
+turn. Follow-up segments are plain messages and do not inherit the quote or @
+decoration, which prevents a multi-segment reply from repeatedly @-ing the
+trigger sender. Billing receipts attach only to the last segment and are not
+parsed as model output.
 AstrBot marks all but the last segment as intermediate so its plugin continues
 consuming the same reply stream.
 

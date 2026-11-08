@@ -11,6 +11,7 @@ import (
 // Input placeholders describe code defaults, including dependent defaults.
 var resetHints = map[string]string{
 	"ENABLE_MULTI_SEGMENT_REPLY":           "关闭",
+	"MULTI_SEGMENT_REPLY_MAX_SEGMENTS":     "0（不限制）",
 	"ENABLE_POKE":                          "关闭",
 	"POKE_CUSTOM_TEXT":                     "的...",
 	"POKE_COOLDOWN_SECONDS":                "30",

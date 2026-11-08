@@ -1,10 +1,48 @@
 // Package replyformat interprets the model's ordinary reply delivery markers.
 package replyformat
 
-import "strings"
+import (
+	"math/rand"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 const EnvKey = "ENABLE_MULTI_SEGMENT_REPLY"
 const SegmentMark = "<FROSTAGENT_SEGMENT_MARK>"
+
+// LimitEnvKey caps how many segments of one reply are delivered. Zero, empty,
+// or invalid values mean no cap.
+const LimitEnvKey = "MULTI_SEGMENT_REPLY_MAX_SEGMENTS"
+
+// MaxSegmentLimit is the largest accepted value for LimitEnvKey.
+const MaxSegmentLimit = 20
+
+// ParseLimit converts the LimitEnvKey value into a segment cap. Zero means no cap.
+func ParseLimit(value string) int {
+	limit, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || limit < 1 || limit > MaxSegmentLimit {
+		return 0
+	}
+	return limit
+}
+
+// SplitLimited splits text for delivery. When segmentation is enabled and limit
+// is positive, it keeps a random subset of at most limit segments, preserving
+// their original order and discarding the rest.
+func SplitLimited(text string, enabled bool, limit int) []string {
+	parts := Split(text, enabled)
+	if !enabled || limit <= 0 || len(parts) <= limit {
+		return parts
+	}
+	keep := rand.Perm(len(parts))[:limit]
+	sort.Ints(keep)
+	kept := make([]string, 0, limit)
+	for _, index := range keep {
+		kept = append(kept, parts[index])
+	}
+	return kept
+}
 
 // Split preserves code spans/fences and single newlines. Disabled segmentation
 // only removes bare markers; ordinary text and whitespace remain unchanged.

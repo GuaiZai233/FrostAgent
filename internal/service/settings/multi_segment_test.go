@@ -64,3 +64,16 @@ func TestMultiSegmentReplySetting(t *testing.T) {
 		t.Fatal("invalid boolean accepted")
 	}
 }
+
+func TestMultiSegmentReplyLimitValidation(t *testing.T) {
+	for _, value := range []string{"", "0", "2", "20"} {
+		if err := validateUpdate(replyformat.LimitEnvKey, value); err != nil {
+			t.Fatalf("value %q rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"-1", "21", "2.5", " 2", "two"} {
+		if err := validateUpdate(replyformat.LimitEnvKey, value); err == nil {
+			t.Fatalf("value %q accepted", value)
+		}
+	}
+}
