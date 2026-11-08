@@ -58,23 +58,22 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
             <p id="${adapter.id}-disabled-hint" class="text-xs text-muted" hidden>连接已停用；保存后关闭真实上游连接并停止重连，保留方向、地址和令牌。网页直接对话不受影响。</p>
             <label class="text-xs font-medium" for="${adapter.id}-mode">连接方式</label>
             <select id="${adapter.id}-mode" class="input w-full" disabled>
-              <option value="reverse">反向 WebSocket（FA 作为服务端）</option>
-              <option value="forward">正向 WebSocket（FA 作为客户端）</option>
+              <option value="reverse">反向 WebSocket（FrostAgent 作为服务端）</option>
+              <option value="forward">正向 WebSocket（FrostAgent 作为客户端）</option>
             </select>
             <div id="${adapter.id}-reverse" class="flex flex-col gap-2">
-              <p class="text-xs text-muted">由 ${adapter.name === 'OneBot' ? 'NapCat 等上游' : 'AstrBot 插件'}主动连接 FA。将下面的实例地址填入上游的反向 WebSocket 配置。</p>
+              <p class="text-xs text-muted">由 ${adapter.name === 'OneBot' ? '消息平台协议实现上游' : 'AstrBot 插件'}主动连接 FrostAgent。将下面的实例地址填入上游的反向 WebSocket 配置。</p>
               <div class="flex items-center gap-2 flex-wrap">
                 <code id="${adapter.id}-address" class="text-xs font-mono break-all flex-1 min-w-0"></code>
                 <button type="button" id="${adapter.id}-copy" class="btn btn-outline btn-sm" aria-label="复制 ${adapter.name} 地址" disabled>${icon('copy', 'w-3.5 h-3.5')}复制</button>
               </div>
-              <p class="text-xs text-muted">地址根据实际 WS 监听地址生成；跨主机或 Docker 端口映射时，请按上游可达的地址调整。</p>
+              <p class="text-xs text-muted">地址根据实际 WS 监听地址生成；跨主机或 Docker 端口映射时，请按实际地址调整。</p>
               <label class="text-xs font-medium" for="${adapter.id}-inbound_token">入站认证令牌（可选）</label>
               <input id="${adapter.id}-inbound_token" class="input font-mono w-full" type="password" autocomplete="off" spellcheck="false" disabled>
-              <p class="text-xs text-muted">配置后，上游每次连接都必须发送 Authorization: Bearer &lt;令牌&gt;。此令牌独立于正向连接令牌和管理令牌，不要放入 URL；非受信网络请使用 wss://。</p>
-              <p class="text-xs text-muted">留空保留专用 WS 端口的无令牌兼容行为，但 Docker 网桥管理端口（默认 8080）拒绝真实适配器连接；配置后管理端口也仅接受正确入站令牌。网页直接对话仍使用管理凭据。</p>
+              <p class="text-xs text-muted">配置后，上游每次连接都必须发送 Authorization: Bearer &lt;令牌&gt;。非受信网络请使用 wss://。</p>
             </div>
             <div id="${adapter.id}-forward" class="flex flex-col gap-2" hidden>
-              <p class="text-xs text-muted">${adapter.upstream} FA 将主动连接，断线后自动重连；实例停用时停止连接。</p>
+              <p class="text-xs text-muted">${adapter.upstream} FrostAgent 将主动连接，断线后自动重连；实例停用时停止连接。</p>
               <label class="text-xs font-medium" for="${adapter.id}-url">上游 WebSocket 地址</label>
               <input id="${adapter.id}-url" class="input font-mono w-full" type="url" placeholder="ws://上游主机:端口/" autocomplete="off" spellcheck="false" disabled>
               <label class="text-xs font-medium" for="${adapter.id}-token">上游访问令牌（可选）</label>
@@ -83,10 +82,6 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
             </div>
           </article>
         `).join('')}
-        <aside class="card p-4 text-xs text-muted leading-relaxed">
-          OneBot、AstrBot 可分别勾选启用，默认启用。启用后同一适配器的正向／反向二选一，两种模式都能双向收发消息。停用或切回反向模式会保留正向地址和令牌。<br>
-          Docker 内的 127.0.0.1 指容器自己，请填写 FA 容器实际能访问的上游地址。这里仅配置适配器 WebSocket，不改变 HTTP 管理面板的端口或访问限制。
-        </aside>
       </div>
     </div>
   `;
