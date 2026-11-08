@@ -58,7 +58,11 @@ func (s *Service) GetOverview(
 
 	activeSessions := int32(0)
 	if s.engine.SessionManager != nil {
-		activeSessions = int32(s.engine.SessionManager.Count())
+		for _, sess := range s.engine.SessionManager.ListSessions(0, 0) {
+			if !isMockSession(sess.ConversationID) {
+				activeSessions++
+			}
+		}
 	}
 
 	// Build tool list
@@ -165,6 +169,9 @@ func (s *Service) GetSessions(
 	viewsByID := make(map[string]sessionView)
 	sessions := s.engine.SessionManager.ListSessions(0, 0)
 	for _, sess := range sessions {
+		if isMockSession(sess.ConversationID) {
+			continue
+		}
 		platform := derivePlatform(sess.ConversationID)
 
 		sess.Lock()
@@ -320,7 +327,9 @@ func (s *Service) GetSessionContext(
 	var recentStructuredMessages []llm.GroupCompactMessage
 	var historyMsgs []*v1.SessionHistoryMessageProto
 
-	if s.engine.SessionManager != nil {
+	// Mock (Direct Chat) sessions are ephemeral debug state: never expose
+	// their history or last prompt through the session inspector.
+	if s.engine.SessionManager != nil && !isMockSession(sessionID) {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess {
 				snap := sess.SnapshotGroupContext(limit, 100000, "")
@@ -456,6 +465,12 @@ func (s *Service) DeleteGroupSummary(
 func isGroupSession(sessionID string) bool {
 	s := strings.ToLower(sessionID)
 	return !isPrivateSession(s) && (strings.HasPrefix(s, "group:") || strings.Contains(s, ":group:"))
+}
+
+// isMockSession reports whether a session key was created by a Direct Chat
+// mock connection (`mock:<generation>:<baseKey>`, see the adapters' sessionKey).
+func isMockSession(sessionID string) bool {
+	return strings.HasPrefix(sessionID, "mock:")
 }
 
 func isPrivateSession(sessionID string) bool {

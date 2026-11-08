@@ -7,6 +7,28 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { dashboardWebSocketURL } from '../utils/websocket-url';
 
+const MOCK_NICKNAME_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+function randomChars(alphabet: string, length: number): string {
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  return Array.from(values, (value) => alphabet[value % alphabet.length]).join('');
+}
+
+/** Random 5-digit UID; the leading digit is never 0 so Number() round-trips. */
+function randomMockUid(): string {
+  return randomChars('123456789', 1) + randomChars('0123456789', 4);
+}
+
+/** Random 7-character nickname that always mixes upper case, lower case and digits. */
+function randomMockNickname(): string {
+  let nickname = '';
+  do {
+    nickname = randomChars(MOCK_NICKNAME_ALPHABET, 7);
+  } while (!/[A-Z]/.test(nickname) || !/[a-z]/.test(nickname) || !/[0-9]/.test(nickname));
+  return nickname;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'bot' | 'system';
@@ -104,8 +126,12 @@ function createChatPage(container: HTMLElement): () => void {
   let adapter: 'onebot' | 'astrbot' = 'onebot';
   let astrbotPlatform = 'aiocqhttp';
   let chatType: 'private' | 'group' = 'private';
-  let userId = '10001';
-  let nickname = '调试员';
+  // Each debug session starts with a fresh random identity so simulated
+  // senders do not collide with each other across page visits.
+  const defaultUid = randomMockUid();
+  const defaultNickname = randomMockNickname();
+  let userId = defaultUid;
+  let nickname = defaultNickname;
   let groupId = '100001';
   let groupName = '调试群';
   let card = '';
@@ -177,12 +203,12 @@ function createChatPage(container: HTMLElement): () => void {
 
           <div class="form-group">
             <label class="form-label text-xs" for="chat-uid-input">用户 ID (UID)</label>
-            <input type="text" id="chat-uid-input" class="input text-xs font-mono" value="10001" placeholder="例如: 10001" />
+            <input type="text" id="chat-uid-input" class="input text-xs font-mono" value="${escapeHtml(defaultUid)}" placeholder="例如: 12345" />
           </div>
 
           <div class="form-group">
             <label class="form-label text-xs" for="chat-nickname-input">发送者昵称</label>
-            <input type="text" id="chat-nickname-input" class="input text-xs" value="调试员" placeholder="例如: 调试员" />
+            <input type="text" id="chat-nickname-input" class="input text-xs" value="${escapeHtml(defaultNickname)}" placeholder="例如: aB3dE9f" />
           </div>
         </div>
 
@@ -612,7 +638,7 @@ function createChatPage(container: HTMLElement): () => void {
     appendMessage({
       id: `user_${Date.now()}_${++msgSeq}`,
       role: 'user',
-      sender: nickname || '调试员',
+      sender: nickname || defaultNickname,
       content: text,
       time: new Date().toLocaleTimeString(),
     });
@@ -630,9 +656,9 @@ function createChatPage(container: HTMLElement): () => void {
   function sendOneBotMessage(text: string) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    const currentUid = Number(userId) || 10001;
+    const currentUid = Number(userId) || Number(defaultUid);
     const currentGid = Number(groupId) || 100001;
-    const senderName = nickname || '调试员';
+    const senderName = nickname || defaultNickname;
 
     if (chatType === 'group') {
       const eventPayload = {
@@ -689,9 +715,9 @@ function createChatPage(container: HTMLElement): () => void {
   function sendAstrBotMessage(text: string) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    const currentUid = String(userId || '10001');
+    const currentUid = String(userId || defaultUid);
     const currentGid = String(groupId || '100001');
-    const senderName = nickname || '调试员';
+    const senderName = nickname || defaultNickname;
     const currentPlatform = astrbotPlatform || 'aiocqhttp';
 
     const eventPayload = {

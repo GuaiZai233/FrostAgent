@@ -468,7 +468,9 @@ func (e *Engine) RunMessagesWithContext(
 	if sessionID != "" && e.SessionManager != nil {
 		if sessCore, ok := e.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*SessionContext); isSess {
-				if sysContent, ok := messages[0].Content.(string); ok {
+				// Mock (Direct Chat) runs never publish their prompt to the
+				// session-level Prompt Inspector.
+				if sysContent, ok := messages[0].Content.(string); ok && !runContext.Mock {
 					modelName := e.ModelName
 					if e.ModelRouter != nil {
 						if target, err := runContext.RouteSnapshot.Resolve(modelrouter.WorkloadDialogue, runContext.RouteScope); err == nil {
@@ -855,7 +857,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			messages = skillMessages
 		}
 		messages = e.messageGuidanceMessages(messages)
-		if sess := e.promptTraceSession(ctx); sess != nil {
+		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && runCtx.Mock) {
 			var system []string
 			for _, message := range messages {
 				if message.Role == "system" {
