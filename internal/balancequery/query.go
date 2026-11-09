@@ -27,7 +27,7 @@ func newQueryClient() *http.Client {
 // Execute substitutes credentials only at the outbound HTTP boundary. No URL,
 // request headers, transport errors or secret-bearing responses reach the model.
 func Execute(ctx context.Context, cfg Config) (string, error) {
-	if cfg.APIKey == "" {
+	if cfg.APIKey == "" && !cfg.Keyless {
 		return "", errors.New("额度查询尚未配置 API key，请联系管理员")
 	}
 	if err := cfg.Validate(); err != nil {
@@ -41,6 +41,10 @@ func Execute(ctx context.Context, cfg Config) (string, error) {
 	}
 	for name, values := range spec.headers {
 		for _, value := range values {
+			// Without a credential, a header that only exists to carry the key is omitted entirely.
+			if cfg.APIKey == "" && strings.Contains(value, KeyPlaceholder) {
+				continue
+			}
 			req.Header.Add(name, strings.ReplaceAll(value, KeyPlaceholder, cfg.APIKey))
 		}
 	}
@@ -63,7 +67,7 @@ func Execute(ctx context.Context, cfg Config) (string, error) {
 		return "", errors.New("额度查询结果不是有效文本")
 	}
 	result := string(data)
-	if containsSecret(result, cfg.APIKey) {
+	if cfg.APIKey != "" && containsSecret(result, cfg.APIKey) {
 		return "", errors.New("额度查询结果包含 API key，已阻止返回")
 	}
 	return result, nil

@@ -275,6 +275,9 @@ try {
     const testButton = presetDialog.querySelector<HTMLButtonElement>('#balance-query-test')!;
     const cancelButton = [...presetDialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn')].find((button) => button.textContent!.trim() === '取消')!;
     assert.equal(testButton.textContent!.trim(), '测试连接');
+    const clearButton = presetDialog.querySelector<HTMLButtonElement>('#balance-query-clear-config')!;
+    assert.ok(clearButton.textContent!.includes('清除配置'), 'clear button must be labelled 清除配置');
+    assert.ok(clearButton.compareDocumentPosition(testButton) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, '清除配置 must be the left-most footer action');
     assert.ok(testButton.compareDocumentPosition(cancelButton) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, '测试连接 must sit to the left of 取消');
     choose('newapi-key');
     presetCurl.value = "curl https://hand.example/balance -H 'Authorization: Bearer {{API_KEY}}'";

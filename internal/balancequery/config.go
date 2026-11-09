@@ -18,6 +18,9 @@ type Config struct {
 	Curl       string `json:"curl"`
 	APIKey     string `json:"api_key,omitempty"`
 	ProviderID string `json:"provider_id,omitempty"`
+	// Keyless marks a template saved without any credential (a custom endpoint that needs none).
+	// It is set only by saving a blank key with no stored key or provider; clearing a key never sets it.
+	Keyless bool `json:"keyless,omitempty"`
 }
 
 type KeyResolver func(providerID string) (string, error)
@@ -70,5 +73,5 @@ func Configured(get func(string) string, resolvers ...KeyResolver) bool {
 		resolve = resolvers[0]
 	}
 	cfg, err := LoadResolved(get, resolve)
-	return err == nil && cfg.APIKey != "" && cfg.Validate() == nil
+	return err == nil && (cfg.APIKey != "" || cfg.Keyless) && cfg.Validate() == nil
 }

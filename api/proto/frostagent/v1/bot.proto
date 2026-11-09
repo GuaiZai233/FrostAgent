@@ -11,6 +11,7 @@ service BotStatusService {
   rpc GetBalanceQueryConfig(GetBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc SaveBalanceQueryConfig(SaveBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc TestBalanceQueryConfig(TestBalanceQueryConfigRequest) returns (TestBalanceQueryConfigResponse);
+  rpc ClearBalanceQueryConfig(ClearBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
@@ -45,6 +46,9 @@ message SaveBalanceQueryConfigRequest {
   // Published provider whose current credential is resolved by the backend.
   string provider_id = 4;
 }
+
+// Deletes the whole stored balance_query configuration, returning the tool to unconfigured.
+message ClearBalanceQueryConfigRequest {}
 
 // Runs the draft request once without saving anything. The response body is never returned.
 message TestBalanceQueryConfigRequest {

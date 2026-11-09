@@ -92,6 +92,8 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if err := validated.Validate(); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
+	// A blank credential with nothing stored is a keyless template. Clearing a key is not keyless.
+	cfg.Keyless = !req.Msg.ClearApiKey && cfg.APIKey == "" && cfg.ProviderID == ""
 	raw, _ := json.Marshal(cfg)
 	if err := s.engine.Config.Update(balancequery.ConfigKey, string(raw), false); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("保存额度查询配置失败"))
@@ -128,7 +130,11 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 		}
 		candidate.APIKey = cfg.APIKey
 	default:
-		return fail("请填写 API Key")
+		// No credential typed and nothing reusable: only a keyless template can run without one.
+		if cfg.ProviderID != "" {
+			return fail("请填写 API Key")
+		}
+		candidate.Keyless = true
 	}
 	if err := candidate.Validate(); err != nil {
 		return fail(err.Error())
@@ -137,4 +143,14 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 		return fail(err.Error())
 	}
 	return connect.NewResponse(&v1.TestBalanceQueryConfigResponse{Ok: true, Message: "连接成功，接口返回了有效结果"}), nil
+}
+
+// ClearBalanceQueryConfig deletes the stored configuration so balance_query reports unconfigured.
+func (s *Service) ClearBalanceQueryConfig(ctx context.Context, req *connect.Request[v1.ClearBalanceQueryConfigRequest]) (*connect.Response[v1.BalanceQueryConfigResponse], error) {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	if err := s.engine.Config.Update(balancequery.ConfigKey, "", true); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("清除额度查询配置失败"))
+	}
+	return s.balanceConfigResponse(balancequery.Config{Curl: balancequery.DefaultCurl}), nil
 }
