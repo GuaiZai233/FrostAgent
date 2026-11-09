@@ -443,7 +443,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				if turn != nil {
 					turn.StagedGuard().SetImageDescription(imageDesc)
 				}
-				userText = userText + " 【图片内容】：" + imageDesc
+				userText = userText + " " + llm.VisionResultLabel + imageDesc
 			}
 		}
 	}
@@ -1576,7 +1576,7 @@ func buildChatMessagesFromEvent(event model.OneBotEvent, engine *llm.Engine) []l
 			}
 			scope := oneBotRouteScope(event)
 			imageDesc := content.ProcessImage(runtimescope.WithContext(engine.Context(), engine.Scope), segments, provider, core.RouteContext{Platform: scope.Platform, GroupID: scope.GroupID})
-			userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+			userText = strings.TrimSpace(userText + " " + llm.VisionResultLabel + imageDesc)
 		}
 		messages = append(messages, llm.ChatMessage{Role: "user", Content: userText})
 	}

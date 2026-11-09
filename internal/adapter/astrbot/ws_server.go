@@ -990,7 +990,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if turn != nil {
 					turn.StagedGuard().SetImageDescription(imageDesc)
 				}
-				userText = strings.TrimSpace(userText + " 【图片内容】：" + imageDesc)
+				userText = strings.TrimSpace(userText + " " + llm.VisionResultLabel + imageDesc)
 			}
 		}
 	}
