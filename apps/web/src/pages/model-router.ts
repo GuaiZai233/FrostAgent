@@ -337,7 +337,18 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
             <select class="select" data-global-workload="${workload.value}">${bindingOptions(draft, binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select>
           </div>`;
         }).join('')}
-      </div>`;
+      </div>
+      ${dialogueModelHasVision()
+        ? '<div class="card p-3 mt-3 text-xs text-muted flex gap-2" role="note"><span aria-hidden="true">ⓘ</span><span>主对话模型已勾选识图能力，当多模态模型 Disable 时，图片内容会直接输入主对话模型。</span></div>'
+        : ''}`;
+  }
+
+  function dialogueModelHasVision(): boolean {
+    const binding = bindingFor(draft.globalBindings, ModelWorkload.DIALOGUE);
+    if (binding?.mode !== ModelBindingMode.MODEL) return false;
+    // Match the backend's Target.HasCapability: trim and lowercase before comparing.
+    return draft.models.some((model) => model.id === binding.modelId
+      && model.capabilities.some((capability) => capability.trim().toLowerCase() === 'vision'));
   }
 
   function renderGroups(): string {
