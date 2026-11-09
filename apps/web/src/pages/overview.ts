@@ -301,7 +301,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
-        footerHtml: `<button type="button" id="balance-query-clear-config" class="btn btn-ghost text-destructive" style="margin-right:auto">${icon('trash', 'w-3.5 h-3.5')} 清除配置</button><button type="button" id="balance-query-test" class="btn btn-outline">测试连接</button><button type="button" class="btn btn-outline dialog-close-btn">取消</button><button type="submit" form="balance-query-form" id="balance-query-save" class="btn btn-primary">保存</button>',
+        footerHtml: `<button type="button" id="balance-query-clear-config" class="btn btn-ghost text-destructive" style="margin-right:auto">${icon('trash', 'w-3.5 h-3.5')} 清除配置</button><button type="button" id="balance-query-test" class="btn btn-outline">测试连接</button><button type="button" class="btn btn-outline dialog-close-btn">取消</button><button type="submit" form="balance-query-form" id="balance-query-save" class="btn btn-primary">保存</button>`,
         onMount: (dialog, close) => {
           closeConfigDialog = close;
           const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
