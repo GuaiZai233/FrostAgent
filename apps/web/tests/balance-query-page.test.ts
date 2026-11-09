@@ -94,6 +94,7 @@ try {
   await flush();
   assert.equal(balanceToggle.checked, false, 'forced enable must be reverted');
   assert.match(document.querySelector('.fa-toast-error')?.textContent ?? '', /请先点击卡片后进行配置/);
+  assert.equal(toolUpdates['balance_query'], undefined, 'forced balance_query enable must not reach the API');
   await openConfig();
   const clearButton = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
   assert.ok(clearButton, 'clear-key action must exist');
