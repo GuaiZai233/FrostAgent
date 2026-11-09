@@ -366,7 +366,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             providerGroup.hidden = !reuseKey.checked;
             manualKey.hidden = reuseKey.checked;
             key.disabled = saving || reuseKey.checked;
-            key.required = !reuseKey.checked && !clearKey && (!cfg.apiKeyConfigured || !!cfg.providerId || retypeKey);
+            // Custom templates may leave the key blank (the backend keeps the stored key only for the same endpoint).
+            // A chosen preset always needs its own key when none is stored or the template has changed.
+            const presetChosen = preset.value !== '';
+            key.required = !reuseKey.checked && !clearKey && (!!cfg.providerId || (presetChosen && (!cfg.apiKeyConfigured || retypeKey)));
             clearKeyButton.disabled = saving || reuseKey.checked || !cfg.apiKeyConfigured || !!cfg.providerId || clearKey;
             keyHint.textContent = clearKey
               ? '保存后将清除已配置的 API Key。'

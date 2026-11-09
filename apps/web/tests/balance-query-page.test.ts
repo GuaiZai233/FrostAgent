@@ -55,6 +55,11 @@ globalThis.fetch = async (input, init) => {
   saves.push(body);
   if (deferSave) await new Promise<void>((resolve) => { releaseSave = resolve; });
   if (failSave) return Response.json({ code: 'invalid_argument', message: 'synthetic invalid curl' }, { status: 400 });
+  // Mirrors the backend rule: a blank key may only be reused when the request endpoint is unchanged.
+  const endpointOf = (curl: string) => curl.match(/https?:\/\/\S+/)?.[0] ?? '';
+  if (!body.apiKey && !body.clearApiKey && !body.providerId && savedKey && endpointOf(body.curl) !== endpointOf(savedCurl)) {
+    return Response.json({ code: 'invalid_argument', message: '请求地址已变更，请重新输入 Key，不会复用原有密钥' }, { status: 400 });
+  }
   savedCurl = body.curl;
   if (body.clearApiKey) {
     savedKey = '';
@@ -311,18 +316,20 @@ try {
     editCurl.dispatchEvent(new dom.window.Event('input'));
     editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
-    assert.equal(saves.length, savesBeforeManualHost, 'manual host change must not reuse the stored key');
+    // Custom template: a blank key is sent, and the backend refuses to reuse the stored key for a new host.
+    assert.equal(saves.length, savesBeforeManualHost + 1);
+    assert.ok(!saves.at(-1)!.apiKey, 'blank custom key is allowed in the form');
     assert.match(editError.textContent!, /请重新输入/);
-    // Any template edit, even path-only on the same host, requires the key to be re-entered.
+    assert.equal(savedKey, 'sk-synthetic-new-host-key', 'refused edit must not change the stored key');
+    // A path-only change on a different endpoint is refused the same way.
     editCurl.value = "curl https://你的NewAPI地址/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
     editCurl.dispatchEvent(new dom.window.Event('input'));
     editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
-    assert.equal(saves.length, savesBeforeManualHost, 'path edit with blank key must not reuse the stored key');
+    assert.match(editError.textContent!, /请重新输入/);
     editDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'sk-synthetic-path-key';
     editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
-    assert.equal(saves.length, savesBeforeManualHost + 1);
     assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-path-key');
     savedKey = '';
   }
