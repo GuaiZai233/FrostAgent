@@ -1125,9 +1125,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
 			}
-			// A silence after a confirmed delivery is not a silent turn: skip the
-			// synthetic [stay_silent] memory record for any turn that spoke.
-			if runResult.StaySilentCalled && deliveries.Text() == "" && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			// The extraction turn records what the bot actually said when it spoke
+			// before stay_silent; [stay_silent] is used only for a genuine silence.
+			silentRecord := "[stay_silent]"
+			if spoken := deliveries.Text(); spoken != "" {
+				silentRecord = spoken
+			}
+			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
@@ -1157,7 +1161,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							SpeakerID:   userIDStr,
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: silentRecord},
 							MessageID:   msgID,
 						},
 					})
@@ -1175,13 +1179,21 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							OwnerType: ownerType,
 							ScopeType: memory.ScopePrivate,
 							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: silentRecord},
 						},
 					})
 				}
 			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", conn.historyKey(event)))
 			return
+		}
+
+		// After a confirmed send_message in this turn, a placeholder final such as
+		// "(empty)" is not a second reply: drop it so the delivered text alone is
+		// committed and nothing extra is sent.
+		if deliveries.Text() != "" && llm.IsPlaceholderFinal(replyText) {
+			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮已送达回复，占位式最终文本已丢弃: session=%s", conn.historyKey(event)))
+			replyText = ""
 		}
 
 		// Some OpenAI-compatible providers use a null assistant content when

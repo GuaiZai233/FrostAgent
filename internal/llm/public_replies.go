@@ -4,7 +4,26 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"sync"
+	"unicode"
 )
+
+// IsPlaceholderFinal reports whether a final model answer has no speakable
+// content: blank, punctuation-only, or a bare placeholder token such as
+// "(empty)". Adapters consult it only after a confirmed delivery in the same
+// turn, so such text is dropped instead of being sent as an extra message.
+func IsPlaceholderFinal(text string) bool {
+	body := strings.TrimFunc(strings.TrimSpace(text), func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	if body == "" {
+		return true
+	}
+	switch strings.ToLower(body) {
+	case "empty", "null", "none", "nil", "n/a", "undefined":
+		return true
+	}
+	return false
+}
 
 // PublicReplyLog separates confirmed delivery facts from a cancellable attempt.
 // Late transport confirmations may arrive after Finish; they remain public but

@@ -385,3 +385,16 @@ func TestPublicReplyLogSilentExitKeepsDeliveredText(t *testing.T) {
 		t.Fatalf("history=%+v want one assistant entry with the delivered text", got)
 	}
 }
+
+func TestIsPlaceholderFinal(t *testing.T) {
+	for _, text := range []string{"", "   ", "(empty)", "（empty）", "[empty]", "<empty>", "empty", "NULL", "None", "...", "。", "…", ".", "()"} {
+		if !IsPlaceholderFinal(text) {
+			t.Fatalf("IsPlaceholderFinal(%q) = false, want true", text)
+		}
+	}
+	for _, text := range []string{"你好", "听起来好香", "ok", "(empty) 还有内容", "no"} {
+		if IsPlaceholderFinal(text) {
+			t.Fatalf("IsPlaceholderFinal(%q) = true, want false", text)
+		}
+	}
+}

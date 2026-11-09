@@ -1144,7 +1144,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	contextBytes, _ := json.Marshal(contextData)
 
-	responseContext, _ := json.Marshal(map[string]string{"guidance": parity.CurrentTimeGuidance(time.Now())})
+	responseContext, _ := json.Marshal(map[string]string{"guidance": parity.ReplyDecisionGuidance + parity.CurrentTimeGuidance(time.Now())})
 	responseTag := fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	durablePrompt := fmt.Sprintf("User Message: %s%s\n\n<system_context>\n%s\n</system_context>", userText, responseTag, string(contextBytes))
 
@@ -1525,9 +1525,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			// A silence after a confirmed delivery is not a silent turn: skip the
-			// synthetic [stay_silent] memory record for any turn that spoke.
-			if runResult.StaySilentCalled && deliveries.Text() == "" && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			// The extraction turn records what the bot actually said when it spoke
+			// before stay_silent; [stay_silent] is used only for a genuine silence.
+			silentRecord := "[stay_silent]"
+			if spoken := deliveries.Text(); spoken != "" {
+				silentRecord = spoken
+			}
+			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					speakerName := senderDisplayName(event)
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
@@ -1551,7 +1555,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 							SpeakerID:   event.UserID,
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: silentRecord},
 							MessageID:   event.MessageID,
 						},
 					})
@@ -1569,7 +1573,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 							OwnerType: ownerType,
 							ScopeType: memory.ScopePrivate,
 							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: silentRecord},
 						},
 					})
 				}
@@ -1583,6 +1587,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		replyText = "智能体引擎未就绪"
 	}
 
+	// After a confirmed send_message in this turn, a placeholder final such as
+	// "(empty)" is not a second reply: drop it so the delivered text alone is
+	// committed and the terminal noop is sent instead.
+	if deliveries.Text() != "" && llm.IsPlaceholderFinal(replyText) {
+		replyText = ""
+	}
 	multiSegment, segmentLimit := false, 0
 	if engine != nil {
 		multiSegment = engine.Getenv(replyformat.EnvKey) == "true"
