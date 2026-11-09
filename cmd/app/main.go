@@ -10,18 +10,27 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/modelcatalog"
 	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	"github.com/GuaiZai233/FrostAgent/internal/updatecheck"
 	"maps"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 )
 
 func run() error {
+	catalogCtx, stopCatalog := context.WithCancel(context.Background())
+	defer stopCatalog()
+	modelcatalog.Start(catalogCtx, modelcatalog.New(
+		modelcatalog.DefaultURL,
+		filepath.Join("data", "models_dev_cache.json"),
+		modelcatalog.RefreshInterval,
+	))
 	gateway, err := newStorageGateway(context.Background(), "data")
 	if err != nil {
 		return err

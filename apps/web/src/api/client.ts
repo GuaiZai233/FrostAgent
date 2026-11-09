@@ -836,6 +836,11 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
     testModel(modelId: string): Promise<TestModelResponse> {
       return modelRouterClient.testModel({ modelId });
     },
+    inferModelCapabilities(
+      modelName: string,
+    ): Promise<{ found: boolean; capabilities: string[] }> {
+      return modelRouterClient.inferModelCapabilities({ modelName });
+    },
 
     // Memory
     setMemoryPlatform(platform: string): void { memoryPlatform = platform; },
