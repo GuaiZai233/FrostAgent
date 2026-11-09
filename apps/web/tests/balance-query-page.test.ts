@@ -179,6 +179,12 @@ try {
     assert.equal(dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!.disabled, true);
     assert.ok([...dialog.querySelectorAll<HTMLInputElement>('input[name="balance-query-provider"]')].every((input) => input.disabled));
     assert.equal(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.disabled, true);
+    const presetSelect = dialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    assert.equal(presetSelect.disabled, true, 'preset select must be disabled while a save is pending');
+    const pendingCurl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value;
+    presetSelect.value = 'deepseek';
+    presetSelect.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, pendingCurl, 'pending save curl must not change');
     await save();
     assert.equal(saves.length, savesBefore + 1, 'pending save was submitted twice');
     for (const close of dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn')) {

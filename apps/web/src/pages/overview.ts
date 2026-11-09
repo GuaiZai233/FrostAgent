@@ -311,6 +311,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           const presetHint = dialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
           const defaultKeyPlaceholder = key.placeholder;
           preset.onchange = () => {
+            if (saving) return;
             const selected = balanceQueryPresets[preset.value];
             if (selected) curl.value = selected.curl;
             key.placeholder = selected ? selected.keyPlaceholder : defaultKeyPlaceholder;
@@ -338,6 +339,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             save.textContent = pending ? '保存中...' : '保存';
             dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn').forEach((button) => { button.disabled = pending; });
             curl.disabled = pending;
+            preset.disabled = pending;
             syncCredentials();
           };
           reuseKey.onchange = () => { clearKey = false; syncCredentials(); };
