@@ -254,8 +254,29 @@ try {
   assert.equal(document.querySelectorAll('dialog').length, 0, 'late configuration response opened a dialog after unmount');
 } finally {
   cleanup();
+  // Preset selection fills the curl template and the matching key placeholder.
+  await openConfig();
+  const presetDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+  const preset = presetDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+  const presetCurl = presetDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+  const presetKey = presetDialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+  const presetHint = presetDialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
+  const choose = (value: string) => { preset.value = value; preset.dispatchEvent(new dom.window.Event('change')); };
+  assert.deepEqual([...preset.options].map((option) => option.value), ['', 'deepseek', 'newapi-key', 'newapi-account']);
+  choose('newapi-key');
+  assert.match(presetCurl.value, /\/api\/usage\/token\/\s*\\/);
+  assert.match(presetCurl.value, /\{\{API_KEY\}\}/);
+  assert.equal(presetKey.placeholder, 'sk-xxx');
+  assert.match(presetHint.textContent!, /unlimited_quota/);
+  choose('newapi-account');
+  assert.match(presetCurl.value, /\/api\/user\/self\s*\\/);
+  assert.equal(presetKey.placeholder, 'nap_xxx');
+  assert.match(presetHint.textContent!, /profile:read/);
+  choose('');
+  assert.equal(presetHint.hidden, true, 'custom option must hide the preset hint');
+  presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
   instanceState.select(null);
   dom.window.close();
   Object.assign(globalThis, originals);
 }
-console.log('PASS: balance query defaults, unavailable toggle, clear-key, provider reuse, credentials, pending-save dismissal, failure retry and instance lifecycle');
+console.log('PASS: balance query defaults, unavailable toggle, clear-key, provider reuse, credentials, pending-save dismissal, preset selection, failure retry and instance lifecycle');

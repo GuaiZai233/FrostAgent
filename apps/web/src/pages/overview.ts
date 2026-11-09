@@ -19,10 +19,15 @@ const balanceQueryPresets: Record<string, { curl: string; keyPlaceholder: string
     keyPlaceholder: 'sk-xxx',
     keyHint: '此处填写DeepSeek API Key',
   },
-  newapi: {
-    curl: "curl https://你的NewAPI地址/api/user/balance \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
+  'newapi-key': {
+    curl: "curl https://你的NewAPI地址/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
+    keyPlaceholder: 'sk-xxx',
+    keyHint: '填写该 Token 的 sk- Key。返回该 Token 的剩余额度；不限额度时 unlimited_quota 为 true。',
+  },
+  'newapi-account': {
+    curl: "curl https://你的NewAPI地址/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
     keyPlaceholder: 'nap_xxx',
-    keyHint: '在面板安全与访问 -> 创建访问令牌，至少保证 钱包 选项具有“查看”权限。',
+    keyHint: '在面板安全与访问 -> 创建访问令牌，至少勾选 profile:read 权限。返回账号的 quota 与 used_quota。',
   },
 };
 
@@ -286,7 +291,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         canDismiss: () => !saving,
         bodyHtml: `<form id="balance-query-form" class="flex flex-col gap-4">
           <div class="form-group"><label class="form-label" for="balance-query-curl">curl 请求模板</label>
-            <select id="balance-query-preset" class="select" aria-label="预设模板"><option value="" selected>自定义</option><option value="deepseek">DeepSeek</option><option value="newapi">NewAPI</option></select>
+            <select id="balance-query-preset" class="select" aria-label="预设模板"><option value="" selected>自定义</option><option value="deepseek">DeepSeek</option><option value="newapi-key">New API 当前 Key 额度</option><option value="newapi-account">New API 账号余额</option></select>
             <textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></div>
           <p class="text-xs text-muted">支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。</p>
           <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 Key</label>
