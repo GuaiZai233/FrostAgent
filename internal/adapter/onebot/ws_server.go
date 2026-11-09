@@ -853,6 +853,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("%s", reason)
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			deliveries.NoteConfirmed()
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveries.Record(deliveredReply, func(live bool) {
 					if event.MessageType == "group" {
@@ -1104,6 +1105,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// never emits an empty OneBot message or feeds the turn into automatic
 		// memory extraction.
 		if runResult.Silent {
+			// Text already delivered by send_message before a terminal stay_silent
+			// is real conversation history; commit it so the next turn sees it.
+			// Turns without delivered text keep the original silence behaviour.
+			if deliveries.Text() != "" {
+				deliveries.CommitDelivered()
+			}
 			engine.TrimSession(session)
 			if event.MessageType == "group" && !runResult.Banned {
 				var msgID string
@@ -1119,7 +1126,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
 			}
-			if runResult.StaySilentCalled && (!wakeSignals.Proactive || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			// The extraction turn records what the bot actually said when it spoke
+			// before stay_silent; [stay_silent] is used only for a genuine silence.
+			silentRecord := "[stay_silent]"
+			if spoken := deliveries.SpokeText(); spoken != "" {
+				silentRecord = spoken
+			}
+			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
@@ -1128,7 +1141,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					engine.EnqueueExtractionTurnAtEpoch(session, startEpoch, []memory.PendingExtractionItem{
 						{
 							Owner:            owner,
 							OwnerType:        memory.OwnerGroup,
@@ -1149,12 +1162,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							SpeakerID:   userIDStr,
 							SpeakerName: speakerName,
 							Route:       core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							Message:     core.ChatMessage{Role: core.RoleAssistant, Content: silentRecord},
 							MessageID:   msgID,
 						},
 					})
 				} else {
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					engine.EnqueueExtractionTurnAtEpoch(session, startEpoch, []memory.PendingExtractionItem{
 						{
 							Owner:     owner,
 							OwnerType: ownerType,
@@ -1167,13 +1180,24 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							OwnerType: ownerType,
 							ScopeType: memory.ScopePrivate,
 							Route:     core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
-							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: "[stay_silent]"},
+							Message:   core.ChatMessage{Role: core.RoleAssistant, Content: silentRecord},
 						},
 					})
 				}
 			}
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮保持沉默: session=%s", conn.historyKey(event)))
 			return
+		}
+
+		// After a confirmed send_message in this turn, a placeholder final such as
+		// "(empty)" is not a second reply: drop it so the delivered text alone is
+		// committed and nothing extra is sent.
+		if deliveries.SpokeText() != "" && llm.IsPlaceholderFinal(replyText) {
+			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮已送达回复，占位式最终文本已丢弃: session=%s", conn.historyKey(event)))
+			replyText = ""
+			// replyParts is derived from the placeholder earlier; clear it too so a
+			// billing receipt is sent alone rather than appended to "(empty)".
+			replyParts = nil
 		}
 
 		// Some OpenAI-compatible providers use a null assistant content when

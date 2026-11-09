@@ -14,7 +14,7 @@ import (
 func StaySilentTool() Tool {
 	return Tool{
 		name:        llm.StaySilentToolName,
-		description: "当且仅当当前消息确实不值得回复时保持沉默。可用于无意义字符、单个无上下文表情或明显无需插话的内容。用户明确要求回复时应正常回答。此工具会立即结束本轮，必须单独调用，不能与任何其他工具同时使用。",
+		description: "结束本轮且不再输出任何最终文字。本轮没有调用过任何工具时，表示当前消息确实不值得回复（如无意义字符、单个无上下文表情或明显无需插话的内容）；本轮已调用过任何工具并决定结束时，也必须调用本工具。用户明确要求回复时应正常回答。此工具会立即结束本轮，必须单独调用，不能与任何其他工具同时使用。",
 		parameter: map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{},
