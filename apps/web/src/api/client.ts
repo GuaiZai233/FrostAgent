@@ -682,8 +682,8 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.getBalanceQueryConfig({});
     },
 
-    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '') {
-      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId });
+    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false) {
+      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey });
     },
 
     getSessions(

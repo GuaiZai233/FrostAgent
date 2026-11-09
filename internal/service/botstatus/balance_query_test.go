@@ -75,11 +75,18 @@ func TestBalanceQueryConfigCredentialLifecycle(t *testing.T) {
 	checkStored(t, firstKey)
 	save(&v1.SaveBalanceQueryConfigRequest{Curl: customCurl}, true)
 	checkStored(t, firstKey)
+	save(&v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ClearApiKey: true}, false)
+	get(customCurl, false)
+	checkStored(t, "")
+	save(&v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: firstKey}, true)
+	checkStored(t, firstKey)
 	for _, tc := range []struct {
 		name    string
 		request *v1.SaveBalanceQueryConfigRequest
 	}{
 		{"provider and manual key", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey, ProviderId: "fixture-provider"}},
+		{"clear and manual key", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ClearApiKey: true, ApiKey: nextKey}},
+		{"clear and provider", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ClearApiKey: true, ProviderId: "fixture-provider"}},
 		{"literal credential", &v1.SaveBalanceQueryConfigRequest{Curl: "curl https://example.invalid/" + firstKey}},
 		{"redirect option", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl + " -L"}},
 		{"invalid credential", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey + "\n"}},

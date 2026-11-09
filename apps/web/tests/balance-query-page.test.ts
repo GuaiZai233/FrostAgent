@@ -30,6 +30,7 @@ let overviewLoads = 0;
 let deferGet = false;
 let releaseGet: (() => void) | undefined;
 const saves: Record<string, unknown>[] = [];
+const toolUpdates: Record<string, boolean> = {};
 globalThis.fetch = async (input, init) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
   assert.ok(path === '/api/version' || path === '/api/instances' || path.startsWith(`/instances/${instance.id}/`), 'balance request escaped its instance');
@@ -37,8 +38,14 @@ globalThis.fetch = async (input, init) => {
   if (path === '/api/instances') return Response.json({ instances: [instance] });
   if (path.endsWith('/GetOverview')) { overviewLoads++; return Response.json({ status: 2, tools: [
     { name: 'ban_user', description: 'Synthetic ordinary tool', enabled: true, available: true },
+    { name: 'inspect_message_image', description: 'Runtime-gated tool', enabled: true, available: false },
     { name: 'balance_query', description: 'Query balance', enabled: true, available: !!savedKey || !!savedProvider, configurable: true },
   ] }); }
+  if (path.endsWith('/SetToolEnabled')) {
+    const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
+    toolUpdates[body.name] = body.enabled ?? false;
+    return Response.json({});
+  }
   if (path.endsWith('/GetBalanceQueryConfig')) {
     if (deferGet) await new Promise<void>((resolve) => { releaseGet = resolve; });
     return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
@@ -49,8 +56,13 @@ globalThis.fetch = async (input, init) => {
   if (deferSave) await new Promise<void>((resolve) => { releaseSave = resolve; });
   if (failSave) return Response.json({ code: 'invalid_argument', message: 'synthetic invalid curl' }, { status: 400 });
   savedCurl = body.curl;
-  savedProvider = body.providerId || '';
-  if (savedProvider) savedKey = ''; else if (body.apiKey) savedKey = body.apiKey;
+  if (body.clearApiKey) {
+    savedKey = '';
+    savedProvider = '';
+  } else {
+    savedProvider = body.providerId || '';
+    if (savedProvider) savedKey = ''; else if (body.apiKey) savedKey = body.apiKey;
+  }
   return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
 };
 const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
@@ -63,9 +75,30 @@ try {
   await flush();
   assert.equal(root.querySelectorAll('[data-tool-config]').length, 1, 'only configurable cards may open a configuration dialog');
   assert.equal(root.querySelectorAll('.overview-tool-configurable').length, 1);
-  assert.equal(root.querySelector('.overview-tool-name h3 + .overview-tool-configurable')?.textContent, '可配置', 'configuration label must be below the configurable tool name');
+  assert.equal(root.querySelector('.overview-tool-name .overview-tool-configurable')?.textContent, '可配置', 'configuration label must be below the configurable tool name');
+  const balanceCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('balance_query'))!;
+  const balanceToggle = balanceCard.querySelector<HTMLInputElement>('[data-tool-toggle="balance_query"]')!;
+  assert.equal(balanceToggle.checked, false, 'unconfigured balance_query must render as off');
+  assert.equal(balanceCard.querySelector('.overview-tool-unconfigured')?.textContent, '未配置');
+  const runtimeGatedCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('inspect_message_image'))!;
+  const runtimeGatedToggle = runtimeGatedCard.querySelector<HTMLInputElement>('[data-tool-toggle="inspect_message_image"]')!;
+  assert.equal(runtimeGatedToggle.checked, true, 'non-balance unavailable tools keep the persisted enabled state');
+  assert.equal(runtimeGatedCard.querySelector('.overview-tool-unconfigured'), null);
+  runtimeGatedToggle.checked = false;
+  runtimeGatedToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await flush();
+  assert.equal(toolUpdates['inspect_message_image'], false, 'non-balance unavailable tool must still update through the API');
+  assert.equal(document.querySelector('.fa-toast-error')?.textContent?.includes('请先点击卡片') ?? false, false);
+  balanceToggle.checked = true;
+  balanceToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await flush();
+  assert.equal(balanceToggle.checked, false, 'forced enable must be reverted');
+  assert.match(document.querySelector('.fa-toast-error')?.textContent ?? '', /请先点击卡片后进行配置/);
+  assert.equal(toolUpdates['balance_query'], undefined, 'forced balance_query enable must not reach the API');
   await openConfig();
-  assert.equal(document.querySelector('#balance-query-clear-key'), null, 'clear-key action must be removed');
+  const clearButton = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
+  assert.ok(clearButton, 'clear-key action must exist');
+  assert.equal(clearButton.disabled, true, 'clear-key action must be disabled without a stored key');
   assert.equal(document.querySelector<HTMLElement>('#balance-query-providers')!.hidden, true);
   assert.equal(document.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, defaultCurl);
   let key = document.querySelector<HTMLInputElement>('#balance-query-key')!;
@@ -81,10 +114,14 @@ try {
   await save();
   assert.equal(document.querySelectorAll('dialog').length, 0);
   assert.equal(savedKey, 'synthetic-ui-balance-key');
+  const configuredCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('balance_query'))!;
+  assert.equal(configuredCard.querySelector('.overview-tool-unconfigured'), null);
+  assert.equal(configuredCard.querySelector<HTMLInputElement>('[data-tool-toggle="balance_query"]')!.checked, true);
   await openConfig();
   key = document.querySelector<HTMLInputElement>('#balance-query-key')!;
   assert.equal(key.value, '', 'stored key must never populate the frontend field');
   assert.match(key.placeholder, /留空保留/);
+  assert.equal(document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!.disabled, false);
   assert.equal(document.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, customCurl);
   await save();
   assert.equal(savedKey, 'synthetic-ui-balance-key');
@@ -93,6 +130,7 @@ try {
   const reuse = document.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
   reuse.click();
   assert.equal(document.querySelector<HTMLInputElement>('#balance-query-key')!.disabled, true);
+  assert.equal(document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!.disabled, true);
   assert.equal(document.querySelector<HTMLElement>('#balance-query-manual-key')!.hidden, true);
   assert.equal(document.querySelector<HTMLElement>('#balance-query-providers')!.hidden, false);
   const savesBeforeSelection = saves.length;
@@ -110,7 +148,7 @@ try {
   assert.equal(savedKey, '');
   assert.equal(saves.at(-1)!.providerId, 'provider-b');
   assert.ok(!saves.at(-1)!.apiKey, 'provider reuse must not send a credential');
-  assert.ok(!('clearApiKey' in saves.at(-1)!));
+  assert.notEqual(saves.at(-1)!.clearApiKey, true, 'provider reuse must not clear the key');
   await openConfig();
   assert.equal(document.querySelector<HTMLInputElement>('#balance-query-reuse-key')!.checked, true);
   assert.equal(document.querySelector<HTMLInputElement>('input[value="provider-b"]')!.checked, true);
@@ -178,6 +216,20 @@ try {
     }
   }
   failSave = false;
+  await openConfig();
+  const clearButtonAfterSave = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
+  assert.equal(clearButtonAfterSave.disabled, false, 'clear-key action must be enabled for a stored key');
+  clearButtonAfterSave.click();
+  assert.equal(document.querySelector<HTMLInputElement>('#balance-query-key')!.value, '');
+  assert.match(document.querySelector('#balance-query-key-hint')!.textContent!, /清除/);
+  await save();
+  assert.equal(saves.at(-1)!.clearApiKey, true);
+  assert.equal(savedKey, '');
+  assert.equal(document.querySelectorAll('dialog').length, 0);
+  await flush();
+  const clearedCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('balance_query'))!;
+  assert.equal(clearedCard.querySelector('.overview-tool-unconfigured')?.textContent, '未配置');
+  assert.equal(clearedCard.querySelector<HTMLInputElement>('[data-tool-toggle="balance_query"]')!.checked, false);
   providers = [];
   savedProvider = 'deleted-provider';
   await openConfig();
@@ -200,4 +252,4 @@ try {
   dom.window.close();
   Object.assign(globalThis, originals);
 }
-console.log('PASS: balance query defaults, provider reuse, credentials, pending-save dismissal, failure retry and instance lifecycle');
+console.log('PASS: balance query defaults, unavailable toggle, clear-key, provider reuse, credentials, pending-save dismissal, failure retry and instance lifecycle');

@@ -227,12 +227,17 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((toggle) => {
       toggle.addEventListener('change', async () => {
         const enabled = toggle.checked;
+        const tool = tools.find((item) => item.name === toggle.dataset.toolToggle);
+        if (enabled && tool?.name === 'balance_query' && tool.available === false) {
+          toggle.checked = false;
+          if (!isUnmounted) toast.error('工具启用失败：请先点击卡片后进行配置！');
+          return;
+        }
         toolRevision++;
         toolUpdates++;
         root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((other) => { other.disabled = true; });
         try {
           await api.setToolEnabled(toggle.dataset.toolToggle!, enabled);
-          const tool = tools.find((item) => item.name === toggle.dataset.toolToggle);
           if (tool) tool.enabled = enabled;
           if (!isUnmounted) {
             container.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((other) => {
@@ -269,7 +274,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <p class="text-xs text-muted">用 {{API_KEY}} 代替密钥，支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。不会执行 shell、读取文件或跟随重定向。</p>
           <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 API Key</label>
           <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
-          <label id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><span class="form-label">API Key</span><input id="balance-query-key" class="input" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"></label>
+          <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">API Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 API Key。'}</p></div>
           <p class="text-xs text-muted">凭据只用于后端请求，不加入模型工具定义和调用参数。模型收到接口的原始响应正文；包含密钥的响应会被拦截。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
@@ -277,17 +282,26 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         onMount: (dialog, close) => {
           closeConfigDialog = close;
           const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+          const clearKeyButton = dialog.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
+          const keyHint = dialog.querySelector<HTMLElement>('#balance-query-key-hint')!;
           const reuseKey = dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
           const providerGroup = dialog.querySelector<HTMLFieldSetElement>('#balance-query-providers')!;
           const providerInputs = providerGroup.querySelectorAll<HTMLInputElement>('input');
           const manualKey = dialog.querySelector<HTMLElement>('#balance-query-manual-key')!;
           const curl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
           const save = dialog.querySelector<HTMLButtonElement>('#balance-query-save')!;
+          let clearKey = false;
           const syncCredentials = () => {
             providerGroup.hidden = !reuseKey.checked;
             manualKey.hidden = reuseKey.checked;
             key.disabled = saving || reuseKey.checked;
-            key.required = !reuseKey.checked && (!cfg.apiKeyConfigured || !!cfg.providerId);
+            key.required = !reuseKey.checked && !clearKey && (!cfg.apiKeyConfigured || !!cfg.providerId);
+            clearKeyButton.disabled = saving || reuseKey.checked || !cfg.apiKeyConfigured || !!cfg.providerId || clearKey;
+            keyHint.textContent = clearKey
+              ? '保存后将清除已配置的 API Key。'
+              : cfg.apiKeyConfigured && !cfg.providerId
+              ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。'
+              : '填写查询接口的 API Key。';
             reuseKey.disabled = saving;
             providerInputs.forEach((input) => { input.disabled = saving || input.dataset.available !== 'true'; });
           };
@@ -299,7 +313,19 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             curl.disabled = pending;
             syncCredentials();
           };
-          reuseKey.onchange = syncCredentials;
+          reuseKey.onchange = () => { clearKey = false; syncCredentials(); };
+          clearKeyButton.onclick = () => {
+            if (saving || reuseKey.checked || !cfg.apiKeyConfigured || clearKey) return;
+            clearKey = true;
+            key.value = '';
+            syncCredentials();
+            key.focus();
+          };
+          key.oninput = () => {
+            if (!clearKey) return;
+            clearKey = false;
+            syncCredentials();
+          };
           syncCredentials();
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
@@ -309,11 +335,13 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             const provider = providerGroup.querySelector<HTMLInputElement>('input:checked:not(:disabled)');
             if (reuseKey.checked && !provider) { error.textContent = '请选择已启用且已配置 API Key 的 Provider'; return; }
             if (!reuseKey.checked && key.required && !key.value) { error.textContent = '请填写 API Key'; return; }
+            const clear = !reuseKey.checked && clearKey;
             setSaving(true);
             try {
-              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '');
+              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', clear);
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
+              clearKey = false;
               key.value = '';
               close();
               closeToolsDialog?.();

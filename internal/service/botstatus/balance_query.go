@@ -60,7 +60,13 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	}
 	cfg.Curl = req.Msg.Curl
 	validated := cfg
-	if req.Msg.ProviderId != "" {
+	if req.Msg.ClearApiKey {
+		if req.Msg.ApiKey != "" || req.Msg.ProviderId != "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("清除 API Key 时不能同时填写 API Key 或复用 Provider"))
+		}
+		cfg.APIKey, cfg.ProviderID = "", ""
+		validated = cfg
+	} else if req.Msg.ProviderId != "" {
 		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("请选择已启用且已配置 API Key 的 Provider"))
