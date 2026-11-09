@@ -11,6 +11,21 @@ import { mountVersionControl } from '../components/version-panel';
 import { mountInstanceRequired } from '../components/instance-required';
 import '../styles/overview.css';
 
+// Preset curl templates for balance_query. The backend only substitutes {{API_KEY}};
+// NewAPI's host is a placeholder the user must replace with their own address.
+const balanceQueryPresets: Record<string, { curl: string; keyPlaceholder: string; keyHint: string }> = {
+  deepseek: {
+    curl: "curl https://api.deepseek.com/user/balance \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
+    keyPlaceholder: 'sk-xxx',
+    keyHint: '此处填写DeepSeek API Key',
+  },
+  newapi: {
+    curl: "curl https://你的NewAPI地址/api/user/balance \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
+    keyPlaceholder: 'nap_xxx',
+    keyHint: '在面板安全与访问 -> 创建访问令牌，至少保证 钱包 选项具有“查看”权限。',
+  },
+};
+
 export function mountOverviewPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
   let timerId: number | null = null;
@@ -270,11 +285,13 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         maxWidth: '42rem',
         canDismiss: () => !saving,
         bodyHtml: `<form id="balance-query-form" class="flex flex-col gap-4">
-          <label class="form-group"><span class="form-label">curl 请求模板</span><textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></label>
-          <p class="text-xs text-muted">用 {{API_KEY}} 代替密钥，支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。不会执行 shell、读取文件或跟随重定向。</p>
-          <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 API Key</label>
+          <div class="form-group"><label class="form-label" for="balance-query-curl">curl 请求模板</label>
+            <select id="balance-query-preset" class="select" aria-label="预设模板"><option value="" selected>自定义</option><option value="deepseek">DeepSeek</option><option value="newapi">NewAPI</option></select>
+            <textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></div>
+          <p class="text-xs text-muted">支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。</p>
+          <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 Key</label>
           <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
-          <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">API Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 API Key。'}</p></div>
+          <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
           <p class="text-xs text-muted">凭据只用于后端请求，不加入模型工具定义和调用参数。模型收到接口的原始响应正文；包含密钥的响应会被拦截。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
@@ -290,6 +307,16 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           const manualKey = dialog.querySelector<HTMLElement>('#balance-query-manual-key')!;
           const curl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
           const save = dialog.querySelector<HTMLButtonElement>('#balance-query-save')!;
+          const preset = dialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+          const presetHint = dialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
+          const defaultKeyPlaceholder = key.placeholder;
+          preset.onchange = () => {
+            const selected = balanceQueryPresets[preset.value];
+            if (selected) curl.value = selected.curl;
+            key.placeholder = selected ? selected.keyPlaceholder : defaultKeyPlaceholder;
+            presetHint.textContent = selected ? selected.keyHint : '';
+            presetHint.hidden = !selected;
+          };
           let clearKey = false;
           const syncCredentials = () => {
             providerGroup.hidden = !reuseKey.checked;
