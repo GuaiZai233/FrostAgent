@@ -30,6 +30,7 @@ let overviewLoads = 0;
 let deferGet = false;
 let releaseGet: (() => void) | undefined;
 const saves: Record<string, unknown>[] = [];
+const toolUpdates: Record<string, boolean> = {};
 globalThis.fetch = async (input, init) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
   assert.ok(path === '/api/version' || path === '/api/instances' || path.startsWith(`/instances/${instance.id}/`), 'balance request escaped its instance');
@@ -37,8 +38,14 @@ globalThis.fetch = async (input, init) => {
   if (path === '/api/instances') return Response.json({ instances: [instance] });
   if (path.endsWith('/GetOverview')) { overviewLoads++; return Response.json({ status: 2, tools: [
     { name: 'ban_user', description: 'Synthetic ordinary tool', enabled: true, available: true },
+    { name: 'inspect_message_image', description: 'Runtime-gated tool', enabled: true, available: false },
     { name: 'balance_query', description: 'Query balance', enabled: true, available: !!savedKey || !!savedProvider, configurable: true },
   ] }); }
+  if (path.endsWith('/SetToolEnabled')) {
+    const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
+    toolUpdates[body.name] = body.enabled ?? false;
+    return Response.json({});
+  }
   if (path.endsWith('/GetBalanceQueryConfig')) {
     if (deferGet) await new Promise<void>((resolve) => { releaseGet = resolve; });
     return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
@@ -73,6 +80,15 @@ try {
   const balanceToggle = balanceCard.querySelector<HTMLInputElement>('[data-tool-toggle="balance_query"]')!;
   assert.equal(balanceToggle.checked, false, 'unconfigured balance_query must render as off');
   assert.equal(balanceCard.querySelector('.overview-tool-unconfigured')?.textContent, '未配置');
+  const runtimeGatedCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('inspect_message_image'))!;
+  const runtimeGatedToggle = runtimeGatedCard.querySelector<HTMLInputElement>('[data-tool-toggle="inspect_message_image"]')!;
+  assert.equal(runtimeGatedToggle.checked, true, 'non-balance unavailable tools keep the persisted enabled state');
+  assert.equal(runtimeGatedCard.querySelector('.overview-tool-unconfigured'), null);
+  runtimeGatedToggle.checked = false;
+  runtimeGatedToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  await flush();
+  assert.equal(toolUpdates['inspect_message_image'], false, 'non-balance unavailable tool must still update through the API');
+  assert.equal(document.querySelector('.fa-toast-error')?.textContent?.includes('请先点击卡片') ?? false, false);
   balanceToggle.checked = true;
   balanceToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
   await flush();

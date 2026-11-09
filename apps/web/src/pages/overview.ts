@@ -228,7 +228,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       toggle.addEventListener('change', async () => {
         const enabled = toggle.checked;
         const tool = tools.find((item) => item.name === toggle.dataset.toolToggle);
-        if (enabled && tool?.available === false) {
+        if (enabled && tool?.name === 'balance_query' && tool.available === false) {
           toggle.checked = false;
           if (!isUnmounted) toast.error('工具启用失败：请先点击卡片后进行配置！');
           return;
