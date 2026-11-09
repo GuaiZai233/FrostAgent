@@ -252,6 +252,12 @@ try {
   document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')!.click();
   await flush();
   {
+    // Earlier cases empty the provider list and set a deleted provider; restore a usable list for these cases.
+    providers = [
+      { id: 'provider-a', displayName: 'Provider <A>', available: true, baseUrl: 'https://newapi.example/v1' },
+      { id: 'provider-b', displayName: 'Provider B', available: true },
+    ];
+    savedProvider = '';
     // Preset selection fills the curl template and the matching key placeholder.
     await openConfig();
     const presetDialog = document.querySelector<HTMLDialogElement>('dialog')!;
