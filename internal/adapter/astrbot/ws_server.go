@@ -1534,7 +1534,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					speakerName := senderDisplayName(event)
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					engine.EnqueueExtractionTurnAtEpoch(session, startEpoch, []memory.PendingExtractionItem{
 						{
 							Owner:            owner,
 							OwnerType:        memory.OwnerGroup,
@@ -1560,7 +1560,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 						},
 					})
 				} else {
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					engine.EnqueueExtractionTurnAtEpoch(session, startEpoch, []memory.PendingExtractionItem{
 						{
 							Owner:     owner,
 							OwnerType: ownerType,

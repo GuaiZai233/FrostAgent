@@ -1140,7 +1140,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
 					}
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					engine.EnqueueExtractionTurnAtEpoch(session, startEpoch, []memory.PendingExtractionItem{
 						{
 							Owner:            owner,
 							OwnerType:        memory.OwnerGroup,
@@ -1166,7 +1166,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						},
 					})
 				} else {
-					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
+					engine.EnqueueExtractionTurnAtEpoch(session, startEpoch, []memory.PendingExtractionItem{
 						{
 							Owner:     owner,
 							OwnerType: ownerType,
@@ -1194,6 +1194,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if deliveries.Text() != "" && llm.IsPlaceholderFinal(replyText) {
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮已送达回复，占位式最终文本已丢弃: session=%s", conn.historyKey(event)))
 			replyText = ""
+			// replyParts is derived from the placeholder earlier; clear it too so a
+			// billing receipt is sent alone rather than appended to "(empty)".
+			replyParts = nil
 		}
 
 		// Some OpenAI-compatible providers use a null assistant content when
