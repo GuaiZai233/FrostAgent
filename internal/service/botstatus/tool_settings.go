@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 )
 
@@ -20,6 +21,11 @@ func (s *Service) SetToolEnabled(ctx context.Context, req *connect.Request[v1.Se
 	}
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
+	if req.Msg.Enabled && req.Msg.Name == balancequery.ToolName {
+		if availability, ok := s.engine.ToolRegistry[req.Msg.Name].(interface{ IsEnabled() bool }); ok && !availability.IsEnabled() {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("工具启用失败：请先点击卡片后进行配置！"))
+		}
+	}
 	var disabled []string
 	if raw := s.engine.Config.Get(llm.DisabledToolsKey); raw != "" {
 		if json.Unmarshal([]byte(raw), &disabled) != nil {

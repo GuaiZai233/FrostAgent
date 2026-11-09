@@ -38,8 +38,9 @@ message SaveBalanceQueryConfigRequest {
   string curl = 1;
   // Write-only. Empty preserves the existing manually configured key.
   string api_key = 2;
-  reserved 3;
-  reserved "clear_api_key";
+  // Explicitly clears the stored manual key. Cannot be combined with api_key
+  // or provider_id.
+  bool clear_api_key = 3;
   // Published provider whose current credential is resolved by the backend.
   string provider_id = 4;
 }
