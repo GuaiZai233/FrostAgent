@@ -219,3 +219,52 @@ func TestBalanceQueryConfigReferencesProviderWithoutCopyingKey(t *testing.T) {
 		t.Fatal("switching to manual credentials retained the provider reference")
 	}
 }
+
+func TestTestBalanceQueryConfigNeverReusesKeyForChangedEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "instance.env")
+	config, err := instanceconfig.Open(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := runtimescope.New(config, nil, nil)
+	t.Cleanup(scope.Cancel)
+	service := New(&llm.Engine{Scope: scope}, "test", "")
+	ctx := context.Background()
+	const storedCurl = "curl http://127.0.0.1:12345/balance -H 'Authorization: Bearer {{API_KEY}}'"
+	const storedKey = "synthetic-stored-test-key"
+	if _, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: storedCurl, ApiKey: storedKey})); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		request *v1.TestBalanceQueryConfigRequest
+		message string
+	}{
+		{"blank key on a changed endpoint is refused", &v1.TestBalanceQueryConfigRequest{Curl: "curl http://127.0.0.1:12345/other -H 'Authorization: Bearer {{API_KEY}}'"}, "请求地址已变更"},
+		{"provider and key together", &v1.TestBalanceQueryConfigRequest{Curl: storedCurl, ApiKey: "k", ProviderId: "p"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response, err := service.TestBalanceQueryConfig(ctx, connect.NewRequest(tc.request))
+			if tc.message == "" {
+				if connect.CodeOf(err) != connect.CodeInvalidArgument {
+					t.Fatalf("expected invalid argument, got %v", err)
+				}
+				return
+			}
+			if err != nil || response.Msg.Ok || !strings.Contains(response.Msg.Message, tc.message) {
+				t.Fatalf("expected failure containing %q, got %v, %v", tc.message, response, err)
+			}
+			if strings.Contains(response.Msg.Message, storedKey) {
+				t.Fatal("test response leaked the stored key")
+			}
+		})
+	}
+	response, err := service.TestBalanceQueryConfig(ctx, connect.NewRequest(&v1.TestBalanceQueryConfigRequest{Curl: "curl http://127.0.0.1:1/x -H 'Authorization: Bearer {{API_KEY}}'", ApiKey: "synthetic-typed-key"}))
+	if err != nil || response.Msg.Ok {
+		t.Fatalf("unreachable endpoint must report failure, got %v, %v", response, err)
+	}
+	if strings.Contains(response.Msg.Message, "synthetic-typed-key") {
+		t.Fatal("test response leaked the typed key")
+	}
+}

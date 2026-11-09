@@ -297,10 +297,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 Key</label>
           <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
           <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
-          <p class="text-xs text-muted">凭据只用于后端请求，不加入模型工具定义和调用参数。模型收到接口的原始响应正文；包含密钥的响应会被拦截。</p>
+          <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
-        footerHtml: '<button type="button" class="btn btn-outline dialog-close-btn">取消</button><button type="submit" form="balance-query-form" id="balance-query-save" class="btn btn-primary">保存</button>',
+        footerHtml: '<button type="button" id="balance-query-test" class="btn btn-outline">测试连接</button><button type="button" class="btn btn-outline dialog-close-btn">取消</button><button type="submit" form="balance-query-form" id="balance-query-save" class="btn btn-primary">保存</button>',
         onMount: (dialog, close) => {
           closeConfigDialog = close;
           const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
@@ -333,6 +333,35 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             syncCredentials();
           };
           curl.addEventListener('input', updateRetypeKey);
+          // Hand-editing the template means it no longer matches any preset, so the selector goes back to 自定义.
+          curl.addEventListener('input', () => {
+            preset.value = '';
+            presetHint.hidden = true;
+          });
+          const testButton = dialog.querySelector<HTMLButtonElement>('#balance-query-test')!;
+          testButton.onclick = async () => {
+            if (saving || testButton.disabled) return;
+            const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
+            error.textContent = '';
+            const provider = providerGroup.querySelector<HTMLInputElement>('input:checked:not(:disabled)');
+            const useProvider = reuseKey.checked;
+            if (useProvider && !provider) { error.textContent = '请选择已启用且已配置 API Key 的 Provider'; return; }
+            testButton.disabled = true;
+            testButton.textContent = '测试中...';
+            try {
+              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '');
+              if (isUnmounted || !dialog.isConnected) return;
+              if (result.ok) toast.success(result.message);
+              else error.textContent = result.message;
+            } catch (err) {
+              if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
+            } finally {
+              if (dialog.isConnected) {
+                testButton.disabled = false;
+                testButton.textContent = '测试连接';
+              }
+            }
+          };
           const syncCredentials = () => {
             providerGroup.hidden = !reuseKey.checked;
             manualKey.hidden = reuseKey.checked;

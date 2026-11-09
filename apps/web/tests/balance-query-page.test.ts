@@ -267,6 +267,15 @@ try {
     assert.match(presetHint.textContent!, /profile:read/);
     choose('');
     assert.equal(presetHint.hidden, true, 'custom option must hide the preset hint');
+    const testButton = presetDialog.querySelector<HTMLButtonElement>('#balance-query-test')!;
+    const cancelButton = [...presetDialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn')].find((button) => button.textContent!.trim() === '取消')!;
+    assert.equal(testButton.textContent!.trim(), '测试连接');
+    assert.ok(testButton.compareDocumentPosition(cancelButton) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, '测试连接 must sit to the left of 取消');
+    choose('newapi-key');
+    presetCurl.value = "curl https://hand.example/balance -H 'Authorization: Bearer {{API_KEY}}'";
+    presetCurl.dispatchEvent(new dom.window.Event('input'));
+    assert.equal(preset.value, '', 'hand-editing the template must return the selector to 自定义');
+    assert.equal(presetHint.hidden, true);
     presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
     await flush();
 

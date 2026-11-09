@@ -98,3 +98,43 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	}
 	return s.balanceConfigResponse(cfg), nil
 }
+
+// TestBalanceQueryConfig runs a draft balance query once and never persists anything. Credentials
+// follow the same rules as saving: a manual key is reused only when the endpoint is unchanged.
+func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Request[v1.TestBalanceQueryConfigRequest]) (*connect.Response[v1.TestBalanceQueryConfigResponse], error) {
+	fail := func(message string) (*connect.Response[v1.TestBalanceQueryConfigResponse], error) {
+		return connect.NewResponse(&v1.TestBalanceQueryConfigResponse{Ok: false, Message: message}), nil
+	}
+	if req.Msg.ProviderId != "" && req.Msg.ApiKey != "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("复用 Provider 时无需填写 API Key"))
+	}
+	cfg, err := s.balanceConfig()
+	if err != nil {
+		return nil, err
+	}
+	candidate := balancequery.Config{Curl: req.Msg.Curl}
+	switch {
+	case req.Msg.ProviderId != "":
+		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)
+		if err != nil {
+			return fail("请选择已启用且已配置 API Key 的 Provider")
+		}
+		candidate.APIKey = key
+	case req.Msg.ApiKey != "":
+		candidate.APIKey = req.Msg.ApiKey
+	case cfg.APIKey != "" && cfg.ProviderID == "":
+		if !balancequery.SameEndpoint(cfg.Curl, req.Msg.Curl) {
+			return fail("请求地址已变更，请重新输入 Key，不会复用原有密钥")
+		}
+		candidate.APIKey = cfg.APIKey
+	default:
+		return fail("请填写 API Key")
+	}
+	if err := candidate.Validate(); err != nil {
+		return fail(err.Error())
+	}
+	if _, err := balancequery.Execute(ctx, candidate); err != nil {
+		return fail(err.Error())
+	}
+	return connect.NewResponse(&v1.TestBalanceQueryConfigResponse{Ok: true, Message: "连接成功，接口返回了有效结果"}), nil
+}
