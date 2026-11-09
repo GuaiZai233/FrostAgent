@@ -37,7 +37,7 @@ func buildResponseContext(
 		}
 	}
 
-	guidance := "请结合用户消息与已有上下文自行决定是否回复；确实无需回应时，单独调用 stay_silent。已通过 send_message 发送过回复时，本轮最终回答必须为空，不要输出任何文字（包括 (empty)、省略号、标点或说明），因为任何非空的最终文字都会被作为额外消息发送。用户明确要求回应时应正常回答。"
+	guidance := "请结合用户消息与已有上下文自行决定是否回复；确实无需回应时，单独调用 stay_silent。已通过 send_message 发送过回复时，必须调用 stay_silent 工具中止此轮对话。用户明确要求回应时应正常回答。"
 	if wakeSignals.Alias {
 		guidance = parity.AliasWakeGuidance + " " + guidance
 	}
