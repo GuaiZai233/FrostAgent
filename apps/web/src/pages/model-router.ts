@@ -18,6 +18,7 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { randomUUID } from '../utils/random-id';
 import { escapeHtml } from '../utils/formatters';
+import { shouldApplyInferredCapabilities } from './model-capability-policy';
 import { bindingFor, bindingOptions, setBinding, workloads } from '../utils/model-bindings';
 
 const apiKeyStorageUnspecified = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_UNSPECIFIED;
@@ -663,8 +664,14 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
             settled = true;
             window.clearTimeout(timer);
             setCapabilityPending(false);
-            capabilityHint.style.display = response.found ? 'block' : 'none';
-            if (!response.found) return;
+            // Lookups never overwrite the saved tags of an unchanged existing model.
+            const apply = shouldApplyInferredCapabilities({
+              isNewModel: !existing,
+              openedUpstream: model.upstreamModel,
+              upstream: name,
+            });
+            capabilityHint.style.display = response.found && apply ? 'block' : 'none';
+            if (!response.found || !apply) return;
             // models.dev only describes text/tools/vision; other tags such as
             // embedding keep whatever the user chose.
             dialog.querySelectorAll<HTMLInputElement>('.model-cap').forEach((input) => {
