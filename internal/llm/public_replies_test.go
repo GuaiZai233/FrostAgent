@@ -368,3 +368,20 @@ func TestPublicReplyLogLateFinal(t *testing.T) {
 		}
 	}
 }
+
+// A terminal silence after a confirmed delivery (send_message, or any future
+// tool that records via the log) must keep the delivered text in history, and
+// a silence without delivery must leave history untouched.
+func TestPublicReplyLogSilentExitKeepsDeliveredText(t *testing.T) {
+	session := NewSessionManager().GetOrCreate("group:fixture-silent")
+	log := NewPublicReplyLog(session, session.Epoch())
+	log.Record("delivered before silence", nil)
+	log.CommitDelivered()
+	log.Finish(false)
+	log.CommitDelivered()
+
+	got := session.Snapshot()
+	if len(got) != 1 || got[0].Role != "assistant" || got[0].Content != "delivered before silence" {
+		t.Fatalf("history=%+v want one assistant entry with the delivered text", got)
+	}
+}

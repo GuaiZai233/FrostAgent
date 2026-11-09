@@ -1104,6 +1104,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// never emits an empty OneBot message or feeds the turn into automatic
 		// memory extraction.
 		if runResult.Silent {
+			// Text already delivered by send_message before a terminal stay_silent
+			// is real conversation history; commit it so the next turn sees it.
+			// Turns without delivered text keep the original silence behaviour.
+			if deliveries.Text() != "" {
+				deliveries.CommitDelivered()
+			}
 			engine.TrimSession(session)
 			if event.MessageType == "group" && !runResult.Banned {
 				var msgID string
@@ -1119,7 +1125,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					engine.GroupCompactor.TriggerWithScope(session, owner, routeScope)
 				}
 			}
-			if runResult.StaySilentCalled && (!wakeSignals.Proactive || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			// A silence after a confirmed delivery is not a silent turn: skip the
+			// synthetic [stay_silent] memory record for any turn that spoke.
+			if runResult.StaySilentCalled && deliveries.Text() == "" && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)

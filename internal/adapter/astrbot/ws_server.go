@@ -1506,6 +1506,12 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		if runResult.Silent {
+			// Text already delivered by send_message before a terminal stay_silent
+			// is real conversation history; commit it so the next turn sees it.
+			// Turns without delivered text keep the original silence behaviour.
+			if deliveries.Text() != "" {
+				deliveries.CommitDelivered()
+			}
 			engine.TrimSession(session)
 			if event.MessageType == "group" && !runResult.Banned {
 				if session != nil {
@@ -1519,7 +1525,9 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			if runResult.StaySilentCalled && (!isProactiveReply(&event) || deliveries.Text() == "") && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			// A silence after a confirmed delivery is not a silent turn: skip the
+			// synthetic [stay_silent] memory record for any turn that spoke.
+			if runResult.StaySilentCalled && deliveries.Text() == "" && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					speakerName := senderDisplayName(event)
 					engine.EnqueueExtractionTurn(session, []memory.PendingExtractionItem{
