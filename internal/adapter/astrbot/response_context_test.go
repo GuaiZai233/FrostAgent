@@ -41,7 +41,7 @@ func TestPrivateResponseGuidanceTime(t *testing.T) {
 		}
 	}
 	content, _ := request.Messages[len(request.Messages)-1].Content.(string)
-	if !strings.Contains(content, `"guidance":"当前系统时间：`) || strings.Count(content, "当前系统时间：") != 1 {
+	if !strings.Contains(content, `"guidance":"请结合用户消息`) || !strings.Contains(content, "必须单独调用 stay_silent 中止此轮对话") || strings.Count(content, "当前系统时间：") != 1 {
 		t.Fatalf("time must appear once in user guidance: %s", content)
 	}
 }

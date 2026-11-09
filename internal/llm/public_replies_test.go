@@ -368,3 +368,33 @@ func TestPublicReplyLogLateFinal(t *testing.T) {
 		}
 	}
 }
+
+// A terminal silence after a confirmed delivery (send_message, or any future
+// tool that records via the log) must keep the delivered text in history, and
+// a silence without delivery must leave history untouched.
+func TestPublicReplyLogSilentExitKeepsDeliveredText(t *testing.T) {
+	session := NewSessionManager().GetOrCreate("group:fixture-silent")
+	log := NewPublicReplyLog(session, session.Epoch())
+	log.Record("delivered before silence", nil)
+	log.CommitDelivered()
+	log.Finish(false)
+	log.CommitDelivered()
+
+	got := session.Snapshot()
+	if len(got) != 1 || got[0].Role != "assistant" || got[0].Content != "delivered before silence" {
+		t.Fatalf("history=%+v want one assistant entry with the delivered text", got)
+	}
+}
+
+func TestIsPlaceholderFinal(t *testing.T) {
+	for _, text := range []string{"", "   ", "(empty)", "（empty）", "[empty]", "<empty>", "empty", "NULL", "None", "...", "。", "…", ".", "()"} {
+		if !IsPlaceholderFinal(text) {
+			t.Fatalf("IsPlaceholderFinal(%q) = false, want true", text)
+		}
+	}
+	for _, text := range []string{"你好", "听起来好香", "ok", "(empty) 还有内容", "no"} {
+		if IsPlaceholderFinal(text) {
+			t.Fatalf("IsPlaceholderFinal(%q) = true, want false", text)
+		}
+	}
+}

@@ -4,7 +4,26 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"sync"
+	"unicode"
 )
+
+// IsPlaceholderFinal reports whether a final model answer has no speakable
+// content: blank, punctuation-only, or a bare placeholder token such as
+// "(empty)". Adapters consult it only after a confirmed delivery in the same
+// turn, so such text is dropped instead of being sent as an extra message.
+func IsPlaceholderFinal(text string) bool {
+	body := strings.TrimFunc(strings.TrimSpace(text), func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	if body == "" {
+		return true
+	}
+	switch strings.ToLower(body) {
+	case "empty", "null", "none", "nil", "n/a", "undefined":
+		return true
+	}
+	return false
+}
 
 // PublicReplyLog separates confirmed delivery facts from a cancellable attempt.
 // Late transport confirmations may arrive after Finish; they remain public but
@@ -21,6 +40,10 @@ type PublicReplyLog struct {
 	fallbackText  string
 	finalAccepted bool
 	finalID       uint64
+	// confirmed records a platform-acknowledged public send even when it has no
+	// speakable text (image, file, audio). It is separate from texts so media-only
+	// deliveries are not mistaken for silence.
+	confirmed bool
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
@@ -181,4 +204,33 @@ func (p *PublicReplyLog) Finish(interrupted bool) {
 			p.session.DropMessage(id)
 		}
 	}
+}
+
+// NoteConfirmed marks that the platform acknowledged a public send in this
+// attempt. Call it only after the ACK succeeds.
+func (p *PublicReplyLog) NoteConfirmed() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.confirmed = true
+}
+
+// Confirmed reports whether any public send in this attempt was acknowledged,
+// including sends with no textual content.
+func (p *PublicReplyLog) Confirmed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.confirmed
+}
+
+// SpokeText is the history-facing record of what the turn publicly did before a
+// terminal silence: the delivered text when there is any, a neutral marker for a
+// confirmed non-text send, and "" when nothing was delivered.
+func (p *PublicReplyLog) SpokeText() string {
+	if text := p.Text(); text != "" {
+		return text
+	}
+	if p.Confirmed() {
+		return "[已发送非文本消息]"
+	}
+	return ""
 }

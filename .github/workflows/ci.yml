@@ -56,10 +56,13 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/tokenusage -run '^TestPostgresTokenUsagePersistence$' -count=1 -v
+      - name: Set up buf
+        uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: '1.75.0'
+          setup_only: true
       - name: Generate Go proto for restore test
-        run: |
-          go install github.com/bufbuild/buf/cmd/buf@v1.75.0
-          make proto-generate-go
+        run: make proto-generate-go
       - name: Test PostgreSQL dialogue compatibility
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
@@ -143,8 +146,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # buf compiles protobuf schemas into Go and TypeScript code as part of Makefile targets
-      - name: Install buf
-        run: go install github.com/bufbuild/buf/cmd/buf@v1.75.0
+      - name: Set up buf
+        uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: '1.75.0'
+          setup_only: true
 
       - name: Run AstrBot plugin unit tests
         run: |
@@ -160,18 +166,41 @@ jobs:
       - name: Run checks
         run: make ci
 
-      - name: Run concurrency and race regressions
-        run: go test -race ./internal/instance/... ./internal/service/security/... ./internal/llm/... ./internal/memory/... ./internal/groupsummary/... ./internal/modelrouter/... ./internal/adapter/onebot/... ./internal/adapter/astrbot/... -timeout 300s
-
-      - name: Run WebSocket heartbeat race regression
-        run: go test -race ./internal/adapter/heartbeat/... ./internal/adapter/wsclient/... -timeout 60s
-
       - name: Upload Go coverage to Codecov
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ./coverage.out
           fail_ci_if_error: false
+
+  race:
+    name: Race Regressions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: 'go.sum'
+
+      - name: Set up buf
+        uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+
+      - name: Generate Go proto
+        run: make proto-generate-go
+
+      - name: Run concurrency and race regressions
+        run: go test -race ./internal/instance/... ./internal/service/security/... ./internal/llm/... ./internal/memory/... ./internal/groupsummary/... ./internal/modelrouter/... ./internal/adapter/onebot/... ./internal/adapter/astrbot/... -timeout 300s
+
+      - name: Run WebSocket heartbeat race regression
+        run: go test -race ./internal/adapter/heartbeat/... ./internal/adapter/wsclient/... -timeout 60s
 
   windows-smoke:
     name: Windows Smoke
@@ -202,17 +231,19 @@ jobs:
       - name: Build web frontend
         run: pnpm --filter @frostagent/web run build
 
-      - name: Install proto tools
+      - name: Set up buf
+        uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          version: '1.75.0'
+          setup_only: true
+
+      - name: Install proto plugins
         run: |
-          go install github.com/bufbuild/buf/cmd/buf@v1.75.0
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
 
       - name: Generate Go proto
         run: buf generate --template buf.gen.yaml
-
-      - name: Build cmd/app
-        run: go build ./cmd/app
 
       - name: Run tests
         run: go test ./...

@@ -507,13 +507,38 @@ func (e *Engine) EnqueueExtractionTurn(
 	session *SessionContext,
 	items []memory.PendingExtractionItem,
 ) {
+	e.EnqueueExtractionTurnAtEpoch(session, 0, items)
+}
+
+// EnqueueExtractionTurnAtEpoch admits the turn only while the session is still
+// at epoch. Admission runs under the reset lock, so a turn that finished across
+// a /reset cannot enter the new session's extraction batch. Epoch 0 disables
+// the check.
+func (e *Engine) EnqueueExtractionTurnAtEpoch(
+	session *SessionContext,
+	epoch uint64,
+	items []memory.PendingExtractionItem,
+) {
 	if e == nil || e.MemoryWriter == nil || session == nil || len(items) == 0 {
 		return
 	}
 	minTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MIN", 3, e.Scope)
 	maxTurns := positiveIntEnv("MEMORY_EXTRACT_BATCH_MAX", 5, e.Scope)
 	maxTurns = max(maxTurns, minTurns)
-	batch, ready := session.EnqueuePendingTurn(items, minTurns, maxTurns)
+	var (
+		batch PendingExtractionBatch
+		ready bool
+	)
+	admit := func() {
+		batch, ready = session.EnqueuePendingTurn(items, minTurns, maxTurns)
+	}
+	// Epoch 0 keeps the legacy unguarded path. It must not take the reset lock:
+	// callers such as commitAssistantHistory already hold it.
+	if epoch == 0 {
+		admit()
+	} else if !session.WithEpochCommit(epoch, admit) {
+		return
+	}
 	if !ready {
 		return
 	}
