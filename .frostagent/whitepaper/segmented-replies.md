@@ -9,7 +9,7 @@ When enabled, the runtime injects `<frostagent_msg_guidance>` immediately before
 the generated `<frostagent_skills>` system message, after the primary system
 message. It refreshes every model iteration and appears in Prompt Inspector,
 not persistent conversation history.
-The guidance starts with “为保证拟真的对话效果，你被允许且被鼓励多段回复用户消息。”;
+The guidance starts with “为保证拟真的对话效果，你被允许多段回复用户消息。”;
 the marker and literal-backtick instructions follow unchanged.
 
 Ordinary final text is split on bare `<FROSTAGENT_SEGMENT_MARK>` and blank
