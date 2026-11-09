@@ -74,6 +74,8 @@ message BalanceQueryProvider {
   string id = 1;
   string display_name = 2;
   bool available = 3;
+  // Base URL of the provider endpoint, used by presets that reuse it (for example New API).
+  string base_url = 4;
 }
 
 message GetOverviewResponse {

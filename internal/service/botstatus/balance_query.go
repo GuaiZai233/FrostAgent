@@ -18,6 +18,7 @@ func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Respon
 				response.Providers = append(response.Providers, &v1.BalanceQueryProvider{
 					Id: endpoint.ID, DisplayName: endpoint.DisplayName,
 					Available: endpoint.Enabled && endpoint.APIKeyConfigured,
+					BaseUrl:   endpoint.BaseURL,
 				})
 			}
 		}

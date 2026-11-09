@@ -14,7 +14,8 @@ import '../styles/overview.css';
 
 // Preset curl templates for balance_query. The backend only substitutes {{API_KEY}};
 // NewAPI's host is a placeholder the user must replace with their own address.
-const balanceQueryPresets: Record<string, { curl: string; keyPlaceholder: string; keyHint: string }> = {
+// path: the New API endpoint path, appended to a provider's base origin when the endpoint is reused.
+const balanceQueryPresets: Record<string, { curl: string; keyPlaceholder: string; keyHint: string; path?: string }> = {
   deepseek: {
     curl: "curl https://api.deepseek.com/user/balance \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
     keyPlaceholder: 'sk-xxx',
@@ -24,13 +25,20 @@ const balanceQueryPresets: Record<string, { curl: string; keyPlaceholder: string
     curl: "curl https://你的NewAPI地址/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
     keyPlaceholder: 'sk-xxx',
     keyHint: '填写该 Token 的 sk- Key。返回该 Token 的剩余额度；不限额度时 unlimited_quota 为 true。',
+    path: '/api/usage/token/',
   },
   'newapi-account': {
     curl: "curl https://你的NewAPI地址/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'",
     keyPlaceholder: 'nap_xxx',
     keyHint: '在面板安全与访问 -> 创建访问令牌，至少勾选 profile:read 权限。返回账号的 quota 与 used_quota。',
+    path: '/api/user/self',
   },
 };
+
+// Keeps only the scheme and host of a URL, dropping any path such as /v1.
+function originOf(url: string): string {
+  return url.match(/^https?:\/\/[^/\s]+/i)?.[0] ?? '';
+}
 
 export function mountOverviewPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
@@ -305,6 +313,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             <select id="balance-query-preset" class="select" aria-label="预设模板"><option value="" selected>自定义</option><option value="deepseek">DeepSeek</option><option value="newapi-key">New API 当前 Key 额度</option><option value="newapi-account">New API 账号余额</option></select>
             <textarea id="balance-query-curl" class="textarea font-mono" rows="7" required>${escapeHtml(cfg.curl)}</textarea></div>
           <p class="text-xs text-muted">支持 HTTP/HTTPS（含内网）、GET/POST、-X、-H、-d、--data-raw、--data-binary、-G 和 --url。</p>
+          <label id="balance-query-endpoint-row" class="flex items-center gap-2 text-sm" hidden><input id="balance-query-use-endpoint" type="checkbox" class="checkbox">复用现有 Provider 端点（New API 基准地址取其域名，去掉斜杠后的路径）</label>
           <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 Key</label>
           <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
           <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
@@ -326,6 +335,9 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           const preset = dialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
           const presetHint = dialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
           const defaultKeyPlaceholder = key.placeholder;
+          const endpointRow = dialog.querySelector<HTMLElement>('#balance-query-endpoint-row')!;
+          const useEndpoint = dialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!;
+          let reuseKeyBeforeEndpoint = false;
           preset.onchange = () => {
             if (saving) return;
             const selected = balanceQueryPresets[preset.value];
@@ -334,6 +346,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             key.placeholder = selected ? selected.keyPlaceholder : defaultKeyPlaceholder;
             presetHint.textContent = selected ? selected.keyHint : '';
             presetHint.hidden = !selected;
+            applyEndpointMode();
           };
           let clearKey = false;
           let retypeKey = false;
@@ -411,7 +424,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               : cfg.apiKeyConfigured && !cfg.providerId
               ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。'
               : '填写查询接口的 API Key。';
-            reuseKey.disabled = saving;
+            reuseKey.disabled = saving || useEndpoint.checked;
             providerInputs.forEach((input) => { input.disabled = saving || input.dataset.available !== 'true'; });
           };
           const setSaving = (pending: boolean) => {
@@ -424,6 +437,39 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             syncCredentials();
           };
           reuseKey.onchange = () => { clearKey = false; syncCredentials(); };
+          // New API presets can reuse a provider's endpoint: the curl box is replaced by the provider's
+          // scheme and host (everything after the first slash removed), and the provider's key is reused.
+          const isNewApi = () => preset.value === 'newapi-key' || preset.value === 'newapi-account';
+          const selectedProviderOrigin = () => {
+            const id = providerGroup.querySelector<HTMLInputElement>('input:checked')?.value ?? '';
+            return originOf(cfg.providers.find((provider) => provider.id === id)?.baseUrl ?? '');
+          };
+          const applyEndpointMode = () => {
+            endpointRow.hidden = !isNewApi();
+            if (!isNewApi() && useEndpoint.checked) {
+              useEndpoint.checked = false;
+              reuseKey.checked = reuseKeyBeforeEndpoint;
+            }
+            const active = useEndpoint.checked && isNewApi();
+            curl.hidden = active;
+            curl.required = !active;
+            if (active) {
+              reuseKey.checked = true;
+              const origin = selectedProviderOrigin();
+              if (origin) curl.value = `curl ${origin}${balanceQueryPresets[preset.value].path} \\\n  -H 'Authorization: Bearer {{API_KEY}}'`;
+            }
+            syncCredentials();
+          };
+          useEndpoint.onchange = () => {
+            if (useEndpoint.checked) {
+              reuseKeyBeforeEndpoint = reuseKey.checked;
+            } else {
+              reuseKey.checked = reuseKeyBeforeEndpoint;
+              if (isNewApi()) curl.value = balanceQueryPresets[preset.value].curl;
+            }
+            applyEndpointMode();
+          };
+          providerGroup.addEventListener('change', () => { if (useEndpoint.checked) applyEndpointMode(); });
           clearKeyButton.onclick = () => {
             if (saving || reuseKey.checked || !cfg.apiKeyConfigured || clearKey) return;
             clearKey = true;

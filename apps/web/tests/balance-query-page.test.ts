@@ -19,7 +19,7 @@ let savedCurl = defaultCurl;
 let savedKey = '';
 let savedProvider = '';
 let providers = [
-  { id: 'provider-a', displayName: 'Provider <A>', available: true },
+  { id: 'provider-a', displayName: 'Provider <A>', available: true, baseUrl: 'https://newapi.example/v1' },
   { id: 'provider-b', displayName: 'Provider B', available: true },
   { id: 'no-key', displayName: 'No key', available: false },
 ];
@@ -284,6 +284,28 @@ try {
     presetCurl.dispatchEvent(new dom.window.Event('input'));
     assert.equal(preset.value, '', 'hand-editing the template must return the selector to 自定义');
     assert.equal(presetHint.hidden, true);
+
+    // New API endpoint reuse: the option appears only for New API presets; enabling it hides the curl box,
+    // forces the provider key, and builds the request from the provider's scheme and host (path removed).
+    const endpointRowEl = presetDialog.querySelector<HTMLElement>('#balance-query-endpoint-row')!;
+    const useEndpointEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!;
+    const reuseKeyEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
+    choose('newapi-key');
+    assert.equal(endpointRowEl.hidden, false);
+    choose('deepseek');
+    assert.equal(endpointRowEl.hidden, true, 'endpoint reuse is only offered for New API presets');
+    choose('newapi-key');
+    useEndpointEl.checked = true;
+    useEndpointEl.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(presetCurl.hidden, true, 'enabling endpoint reuse hides the curl box');
+    assert.equal(reuseKeyEl.checked, true);
+    assert.equal(reuseKeyEl.disabled, true);
+    presetDialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.click();
+    assert.equal(presetCurl.value, "curl https://newapi.example/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'");
+    useEndpointEl.checked = false;
+    useEndpointEl.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(presetCurl.hidden, false, 'disabling endpoint reuse shows the curl box again');
+    assert.equal(reuseKeyEl.disabled, false);
     presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
     await flush();
 
