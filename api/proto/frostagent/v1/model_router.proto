@@ -11,6 +11,18 @@ service ModelRouterService {
   rpc Publish(PublishRequest) returns (PublishResponse);
   rpc ListUpstreamModels(ListUpstreamModelsRequest) returns (ListUpstreamModelsResponse);
   rpc TestModel(TestModelRequest) returns (TestModelResponse);
+  rpc InferModelCapabilities(InferModelCapabilitiesRequest) returns (InferModelCapabilitiesResponse);
+}
+
+message InferModelCapabilitiesRequest {
+  string model_name = 1;
+}
+
+// found is false when the models.dev snapshot is unavailable or has no
+// matching entry; the editor must then leave capability tags untouched.
+message InferModelCapabilitiesResponse {
+  bool found = 1;
+  repeated string capabilities = 2;
 }
 
 enum ModelWorkload {
