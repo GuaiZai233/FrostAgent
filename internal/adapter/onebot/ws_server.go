@@ -853,6 +853,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("%s", reason)
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			deliveries.NoteConfirmed()
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveries.Record(deliveredReply, func(live bool) {
 					if event.MessageType == "group" {
@@ -1128,7 +1129,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			// The extraction turn records what the bot actually said when it spoke
 			// before stay_silent; [stay_silent] is used only for a genuine silence.
 			silentRecord := "[stay_silent]"
-			if spoken := deliveries.Text(); spoken != "" {
+			if spoken := deliveries.SpokeText(); spoken != "" {
 				silentRecord = spoken
 			}
 			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
@@ -1191,7 +1192,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// After a confirmed send_message in this turn, a placeholder final such as
 		// "(empty)" is not a second reply: drop it so the delivered text alone is
 		// committed and nothing extra is sent.
-		if deliveries.Text() != "" && llm.IsPlaceholderFinal(replyText) {
+		if deliveries.SpokeText() != "" && llm.IsPlaceholderFinal(replyText) {
 			engine.Log().Info(logs.SYSTEM, fmt.Sprintf("本轮已送达回复，占位式最终文本已丢弃: session=%s", conn.historyKey(event)))
 			replyText = ""
 			// replyParts is derived from the placeholder earlier; clear it too so a

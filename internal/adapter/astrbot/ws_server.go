@@ -1405,6 +1405,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if session != nil && session.Epoch() != startEpoch {
 				return errors.New("会话已重置，取消发送中间消息")
 			}
+			deliveries.NoteConfirmed()
 			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
 				deliveries.Record(deliveredReply, func(live bool) {
 					if event.MessageType == "group" && !conn.mock {
@@ -1528,7 +1529,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			// The extraction turn records what the bot actually said when it spoke
 			// before stay_silent; [stay_silent] is used only for a genuine silence.
 			silentRecord := "[stay_silent]"
-			if spoken := deliveries.Text(); spoken != "" {
+			if spoken := deliveries.SpokeText(); spoken != "" {
 				silentRecord = spoken
 			}
 			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
@@ -1590,7 +1591,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	// After a confirmed send_message in this turn, a placeholder final such as
 	// "(empty)" is not a second reply: drop it so the delivered text alone is
 	// committed and the terminal noop is sent instead.
-	if deliveries.Text() != "" && llm.IsPlaceholderFinal(replyText) {
+	if deliveries.SpokeText() != "" && llm.IsPlaceholderFinal(replyText) {
 		replyText = ""
 	}
 	multiSegment, segmentLimit := false, 0

@@ -40,6 +40,10 @@ type PublicReplyLog struct {
 	fallbackText  string
 	finalAccepted bool
 	finalID       uint64
+	// confirmed records a platform-acknowledged public send even when it has no
+	// speakable text (image, file, audio). It is separate from texts so media-only
+	// deliveries are not mistaken for silence.
+	confirmed bool
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
@@ -200,4 +204,33 @@ func (p *PublicReplyLog) Finish(interrupted bool) {
 			p.session.DropMessage(id)
 		}
 	}
+}
+
+// NoteConfirmed marks that the platform acknowledged a public send in this
+// attempt. Call it only after the ACK succeeds.
+func (p *PublicReplyLog) NoteConfirmed() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.confirmed = true
+}
+
+// Confirmed reports whether any public send in this attempt was acknowledged,
+// including sends with no textual content.
+func (p *PublicReplyLog) Confirmed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.confirmed
+}
+
+// SpokeText is the history-facing record of what the turn publicly did before a
+// terminal silence: the delivered text when there is any, a neutral marker for a
+// confirmed non-text send, and "" when nothing was delivered.
+func (p *PublicReplyLog) SpokeText() string {
+	if text := p.Text(); text != "" {
+		return text
+	}
+	if p.Confirmed() {
+		return "[已发送非文本消息]"
+	}
+	return ""
 }
