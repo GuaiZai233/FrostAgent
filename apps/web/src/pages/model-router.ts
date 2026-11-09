@@ -346,7 +346,9 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
   function dialogueModelHasVision(): boolean {
     const binding = bindingFor(draft.globalBindings, ModelWorkload.DIALOGUE);
     if (binding?.mode !== ModelBindingMode.MODEL) return false;
-    return draft.models.some((model) => model.id === binding.modelId && model.capabilities.includes('vision'));
+    // Match the backend's Target.HasCapability: trim and lowercase before comparing.
+    return draft.models.some((model) => model.id === binding.modelId
+      && model.capabilities.some((capability) => capability.trim().toLowerCase() === 'vision'));
   }
 
   function renderGroups(): string {
