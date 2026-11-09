@@ -305,7 +305,7 @@ try {
     assert.equal(saves.length, savesBeforeManualHost, 'manual host change must not reuse the stored key');
     assert.match(editError.textContent!, /请重新输入/);
     // Any template edit, even path-only on the same host, requires the key to be re-entered.
-    editCurl.value = "curl https://你的NewAPI地址/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
+    editCurl.value = "curl https://你的NewAPI地址/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
     editCurl.dispatchEvent(new dom.window.Event('input'));
     editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
