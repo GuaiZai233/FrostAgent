@@ -319,16 +319,20 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             if (saving) return;
             const selected = balanceQueryPresets[preset.value];
             if (selected) curl.value = selected.curl;
+            // A stored manual key belongs to the previous host; the new target needs it re-entered.
+            if (cfg.apiKeyConfigured && !cfg.providerId) retypeKey = true;
+            syncCredentials();
             key.placeholder = selected ? selected.keyPlaceholder : defaultKeyPlaceholder;
             presetHint.textContent = selected ? selected.keyHint : '';
             presetHint.hidden = !selected;
           };
           let clearKey = false;
+          let retypeKey = false;
           const syncCredentials = () => {
             providerGroup.hidden = !reuseKey.checked;
             manualKey.hidden = reuseKey.checked;
             key.disabled = saving || reuseKey.checked;
-            key.required = !reuseKey.checked && !clearKey && (!cfg.apiKeyConfigured || !!cfg.providerId);
+            key.required = !reuseKey.checked && !clearKey && (!cfg.apiKeyConfigured || !!cfg.providerId || retypeKey);
             clearKeyButton.disabled = saving || reuseKey.checked || !cfg.apiKeyConfigured || !!cfg.providerId || clearKey;
             keyHint.textContent = clearKey
               ? '保存后将清除已配置的 API Key。'
@@ -368,7 +372,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             error.textContent = '';
             const provider = providerGroup.querySelector<HTMLInputElement>('input:checked:not(:disabled)');
             if (reuseKey.checked && !provider) { error.textContent = '请选择已启用且已配置 API Key 的 Provider'; return; }
-            if (!reuseKey.checked && key.required && !key.value) { error.textContent = '请填写 API Key'; return; }
+            if (!reuseKey.checked && key.required && !key.value) {
+              error.textContent = retypeKey ? '切换预设后请重新输入 Key，不会复用原有密钥' : '请填写 API Key';
+              return;
+            }
             const clear = !reuseKey.checked && clearKey;
             setSaving(true);
             try {

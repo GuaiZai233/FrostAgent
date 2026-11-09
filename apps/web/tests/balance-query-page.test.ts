@@ -246,6 +246,54 @@ try {
   assert.equal(saves.length, savesBeforeMissingProvider, 'missing provider must not silently fall back to a manual credential');
   document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')!.click();
   await flush();
+  {
+    // Preset selection fills the curl template and the matching key placeholder.
+    await openConfig();
+    const presetDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const preset = presetDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    const presetCurl = presetDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+    const presetKey = presetDialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+    const presetHint = presetDialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
+    const choose = (value: string) => { preset.value = value; preset.dispatchEvent(new dom.window.Event('change')); };
+    assert.deepEqual([...preset.options].map((option) => option.value), ['', 'deepseek', 'newapi-key', 'newapi-account']);
+    choose('newapi-key');
+    assert.match(presetCurl.value, /\/api\/usage\/token\/\s*\\/);
+    assert.match(presetCurl.value, /\{\{API_KEY\}\}/);
+    assert.equal(presetKey.placeholder, 'sk-xxx');
+    assert.match(presetHint.textContent!, /unlimited_quota/);
+    choose('newapi-account');
+    assert.match(presetCurl.value, /\/api\/user\/self\s*\\/);
+    assert.equal(presetKey.placeholder, 'nap_xxx');
+    assert.match(presetHint.textContent!, /profile:read/);
+    choose('');
+    assert.equal(presetHint.hidden, true, 'custom option must hide the preset hint');
+    presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+    await flush();
+
+    // Switching a stored manual key to another host must not silently reuse the old secret.
+    savedProvider = '';
+    savedKey = 'synthetic-stored-deepseek-key';
+    await openConfig();
+    const hostDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const hostPreset = hostDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    const hostKey = hostDialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+    const hostError = hostDialog.querySelector<HTMLElement>('#balance-query-error')!;
+    hostPreset.value = 'newapi-key';
+    hostPreset.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(hostKey.required, true, 'preset change with a stored key must require re-entry');
+    const savesBeforeHostSwitch = saves.length;
+    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    await flush();
+    assert.equal(saves.length, savesBeforeHostSwitch, 'stored key must not be reused for a new host');
+    assert.match(hostError.textContent!, /请重新输入/);
+    hostKey.value = 'sk-synthetic-new-host-key';
+    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    await flush();
+    assert.equal(saves.length, savesBeforeHostSwitch + 1);
+    assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-new-host-key');
+    savedKey = '';
+  }
+
   deferGet = true;
   await openConfig();
   cleanup();
@@ -254,27 +302,6 @@ try {
   assert.equal(document.querySelectorAll('dialog').length, 0, 'late configuration response opened a dialog after unmount');
 } finally {
   cleanup();
-  // Preset selection fills the curl template and the matching key placeholder.
-  await openConfig();
-  const presetDialog = document.querySelector<HTMLDialogElement>('dialog')!;
-  const preset = presetDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
-  const presetCurl = presetDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
-  const presetKey = presetDialog.querySelector<HTMLInputElement>('#balance-query-key')!;
-  const presetHint = presetDialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
-  const choose = (value: string) => { preset.value = value; preset.dispatchEvent(new dom.window.Event('change')); };
-  assert.deepEqual([...preset.options].map((option) => option.value), ['', 'deepseek', 'newapi-key', 'newapi-account']);
-  choose('newapi-key');
-  assert.match(presetCurl.value, /\/api\/usage\/token\/\s*\\/);
-  assert.match(presetCurl.value, /\{\{API_KEY\}\}/);
-  assert.equal(presetKey.placeholder, 'sk-xxx');
-  assert.match(presetHint.textContent!, /unlimited_quota/);
-  choose('newapi-account');
-  assert.match(presetCurl.value, /\/api\/user\/self\s*\\/);
-  assert.equal(presetKey.placeholder, 'nap_xxx');
-  assert.match(presetHint.textContent!, /profile:read/);
-  choose('');
-  assert.equal(presetHint.hidden, true, 'custom option must hide the preset hint');
-  presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
   instanceState.select(null);
   dom.window.close();
   Object.assign(globalThis, originals);
