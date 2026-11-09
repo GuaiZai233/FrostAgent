@@ -275,12 +275,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     });
   }
 
-// Host of the first URL in a curl template, used to detect a change of request destination.
-function balanceQueryHost(curl: string): string {
-  const match = curl.match(/https?:\/\/([^\s'"/]+)/i);
-  return match ? match[1].toLowerCase() : '';
-}
-
   async function openBalanceConfig() {
     if (isUnmounted || configOpening || toolUpdates > 0) return;
     configOpening = true;
@@ -332,11 +326,10 @@ function balanceQueryHost(curl: string): string {
           };
           let clearKey = false;
           let retypeKey = false;
-          // A stored manual key belongs to the host it was saved for. If the request host changes
-          // (via preset or by editing the curl), the key must be re-entered instead of reused.
+          // Any edit to the stored request template (preset or hand-written) requires the key to be
+          // re-entered. The backend separately enforces the endpoint rule with the real curl parser.
           const updateRetypeKey = () => {
-            retypeKey = !!cfg.apiKeyConfigured && !cfg.providerId
-              && balanceQueryHost(curl.value) !== balanceQueryHost(cfg.curl);
+            retypeKey = !!cfg.apiKeyConfigured && !cfg.providerId && curl.value.trim() !== cfg.curl.trim();
             syncCredentials();
           };
           curl.addEventListener('input', updateRetypeKey);
@@ -385,7 +378,7 @@ function balanceQueryHost(curl: string): string {
             const provider = providerGroup.querySelector<HTMLInputElement>('input:checked:not(:disabled)');
             if (reuseKey.checked && !provider) { error.textContent = '请选择已启用且已配置 API Key 的 Provider'; return; }
             if (!reuseKey.checked && key.required && !key.value) {
-              error.textContent = retypeKey ? '请求地址已变更，请重新输入 Key，不会复用原有密钥' : '请填写 API Key';
+              error.textContent = retypeKey ? '修改请求模板后请重新输入 Key，不会复用原有密钥' : '请填写 API Key';
               return;
             }
             const clear = !reuseKey.checked && clearKey;

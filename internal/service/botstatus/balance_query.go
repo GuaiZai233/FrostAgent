@@ -58,6 +58,7 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if req.Msg.ProviderId != "" && req.Msg.ApiKey != "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("复用 Provider 时无需填写 API Key"))
 	}
+	previousCurl := cfg.Curl
 	cfg.Curl = req.Msg.Curl
 	validated := cfg
 	if req.Msg.ClearApiKey {
@@ -78,6 +79,11 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("切换为手动配置时请填写 API Key"))
 		}
 		cfg.ProviderID = ""
+		// A blank key keeps the stored one. Only allow that when the request still targets the same
+		// endpoint; otherwise the old secret would be sent to a different host or path.
+		if req.Msg.ApiKey == "" && cfg.APIKey != "" && !balancequery.SameEndpoint(previousCurl, req.Msg.Curl) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("请求地址已变更，请重新输入 Key，不会复用原有密钥"))
+		}
 		if req.Msg.ApiKey != "" {
 			cfg.APIKey = req.Msg.ApiKey
 		}

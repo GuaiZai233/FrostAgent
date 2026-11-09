@@ -90,6 +90,7 @@ func TestBalanceQueryConfigCredentialLifecycle(t *testing.T) {
 		{"literal credential", &v1.SaveBalanceQueryConfigRequest{Curl: "curl https://example.invalid/" + firstKey}},
 		{"redirect option", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl + " -L"}},
 		{"invalid credential", &v1.SaveBalanceQueryConfigRequest{Curl: customCurl, ApiKey: nextKey + "\n"}},
+		{"blank key reused for a different endpoint", &v1.SaveBalanceQueryConfigRequest{Curl: "curl http://127.0.0.1:9001/other -H 'X-API-Key: {{API_KEY}}'"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := config.Get(balancequery.ConfigKey)
