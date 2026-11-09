@@ -276,6 +276,16 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     });
   }
 
+  // After saving or clearing the balance configuration, return to the 已注册工具能力 window if it was open,
+  // reopened with fresh data so its status reflects the change. Otherwise the user stays on the main page.
+  async function returnToToolsDialog(hadToolsDialog: boolean) {
+    if (!hadToolsDialog || isUnmounted) return;
+    closeToolsDialog?.();
+    await loadData();
+    if (isUnmounted) return;
+    document.querySelector<HTMLButtonElement>('#overview-all-tools')?.click();
+  }
+
   async function openBalanceConfig() {
     if (isUnmounted || configOpening || toolUpdates > 0) return;
     configOpening = true;
@@ -355,9 +365,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               await api.clearBalanceQueryConfig();
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
+              const hadToolsDialog = !!closeToolsDialog;
               close();
-              closeToolsDialog?.();
               toast.success('额度查询配置已清除');
+              await returnToToolsDialog(hadToolsDialog);
             } catch (err) {
               if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
             }
@@ -445,9 +456,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               toolRevision++;
               clearKey = false;
               key.value = '';
+              const hadToolsDialog = !!closeToolsDialog;
               close();
-              closeToolsDialog?.();
               toast.success('额度查询配置已保存');
+              await returnToToolsDialog(hadToolsDialog);
             } catch (err) {
               if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
             } finally { setSaving(false); }
