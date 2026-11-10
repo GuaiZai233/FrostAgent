@@ -323,6 +323,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             <p class="text-xs text-muted">开启后，New API 返回的内部 quota 字段会按该比例换算为美元。</p>
           </div>
           <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
+          <pre id="balance-query-test-result" class="text-xs font-mono whitespace-pre-wrap break-all p-2 rounded bg-muted border border-border overflow-auto" style="max-height:14rem" hidden></pre>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
         footerHtml: `<button type="button" id="balance-query-clear-config" class="btn btn-ghost text-destructive" style="margin-right:auto">${icon('trash', 'w-3.5 h-3.5')} 清除配置</button><button type="button" id="balance-query-test" class="btn btn-outline">测试连接</button><button type="button" class="btn btn-outline dialog-close-btn">取消</button><button type="submit" form="balance-query-form" id="balance-query-save" class="btn btn-primary">保存</button>`,
@@ -405,8 +406,15 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             try {
               const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '', quotaValue());
               if (isUnmounted || !dialog.isConnected) return;
-              if (result.ok) toast.success(result.message);
-              else error.textContent = result.message;
+              const resultBox = dialog.querySelector<HTMLElement>('#balance-query-test-result')!;
+              if (result.ok) {
+                // The response body can be long; show it in a scrollable box instead of a toast.
+                resultBox.textContent = result.message;
+                resultBox.hidden = false;
+              } else {
+                resultBox.hidden = true;
+                error.textContent = result.message;
+              }
             } catch (err) {
               if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
             } finally {

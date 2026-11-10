@@ -147,10 +147,11 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if err := candidate.Validate(); err != nil {
 		return fail(err.Error())
 	}
-	if _, err := balancequery.Execute(ctx, candidate); err != nil {
+	body, err := balancequery.Execute(ctx, candidate)
+	if err != nil {
 		return fail(err.Error())
 	}
-	return connect.NewResponse(&v1.TestBalanceQueryConfigResponse{Ok: true, Message: "连接成功，接口返回了有效结果"}), nil
+	return connect.NewResponse(&v1.TestBalanceQueryConfigResponse{Ok: true, Message: "连接成功，接口返回：\n" + truncateRunes(body, testResultMaxRunes)}), nil
 }
 
 // ClearBalanceQueryConfig deletes the stored configuration so balance_query reports unconfigured.
@@ -161,4 +162,15 @@ func (s *Service) ClearBalanceQueryConfig(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeInternal, errors.New("清除额度查询配置失败"))
 	}
 	return s.balanceConfigResponse(balancequery.Config{Curl: balancequery.DefaultCurl}), nil
+}
+
+// testResultMaxRunes bounds the response body shown back to the operator by the test action.
+const testResultMaxRunes = 2000
+
+func truncateRunes(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…（已截断）"
 }
