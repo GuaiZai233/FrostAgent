@@ -325,6 +325,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	var runningSummary string
+	var lastUserPrompt string
 	var summaryGroups []llm.SummaryGroup
 	var recentMessages []string
 	var recentStructuredMessages []llm.GroupCompactMessage
@@ -356,6 +357,7 @@ func (s *Service) GetSessionContext(
 				lastSysPrompt, lastModel := sess.LastPromptTrace()
 				resp.SystemPrompt = lastSysPrompt
 				resp.Model = lastModel
+				lastUserPrompt = sess.LastUserPrompt()
 
 				for _, h := range history {
 					contentStr := fmt.Sprintf("%v", h.Content)
@@ -402,11 +404,16 @@ func (s *Service) GetSessionContext(
 	if isPrivateSession(sessionID) {
 		// Private compaction is injected into ordinary history, not group XML.
 		// This is a context preview, not a reconstruction of the last LLM request.
-		messages := make([]*v1.SessionHistoryMessageProto, 0, len(historyMsgs)+1)
+		messages := make([]*v1.SessionHistoryMessageProto, 0, len(historyMsgs)+2)
 		if resp.SystemPrompt != "" {
 			messages = append(messages, &v1.SessionHistoryMessageProto{Role: "system", Content: resp.SystemPrompt})
 		}
 		messages = append(messages, historyMsgs...)
+		if lastUserPrompt != "" {
+			// The exact user-role segment of the latest request, including the
+			// adapter's <response_context> guidance that durable history strips.
+			messages = append(messages, &v1.SessionHistoryMessageProto{Role: "user", Content: "[最近一次实际请求的用户段]\n" + lastUserPrompt})
+		}
 		preview, _ := json.MarshalIndent(struct {
 			Model    string                           `json:"model,omitempty"`
 			Messages []*v1.SessionHistoryMessageProto `json:"messages"`
@@ -424,6 +431,11 @@ func (s *Service) GetSessionContext(
 	}
 	if len(recentStructuredMessages) > 0 {
 		promptBuilder.WriteString(llm.FormatRecentGroupMessagesContext(recentStructuredMessages))
+		promptBuilder.WriteString("\n\n")
+	}
+	if lastUserPrompt != "" {
+		promptBuilder.WriteString("[最近一次实际请求的用户段]\n")
+		promptBuilder.WriteString(lastUserPrompt)
 		promptBuilder.WriteString("\n\n")
 	}
 	promptBuilder.WriteString(fmt.Sprintf("<response_context>\n当前会话: %s\n平台: %s\n</response_context>", sessionID, platform))
