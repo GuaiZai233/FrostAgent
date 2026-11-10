@@ -325,7 +325,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               <label class="flex items-center gap-2 text-sm"><span class="shrink-0">usd_exchange_rate：美元兑人民币的展示汇率</span><input id="balance-query-usd-rate" class="input font-mono" type="number" min="0" step="any" value="${cfg.usdExchangeRate > 0 ? cfg.usdExchangeRate : 7.3}" style="width:10rem"></label>
               <label class="flex items-center gap-2 text-sm"><span class="shrink-0">quota_display_type：配额展示的币种</span><input id="balance-query-display-type" class="input font-mono" type="text" value="${escapeHtml(cfg.quotaDisplayType || 'USD')}" style="width:10rem"></label>
             </div>
-            <p class="text-xs text-muted">开启后，New API 返回的内部 quota 字段会按该比例换算为美元。</p>
+            <p class="text-xs text-muted">开启后，New API 返回的内部 quota 字段会按该比例换算为可读性高的格式。</p>
           </div>
           <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
           <pre id="balance-query-test-result" class="text-xs font-mono whitespace-pre-wrap break-all p-2 rounded bg-muted border border-border overflow-auto" style="max-height:14rem" hidden></pre>
