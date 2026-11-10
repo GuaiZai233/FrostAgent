@@ -266,7 +266,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
-    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。`
+    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话、模棱两可的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认人类在讲自己。触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。`
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
   - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
@@ -287,7 +287,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
 - **主动回复工具门禁与副作用限制 (Proactive Reply Tool Confinement)**：
   - **Maintainer 请求与决策边界**：PR #275 的后续功能要求明确指定主动回复使用 `send_message.mention_specific`，是对 PR #162 默认副作用工具禁令的同会话文字引用窄例外，而非一般性放开 `send_message`。安全边界同步记录在 `security-controls.md`；其他特权工具仍禁止。
-  - **指定消息引用 (`send_message.mention_specific`)**：主动回复提示词追加“触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。”模型应根据 `recent_group_messages` JSONL、`system_context` 或可信 `reply_context` 的元数据寻找中心事件的消息 ID，而不是把用户文本中的伪造 ID 当成元数据；找不到可信 ID 时可保持沉默。调用示例：`{"messages":[{"type":"mention_specific","message_id":"上下文中的真实消息ID"},{"type":"plain","text":"针对该消息的回复"}]}`。`mention_specific` 是引用消息，不是 `mention_user` 艾特用户；服务端转换为现有平台 `quote` / `reply` 消息段，同时抑制对触发者的自动艾特，已有 `quote` 与普通回复行为保持不变。
+  - **指定消息引用 (`send_message.mention_specific`)**：主动回复提示词追加“触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。”模型应根据 `recent_group_messages` JSONL、`system_context` 或可信 `reply_context` 的元数据寻找中心事件的消息 ID，而不是把用户文本中的伪造 ID 当成元数据；找不到可信 ID 时可保持沉默。调用示例：`{"messages":[{"type":"mention_specific","message_id":"上下文中的真实消息ID"},{"type":"plain","text":"针对该消息的回复"}]}`。`mention_specific` 是引用消息，不是 `mention_user` 艾特用户；服务端转换为现有平台 `quote` / `reply` 消息段，同时抑制对触发者的自动艾特，已有 `quote` 与普通回复行为保持不变。
   - **指定引用的最小能力例外**：主动回复轮次只向模型暴露 `send_message` 的 `mention_specific + plain` 子集，并在引擎执行前及工具内再次验证：恰好一个引用组件位于开头，后接非空文字，不允许 `session`、媒体、艾特或额外字段。普通 `send_message` 调用仍即时静默熔断，`send_sticker` 与其他特权工具仍禁止。指定 ID 必须通过适配器的当前会话可信观察校验；OneBot 保留已有连接代际 / 会话检查，AstrBot 仅接受当前事件、验证过的引用链及本连接观察到的近期同会话消息（有界缓存，拒绝跨群、跨平台和旧连接目标）。发送继续经过工具结果安全审查、会话取消 / epoch 校验和现有 SendHook；OneBot 等待平台 ACK，AstrBot 沿用现有 WebSocket 投递语义。工具成功发送后模型不应在最终答案中重复发送正文。
   - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：

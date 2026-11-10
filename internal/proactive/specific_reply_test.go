@@ -32,7 +32,7 @@ func TestSpecificReplyGate(t *testing.T) {
 }
 
 func TestPromptPrefixIncludesSpecificReplyInstruction(t *testing.T) {
-	const requested = "触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。"
+	const requested = "触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。"
 	if !strings.HasSuffix(PromptPrefix, requested) {
 		t.Fatal("proactive prompt must append the requested instruction verbatim")
 	}
