@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Response[v1.BalanceQueryConfigResponse] {
-	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit, Newapi: cfg.NewAPI, UsdExchangeRate: cfg.USDExchangeRate, QuotaDisplayType: cfg.QuotaDisplayType}
+	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit, Newapi: cfg.NewAPI, UsdExchangeRate: cfg.USDExchangeRate, QuotaDisplayType: cfg.QuotaDisplayType, CustomCurrencySymbol: cfg.CustomCurrencySymbol, CustomCurrencyExchangeRate: cfg.CustomCurrencyExchangeRate}
 	if s.engine.ModelRouter != nil {
 		if catalog, err := s.engine.ModelRouter.ActiveChecked(); err == nil {
 			for _, endpoint := range catalog.Endpoints {
@@ -68,6 +68,8 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	cfg.NewAPI = req.Msg.Newapi
 	cfg.USDExchangeRate = req.Msg.UsdExchangeRate
 	cfg.QuotaDisplayType = req.Msg.QuotaDisplayType
+	cfg.CustomCurrencySymbol = req.Msg.CustomCurrencySymbol
+	cfg.CustomCurrencyExchangeRate = req.Msg.CustomCurrencyExchangeRate
 	validated := cfg
 	if req.Msg.ClearApiKey {
 		if req.Msg.ApiKey != "" || req.Msg.ProviderId != "" {
@@ -128,7 +130,7 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if err := balancequery.ValidateQuotaPerUnit(req.Msg.QuotaPerUnit); err != nil {
 		return fail(err.Error())
 	}
-	candidate := balancequery.Config{Curl: req.Msg.Curl, QuotaPerUnit: req.Msg.QuotaPerUnit, NewAPI: req.Msg.Newapi}
+	candidate := balancequery.Config{Curl: req.Msg.Curl, QuotaPerUnit: req.Msg.QuotaPerUnit, NewAPI: req.Msg.Newapi, USDExchangeRate: req.Msg.UsdExchangeRate, QuotaDisplayType: req.Msg.QuotaDisplayType, CustomCurrencySymbol: req.Msg.CustomCurrencySymbol, CustomCurrencyExchangeRate: req.Msg.CustomCurrencyExchangeRate}
 	switch {
 	case req.Msg.ProviderId != "":
 		credential, err := s.engine.ModelRouter.EndpointCredential(req.Msg.ProviderId)
@@ -196,6 +198,6 @@ func (s *Service) FetchQuotaConfig(ctx context.Context, req *connect.Request[v1.
 	}
 	return connect.NewResponse(&v1.FetchQuotaConfigResponse{
 		Ok: true, Message: "已从远端获取换算配置",
-		QuotaPerUnit: status.QuotaPerUnit, UsdExchangeRate: status.USDExchangeRate, QuotaDisplayType: status.QuotaDisplayType,
+		QuotaPerUnit: status.QuotaPerUnit, UsdExchangeRate: status.USDExchangeRate, QuotaDisplayType: status.QuotaDisplayType, CustomCurrencySymbol: status.CustomCurrencySymbol, CustomCurrencyExchangeRate: status.CustomCurrencyExchangeRate,
 	}), nil
 }

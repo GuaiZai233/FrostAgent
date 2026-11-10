@@ -41,3 +41,24 @@ func TestValidateQuotaPerUnit(t *testing.T) {
 		t.Fatal("negative ratio must be rejected")
 	}
 }
+
+func TestConvertQuotaCoversNestedUserQuota(t *testing.T) {
+	body := `{"object":"token_usage","total_available":500000,"data":{"user_quota":{"total_available":1000000,"total_used":500000}}}`
+	got := ConvertQuota(body, DefaultQuotaPerUnit, 7.3, "USD")
+	want := `{"data":{"user_quota":{"total_available":"2 USD","total_used":"1 USD"}},"object":"token_usage","total_available":"1 USD"}`
+	if got != want {
+		t.Fatalf("ConvertQuota() = %s, want %s", got, want)
+	}
+}
+
+func TestConvertQuotaCustomCurrency(t *testing.T) {
+	// 1 USD of quota (500000) at a custom rate of 0.9 with a euro symbol.
+	got := ConvertQuotaCustom(`{"quota":500000}`, DefaultQuotaPerUnit, 7.3, "CUSTOM", "€", 0.9)
+	if got != `{"quota":"€0.9"}` {
+		t.Fatalf("custom currency = %s", got)
+	}
+	got = ConvertQuotaCustom(`{"quota":500000}`, DefaultQuotaPerUnit, 7.3, "CUSTOM", "", 0.9)
+	if got != `{"quota":"0.9 CUSTOM"}` {
+		t.Fatalf("custom currency without symbol = %s", got)
+	}
+}

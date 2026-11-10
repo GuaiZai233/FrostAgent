@@ -324,6 +324,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               <label class="flex items-center gap-2 text-sm"><span class="shrink-0">quota_per_unit：每美元对应的额度单位</span><input id="balance-query-quota-ratio" class="input font-mono" type="number" min="0" step="any" value="${cfg.quotaPerUnit > 0 ? cfg.quotaPerUnit : 500000}" style="width:10rem"></label>
               <label class="flex items-center gap-2 text-sm"><span class="shrink-0">usd_exchange_rate：美元兑人民币的展示汇率</span><input id="balance-query-usd-rate" class="input font-mono" type="number" min="0" step="any" value="${cfg.usdExchangeRate > 0 ? cfg.usdExchangeRate : 7.3}" style="width:10rem"></label>
               <label class="flex items-center gap-2 text-sm"><span class="shrink-0">quota_display_type：配额展示的币种</span><input id="balance-query-display-type" class="input font-mono" type="text" value="${escapeHtml(cfg.quotaDisplayType || 'USD')}" style="width:10rem"></label>
+              <label class="flex items-center gap-2 text-sm"><span class="shrink-0">custom_currency_symbol：CUSTOM 时的符号</span><input id="balance-query-custom-symbol" class="input font-mono" type="text" value="${escapeHtml(cfg.customCurrencySymbol || '')}" style="width:10rem"></label>
+              <label class="flex items-center gap-2 text-sm"><span class="shrink-0">custom_currency_exchange_rate：CUSTOM 时的换算汇率</span><input id="balance-query-custom-rate" class="input font-mono" type="number" min="0" step="any" value="${cfg.customCurrencyExchangeRate > 0 ? cfg.customCurrencyExchangeRate : 1}" style="width:10rem"></label>
             </div>
             <p class="text-xs text-muted">开启后，New API 返回的内部 quota 字段会按该比例换算为可读性高的格式。</p>
           </div>
@@ -365,10 +367,32 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             applyQuotaBox();
           };
           let retypeKey = false;
+          // Provider reuse is only valid for the endpoint and credential type it was chosen for. When the request
+          // origin or the New API credential type (sk- token vs nap_ PAT) changes, reuse is withdrawn automatically:
+          // the provider selection and manual key are cleared and the user must choose a credential explicitly.
+          // The saved provider itself is never modified here.
+          let credentialType = preset.value;
+          const withdrawProviderReuse = () => {
+            if (!reuseKey.checked && !useEndpoint.checked && !providerGroup.querySelector("input:checked")) return;
+            reuseKey.checked = false;
+            useEndpoint.checked = false;
+            providerGroup.querySelectorAll<HTMLInputElement>("input").forEach((input) => { input.checked = false; });
+            key.value = "";
+            const errorBox = dialog.querySelector<HTMLElement>("#balance-query-error");
+            if (errorBox) errorBox.textContent = "";
+          };
+          const providerOriginChanged = () => {
+            const id = providerGroup.querySelector<HTMLInputElement>("input:checked")?.value ?? cfg.providerId;
+            const provider = cfg.providers.find((item) => item.id === id);
+            if (!provider || !provider.baseUrl) return reuseKey.checked;
+            return !sameOriginText(curl.value, provider.baseUrl);
+          };
           // Any edit to the stored request template (preset or hand-written) requires the key to be
           // re-entered. The backend separately enforces the endpoint rule with the real curl parser.
           const updateRetypeKey = () => {
             retypeKey = !!cfg.apiKeyConfigured && !cfg.providerId && curl.value.trim() !== cfg.curl.trim();
+            if ((reuseKey.checked || useEndpoint.checked) && (providerOriginChanged() || (preset.value !== credentialType && credentialType !== ""))) withdrawProviderReuse();
+            credentialType = preset.value;
             syncCredentials();
           };
           curl.addEventListener('input', updateRetypeKey);
@@ -412,7 +436,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             testButton.disabled = true;
             testButton.textContent = '测试中...';
             try {
-              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '', quotaValue(), isNewApi());
+              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : "", quotaValue(), isNewApi(), quotaExtras());
               if (isUnmounted || !dialog.isConnected) return;
               const resultBox = dialog.querySelector<HTMLElement>('#balance-query-test-result')!;
               if (result.ok) {
@@ -453,6 +477,13 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn').forEach((button) => { button.disabled = pending; });
             curl.disabled = pending;
             preset.disabled = pending;
+            // Every control whose value is captured by the pending save must be locked too, otherwise a change
+            // made while the request is in flight would be silently dropped when the dialog closes on success.
+            for (const control of [useEndpoint, quotaEnabled, quotaRatio, usdRate, displayType, fetchQuotaButton]) {
+              control.disabled = pending;
+            }
+            if (customSymbol) customSymbol.disabled = pending;
+            if (customRate) customRate.disabled = pending;
             syncCredentials();
           };
           reuseKey.onchange = () => { syncCredentials(); };
@@ -471,12 +502,20 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           };
           const usdRate = dialog.querySelector<HTMLInputElement>('#balance-query-usd-rate')!;
           const displayType = dialog.querySelector<HTMLInputElement>('#balance-query-display-type')!;
+          const customSymbol = dialog.querySelector<HTMLInputElement>('#balance-query-custom-symbol');
+          const customRate = dialog.querySelector<HTMLInputElement>('#balance-query-custom-rate');
           const fetchQuotaButton = dialog.querySelector<HTMLButtonElement>('#balance-query-fetch-quota')!;
           // Exchange rate and display unit are only sent while conversion is on; off means none.
           const quotaExtras = () => {
-            if (quotaBox.hidden || !quotaEnabled.checked) return { usd: 0, type: '' };
+            if (quotaBox.hidden || !quotaEnabled.checked) return { usd: 0, type: '', symbol: '', customRate: 0 };
             const rate = Number(usdRate.value);
-            return { usd: Number.isFinite(rate) && rate > 0 ? rate : 0, type: displayType.value.trim() };
+            const custom = Number(customRate?.value ?? '');
+            return {
+              usd: Number.isFinite(rate) && rate > 0 ? rate : 0,
+              type: displayType.value.trim(),
+              symbol: customSymbol?.value.trim() ?? '',
+              customRate: Number.isFinite(custom) && custom > 0 ? custom : 0,
+            };
           };
           const applyQuotaBox = () => {
             quotaBox.hidden = !isNewApi();
@@ -544,7 +583,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             }
             setSaving(true);
             try {
-              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', false, quotaValue(), isNewApi(), quotaExtras().usd, quotaExtras().type);
+              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : "", false, quotaValue(), isNewApi(), quotaExtras().usd, quotaExtras().type, quotaExtras().symbol, quotaExtras().customRate);
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
               key.value = '';
@@ -581,4 +620,12 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       clearInterval(timerId);
     }
   };
+}
+
+// sameOriginText reports whether a curl template targets the same scheme, host and port as baseUrl.
+// It is a display-side check only; the backend re-validates with the real parser before any key is sent.
+function sameOriginText(curl: string, baseUrl: string): boolean {
+  const target = curl.match(/https?:\/\/[^/\s'"]+/i)?.[0]?.toLowerCase() ?? '';
+  const base = baseUrl.match(/^https?:\/\/[^/\s'"]+/i)?.[0]?.toLowerCase() ?? '';
+  return target !== '' && target === base;
 }

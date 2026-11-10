@@ -28,6 +28,9 @@ type Config struct {
 	// USDExchangeRate and QuotaDisplayType come from the New API status and are kept with the template.
 	USDExchangeRate  float64 `json:"usd_exchange_rate,omitempty"`
 	QuotaDisplayType string  `json:"quota_display_type,omitempty"`
+	// CustomCurrencySymbol and CustomCurrencyExchangeRate apply when QuotaDisplayType is CUSTOM.
+	CustomCurrencySymbol       string  `json:"custom_currency_symbol,omitempty"`
+	CustomCurrencyExchangeRate float64 `json:"custom_currency_exchange_rate,omitempty"`
 }
 
 // ProviderCredential is a provider's key with its base URL, read atomically from one published endpoint.

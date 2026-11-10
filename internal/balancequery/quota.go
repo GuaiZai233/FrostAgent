@@ -38,6 +38,11 @@ func ValidateQuotaPerUnit(v float64) error {
 // per-currency rules: TOKENS shows the raw quota; CNY shows dollars times the exchange rate; any other
 // display type (USD by default) shows dollars. Non-JSON bodies and bodies without quota fields are unchanged.
 func ConvertQuota(body string, perUnit, usdRate float64, unit string) string {
+	return ConvertQuotaCustom(body, perUnit, usdRate, unit, "", 0)
+}
+
+// ConvertQuotaCustom is ConvertQuota with NewAPI custom currency settings, used when unit is CUSTOM.
+func ConvertQuotaCustom(body string, perUnit, usdRate float64, unit, symbol string, customRate float64) string {
 	if perUnit <= 0 {
 		return body
 	}
@@ -48,10 +53,7 @@ func ConvertQuota(body string, perUnit, usdRate float64, unit string) string {
 	if json.Unmarshal([]byte(body), &fields) != nil {
 		return body
 	}
-	changed := convertQuotaFields(fields, perUnit, usdRate, unit)
-	if data, ok := fields["data"].(map[string]any); ok && convertQuotaFields(data, perUnit, usdRate, unit) {
-		changed = true
-	}
+	changed := convertQuotaNode(fields, perUnit, usdRate, unit, symbol, customRate)
 	if !changed {
 		return body
 	}
@@ -62,23 +64,38 @@ func ConvertQuota(body string, perUnit, usdRate float64, unit string) string {
 	return string(out)
 }
 
-// convertQuotaFields rewrites quota-valued numbers in one object and reports whether any changed.
-func convertQuotaFields(fields map[string]any, perUnit, usdRate float64, unit string) bool {
+// convertQuotaNode converts quota-valued numbers in an object and in every nested object, so that
+// user_quota objects under data (returned by token usage when user quota querying is allowed) are covered.
+func convertQuotaNode(fields map[string]any, perUnit, usdRate float64, unit, symbol string, customRate float64) bool {
 	changed := false
 	for name, value := range fields {
-		number, ok := value.(float64)
-		if !ok || !quotaFields[name] {
-			continue
+		switch typed := value.(type) {
+		case float64:
+			if quotaFields[name] {
+				fields[name] = formatQuotaAmount(typed, perUnit, usdRate, unit, symbol, customRate)
+				changed = true
+			}
+		case map[string]any:
+			if convertQuotaNode(typed, perUnit, usdRate, unit, symbol, customRate) {
+				changed = true
+			}
 		}
-		fields[name] = formatQuotaAmount(number, perUnit, usdRate, unit)
-		changed = true
 	}
 	return changed
 }
 
 // formatQuotaAmount applies the display rule for one quota value.
-func formatQuotaAmount(quota, perUnit, usdRate float64, unit string) string {
+func formatQuotaAmount(quota, perUnit, usdRate float64, unit, symbol string, customRate float64) string {
 	switch strings.ToUpper(unit) {
+	case "CUSTOM":
+		rate := customRate
+		if rate <= 0 {
+			rate = 1
+		}
+		if symbol == "" {
+			return formatDecimal(quota/perUnit*rate) + " CUSTOM"
+		}
+		return symbol + formatDecimal(quota/perUnit*rate)
 	case "TOKENS":
 		return formatDecimal(quota) + " TOKENS"
 	case "CNY":

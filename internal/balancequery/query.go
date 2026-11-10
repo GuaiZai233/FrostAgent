@@ -71,7 +71,7 @@ func Execute(ctx context.Context, cfg Config) (string, error) {
 			return "", err
 		}
 	}
-	result := ConvertQuota(string(data), cfg.QuotaPerUnit, cfg.USDExchangeRate, cfg.QuotaDisplayType)
+	result := ConvertQuotaCustom(string(data), cfg.QuotaPerUnit, cfg.USDExchangeRate, cfg.QuotaDisplayType, cfg.CustomCurrencySymbol, cfg.CustomCurrencyExchangeRate)
 	if cfg.APIKey != "" && containsSecret(result, cfg.APIKey) {
 		return "", errors.New("额度查询结果包含 API key，已阻止返回")
 	}

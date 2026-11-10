@@ -183,6 +183,10 @@ try {
     assert.equal(dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!.disabled, true);
     assert.ok([...dialog.querySelectorAll<HTMLInputElement>('input[name="balance-query-provider"]')].every((input) => input.disabled));
     assert.equal(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.disabled, true);
+    // Every control whose value the pending save captured is locked, so edits cannot be silently dropped.
+    for (const id of ['#balance-query-use-endpoint', '#balance-query-quota-enabled', '#balance-query-quota-ratio', '#balance-query-usd-rate', '#balance-query-display-type', '#balance-query-fetch-quota', '#balance-query-custom-symbol', '#balance-query-custom-rate']) {
+      assert.equal(dialog.querySelector<HTMLInputElement | HTMLButtonElement>(id)!.disabled, true, `${id} must be locked while saving`);
+    }
     const presetSelect = dialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
     assert.equal(presetSelect.disabled, true, 'preset select must be disabled while a save is pending');
     const pendingCurl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value;
@@ -313,6 +317,16 @@ try {
     useEndpointEl.dispatchEvent(new dom.window.Event('change'));
     assert.equal(presetCurl.hidden, false, 'disabling endpoint reuse shows the curl box again');
     assert.equal(reuseKeyEl.disabled, false);
+    // Switching between the sk- token and nap_ PAT presets withdraws provider reuse, even on the same origin.
+    choose('newapi-key');
+    reuseKeyEl.checked = true;
+    reuseKeyEl.dispatchEvent(new dom.window.Event('change'));
+    presetDialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.click();
+    assert.equal(reuseKeyEl.checked, true, 'precondition: provider reuse must be active before switching');
+    assert.equal(presetDialog.querySelectorAll('input[name="balance-query-provider"]:checked').length, 1, 'precondition: a provider must be selected');
+    choose('newapi-account');
+    assert.equal(reuseKeyEl.checked, false, 'switching credential type must withdraw key reuse');
+    assert.equal(presetDialog.querySelectorAll('input[name="balance-query-provider"]:checked').length, 0, 'switching credential type must clear the provider selection');
     presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
     await flush();
 

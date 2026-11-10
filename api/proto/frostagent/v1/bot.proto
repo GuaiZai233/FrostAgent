@@ -53,6 +53,8 @@ message SaveBalanceQueryConfigRequest {
   // Exchange rate and display unit from the remote New API status; saved with the template.
   double usd_exchange_rate = 7;
   string quota_display_type = 8;
+  string custom_currency_symbol = 9;
+  double custom_currency_exchange_rate = 10;
 }
 
 // Deletes the whole stored balance_query configuration, returning the tool to unconfigured.
@@ -66,6 +68,10 @@ message TestBalanceQueryConfigRequest {
   string provider_id = 3;
   double quota_per_unit = 4;
   bool newapi = 5;
+  double usd_exchange_rate = 6;
+  string quota_display_type = 7;
+  string custom_currency_symbol = 8;
+  double custom_currency_exchange_rate = 9;
 }
 
 message TestBalanceQueryConfigResponse {
@@ -82,6 +88,8 @@ message BalanceQueryConfigResponse {
   bool newapi = 6;
   double usd_exchange_rate = 7;
   string quota_display_type = 8;
+  string custom_currency_symbol = 9;
+  double custom_currency_exchange_rate = 10;
 }
 
 message BalanceQueryProvider {
@@ -203,4 +211,6 @@ message FetchQuotaConfigResponse {
   double quota_per_unit = 3;
   double usd_exchange_rate = 4;
   string quota_display_type = 5;
+  string custom_currency_symbol = 6;
+  double custom_currency_exchange_rate = 7;
 }

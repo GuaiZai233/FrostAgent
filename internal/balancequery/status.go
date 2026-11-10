@@ -14,9 +14,11 @@ import (
 
 // QuotaStatus is the quota conversion configuration published by a New API site at /api/status.
 type QuotaStatus struct {
-	QuotaPerUnit     float64
-	USDExchangeRate  float64
-	QuotaDisplayType string
+	QuotaPerUnit               float64
+	USDExchangeRate            float64
+	QuotaDisplayType           string
+	CustomCurrencySymbol       string
+	CustomCurrencyExchangeRate float64
 }
 
 // OriginOf returns the scheme and host of the endpoint a template targets.
@@ -53,9 +55,11 @@ func FetchQuotaStatus(ctx context.Context, origin string) (QuotaStatus, error) {
 	var payload struct {
 		Success bool `json:"success"`
 		Data    struct {
-			QuotaPerUnit     float64 `json:"quota_per_unit"`
-			USDExchangeRate  float64 `json:"usd_exchange_rate"`
-			QuotaDisplayType string  `json:"quota_display_type"`
+			QuotaPerUnit               float64 `json:"quota_per_unit"`
+			USDExchangeRate            float64 `json:"usd_exchange_rate"`
+			QuotaDisplayType           string  `json:"quota_display_type"`
+			CustomCurrencySymbol       string  `json:"custom_currency_symbol"`
+			CustomCurrencyExchangeRate float64 `json:"custom_currency_exchange_rate"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(data, &payload) != nil || !payload.Success {
@@ -65,9 +69,11 @@ func FetchQuotaStatus(ctx context.Context, origin string) (QuotaStatus, error) {
 		return QuotaStatus{}, errors.New("远端 /api/status 未返回有效的 quota_per_unit")
 	}
 	return QuotaStatus{
-		QuotaPerUnit:     payload.Data.QuotaPerUnit,
-		USDExchangeRate:  payload.Data.USDExchangeRate,
-		QuotaDisplayType: payload.Data.QuotaDisplayType,
+		QuotaPerUnit:               payload.Data.QuotaPerUnit,
+		USDExchangeRate:            payload.Data.USDExchangeRate,
+		QuotaDisplayType:           payload.Data.QuotaDisplayType,
+		CustomCurrencySymbol:       payload.Data.CustomCurrencySymbol,
+		CustomCurrencyExchangeRate: payload.Data.CustomCurrencyExchangeRate,
 	}, nil
 }
 
