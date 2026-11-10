@@ -59,7 +59,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 			"additionalProperties": false,
 		},
 		enabled: func() bool {
-			return engine != nil && engine.VisionProvider != nil
+			return engine != nil && (engine.VisionProvider != nil || engine.Provider != nil)
 		},
 		disabledError:    fmt.Errorf("图片识别功能未启用"),
 		proactiveAllowed: true,
@@ -88,11 +88,14 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 				return textResult("当前会话无法回溯消息图片。"), nil
 			}
 
-			provider, modelSource, visionDisabled := inspectImageProvider(engine, runContext)
-			if provider == nil {
-				if visionDisabled {
-					return textResult("当前会话已禁用视觉模型，无法识别图片。"), nil
+			if engine.ModelRouter != nil {
+				if runContext.RouteSnapshot == nil {
+					runContext.RouteSnapshot = engine.ModelRouter.Snapshot()
 				}
+				ctx = engine.ModelRouter.WithSnapshot(ctx, runContext.RouteSnapshot)
+			}
+			provider, modelSource := inspectImageProvider(engine, runContext)
+			if provider == nil {
 				return textResult("图片识别模型不可用。"), nil
 			}
 			if inspectImageQuotaExceeded(engine, runContext) {
@@ -175,23 +178,30 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 	}
 }
 
-// inspectImageProvider uses the configured vision workload. A vision workload
-// that is explicitly disabled is a hard opt-out and is never bypassed through
-// the dialogue workload. Deployments that want the dialogue model to inspect
-// images must bind the vision workload to follow_dialogue, which is resolved
-// through engine.VisionProvider rather than this tool.
-func inspectImageProvider(engine *llm.Engine, runContext llm.RunContext) (core.LLMProvider, string, bool) {
-	if engine == nil || engine.VisionProvider == nil {
-		return nil, "", false
+// inspectImageProvider prefers the configured image-description workload and
+// otherwise uses the current dialogue model. Disabling the dedicated workload
+// only disables that preprocessing route, not the dialogue model's image access.
+func inspectImageProvider(engine *llm.Engine, runContext llm.RunContext) (core.LLMProvider, string) {
+	if engine == nil {
+		return nil, ""
 	}
-	snapshot := runContext.RouteSnapshot
-	if snapshot == nil && engine.ModelRouter != nil {
-		snapshot = engine.ModelRouter.Snapshot()
+	if snapshot := runContext.RouteSnapshot; snapshot != nil {
+		_, err := snapshot.Resolve(modelrouter.WorkloadVision, runContext.RouteScope)
+		if err == nil {
+			return engine.VisionProvider, "vision"
+		}
+		// A configured route that cannot be resolved must report failure rather
+		// than silently selecting a different model.
+		if !errors.Is(err, modelrouter.ErrDisabled) {
+			return nil, ""
+		}
+		if _, err := snapshot.Resolve(modelrouter.WorkloadDialogue, runContext.RouteScope); err != nil {
+			return nil, ""
+		}
+	} else if engine.VisionProvider != nil {
+		return engine.VisionProvider, "vision"
 	}
-	if snapshot != nil && snapshot.IsDisabled(modelrouter.WorkloadVision, runContext.RouteScope) {
-		return nil, "", true
-	}
-	return engine.VisionProvider, "vision", false
+	return engine.Provider, "dialogue"
 }
 
 func inspectImageQuotaLimit(engine *llm.Engine) int {
