@@ -320,7 +320,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <div id="balance-query-quota" class="form-group" hidden>
             <label class="flex items-center gap-2 text-sm"><input id="balance-query-quota-enabled" type="checkbox" class="checkbox" ${cfg.quotaPerUnit > 0 ? 'checked' : ''}>内部 Quota 转换</label>
             <div id="balance-query-quota-ratio-row" class="flex items-center gap-2 text-sm" ${cfg.quotaPerUnit > 0 ? '' : 'hidden'}><span>每 1 Dollar 对应的 Quota</span><input id="balance-query-quota-ratio" class="input font-mono" type="number" min="0" step="any" value="${cfg.quotaPerUnit > 0 ? cfg.quotaPerUnit : 500000}" style="width:10rem"></div>
-            <p class="text-xs text-muted">开启后，New API 返回的 quota 与 used_quota 等字段会按该比例换算为美元，并附带单位（如 0.18455 Dollar）后交给 Bot。</p>
+            <p class="text-xs text-muted">开启后，New API 返回的内部 quota 字段会按该比例换算为美元。</p>
           </div>
           <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
