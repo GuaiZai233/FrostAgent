@@ -766,7 +766,7 @@ func TestSecurityRejectionMessages(t *testing.T) {
 	if msg != RejectInspectorMsg {
 		t.Fatalf("expected RejectInspectorMsg, got %q", msg)
 	}
-	if msg != "FrostAgent 错误：Request rejected by security inspector: 不合适的内容！" {
+	if msg != "安全审查拦截：不合适的内容" {
 		t.Fatalf("unexpected inspector error message: %q", msg)
 	}
 
@@ -787,7 +787,7 @@ func TestSecurityRejectionMessages(t *testing.T) {
 	if failMsg != RejectFailureMsg {
 		t.Fatalf("expected RejectFailureMsg, got %q", failMsg)
 	}
-	if failMsg != "FrostAgent 错误：Request rejected by security service: 安全审查服务暂时不可用，请稍后重试。" {
+	if failMsg != "安全审查失败：服务暂时不可用，请稍后重试" {
 		t.Fatalf("unexpected failure error message: %q", failMsg)
 	}
 
@@ -803,7 +803,7 @@ func TestSecurityRejectionMessages(t *testing.T) {
 	if gatewayMsg != RejectGatewayMsg {
 		t.Fatalf("expected RejectGatewayMsg, got %q", gatewayMsg)
 	}
-	if gatewayMsg != "FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。" {
+	if gatewayMsg != "安全访问拒绝：您已被封禁，请联系管理员" {
 		t.Fatalf("unexpected gateway error message: %q", gatewayMsg)
 	}
 

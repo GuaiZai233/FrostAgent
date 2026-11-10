@@ -3523,7 +3523,8 @@ func TestWS_SendMessage_ACKFailure_Muted(t *testing.T) {
 			if contentStr == "消息已发送" {
 				t.Fatalf("平台 ACK 失败时，严禁向 LLM 返回 '消息已发送'")
 			}
-			if strings.Contains(contentStr, "消息发送失败") && (strings.Contains(contentStr, "禁言") || strings.Contains(contentStr, "10004")) {
+			if strings.HasPrefix(contentStr, "[FrostAgent 错误] 消息发送失败 (Ref_ID: ") {
+				assertFailureReference(t, engine.Log(), contentStr, "禁言")
 				foundFailResult = true
 			}
 		}
@@ -3612,7 +3613,7 @@ func TestWS_SendMessage_ACKTimeout(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证第二轮 LLM 请求中收到的 toolResult 为包含 timeout 的失败原因
+	// 验证第二轮 LLM 请求收到安全摘要，超时原因保留在关联日志中
 	mockLLM.mu.Lock()
 	if len(mockLLM.requests) < 2 {
 		mockLLM.mu.Unlock()
@@ -3628,7 +3629,8 @@ func TestWS_SendMessage_ACKTimeout(t *testing.T) {
 			if contentStr == "消息已发送" {
 				t.Fatalf("超时情况下严禁返回 '消息已发送'")
 			}
-			if strings.Contains(contentStr, "消息发送失败") && strings.Contains(contentStr, "timeout") {
+			if strings.HasPrefix(contentStr, "[FrostAgent 错误] 消息发送失败 (Ref_ID: ") {
+				assertFailureReference(t, engine.Log(), contentStr, "timeout")
 				foundTimeoutResult = true
 			}
 		}
@@ -3993,7 +3995,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Errorf("期望 action=send_private_msg, 实际=%s", act.Action)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectInspectorMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectInspectorMsg+" (Ref_ID: ") {
 			t.Errorf("期望 inspector 报错 %q, 实际=%q", security.RejectInspectorMsg, msg)
 		}
 	})
@@ -4032,7 +4034,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Fatalf("解析已封禁 action 失败: %v", err)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectGatewayMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("期望 gateway 报错 %q, 实际=%q", security.RejectGatewayMsg, msg)
 		}
 	})
@@ -4092,7 +4094,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Errorf("期望 action=send_group_msg, 实际=%s", act.Action)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectInspectorMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectInspectorMsg+" (Ref_ID: ") {
 			t.Errorf("期望群聊 inspector 报错 %q, 实际=%q", security.RejectInspectorMsg, msg)
 		}
 	})
@@ -4135,7 +4137,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Errorf("期望 action=send_group_msg, 实际=%s", act.Action)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectGatewayMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("期望群聊 gateway 报错 %q, 实际=%q", security.RejectGatewayMsg, msg)
 		}
 	})
@@ -4206,7 +4208,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Errorf("期望 action=send_group_msg, 实际=%s", act.Action)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectInspectorMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectInspectorMsg+" (Ref_ID: ") {
 			t.Errorf("期望 inspector 报错 %q, 实际=%q", security.RejectInspectorMsg, msg)
 		}
 	})
@@ -4246,7 +4248,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Fatalf("解析 action 失败: %v", err)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectFailureMsg+" (Ref_ID: ") {
 			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
 		}
 	})
@@ -4291,7 +4293,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 			t.Fatalf("解析 action 失败: %v", err)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectFailureMsg+" (Ref_ID: ") {
 			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
 		}
 	})
@@ -4441,7 +4443,7 @@ func TestOneBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T)
 		t.Fatalf("解析 action 失败: %v", err)
 	}
 	params, _ := act.Params.(map[string]any)
-	if msg, _ := params["message"].(string); msg != security.RejectFailureMsg {
+	if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectFailureMsg+" (Ref_ID: ") {
 		t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, msg)
 	}
 
@@ -5484,7 +5486,7 @@ func TestOneBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
 	// Verify rejection text contains RejectGatewayMsg
 	params, _ := act.Params.(map[string]any)
 	msgStr, _ := params["message"].(string)
-	if !strings.Contains(msgStr, security.RejectGatewayMsg) {
+	if !strings.HasPrefix(msgStr, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 		t.Errorf("expected rejection message containing %q, got %q", security.RejectGatewayMsg, msgStr)
 	}
 

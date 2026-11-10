@@ -214,6 +214,10 @@ func (c *wsConn) writeStickerActionAndWait(action Action) error {
 }
 
 func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionTurn) error {
+	return c.writeActionAndWaitTurn(action, turn, 60*time.Second, "贴纸")
+}
+
+func (c *wsConn) writeActionAndWaitTurn(action Action, turn *llm.SessionTurn, timeout time.Duration, description string) error {
 	action.DeliveryID = fmt.Sprintf("delivery_%d", atomic.AddUint64(&nextDeliveryID, 1))
 	receipts := make(chan deliveryReceipt, 1)
 	c.pendingDeliveries.Store(action.DeliveryID, receipts)
@@ -221,7 +225,7 @@ func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionT
 	if err := c.writeTurnJSON(action, turn); err != nil {
 		return err
 	}
-	timer := time.NewTimer(60 * time.Second)
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case <-turn.Context().Done():
@@ -229,15 +233,15 @@ func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionT
 	case receipt := <-receipts:
 		if !receipt.Delivered {
 			if receipt.Error != "" {
-				return fmt.Errorf("AstrBot 贴纸发送失败: %s", receipt.Error)
+				return fmt.Errorf("AstrBot %s发送失败: %s", description, receipt.Error)
 			}
-			return errors.New("AstrBot 贴纸发送失败")
+			return fmt.Errorf("AstrBot %s发送失败", description)
 		}
 		return nil
 	case <-c.Context().Done():
 		return c.Context().Err()
 	case <-timer.C:
-		return errors.New("等待 AstrBot 贴纸投递回执超时")
+		return fmt.Errorf("等待 AstrBot %s投递回执超时", description)
 	}
 }
 
@@ -947,16 +951,15 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if err != nil {
 					if errors.Is(err, billing.ErrInsufficientFunds) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
-						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+						sendDirectReply(event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 						return
 					}
-					engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage(), turn)
+					sendDirectReply(event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务不可用 (fail-closed, vision): %w", err)), turn)
 					return
 				}
 				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
-					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+					sendDirectReply(event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 					return
 				}
 			}

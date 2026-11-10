@@ -1139,7 +1139,7 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 
 		params, _ := action.Params.(map[string]any)
 		msgStr, _ := params["message"].(string)
-		if !strings.Contains(msgStr, "FrostAgent安全控制：模型输出已拦截。") {
+		if !strings.HasPrefix(msgStr, "[FrostAgent 错误] 安全审查拦截：模型输出已拦截 (Ref_ID: ") {
 			t.Fatalf("显式唤醒 OutputBlocked 时应发送拦截提示，实际: %s", msgStr)
 		}
 	})
@@ -1235,7 +1235,7 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 
 		params, _ := action.Params.(map[string]any)
 		msgStr, _ := params["message"].(string)
-		if !strings.Contains(msgStr, security.RejectGatewayMsg) {
+		if !strings.HasPrefix(msgStr, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Fatalf("显式唤醒 ban_user 应发送封禁拒绝提示，实际: %s", msgStr)
 		}
 	})

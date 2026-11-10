@@ -557,7 +557,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					}
 				}
 				if directReply {
-					msg := a.engine.Security.RejectMessage(principal, decision)
+					summary := a.engine.Security.RejectMessage(principal, decision)
+					msg := security.ReportRejection(a.engine.Log(), summary, decision)
 					_ = sendDirectReply(event, c, msg)
 				} else if isProactiveReply(&event) || event.pokeID != "" {
 					_ = sendTerminalNoopWithSuppress(event, c)

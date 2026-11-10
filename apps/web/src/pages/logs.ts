@@ -25,9 +25,11 @@ import {
   renderLoggedImagesInText,
 } from '../components/prompt-inspector';
 
-export function mountLogsPage(container: HTMLElement): () => void {
+export function mountLogsPage(
+  container: HTMLElement,
+  api = createInstanceAPI(),
+): () => void {
   if (!instanceState.selected) instanceState.logSource = 'control-plane';
-  const api = createInstanceAPI();
   let isUnmounted = false;
   let botName = DEFAULT_BOT_NAME;
   const botNameReady = (async () => {
@@ -69,6 +71,17 @@ export function mountLogsPage(container: HTMLElement): () => void {
           </button>
         </div>
       </header>
+
+      <section class="card p-3.5">
+        <form id="logs-error-lookup-form" class="flex items-end gap-3 flex-wrap">
+          <div class="form-group flex-1" style="min-width: 16rem;">
+            <label class="form-label" for="logs-error-uuid-input">按错误uuid定位</label>
+            <input id="logs-error-uuid-input" class="input text-xs font-mono" placeholder="输入报错中的 UUIDv4" autocomplete="off" spellcheck="false" />
+          </div>
+          <button type="submit" class="btn btn-outline btn-sm">${icon('search', 'w-3.5 h-3.5')}<span>定位错误</span></button>
+        </form>
+        <p class="text-xs text-muted mt-2">在所选实例和日志来源中定位；已清理、覆盖或重启前的日志无法查询。</p>
+      </section>
 
       <div class="form-group" style="width: 14rem;">
         <label class="form-label" for="logs-source-select">日志来源</label>
@@ -215,7 +228,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
     '#stream-entries-container',
   )!;
 
-  async function loadLogs() {
+  async function loadLogs(errorUuid = '') {
     if (isUnmounted) return;
     const generation = loadRequests.next();
     loading = true;
@@ -224,12 +237,14 @@ export function mountLogsPage(container: HTMLElement): () => void {
     try {
       const resp = await api.listLogs(
         pageSize,
-        tokenStack.currentToken,
-        minLevel,
-        sourceFilter,
+        errorUuid ? '' : tokenStack.currentToken,
+        errorUuid ? LogLevel.UNSPECIFIED : minLevel,
+        errorUuid ? '' : sourceFilter,
+        errorUuid,
       );
       if (isUnmounted || !loadRequests.isCurrent(generation)) return;
       entries = resp.entries || [];
+      if (errorUuid) tokenStack.reset();
       tokenStack.setNextToken(resp.pagination?.pageToken ?? '');
       total = Number(resp.pagination?.total ?? entries.length);
 
@@ -253,6 +268,12 @@ export function mountLogsPage(container: HTMLElement): () => void {
         loading = false;
         renderTable();
         renderDetail();
+        if (errorUuid && selectedEntry) {
+          tbody
+            .querySelector<HTMLElement>('tr[data-id]')
+            ?.scrollIntoView?.({ block: 'center' });
+          openSummaryDialog(selectedEntry);
+        }
       }
     }
   }
@@ -403,6 +424,7 @@ export function mountLogsPage(container: HTMLElement): () => void {
           )}</span>
           <span class="font-mono text-muted text-xs">${escapeHtml(formatDateTime(selectedEntry.timestamp))}</span>
           <span class="badge badge-outline text-[11px] px-1.5 py-0">${escapeHtml(selectedEntry.source || '-')}</span>
+          ${selectedEntry.errorUuid ? `<span class="font-mono text-xs break-all">错误 UUID：${escapeHtml(selectedEntry.errorUuid)}</span>` : ''}
           ${
             selectedEntry.traceId
               ? `<span class="badge badge-outline text-[11px] px-1.5 py-0 font-mono text-muted" title="Trace ID">Trace: ${escapeHtml(
@@ -458,10 +480,11 @@ export function mountLogsPage(container: HTMLElement): () => void {
     const hasPrompt = isPromptEntry(entry);
     const promptPayload = entry.requestBody || '';
     const traceInfo = entry.traceId ? ` · Trace: ${entry.traceId}` : '';
+    const errorInfo = entry.errorUuid ? ` · 错误 UUID：${entry.errorUuid}` : '';
 
     openDialog({
       title: `日志摘要 - ${entry.source || '日志'}`,
-      description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}${traceInfo}`,
+      description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}${traceInfo}${errorInfo}`,
       maxWidth: '38rem',
       bodyHtml: `
         <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${renderLoggedImagesInText(entry.summary || '无摘要内容')}</div>
@@ -640,6 +663,24 @@ export function mountLogsPage(container: HTMLElement): () => void {
   }
 
   // Event handlers
+  container
+    .querySelector<HTMLFormElement>('#logs-error-lookup-form')!
+    .addEventListener('submit', (event) => {
+      event.preventDefault();
+      const value = container
+        .querySelector<HTMLInputElement>('#logs-error-uuid-input')!
+        .value.trim();
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          value,
+        )
+      ) {
+        toast.error('请输入完整的 UUIDv4');
+        return;
+      }
+      void loadLogs(value.toLowerCase());
+    });
+
   refreshBtn.addEventListener('click', () => {
     tokenStack.reset();
     void loadLogs();

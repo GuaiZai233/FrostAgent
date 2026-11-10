@@ -400,16 +400,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err != nil {
 			if errors.Is(err, billing.ErrInsufficientFunds) {
 				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+				sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 				return
 			}
-			engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务不可用 (fail-closed, vision): %w", err)), turn)
 			return
 		}
 		if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), billing.ErrInsufficientFunds), turn)
 			return
 		}
 	}
@@ -493,7 +492,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if wakeSignals.Proactive {
 			return
 		}
-		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。", turn)
+		sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, "消息处理失败：单条消息长度过长，超出处理限制", nil, conn.historyKey(event)), turn)
 		return
 	}
 
@@ -1229,8 +1228,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	} else {
-		replyText = "系统出错，引擎未初始化"
-		engine.Log().Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
+		replyText = conn.Scope.Log().ReportError(logs.SYSTEM, "消息处理失败：引擎未初始化", nil)
+		sendDirectReply(action, type1, id, echo, event, conn, replyText, turn)
+		return
 	}
 
 	// 5. Prepare the final message for OneBot by parsing the engine's response.
@@ -1255,22 +1255,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
-			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "引用消息校验失败", err, conn.historyKey(event))
 			if wakeSignals.Proactive {
 				engine.TrimSession(session)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 			return
 		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(finalMessages)
 		if buildErr != nil {
-			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", buildErr, conn.historyKey(event))
 			if wakeSignals.Proactive {
 				engine.TrimSession(session)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 			return
 		}
 		if len(oneBotSegments) > 0 {

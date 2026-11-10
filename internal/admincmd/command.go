@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 const (
@@ -21,6 +23,7 @@ const (
 	CmdUnban   CommandType = "unban"
 	CmdCompact CommandType = "compact"
 	CmdReflect CommandType = "reflect"
+	CmdLog     CommandType = "log"
 )
 
 // ParsedCommand represents a parsed administrator message command.
@@ -67,7 +70,9 @@ func FormatUsage(prefix string) string {
 		"%s%sban <userID> - 全局安全封禁用户\n"+
 		"%s%sunban <userID> - 解除用户全局安全封禁\n"+
 		"%s%scompact - 立即压缩总结当前会话上下文\n"+
-		"%s%sreflect - 触发记忆反思",
+		"%s%sreflect - 触发记忆反思\n"+
+		"%s%slog <uuidv4> - 私聊查询当前实例错误日志（无需 @）",
+		p, sep,
 		p, sep,
 		p, sep,
 		p, sep,
@@ -131,6 +136,16 @@ func ParseCandidate(text, prefix string) (cmd ParsedCommand, isCandidate bool, e
 
 	cmd = ParsedCommand{Type: CommandType(cmdName), Args: args, RawArgs: rawArgs}
 	switch cmd.Type {
+	case CmdLog:
+		if len(args) != 1 {
+			return cmd, true, fmt.Errorf("log 指令格式错误：log <uuidv4>")
+		}
+		id, ok := logs.NormalizeErrorUUID(args[0])
+		if !ok {
+			return cmd, true, fmt.Errorf("错误 UUID 必须为完整的 UUIDv4")
+		}
+		cmd.Args[0] = id
+		return cmd, true, nil
 	case CmdReset:
 		if len(args) != 0 {
 			return cmd, true, fmt.Errorf("reset 指令不需要任何参数")

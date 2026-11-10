@@ -760,6 +760,22 @@ class ForwardToFrostAgentTest(unittest.IsolatedAsyncioTestCase):
 
 
 class RuntimeInfoCommandTest(unittest.IsolatedAsyncioTestCase):
+    async def test_log_lookup_bypasses_group_filter_without_wake(self):
+        error_uuid = "00000000-0000-4000-8000-000000000001"
+        for command in (f"/log {error_uuid}", f"!log {error_uuid}", f"execute log {error_uuid}", "/log", "/log invalid"):
+            with self.subTest(command=command):
+                adapter = self.make_adapter([{"action": "noop", "suppress_llm": True}])
+                event = FakeEvent(group_id="group_test", content=command)
+                self.assertEqual(await self.forward(adapter, event), [])
+                self.assertEqual(adapter.client.sent_events[0]["content"], command)
+                self.assertEqual(event.should_call_llm_calls, [True])
+        for text in ("ordinary message", f"catalog {error_uuid}", "please log this", "!log not-a-uuid"):
+            with self.subTest(text=text):
+                adapter = self.make_adapter()
+                event = FakeEvent(group_id="group_test", content=text)
+                self.assertEqual(await self.forward(adapter, event), [])
+                self.assertEqual(adapter.client.sent_events, [])
+
     def make_adapter(self, actions=None):
         adapter = object.__new__(FrostAgentAdapter)
         adapter._configuration_error = None
@@ -958,11 +974,43 @@ class FakeContext:
     def __init__(self) -> None:
         self.sent_messages: list[tuple[str, Any]] = []
 
-    async def send_message(self, umo: str, chain: Any) -> None:
+    async def send_message(self, umo: str, chain: Any) -> bool:
         self.sent_messages.append((umo, chain))
+        return True
 
 
 class ProactiveActionDispatchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_private_log_dispatch_receipt_and_failure(self) -> None:
+        context = FakeContext()
+        settings = Settings(
+            ws_url="ws://127.0.0.1:11023/instances/a1b2c3d4/ws/astrbot",
+            http_base_url="http://127.0.0.1:8080",
+            forward_all_group_messages=True, heartbeat_interval=30, reconnect_interval=5,
+        )
+        client = FrostAgentWSClient(settings, context=context)
+        receipts = []
+        async def receipt(delivery_id, delivered, error=""):
+            receipts.append((delivery_id, delivered))
+        client.send_delivery_result = receipt
+        action = {"action": "send_message", "platform": "aiocqhttp",
+                  "message_type": "private", "user_id": "synthetic-admin",
+                  "content": "sensitive diagnostic", "delivery_id": "synthetic-delivery"}
+        await client._handle_incoming_action(json.dumps(action))
+        self.assertEqual(context.sent_messages[0][0], "aiocqhttp:FriendMessage:synthetic-admin")
+        self.assertEqual(receipts, [("synthetic-delivery", True)])
+        async def fail(*args):
+            raise RuntimeError("synthetic private delivery failure")
+        context.send_message = fail
+        await client._handle_incoming_action(json.dumps(action))
+        self.assertEqual(receipts[-1], ("synthetic-delivery", False))
+        self.assertEqual(len(context.sent_messages), 1)
+        async def rejected(*args):
+            return False
+        context.send_message = rejected
+        await client._handle_incoming_action(json.dumps(action))
+        self.assertEqual(receipts[-1], ("synthetic-delivery", False))
+        self.assertEqual(len(receipts), 3)
+
     async def test_proactive_dispatch_platform_and_umo(self) -> None:
         fake_context = FakeContext()
         settings = Settings(

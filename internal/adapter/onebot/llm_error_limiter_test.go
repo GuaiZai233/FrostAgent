@@ -205,7 +205,7 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				}
 				for i := 0; i < 4; i++ {
 					send(second, 104, "blocked")
-					read(second, "Request rejected by security gateway")
+					read(second, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ")
 				}
 			})
 		}

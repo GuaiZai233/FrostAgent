@@ -523,12 +523,16 @@ class FrostAgentWSClient:
 
         if not target_id:
             logger.warning("[frostagent-adapter] 主动推送目标 ID 为空，丢弃")
+            if action.get("delivery_id"):
+                await self.send_delivery_result(action["delivery_id"], False, "target ID is empty")
             return
 
         try:
             action = await resolve_sticker_sources(action, self.settings.http_base_url)
             parts = action_to_message_components(action)
             if not parts:
+                if action.get("delivery_id"):
+                    await self.send_delivery_result(action["delivery_id"], False, "message content is empty")
                 return
 
             if message_type == "group" or group_id:
@@ -536,9 +540,15 @@ class FrostAgentWSClient:
             else:
                 umo = f"{platform}:FriendMessage:{user_id or target_id}"
 
-            await self.context.send_message(umo, MessageChain(parts))
+            delivered = await self.context.send_message(umo, MessageChain(parts))
+            if delivered is False:
+                raise RuntimeError("platform unavailable or message delivery rejected")
+            if action.get("delivery_id"):
+                await self.send_delivery_result(action["delivery_id"], True)
         except Exception as e:
             logger.warning(f"[frostagent-adapter] 主动推送失败: {e}")
+            if action.get("delivery_id"):
+                await self.send_delivery_result(action["delivery_id"], False, str(e))
 
     def register_waiter(self, msg_id: str) -> asyncio.Queue:
         queue: asyncio.Queue = asyncio.Queue()
@@ -640,7 +650,7 @@ class FrostAgentAdapter(Star):
                     if not is_group_interaction:
                         return
 
-                if session_key and not is_poke and not is_runtime_info and not self.settings.forward_all_group_messages:
+                if session_key and not is_poke and not is_runtime_info and not is_log_lookup_candidate(payload.get("content", "")) and not self.settings.forward_all_group_messages:
                     if not payload.get("is_wake") and not payload.get("is_at"):
                         return
 
@@ -1012,6 +1022,18 @@ def extract_message_text(event: AstrMessageEvent) -> str:
     if value is not None:
         return str(value)
     return ""
+
+
+def is_log_lookup_candidate(content: str) -> bool:
+    text = str(content or "").strip()
+    if re.match(r"(?i)^/\s*log(?:\s|$)", text):
+        return True
+    # The configured admin prefix belongs to the backend. Forward UUID-shaped
+    # log candidates for custom prefixes; the backend validates prefix and user.
+    return re.fullmatch(
+        r"(?i).+?(?<!\w)log\s+[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        text,
+    ) is not None
 
 
 def is_runtime_info_command(event: AstrMessageEvent) -> bool:

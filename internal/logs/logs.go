@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type Category string
@@ -28,6 +30,7 @@ const (
 type LogEntry struct {
 	ID           uint64    `json:"id"`
 	TraceID      string    `json:"trace_id"`
+	ErrorUUID    string    `json:"error_uuid,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 	Direction    string    `json:"direction"` // INBOUND / OUTBOUND / INTERNAL
 	Category     Category  `json:"category"`
@@ -95,7 +98,7 @@ func (s *Store) Init(capacity int) {
 }
 
 func entryBytes(e LogEntry) int {
-	return len(e.Content) + len(e.TraceID) + len(e.InstanceID) + len(e.InstanceName) + 64
+	return len(e.Content) + len(e.TraceID) + len(e.ErrorUUID) + len(e.InstanceID) + len(e.InstanceName) + 64
 }
 
 func (s *Store) evictOverBudgetLocked() {
@@ -117,20 +120,20 @@ func (s *Store) evictOverBudgetLocked() {
 	}
 }
 
-func (s *Store) log(level Level, category Category, content string, traceID string, direction string) {
+func (s *Store) log(level Level, category Category, content string, traceID string, direction string) string {
 	consoleContent := "..."
 	if level == WARN || level == ERROR {
 		consoleContent = content
 	}
-	s.logWithImages(level, category, content, traceID, direction, nil, consoleContent)
+	return s.logWithImages(level, category, content, traceID, direction, nil, consoleContent)
 }
 
-func (s *Store) logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage, consoleContent string) {
+func (s *Store) logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage, consoleContent string) string {
 	s.mu.Lock()
 
 	if s.buffer == nil {
 		s.mu.Unlock()
-		return
+		return ""
 	}
 
 	if previous, ok := s.buffer.Value.(LogEntry); ok {
@@ -150,6 +153,10 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 		Level:        level,
 		Content:      content,
 	}
+	if level == ERROR {
+		entry.ErrorUUID = uuid.NewString()
+		consoleContent = "错误 UUID：" + entry.ErrorUUID + " " + consoleContent
+	}
 	entry.imageRefs = s.retainImagesLocked(retainedImages)
 	consoleLine := formatConsoleLine(entry.Timestamp, entry.InstanceID, entry.InstanceName, level, category, consoleContent)
 
@@ -166,6 +173,7 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 	if level != DEBUG {
 		fmt.Println(consoleLine)
 	}
+	return entry.ErrorUUID
 }
 
 func (s *Store) Info(category Category, content string, traceID ...string) {
@@ -229,12 +237,12 @@ func (s *Store) WarnWithConsoleSummary(category Category, content, consoleSummar
 	s.logWithImages(WARN, category, content, tid, "INTERNAL", nil, consoleSummary)
 }
 
-func (s *Store) Error(category Category, content string, traceID ...string) {
+func (s *Store) Error(category Category, content string, traceID ...string) string {
 	tid := ""
 	if len(traceID) > 0 {
 		tid = traceID[0]
 	}
-	s.log(ERROR, category, content, tid, "INTERNAL")
+	return s.log(ERROR, category, content, tid, "INTERNAL")
 }
 
 func (s *Store) Debug(category Category, content string, traceID ...string) {

@@ -177,7 +177,7 @@ func TestInspectMessageImageToolReportsUnavailableImageWithoutCallingModel(t *te
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(content, "无法读取消息 404") {
+		if !strings.HasPrefix(content, "[FrostAgent 错误] 图片读取失败 (Ref_ID: ") {
 			t.Fatalf("unexpected content: %q", content)
 		}
 	})

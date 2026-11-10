@@ -826,7 +826,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
-				Content:   fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Content:   e.Log().ReportError(logs.LLM_RESPONSE, "LLM 响应失败：模型路由错误", err, runCtx.SessionID),
 				Error:     err,
 				LLMFailed: true,
 			}
@@ -835,7 +835,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 
 	if err := e.activateRequestedSkill(ctx, messages); err != nil {
-		return AgentRunResult{Content: err.Error(), Error: err}
+		return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "技能激活失败", err, runCtx.SessionID), Error: err}
 	}
 
 	// 主循环
@@ -880,7 +880,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if e.Skills != nil {
 			skillMessages, skillErr := e.skillMessages(ctx, messages)
 			if skillErr != nil {
-				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
+				return AgentRunResult{Error: skillErr, Content: e.Log().ReportError(logs.SYSTEM, "技能上下文读取失败", skillErr, runCtx.SessionID), Usage: totalUsage}
 			}
 			messages = skillMessages
 		}
@@ -988,7 +988,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			content := fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens)
 			e.Log().WarnWithConsoleSummary(logs.SYSTEM, content, "上下文长度超出硬上限")
 			return AgentRunResult{
-				Content:       "FrostAgent错误：对话上下文过长，超出模型处理上限。",
+				Content:       e.Log().ReportError(logs.SYSTEM, "上下文处理失败：对话上下文过长，超出模型处理上限", errors.New(content), runCtx.SessionID),
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
 				Error:         fmt.Errorf("context tokens %d exceeded limit %d", contextTokens, MaxContextTokens),
@@ -1006,9 +1006,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				e.BillingConfig.Price(modelName),
 			)
 			if err != nil {
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed, iter %d): %v", i+1, err))
 				return AgentRunResult{
-					Content:       billing.FormatBillingUnavailableMessage(),
+					Content:       e.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("计费预估失败 (fail-closed, iter %d): %w", i+1, err), runCtx.SessionID),
 					MemoryWritten: memoryWritten,
 					Usage:         totalUsage,
 					Error:         err,
@@ -1063,18 +1062,17 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					if i == 0 {
 						replyMsg = billing.FormatInsufficientFundsMessage(balMinor)
 					} else {
-						replyMsg = fmt.Sprintf("对话因雪花余额不足中断。\n%s", billing.FormatInsufficientFundsMessage(balMinor))
+						replyMsg = "对话中断：" + billing.FormatInsufficientFundsMessage(balMinor)
 					}
 					return AgentRunResult{
-						Content:       replyMsg,
+						Content:       e.Log().ReportError(logs.SYSTEM, replyMsg, billing.ErrInsufficientFunds, runCtx.SessionID),
 						MemoryWritten: memoryWritten,
 						Usage:         totalUsage,
 						Error:         billing.ErrInsufficientFunds,
 					}
 				}
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %v", i+1, err))
 				return AgentRunResult{
-					Content:       billing.FormatBillingUnavailableMessage(),
+					Content:       e.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %w", i+1, err), runCtx.SessionID),
 					MemoryWritten: memoryWritten,
 					Usage:         totalUsage,
 					Error:         err,
@@ -1087,10 +1085,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				if i == 0 {
 					replyMsg = billing.FormatInsufficientFundsMessage(res.BalanceMinor)
 				} else {
-					replyMsg = fmt.Sprintf("对话因雪花余额不足中断。\n%s", billing.FormatInsufficientFundsMessage(res.BalanceMinor))
+					replyMsg = "对话中断：" + billing.FormatInsufficientFundsMessage(res.BalanceMinor)
 				}
 				return AgentRunResult{
-					Content:       replyMsg,
+					Content:       e.Log().ReportError(logs.SYSTEM, replyMsg, billing.ErrInsufficientFunds, runCtx.SessionID),
 					MemoryWritten: memoryWritten,
 					Usage:         totalUsage,
 					Error:         billing.ErrInsufficientFunds,
@@ -1124,9 +1122,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		resp, err, commitErr := e.chatAndSettle(ctx, chatReq, reservationID, callBilling)
 		if err != nil {
-			e.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
 			return AgentRunResult{
-				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Content:       e.Log().ReportError(logs.LLM_RESPONSE, "LLM 响应失败："+llmErrorType(err), err, runCtx.SessionID),
 				LLMFailed:     true,
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
@@ -1163,7 +1160,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		if commitErr != nil && len(responseMsg.ToolCalls) > 0 {
-			return AgentRunResult{Content: "FrostAgent错误：计费结算失败，已终止后续工具执行。", MemoryWritten: memoryWritten, Usage: totalUsage, Error: commitErr}
+			return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "计费结算失败：已终止后续工具执行", commitErr, runCtx.SessionID), MemoryWritten: memoryWritten, Usage: totalUsage, Error: commitErr}
 		}
 
 		messages = append(messages, *responseMsg)
@@ -1181,14 +1178,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			outputBlocked := false
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
-					contentStr = "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
+					contentStr = security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，模型输出已拦截", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出因安全审查服务异常被拦截: eval_id=%s", decision.EvaluationID))
 					outputBlocked = true
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					contentStr = decision.SanitizedContent
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制过滤脱敏: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
 				} else {
-					contentStr = "FrostAgent安全控制：模型输出已拦截。"
+					contentStr = security.ReportRejection(e.Log(), "安全审查拦截：模型输出已拦截", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
 					outputBlocked = true
 				}
@@ -1335,10 +1332,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
-					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：安全审查服务暂时不可用，该工具调用已被阻止。", ToolCallID: tc.ID})
+					messages = append(messages, ChatMessage{Role: "tool", Content: security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，该工具调用已被阻止", decision, runCtx.SessionID), ToolCallID: tc.ID})
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参因安全审查服务异常被阻止: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
 				} else {
-					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
+					messages = append(messages, ChatMessage{Role: "tool", Content: security.ReportRejection(e.Log(), "安全审查拦截：该工具调用已被阻止", decision, runCtx.SessionID), ToolCallID: tc.ID})
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
 				}
 				continue
@@ -1373,16 +1370,16 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						}
 						e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Bot 自主封禁用户成功，终止思考循环", "Bot 封禁用户")
 						return AgentRunResult{
-							Content:       security.RejectGatewayMsg,
+							Content:       e.Log().ReportError(logs.SYSTEM, security.RejectGatewayMsg, err, runCtx.SessionID),
 							MemoryWritten: memoryWritten,
 							Banned:        true,
 							Usage:         totalUsage,
 						}
 					}
 					if errors.Is(err, actionscat.ErrDisabled) {
-						toolResult = err.Error()
+						toolResult = e.Log().ReportError(logs.TOOL, "工具调用失败：ActionsCat 已被管理员禁用", err, runCtx.SessionID)
 					} else {
-						toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+						toolResult = e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", tc.Function.Name, err), runCtx.SessionID)
 					}
 				} else {
 					toolSucceeded = true
@@ -1406,7 +1403,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			} else {
-				toolResult = "FrostAgent错误：工具未找到"
+				toolResult = e.Log().ReportError(logs.TOOL, "工具调用失败：工具未找到", fmt.Errorf("tool=%s", tc.Function.Name), runCtx.SessionID)
 			}
 
 			// 单条工具结果过大保护
@@ -1426,13 +1423,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, securityContent, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
-					toolResult = "FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
+					toolResult = security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，外部工具结果已隔离", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果因安全审查服务异常被隔离: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					toolResult = decision.SanitizedContent
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制过滤脱敏: tool=%s category=%s eval_id=%s", tc.Function.Name, decision.Classification.Category, decision.EvaluationID))
 				} else {
-					toolResult = "FrostAgent安全控制：外部工具结果已隔离。"
+					toolResult = security.ReportRejection(e.Log(), "安全审查拦截：外部工具结果已隔离", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
 				}
 				toolSucceeded = false
@@ -1498,7 +1495,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 	}
 	return AgentRunResult{
-		Content:       "FrostAgent错误：达到最大迭代次数，未能得出最终答案",
+		Content:       e.Log().ReportError(logs.SYSTEM, "智能体运行失败：达到最大迭代次数，未能得出最终答案", ErrMaxIterationsReached, runCtx.SessionID),
 		MemoryWritten: memoryWritten,
 		Usage:         totalUsage,
 	}

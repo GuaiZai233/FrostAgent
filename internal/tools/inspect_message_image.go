@@ -107,12 +107,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 
 			data, err := runContext.LoadObservedImage(ctx, messageID, payload.ImageIndex)
 			if err != nil {
-				return textResult(fmt.Sprintf(
-					"无法读取消息 %s 的第 %d 张图片: %v",
-					messageID,
-					payload.ImageIndex,
-					err,
-				)), nil
+				return textResult(engine.Log().ReportError(logs.TOOL, "图片读取失败", fmt.Errorf("message=%s index=%d: %w", messageID, payload.ImageIndex, err), runContext.SessionID)), nil
 			}
 			if len(data) == 0 {
 				return textResult(fmt.Sprintf("消息 %s 的第 %d 张图片内容为空。", messageID, payload.ImageIndex)), nil
@@ -137,10 +132,14 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 				return textResult(""), fmt.Errorf("序列化图片识别请求失败: %w", err)
 			}
 
-			description := strings.TrimSpace(llm.CallVisionModel(ctx, provider, core.RouteContext{
+			description, visionErr := llm.CallVisionModelWithError(ctx, provider, core.RouteContext{
 				Platform: runContext.RouteScope.Platform,
 				GroupID:  runContext.RouteScope.GroupID,
-			}, string(encoded)))
+			}, string(encoded))
+			if visionErr != nil {
+				return textResult(engine.Log().ReportError(logs.TOOL, "图片识别失败：视觉模型调用失败", visionErr, runContext.SessionID)), nil
+			}
+			description = strings.TrimSpace(description)
 			if description == "" {
 				engine.Log().Warn(logs.TOOL, fmt.Sprintf(
 					"inspect_message_image: 模型未返回图片描述 message=%s index=%d source=%s",
@@ -148,7 +147,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 					payload.ImageIndex,
 					modelSource,
 				))
-				return textResult("图片识别失败：模型未返回可用内容。"), nil
+				return textResult(engine.Log().ReportError(logs.TOOL, "图片识别失败：模型未返回可用内容", nil, runContext.SessionID)), nil
 			}
 
 			description, blocked := vetInspectedImageDescription(engine, runContext, description)
@@ -158,7 +157,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 					messageID,
 					payload.ImageIndex,
 				))
-				return textResult("图片内容未通过安全审查，已隔离。"), nil
+				return textResult(engine.Log().ReportError(logs.TOOL, "安全审查拦截：图片内容未通过安全审查，已隔离", nil, runContext.SessionID)), nil
 			}
 
 			engine.Log().Info(logs.TOOL, fmt.Sprintf(
@@ -248,7 +247,7 @@ func inspectImageBillingBlocked(ctx context.Context, engine *llm.Engine, runCont
 		externalID = strings.TrimSpace(runContext.ActorUserID)
 	}
 	if externalID == "" {
-		return "计费身份不可用，无法识别图片。", true
+		return engine.Log().ReportError(logs.TOOL, "计费失败：计费身份不可用，无法识别图片", nil, runContext.SessionID), true
 	}
 
 	balanceCtx, cancel := context.WithTimeout(ctx, engine.BillingConfig.Timeout)
@@ -256,13 +255,12 @@ func inspectImageBillingBlocked(ctx context.Context, engine *llm.Engine, runCont
 	cancel()
 	if err != nil {
 		if errors.Is(err, billing.ErrInsufficientFunds) {
-			return "余额不足，无法识别图片。", true
+			return engine.Log().ReportError(logs.TOOL, "计费失败：余额不足，无法识别图片", err, runContext.SessionID), true
 		}
-		engine.Log().Warn(logs.TOOL, fmt.Sprintf("inspect_message_image: 余额查询失败: %v", err))
-		return "计费服务不可用，无法识别图片。", true
+		return engine.Log().ReportError(logs.TOOL, "计费失败：计费服务不可用，无法识别图片", err, runContext.SessionID), true
 	}
 	if balance != nil && balance.Exists && balance.BalanceMinor <= 0 {
-		return "余额不足，无法识别图片。", true
+		return engine.Log().ReportError(logs.TOOL, "计费失败：余额不足，无法识别图片", billing.ErrInsufficientFunds, runContext.SessionID), true
 	}
 	return "", false
 }
