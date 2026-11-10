@@ -5,6 +5,7 @@ import { confirmDialog } from '../components/confirm';
 import { createInstanceAPI } from '../api/client';
 import { BotStatus } from '@frostagent/proto';
 import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/formatters';
+import { balanceQueryOrigin, parseBalanceQueryTarget, type BalanceQueryTarget } from '../utils/balance-query-request';
 import { icon } from '../components/icons';
 import { renderOverviewTools, renderOverviewToolsAction, type ToolCapability } from './overview-tools';
 import { renderTokenUsage } from '../components/token-usage';
@@ -35,9 +36,12 @@ const balanceQueryPresets: Record<string, { curl: string; keyPlaceholder: string
   },
 };
 
-// Keeps only the scheme and host of a URL, dropping any path such as /v1.
-function originOf(url: string): string {
-  return url.match(/^https?:\/\/[^/\s]+/i)?.[0] ?? '';
+function newApiCredentialType(path: string | undefined): 'newapi-key' | 'newapi-account' | '' {
+  switch (path?.replace(/\/+$/, '')) {
+    case '/api/usage/token': return 'newapi-key';
+    case '/api/user/self': return 'newapi-account';
+    default: return '';
+  }
 }
 
 export function mountOverviewPage(container: HTMLElement): () => void {
@@ -359,11 +363,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               curl.value = selected.curl;
               newApiMode = preset.value === "newapi-key" || preset.value === "newapi-account";
             }
-            updateRetypeKey();
             key.placeholder = selected ? selected.keyPlaceholder : defaultKeyPlaceholder;
             presetHint.textContent = selected ? selected.keyHint : '';
             presetHint.hidden = !selected;
             applyEndpointMode();
+            updateRetypeKey();
             applyQuotaBox();
           };
           let retypeKey = false;
@@ -371,7 +375,9 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           // origin or the New API credential type (sk- token vs nap_ PAT) changes, reuse is withdrawn automatically:
           // the provider selection and manual key are cleared and the user must choose a credential explicitly.
           // The saved provider itself is never modified here.
-          let credentialType = preset.value;
+          // The selector returns to 自定义 after an edit and on reopen, so derive the contract from the request.
+          // Keep the last known contract through ordinary-path edits until the user chooses credentials again.
+          let credentialType = newApiCredentialType(parseBalanceQueryTarget(cfg.curl)?.path);
           const withdrawProviderReuse = () => {
             if (!reuseKey.checked && !useEndpoint.checked && !providerGroup.querySelector("input:checked")) return;
             reuseKey.checked = false;
@@ -381,18 +387,24 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             const errorBox = dialog.querySelector<HTMLElement>("#balance-query-error");
             if (errorBox) errorBox.textContent = "";
           };
-          const providerOriginChanged = () => {
-            const id = providerGroup.querySelector<HTMLInputElement>("input:checked")?.value ?? cfg.providerId;
+          const providerOriginChanged = (target: BalanceQueryTarget | null) => {
+            const id = providerGroup.querySelector<HTMLInputElement>("input:checked")?.value;
             const provider = cfg.providers.find((item) => item.id === id);
             if (!provider || !provider.baseUrl) return reuseKey.checked;
-            return !sameOriginText(curl.value, provider.baseUrl);
+            return !target || target.origin !== balanceQueryOrigin(provider.baseUrl);
           };
           // Any edit to the stored request template (preset or hand-written) requires the key to be
           // re-entered. The backend separately enforces the endpoint rule with the real curl parser.
           const updateRetypeKey = () => {
             retypeKey = !!cfg.apiKeyConfigured && !cfg.providerId && curl.value.trim() !== cfg.curl.trim();
-            if ((reuseKey.checked || useEndpoint.checked) && (providerOriginChanged() || (preset.value !== credentialType && credentialType !== ""))) withdrawProviderReuse();
-            credentialType = preset.value;
+            const target = parseBalanceQueryTarget(curl.value);
+            const nextCredentialType = newApiCredentialType(target?.path);
+            const contractChanged = nextCredentialType !== '' && credentialType !== '' && nextCredentialType !== credentialType;
+            if ((reuseKey.checked || useEndpoint.checked) && (providerOriginChanged(target) || contractChanged)) {
+              withdrawProviderReuse();
+              applyEndpointMode();
+            }
+            if (nextCredentialType) credentialType = nextCredentialType;
             syncCredentials();
           };
           curl.addEventListener('input', updateRetypeKey);
@@ -486,9 +498,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             if (customRate) customRate.disabled = pending;
             syncCredentials();
           };
-          reuseKey.onchange = () => { syncCredentials(); };
-          // New API presets can reuse a provider's endpoint: the curl box is replaced by the provider's
-          // scheme and host (everything after the first slash removed), and the provider's key is reused.
+          reuseKey.onchange = () => {
+            credentialType = newApiCredentialType(parseBalanceQueryTarget(curl.value)?.path);
+            syncCredentials();
+          };
+          // New API presets can reuse a provider's origin while keeping the credential choice separate.
           const isNewApi = () => newApiMode;
           // Quota conversion is only offered for New API presets; disabled or hidden means no conversion (0).
           const quotaBox = dialog.querySelector<HTMLElement>('#balance-query-quota')!;
@@ -534,6 +548,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               quotaRatio.value = String(result.quotaPerUnit);
               usdRate.value = String(result.usdExchangeRate || 7.3);
               displayType.value = result.quotaDisplayType || 'USD';
+              if (customSymbol) customSymbol.value = result.customCurrencySymbol;
+              if (customRate) customRate.value = String(result.customCurrencyExchangeRate);
               toast.success(result.message);
             } catch (err) {
               if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
@@ -543,7 +559,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           };
           const selectedProviderOrigin = () => {
             const id = providerGroup.querySelector<HTMLInputElement>('input:checked')?.value ?? '';
-            return originOf(cfg.providers.find((provider) => provider.id === id)?.baseUrl ?? '');
+            return balanceQueryOrigin(cfg.providers.find((provider) => provider.id === id)?.baseUrl ?? '');
           };
           const applyEndpointMode = () => {
             endpointRow.hidden = !isNewApi();
@@ -555,21 +571,27 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             curl.required = !active;
             if (active) {
               const origin = selectedProviderOrigin();
-              if (origin) curl.value = `curl ${origin}${(balanceQueryPresets[preset.value] ?? balanceQueryPresets["newapi-key"]).path} \\\n  -H 'Authorization: Bearer {{API_KEY}}'`;
+              const endpointPreset = balanceQueryPresets[preset.value]
+                ?? balanceQueryPresets[newApiCredentialType(parseBalanceQueryTarget(curl.value)?.path) || credentialType || 'newapi-key'];
+              if (origin) curl.value = `curl ${origin}${endpointPreset.path} \\\n  -H 'Authorization: Bearer {{API_KEY}}'`;
             }
             syncCredentials();
           };
           useEndpoint.onchange = () => {
-            // Turning endpoint reuse off restores the preset's own template. The key choice is never changed here.
+            // Turning endpoint reuse off restores the preset's own template, then checks its credential target.
             const presetCurl = balanceQueryPresets[preset.value]?.curl;
             if (!useEndpoint.checked && isNewApi() && presetCurl) curl.value = presetCurl;
             applyEndpointMode();
+            updateRetypeKey();
           };
-          providerGroup.addEventListener('change', () => { if (useEndpoint.checked) applyEndpointMode(); });
-          syncCredentials();
+          providerGroup.addEventListener('change', () => {
+            if (useEndpoint.checked) applyEndpointMode();
+            credentialType = newApiCredentialType(parseBalanceQueryTarget(curl.value)?.path);
+          });
           // Apply the restored New API mode to the endpoint and quota sections before the user interacts.
           applyQuotaBox();
           applyEndpointMode();
+          updateRetypeKey();
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
             if (saving) return;
@@ -620,12 +642,4 @@ export function mountOverviewPage(container: HTMLElement): () => void {
       clearInterval(timerId);
     }
   };
-}
-
-// sameOriginText reports whether a curl template targets the same scheme, host and port as baseUrl.
-// It is a display-side check only; the backend re-validates with the real parser before any key is sent.
-function sameOriginText(curl: string, baseUrl: string): boolean {
-  const target = curl.match(/https?:\/\/[^/\s'"]+/i)?.[0]?.toLowerCase() ?? '';
-  const base = baseUrl.match(/^https?:\/\/[^/\s'"]+/i)?.[0]?.toLowerCase() ?? '';
-  return target !== '' && target === base;
 }
