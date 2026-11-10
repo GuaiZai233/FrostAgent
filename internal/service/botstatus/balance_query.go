@@ -86,7 +86,8 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("请求地址与所选 Provider 端点不一致，Provider Key 不会发送到该地址"))
 		}
 		cfg.ProviderID, cfg.APIKey = req.Msg.ProviderId, ""
-		validated = balancequery.Config{Curl: cfg.Curl, APIKey: credential.APIKey}
+		validated = cfg
+		validated.APIKey, validated.ProviderID = credential.APIKey, ""
 	} else {
 		if cfg.ProviderID != "" && req.Msg.ApiKey == "" {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("切换为手动配置时请填写 API Key"))
@@ -107,7 +108,10 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	}
 	// A blank credential with nothing stored is a keyless template. Clearing a key is not keyless.
 	cfg.Keyless = !req.Msg.ClearApiKey && cfg.APIKey == "" && cfg.ProviderID == ""
-	raw, _ := json.Marshal(cfg)
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("序列化额度查询配置失败"))
+	}
 	if err := s.engine.Config.Update(balancequery.ConfigKey, string(raw), false); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("保存额度查询配置失败"))
 	}

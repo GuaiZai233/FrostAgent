@@ -32,6 +32,8 @@ let releaseSave: (() => void) | undefined;
 let overviewLoads = 0;
 let deferGet = false;
 let releaseGet: (() => void) | undefined;
+let deferQuotaFetch = false;
+let releaseQuotaFetch: (() => void) | undefined;
 const saves: Record<string, unknown>[] = [];
 const tests: Record<string, unknown>[] = [];
 const quotaFetches: Record<string, unknown>[] = [];
@@ -59,6 +61,7 @@ globalThis.fetch = async (input, init) => {
   const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
   if (path.endsWith('/FetchQuotaConfig')) {
     quotaFetches.push(body);
+    if (deferQuotaFetch) await new Promise<void>((resolve) => { releaseQuotaFetch = resolve; });
     return Response.json({ ok: true, message: 'synthetic quota settings', ...fetchedQuotaSettings });
   }
   if (path.endsWith('/TestBalanceQueryConfig')) {
@@ -454,6 +457,9 @@ try {
       { name: 'contract retained while typing a path', initial: tokenCurl, edits: [newApiCurl('/api/user/'), accountCurl], withdraw: true },
       { name: 'ordinary same-origin paths', initial: newApiCurl('/balance'), edits: [newApiCurl('/usage')], withdraw: false },
       { name: 'same contract with another query', initial: tokenCurl, edits: [newApiCurl('/api/usage/token/?detail=1')], withdraw: false },
+      { name: 'unknown custom path to account contract', initial: newApiCurl('/custom'), edits: [accountCurl], withdraw: true },
+      { name: 'unknown custom path to token contract', initial: newApiCurl('/custom'), edits: [tokenCurl], withdraw: true },
+      { name: 'unknown custom path to unknown path', initial: newApiCurl('/custom'), edits: [newApiCurl('/other')], withdraw: false },
       { name: 'header URL does not conceal a changed origin', initial: tokenCurl, edits: ["curl -H 'Referer: https://newapi.example/api/usage/token/' --url 'https://other.example/api/usage/token/' -H 'Authorization: Bearer {{API_KEY}}'"], withdraw: true },
       { name: 'header URL does not change the actual origin or contract', initial: tokenCurl, edits: ["curl -H 'Referer: https://other.example/api/user/self' --url 'https://newapi.example/api/usage/token/' -H 'Authorization: Bearer {{API_KEY}}'"], withdraw: false },
     ]) {
@@ -563,6 +569,32 @@ try {
     assert.equal(reopened.querySelector<HTMLInputElement>('#balance-query-custom-symbol')!.value, '€');
     assert.equal(reopened.querySelector<HTMLInputElement>('#balance-query-custom-rate')!.value, '0.9');
     reopened.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+    await flush();
+
+    // A late /api/status response must not overwrite settings after the request target changes.
+    await openConfig();
+    const delayedDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const delayedCurl = delayedDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+    const delayedSymbol = delayedDialog.querySelector<HTMLInputElement>('#balance-query-custom-symbol')!;
+    const delayedRate = delayedDialog.querySelector<HTMLInputElement>('#balance-query-custom-rate')!;
+    const delayedError = delayedDialog.querySelector<HTMLElement>('#balance-query-error')!;
+    delayedSymbol.value = '¥';
+    delayedRate.value = '2';
+    deferQuotaFetch = true;
+    delayedDialog.querySelector<HTMLButtonElement>('#balance-query-fetch-quota')!.click();
+    await flush();
+    assert.equal(quotaFetches.at(-1)!.curl, savedCurl);
+    assert.equal(delayedDialog.querySelector<HTMLButtonElement>('#balance-query-save')!.disabled, true, 'Save must be disabled while fetching status');
+    delayedCurl.value = "curl https://other-newapi.example/api/usage/token/ -H 'Authorization: Bearer {{API_KEY}}'";
+    delayedCurl.dispatchEvent(new dom.window.Event('input'));
+    deferQuotaFetch = false;
+    releaseQuotaFetch?.();
+    await flush();
+    assert.equal(delayedSymbol.value, '¥', 'late response must not overwrite the symbol');
+    assert.equal(delayedRate.value, '2', 'late response must not overwrite the custom rate');
+    assert.match(delayedError.textContent!, /请求模板已变化/);
+    assert.equal(delayedDialog.querySelector<HTMLButtonElement>('#balance-query-save')!.disabled, false, 'Save must be restored after fetch completes');
+    delayedDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
     await flush();
   }
 

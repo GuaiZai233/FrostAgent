@@ -4,6 +4,7 @@ package balancequery
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 )
 
@@ -55,6 +56,10 @@ func Load(get func(string) string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if math.IsNaN(c.USDExchangeRate) || math.IsInf(c.USDExchangeRate, 0) || c.USDExchangeRate < 0 ||
+		math.IsNaN(c.CustomCurrencyExchangeRate) || math.IsInf(c.CustomCurrencyExchangeRate, 0) || c.CustomCurrencyExchangeRate < 0 {
+		return errors.New("汇率必须是有限的非负数")
+	}
 	if len(c.APIKey) > 8192 || strings.TrimSpace(c.APIKey) != c.APIKey || strings.ContainsAny(c.APIKey, "\r\n\x00") {
 		return errors.New("API key 过长或含有非法字符")
 	}

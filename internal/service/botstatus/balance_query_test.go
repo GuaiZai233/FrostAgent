@@ -2,6 +2,7 @@ package botstatus
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -271,4 +272,42 @@ func TestTestBalanceQueryConfigNeverReusesKeyForChangedEndpoint(t *testing.T) {
 	if strings.Contains(response.Msg.Message, "synthetic-typed-key") {
 		t.Fatal("test response leaked the typed key")
 	}
+}
+
+
+// Non-finite or negative exchange rates must be rejected by both Save and Test.
+// Save must never ignore json.Marshal errors and overwrite a valid configuration with an empty value.
+func TestBalanceQueryRejectsInvalidExchangeRatesWithoutLosingConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "instance.env")
+	config, err := instanceconfig.Open(path, false)
+	if err != nil { t.Fatal(err) }
+	scope := runtimescope.New(config, nil, nil)
+	t.Cleanup(scope.Cancel)
+	service := New(&llm.Engine{Scope: scope}, "test", "")
+	ctx := context.Background()
+	const curl = "curl http://127.0.0.1:12345/balance -H 'Authorization: Bearer {{API_KEY}}'"
+	const key = "synthetic-preserved-balance-key"
+	if _, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: curl, ApiKey: key})); err != nil { t.Fatal(err) }
+	before := config.Get(balancequery.ConfigKey)
+	cases := []struct { name string; usd, custom float64 }{
+		{"USD NaN", math.NaN(), 0}, {"USD +Inf", math.Inf(1), 0}, {"USD -Inf", math.Inf(-1), 0},
+		{"CUSTOM NaN", 0, math.NaN()}, {"CUSTOM +Inf", 0, math.Inf(1)}, {"CUSTOM -Inf", 0, math.Inf(-1)},
+		{"negative USD", -1, 0}, {"negative CUSTOM", 0, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			saveReq := &v1.SaveBalanceQueryConfigRequest{Curl: curl, UsdExchangeRate: tc.usd, CustomCurrencyExchangeRate: tc.custom}
+			if response, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(saveReq)); response != nil || connect.CodeOf(err) != connect.CodeInvalidArgument {
+				t.Fatalf("invalid rate Save returned %v, %v", response, err)
+			}
+			if config.Get(balancequery.ConfigKey) != before { t.Fatal("invalid rate Save modified existing config") }
+			testReq := &v1.TestBalanceQueryConfigRequest{Curl: curl, ApiKey: key, UsdExchangeRate: tc.usd, CustomCurrencyExchangeRate: tc.custom}
+			if response, err := service.TestBalanceQueryConfig(ctx, connect.NewRequest(testReq)); err != nil || response.Msg.Ok || !strings.Contains(response.Msg.Message, "汇率必须是有限的非负数") {
+				t.Fatalf("invalid rate Test returned %v, %v", response, err)
+			}
+			if config.Get(balancequery.ConfigKey) != before { t.Fatal("invalid rate Test modified existing config") }
+		})
+	}
+	stored, err := balancequery.Load(config.Get)
+	if err != nil || stored.Curl != curl || stored.APIKey != key { t.Fatal("original template or key was lost") }
 }

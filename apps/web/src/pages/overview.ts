@@ -399,7 +399,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             retypeKey = !!cfg.apiKeyConfigured && !cfg.providerId && curl.value.trim() !== cfg.curl.trim();
             const target = parseBalanceQueryTarget(curl.value);
             const nextCredentialType = newApiCredentialType(target?.path);
-            const contractChanged = nextCredentialType !== '' && credentialType !== '' && nextCredentialType !== credentialType;
+            // Unknown -> known is a credential-contract transition too. Keep unknown -> unknown edits compatible.
+            const contractChanged = nextCredentialType !== credentialType && (nextCredentialType !== '' || credentialType !== '');
             if ((reuseKey.checked || useEndpoint.checked) && (providerOriginChanged(target) || contractChanged)) {
               withdrawProviderReuse();
               applyEndpointMode();
@@ -484,7 +485,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           };
           const setSaving = (pending: boolean) => {
             saving = pending;
-            save.disabled = pending;
+            save.disabled = pending || fetchingQuota;
             save.textContent = pending ? '保存中...' : '保存';
             dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn').forEach((button) => { button.disabled = pending; });
             curl.disabled = pending;
@@ -519,6 +520,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           const customSymbol = dialog.querySelector<HTMLInputElement>('#balance-query-custom-symbol');
           const customRate = dialog.querySelector<HTMLInputElement>('#balance-query-custom-rate');
           const fetchQuotaButton = dialog.querySelector<HTMLButtonElement>('#balance-query-fetch-quota')!;
+          let fetchingQuota = false;
           // Exchange rate and display unit are only sent while conversion is on; off means none.
           const quotaExtras = () => {
             if (quotaBox.hidden || !quotaEnabled.checked) return { usd: 0, type: '', symbol: '', customRate: 0 };
@@ -540,10 +542,17 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           fetchQuotaButton.onclick = async () => {
             const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
             error.textContent = '';
+            fetchingQuota = true;
             fetchQuotaButton.disabled = true;
+            save.disabled = true;
             try {
-              const result = await api.fetchQuotaConfig(curl.value);
+              const requestedCurl = curl.value;
+              const result = await api.fetchQuotaConfig(requestedCurl);
               if (isUnmounted || !dialog.isConnected) return;
+              if (curl.value !== requestedCurl) {
+                error.textContent = '请求模板已变化，已丢弃旧地址返回的配置，请重新获取';
+                return;
+              }
               if (!result.ok) { error.textContent = result.message; return; }
               quotaRatio.value = String(result.quotaPerUnit);
               usdRate.value = String(result.usdExchangeRate || 7.3);
@@ -554,7 +563,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             } catch (err) {
               if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
             } finally {
-              if (dialog.isConnected) fetchQuotaButton.disabled = false;
+              fetchingQuota = false;
+              if (dialog.isConnected) {
+                fetchQuotaButton.disabled = saving;
+                save.disabled = saving;
+              }
             }
           };
           const selectedProviderOrigin = () => {
@@ -594,7 +607,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           updateRetypeKey();
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
-            if (saving) return;
+            if (saving || fetchingQuota) return;
             const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
             error.textContent = '';
             const provider = providerGroup.querySelector<HTMLInputElement>('input:checked:not(:disabled)');
