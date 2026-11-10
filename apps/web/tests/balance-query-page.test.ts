@@ -222,7 +222,8 @@ try {
     }
   }
   failSave = false;
-  await openConfig();
+  document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')?.click();
+  await flush();
   providers = [];
   savedProvider = 'deleted-provider';
   await openConfig();
