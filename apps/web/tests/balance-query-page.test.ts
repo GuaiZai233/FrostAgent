@@ -318,8 +318,8 @@ try {
     useEndpointEl.checked = true;
     useEndpointEl.dispatchEvent(new dom.window.Event('change'));
     assert.equal(presetCurl.hidden, true, 'enabling endpoint reuse hides the curl box');
-    assert.equal(reuseKeyEl.checked, true);
-    assert.equal(reuseKeyEl.disabled, true);
+    // Endpoint reuse only replaces the address; the key choice stays with the user (a PAT is not a provider key).
+    assert.equal(reuseKeyEl.disabled, false, 'endpoint reuse must not lock the key-reuse choice');
     presetDialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.click();
     assert.equal(presetCurl.value, "curl https://newapi.example/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'");
     useEndpointEl.checked = false;

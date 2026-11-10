@@ -343,7 +343,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           const defaultKeyPlaceholder = key.placeholder;
           const endpointRow = dialog.querySelector<HTMLElement>('#balance-query-endpoint-row')!;
           const useEndpoint = dialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!;
-          let reuseKeyBeforeEndpoint = false;
           preset.onchange = () => {
             if (saving) return;
             const selected = balanceQueryPresets[preset.value];
@@ -438,7 +437,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               : cfg.apiKeyConfigured && !cfg.providerId
               ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。'
               : '填写查询接口的 API Key。';
-            reuseKey.disabled = saving || useEndpoint.checked;
+            reuseKey.disabled = saving;
             providerInputs.forEach((input) => { input.disabled = saving || input.dataset.available !== 'true'; });
           };
           const setSaving = (pending: boolean) => {
@@ -477,25 +476,19 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             endpointRow.hidden = !isNewApi();
             if (!isNewApi() && useEndpoint.checked) {
               useEndpoint.checked = false;
-              reuseKey.checked = reuseKeyBeforeEndpoint;
             }
             const active = useEndpoint.checked && isNewApi();
             curl.hidden = active;
             curl.required = !active;
             if (active) {
-              reuseKey.checked = true;
               const origin = selectedProviderOrigin();
               if (origin) curl.value = `curl ${origin}${balanceQueryPresets[preset.value].path} \\\n  -H 'Authorization: Bearer {{API_KEY}}'`;
             }
             syncCredentials();
           };
           useEndpoint.onchange = () => {
-            if (useEndpoint.checked) {
-              reuseKeyBeforeEndpoint = reuseKey.checked;
-            } else {
-              reuseKey.checked = reuseKeyBeforeEndpoint;
-              if (isNewApi()) curl.value = balanceQueryPresets[preset.value].curl;
-            }
+            // Turning endpoint reuse off restores the preset's own template. The key choice is never changed here.
+            if (!useEndpoint.checked && isNewApi()) curl.value = balanceQueryPresets[preset.value].curl;
             applyEndpointMode();
           };
           providerGroup.addEventListener('change', () => { if (useEndpoint.checked) applyEndpointMode(); });
