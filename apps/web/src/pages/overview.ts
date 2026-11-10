@@ -319,7 +319,12 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
           <div id="balance-query-quota" class="form-group" hidden>
             <label class="flex items-center gap-2 text-sm"><input id="balance-query-quota-enabled" type="checkbox" class="checkbox" ${cfg.quotaPerUnit > 0 ? 'checked' : ''}>内部 Quota 转换</label>
-            <div id="balance-query-quota-ratio-row" class="flex items-center gap-2 text-sm" ${cfg.quotaPerUnit > 0 ? '' : 'hidden'}><span>每 1 Dollar 对应的 Quota</span><input id="balance-query-quota-ratio" class="input font-mono" type="number" min="0" step="any" value="${cfg.quotaPerUnit > 0 ? cfg.quotaPerUnit : 500000}" style="width:10rem"></div>
+            <div id="balance-query-quota-ratio-row" class="flex flex-col gap-2" ${cfg.quotaPerUnit > 0 ? '' : 'hidden'}>
+              <div class="flex items-center gap-2 flex-wrap"><button type="button" id="balance-query-fetch-quota" class="btn btn-outline btn-sm">从远端 API 获取</button><span class="text-xs text-muted">获取中转站的配额换算配置，请求路径：/api/status</span></div>
+              <label class="flex items-center gap-2 text-sm"><span class="shrink-0">quota_per_unit：每美元对应的额度单位</span><input id="balance-query-quota-ratio" class="input font-mono" type="number" min="0" step="any" value="${cfg.quotaPerUnit > 0 ? cfg.quotaPerUnit : 500000}" style="width:10rem"></label>
+              <label class="flex items-center gap-2 text-sm"><span class="shrink-0">usd_exchange_rate：美元兑人民币的展示汇率</span><input id="balance-query-usd-rate" class="input font-mono" type="number" min="0" step="any" value="${cfg.usdExchangeRate > 0 ? cfg.usdExchangeRate : 7.3}" style="width:10rem"></label>
+              <label class="flex items-center gap-2 text-sm"><span class="shrink-0">quota_display_type：配额展示的币种</span><input id="balance-query-display-type" class="input font-mono" type="text" value="${escapeHtml(cfg.quotaDisplayType || 'USD')}" style="width:10rem"></label>
+            </div>
             <p class="text-xs text-muted">开启后，New API 返回的内部 quota 字段会按该比例换算为美元。</p>
           </div>
           <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
@@ -458,11 +463,39 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             const ratio = Number(quotaRatio.value);
             return Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
           };
+          const usdRate = dialog.querySelector<HTMLInputElement>('#balance-query-usd-rate')!;
+          const displayType = dialog.querySelector<HTMLInputElement>('#balance-query-display-type')!;
+          const fetchQuotaButton = dialog.querySelector<HTMLButtonElement>('#balance-query-fetch-quota')!;
+          // Exchange rate and display unit are only sent while conversion is on; off means none.
+          const quotaExtras = () => {
+            if (quotaBox.hidden || !quotaEnabled.checked) return { usd: 0, type: '' };
+            const rate = Number(usdRate.value);
+            return { usd: Number.isFinite(rate) && rate > 0 ? rate : 0, type: displayType.value.trim() };
+          };
           const applyQuotaBox = () => {
             quotaBox.hidden = !isNewApi();
             quotaRatioRow.hidden = !quotaEnabled.checked;
           };
           quotaEnabled.onchange = applyQuotaBox;
+          // Reads the conversion settings from the template's New API site (/api/status) via the backend.
+          fetchQuotaButton.onclick = async () => {
+            const error = dialog.querySelector<HTMLElement>('#balance-query-error')!;
+            error.textContent = '';
+            fetchQuotaButton.disabled = true;
+            try {
+              const result = await api.fetchQuotaConfig(curl.value);
+              if (isUnmounted || !dialog.isConnected) return;
+              if (!result.ok) { error.textContent = result.message; return; }
+              quotaRatio.value = String(result.quotaPerUnit);
+              usdRate.value = String(result.usdExchangeRate || 7.3);
+              displayType.value = result.quotaDisplayType || 'USD';
+              toast.success(result.message);
+            } catch (err) {
+              if (dialog.isConnected && !isUnmounted) error.textContent = String(err);
+            } finally {
+              if (dialog.isConnected) fetchQuotaButton.disabled = false;
+            }
+          };
           const selectedProviderOrigin = () => {
             const id = providerGroup.querySelector<HTMLInputElement>('input:checked')?.value ?? '';
             return originOf(cfg.providers.find((provider) => provider.id === id)?.baseUrl ?? '');
@@ -501,7 +534,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             }
             setSaving(true);
             try {
-              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', false, quotaValue(), isNewApi());
+              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', false, quotaValue(), isNewApi(), quotaExtras().usd, quotaExtras().type);
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
               key.value = '';

@@ -25,6 +25,9 @@ type Config struct {
 	QuotaPerUnit float64 `json:"quota_per_unit,omitempty"`
 	// NewAPI marks a New API template whose responses must be validated as quota payloads.
 	NewAPI bool `json:"newapi,omitempty"`
+	// USDExchangeRate and QuotaDisplayType come from the New API status and are kept with the template.
+	USDExchangeRate  float64 `json:"usd_exchange_rate,omitempty"`
+	QuotaDisplayType string  `json:"quota_display_type,omitempty"`
 }
 
 type KeyResolver func(providerID string) (string, error)

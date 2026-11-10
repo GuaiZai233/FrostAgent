@@ -11,6 +11,7 @@ service BotStatusService {
   rpc GetBalanceQueryConfig(GetBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc SaveBalanceQueryConfig(SaveBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc TestBalanceQueryConfig(TestBalanceQueryConfigRequest) returns (TestBalanceQueryConfigResponse);
+  rpc FetchQuotaConfig(FetchQuotaConfigRequest) returns (FetchQuotaConfigResponse);
   rpc ClearBalanceQueryConfig(ClearBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
@@ -49,6 +50,9 @@ message SaveBalanceQueryConfigRequest {
   double quota_per_unit = 5;
   // The template targets a New API endpoint; the response must then be a valid New API payload.
   bool newapi = 6;
+  // Exchange rate and display unit from the remote New API status; saved with the template.
+  double usd_exchange_rate = 7;
+  string quota_display_type = 8;
 }
 
 // Deletes the whole stored balance_query configuration, returning the tool to unconfigured.
@@ -76,6 +80,8 @@ message BalanceQueryConfigResponse {
   repeated BalanceQueryProvider providers = 4;
   double quota_per_unit = 5;
   bool newapi = 6;
+  double usd_exchange_rate = 7;
+  string quota_display_type = 8;
 }
 
 message BalanceQueryProvider {
@@ -184,4 +190,17 @@ message TokenUsageOverview {
   repeated TokenUsageModule modules = 1;
   bool incomplete = 2;
   bool available = 3;
+}
+
+message FetchQuotaConfigRequest {
+  // Template whose origin (scheme and host) is queried at /api/status.
+  string curl = 1;
+}
+
+message FetchQuotaConfigResponse {
+  bool ok = 1;
+  string message = 2;
+  double quota_per_unit = 3;
+  double usd_exchange_rate = 4;
+  string quota_display_type = 5;
 }

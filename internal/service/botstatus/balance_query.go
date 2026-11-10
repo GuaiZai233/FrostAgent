@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Response[v1.BalanceQueryConfigResponse] {
-	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit, Newapi: cfg.NewAPI}
+	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit, Newapi: cfg.NewAPI, UsdExchangeRate: cfg.USDExchangeRate, QuotaDisplayType: cfg.QuotaDisplayType}
 	if s.engine.ModelRouter != nil {
 		if catalog, err := s.engine.ModelRouter.ActiveChecked(); err == nil {
 			for _, endpoint := range catalog.Endpoints {
@@ -66,6 +66,8 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	cfg.Curl = req.Msg.Curl
 	cfg.QuotaPerUnit = req.Msg.QuotaPerUnit
 	cfg.NewAPI = req.Msg.Newapi
+	cfg.USDExchangeRate = req.Msg.UsdExchangeRate
+	cfg.QuotaDisplayType = req.Msg.QuotaDisplayType
 	validated := cfg
 	if req.Msg.ClearApiKey {
 		if req.Msg.ApiKey != "" || req.Msg.ProviderId != "" {
@@ -174,4 +176,20 @@ func (s *Service) ClearBalanceQueryConfig(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeInternal, errors.New("清除额度查询配置失败"))
 	}
 	return s.balanceConfigResponse(balancequery.Config{Curl: balancequery.DefaultCurl}), nil
+}
+
+// FetchQuotaConfig reads the conversion settings from the template's New API site (/api/status).
+func (s *Service) FetchQuotaConfig(ctx context.Context, req *connect.Request[v1.FetchQuotaConfigRequest]) (*connect.Response[v1.FetchQuotaConfigResponse], error) {
+	origin, err := balancequery.OriginOf(req.Msg.Curl)
+	if err != nil {
+		return connect.NewResponse(&v1.FetchQuotaConfigResponse{Ok: false, Message: "请先填写有效的请求模板"}), nil
+	}
+	status, err := balancequery.FetchQuotaStatus(ctx, origin)
+	if err != nil {
+		return connect.NewResponse(&v1.FetchQuotaConfigResponse{Ok: false, Message: err.Error()}), nil
+	}
+	return connect.NewResponse(&v1.FetchQuotaConfigResponse{
+		Ok: true, Message: "已从远端获取换算配置",
+		QuotaPerUnit: status.QuotaPerUnit, UsdExchangeRate: status.USDExchangeRate, QuotaDisplayType: status.QuotaDisplayType,
+	}), nil
 }
