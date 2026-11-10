@@ -682,8 +682,17 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.getBalanceQueryConfig({});
     },
 
-    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false) {
-      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey });
+    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false, quotaPerUnit = 0, newapi = false, usdExchangeRate = 0, quotaDisplayType = '', customSymbol = '', customRate = 0) {
+      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey, quotaPerUnit, newapi, usdExchangeRate, quotaDisplayType, customCurrencySymbol: customSymbol, customCurrencyExchangeRate: customRate });
+    },
+    fetchQuotaConfig(curl: string) {
+      return botClient.fetchQuotaConfig({ curl });
+    },
+    clearBalanceQueryConfig() {
+      return botClient.clearBalanceQueryConfig({});
+    },
+    testBalanceQueryConfig(curl: string, apiKey: string, providerId = '', quotaPerUnit = 0, newapi = false, extras = { usd: 0, type: '', symbol: '', customRate: 0 }) {
+      return botClient.testBalanceQueryConfig({ curl, apiKey, providerId, quotaPerUnit, newapi, usdExchangeRate: extras.usd, quotaDisplayType: extras.type, customCurrencySymbol: extras.symbol, customCurrencyExchangeRate: extras.customRate });
     },
 
     getSessions(
