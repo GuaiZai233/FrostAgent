@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Response[v1.BalanceQueryConfigResponse] {
-	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID}
+	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit}
 	if s.engine.ModelRouter != nil {
 		if catalog, err := s.engine.ModelRouter.ActiveChecked(); err == nil {
 			for _, endpoint := range catalog.Endpoints {
@@ -60,7 +60,11 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("复用 Provider 时无需填写 API Key"))
 	}
 	previousCurl := cfg.Curl
+	if err := balancequery.ValidateQuotaPerUnit(req.Msg.QuotaPerUnit); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	cfg.Curl = req.Msg.Curl
+	cfg.QuotaPerUnit = req.Msg.QuotaPerUnit
 	validated := cfg
 	if req.Msg.ClearApiKey {
 		if req.Msg.ApiKey != "" || req.Msg.ProviderId != "" {
@@ -115,7 +119,10 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if err != nil {
 		return nil, err
 	}
-	candidate := balancequery.Config{Curl: req.Msg.Curl}
+	if err := balancequery.ValidateQuotaPerUnit(req.Msg.QuotaPerUnit); err != nil {
+		return fail(err.Error())
+	}
+	candidate := balancequery.Config{Curl: req.Msg.Curl, QuotaPerUnit: req.Msg.QuotaPerUnit}
 	switch {
 	case req.Msg.ProviderId != "":
 		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)

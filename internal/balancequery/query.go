@@ -66,7 +66,7 @@ func Execute(ctx context.Context, cfg Config) (string, error) {
 	if !utf8.Valid(data) {
 		return "", errors.New("额度查询结果不是有效文本")
 	}
-	result := string(data)
+	result := ConvertQuota(string(data), cfg.QuotaPerUnit)
 	if cfg.APIKey != "" && containsSecret(result, cfg.APIKey) {
 		return "", errors.New("额度查询结果包含 API key，已阻止返回")
 	}

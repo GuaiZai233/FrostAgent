@@ -300,6 +300,20 @@ try {
     assert.equal(endpointRowEl.hidden, false);
     choose('deepseek');
     assert.equal(endpointRowEl.hidden, true, 'endpoint reuse is only offered for New API presets');
+    // Quota conversion: only for New API presets, default ratio 500000, sent with the save request.
+    const quotaBoxEl = presetDialog.querySelector<HTMLElement>('#balance-query-quota')!;
+    const quotaEnabledEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!;
+    const quotaRatioEl = presetDialog.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!;
+    choose('deepseek');
+    assert.equal(quotaBoxEl.hidden, true, 'quota conversion is only offered for New API presets');
+    choose('newapi-key');
+    assert.equal(quotaBoxEl.hidden, false);
+    assert.equal(quotaRatioEl.value, '500000', 'default quota ratio is 500000');
+    quotaEnabledEl.checked = true;
+    quotaEnabledEl.dispatchEvent(new dom.window.Event('change'));
+    assert.equal(quotaRatioEl.closest<HTMLElement>('#balance-query-quota-ratio-row')!.hidden, false, 'ratio input shows when enabled');
+    quotaEnabledEl.checked = false;
+    quotaEnabledEl.dispatchEvent(new dom.window.Event('change'));
     choose('newapi-key');
     useEndpointEl.checked = true;
     useEndpointEl.dispatchEvent(new dom.window.Event('change'));
@@ -362,6 +376,38 @@ try {
     editDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await flush();
     assert.equal(saves.at(-1)!.apiKey, 'sk-synthetic-path-key');
+    savedKey = '';
+  }
+
+  {
+    // The enabled quota ratio is sent with the save request; disabling it sends 0.
+    await openConfig();
+    const quotaDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const quotaPreset = quotaDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    quotaPreset.value = 'newapi-key';
+    quotaPreset.dispatchEvent(new dom.window.Event('change'));
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!.checked = true;
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!.dispatchEvent(new dom.window.Event('change'));
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!.value = '500000';
+    quotaDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'sk-synthetic-quota-key';
+    const quotaBefore = saves.length;
+    quotaDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.length, quotaBefore + 1);
+    assert.equal(saves.at(-1)!.quotaPerUnit, 500000, 'enabled quota ratio must be sent with the save');
+    savedKey = '';
+    await openConfig();
+    const offDialog = document.querySelector<HTMLDialogElement>('dialog')!;
+    const offPreset = offDialog.querySelector<HTMLSelectElement>('#balance-query-preset')!;
+    offPreset.value = 'newapi-account';
+    offPreset.dispatchEvent(new dom.window.Event('change'));
+    offDialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!.checked = false;
+    offDialog.querySelector<HTMLInputElement>('#balance-query-key')!.value = 'nap_synthetic_quota_key';
+    const offBefore = saves.length;
+    offDialog.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.at(-1)!.quotaPerUnit ?? 0, 0, 'disabled quota conversion sends 0');
+    assert.equal(saves.length, offBefore + 1);
     savedKey = '';
   }
 

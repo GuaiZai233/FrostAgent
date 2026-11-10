@@ -317,6 +317,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 Key</label>
           <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
           <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
+          <div id="balance-query-quota" class="form-group" hidden>
+            <label class="flex items-center gap-2 text-sm"><input id="balance-query-quota-enabled" type="checkbox" class="checkbox" ${cfg.quotaPerUnit > 0 ? 'checked' : ''}>内部 Quota 转换</label>
+            <div id="balance-query-quota-ratio-row" class="flex items-center gap-2 text-sm" ${cfg.quotaPerUnit > 0 ? '' : 'hidden'}><span>每 1 Dollar 对应的 Quota</span><input id="balance-query-quota-ratio" class="input font-mono" type="number" min="0" step="any" value="${cfg.quotaPerUnit > 0 ? cfg.quotaPerUnit : 500000}" style="width:10rem"></div>
+            <p class="text-xs text-muted">开启后，New API 返回的 quota 与 used_quota 等字段会按该比例换算为美元，并附带单位（如 0.18455 Dollar）后交给 Bot。</p>
+          </div>
           <p class="text-xs text-muted">凭据只用于后端请求，不传递给模型。</p>
           <p id="balance-query-error" role="alert" class="text-sm text-destructive"></p>
         </form>`,
@@ -347,6 +352,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             presetHint.textContent = selected ? selected.keyHint : '';
             presetHint.hidden = !selected;
             applyEndpointMode();
+            applyQuotaBox();
           };
           let clearKey = false;
           let retypeKey = false;
@@ -397,7 +403,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             testButton.disabled = true;
             testButton.textContent = '测试中...';
             try {
-              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '');
+              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '', quotaValue());
               if (isUnmounted || !dialog.isConnected) return;
               if (result.ok) toast.success(result.message);
               else error.textContent = result.message;
@@ -440,6 +446,21 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           // New API presets can reuse a provider's endpoint: the curl box is replaced by the provider's
           // scheme and host (everything after the first slash removed), and the provider's key is reused.
           const isNewApi = () => preset.value === 'newapi-key' || preset.value === 'newapi-account';
+          // Quota conversion is only offered for New API presets; disabled or hidden means no conversion (0).
+          const quotaBox = dialog.querySelector<HTMLElement>('#balance-query-quota')!;
+          const quotaEnabled = dialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!;
+          const quotaRatioRow = dialog.querySelector<HTMLElement>('#balance-query-quota-ratio-row')!;
+          const quotaRatio = dialog.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!;
+          const quotaValue = (): number => {
+            if (quotaBox.hidden || !quotaEnabled.checked) return 0;
+            const ratio = Number(quotaRatio.value);
+            return Number.isFinite(ratio) && ratio > 0 ? ratio : 0;
+          };
+          const applyQuotaBox = () => {
+            quotaBox.hidden = !isNewApi();
+            quotaRatioRow.hidden = !quotaEnabled.checked;
+          };
+          quotaEnabled.onchange = applyQuotaBox;
           const selectedProviderOrigin = () => {
             const id = providerGroup.querySelector<HTMLInputElement>('input:checked')?.value ?? '';
             return originOf(cfg.providers.find((provider) => provider.id === id)?.baseUrl ?? '');
@@ -497,7 +518,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             const clear = !reuseKey.checked && clearKey;
             setSaving(true);
             try {
-              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', clear);
+              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', clear, quotaValue());
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
               clearKey = false;

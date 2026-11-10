@@ -21,6 +21,8 @@ type Config struct {
 	// Keyless marks a template saved without any credential (a custom endpoint that needs none).
 	// It is set only by saving a blank key with no stored key or provider; clearing a key never sets it.
 	Keyless bool `json:"keyless,omitempty"`
+	// QuotaPerUnit converts New API quota fields to dollars; 0 disables conversion.
+	QuotaPerUnit float64 `json:"quota_per_unit,omitempty"`
 }
 
 type KeyResolver func(providerID string) (string, error)
