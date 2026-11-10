@@ -65,7 +65,7 @@ OneBot notice/notify/poke 及 AstrBot aiocqhttp 插件转发的同类通知，�
 
 每次面向 main 的 PR 和 main 推送，Linux CI 都运行 `go test -race`，覆盖实例生命周期、安全服务、LLM（含会话与群聊压缩）、记忆存储与反思、群摘要存储、模型路由，以及 OneBot / AstrBot 适配器。检测命令与包列表以 `.github/workflows/ci.yml` 的 `Run concurrency and race regressions` 步骤为准，单包超时为 300 秒。
 
-Race detector 只能发现本次测试实际执行路径中的 Go 共享内存竞争；未触发的并发时序、逻辑竞态、跨进程或数据库竞争、Python 插件以及真实平台网络行为仍需专项或集成验证。Windows Smoke 继续执行普通测试；不据此宣称 Windows 上的竞态检测已通过。
+Race detector 只能发现本次测试实际执行路径中的 Go 共享内存竞争；未触发的并发时序、逻辑竞态、跨进程或数据库竞争、Python 插件以及真实平台网络行为仍需专项或集成验证。Windows Smoke 已移除，后续 CI 与任务验证不再安排 Windows 冒烟测试；Linux CI 结果不代表 Windows 验证通过。
 
 ### 记忆系统
 
@@ -446,7 +446,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **Origin 校验**：同源自动放行规则严格限制在本地回环 Host 上，杜绝攻击者利用解析至 127.0.0.1 的恶意域名伪造同源；如需远程或跨端口反向代理管理，需通过 `HTTP_ALLOWED_ORIGINS` 显式声明受信任的 Origin 白名单。
 - **平台基线与操作系统支持边界 (Platform Security Baseline & OS Boundary)**：
   - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；重命名失败时直接报错中断，**绝不回退至截断复制（copyFile）**，彻底避免破坏目标文件的原子性与完整性；
-  - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility，并通过轻量 Windows Smoke CI 防范低级构建与测试回归；由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
+  - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility；不再提供 Windows Smoke CI，也不额外安排 Windows 冒烟验证。由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
   - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
