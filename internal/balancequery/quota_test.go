@@ -2,21 +2,33 @@ package balancequery
 
 import "testing"
 
-func TestConvertQuotaTurnsQuotaIntoDollars(t *testing.T) {
-	got := ConvertQuota(`{"quota":92275,"used_quota":1000,"username":"x"}`, DefaultQuotaPerUnit, "CNY")
-	want := `{"quota":"0.18455 CNY","used_quota":"0.002 CNY","username":"x"}`
-	if got != want {
-		t.Fatalf("ConvertQuota() = %s, want %s", got, want)
+func TestConvertQuotaFollowsCurrencyRules(t *testing.T) {
+	cases := []struct {
+		name, body, unit, want string
+		rate                   float64
+	}{
+		{"USD divides by ratio", `{"quota":92275,"used_quota":1000,"username":"x"}`, "USD", `{"quota":"0.18455 USD","used_quota":"0.002 USD","username":"x"}`, 7.3},
+		{"CNY multiplies by exchange rate", `{"quota":500000}`, "CNY", `{"quota":"7.3 CNY"}`, 7.3},
+		{"CNY falls back to default rate", `{"quota":500000}`, "CNY", `{"quota":"7.3 CNY"}`, 0},
+		{"TOKENS shows raw quota", `{"quota":500000}`, "TOKENS", `{"quota":"500000 TOKENS"}`, 7.3},
+		{"unknown display type labels dollars", `{"quota":500000}`, "EUR", `{"quota":"1 EUR"}`, 7.3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ConvertQuota(tc.body, DefaultQuotaPerUnit, tc.rate, tc.unit); got != tc.want {
+				t.Fatalf("ConvertQuota() = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
 func TestConvertQuotaLeavesOtherBodiesAlone(t *testing.T) {
 	for _, body := range []string{"not json", `{"balance":"12.5"}`, `[1,2]`} {
-		if got := ConvertQuota(body, DefaultQuotaPerUnit, "CNY"); got != body {
+		if got := ConvertQuota(body, DefaultQuotaPerUnit, 7.3, "USD"); got != body {
 			t.Fatalf("ConvertQuota(%q) changed the body to %q", body, got)
 		}
 	}
-	if got := ConvertQuota(`{"quota":92275}`, 0, "USD"); got != `{"quota":92275}` {
+	if got := ConvertQuota(`{"quota":92275}`, 0, 7.3, "USD"); got != `{"quota":92275}` {
 		t.Fatalf("zero ratio must disable conversion, got %s", got)
 	}
 }

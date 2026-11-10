@@ -24,8 +24,8 @@ func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Respon
 		}
 	}
 	if cfg.ProviderID != "" {
-		key, err := s.engine.ModelRouter.EndpointAPIKey(cfg.ProviderID)
-		response.ApiKeyConfigured = err == nil && key != ""
+		credential, err := s.engine.ModelRouter.EndpointCredential(cfg.ProviderID)
+		response.ApiKeyConfigured = err == nil && credential.APIKey != ""
 	}
 	return connect.NewResponse(response)
 }
@@ -76,12 +76,15 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 		cfg.APIKey, cfg.ProviderID = "", ""
 		validated = cfg
 	} else if req.Msg.ProviderId != "" {
-		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)
+		credential, err := s.engine.ModelRouter.EndpointCredential(req.Msg.ProviderId)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("请选择已启用且已配置 API Key 的 Provider"))
 		}
+		if !balancequery.SameOrigin(cfg.Curl, credential.BaseURL) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("请求地址与所选 Provider 端点不一致，Provider Key 不会发送到该地址"))
+		}
 		cfg.ProviderID, cfg.APIKey = req.Msg.ProviderId, ""
-		validated = balancequery.Config{Curl: cfg.Curl, APIKey: key}
+		validated = balancequery.Config{Curl: cfg.Curl, APIKey: credential.APIKey}
 	} else {
 		if cfg.ProviderID != "" && req.Msg.ApiKey == "" {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("切换为手动配置时请填写 API Key"))
@@ -128,11 +131,14 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	candidate := balancequery.Config{Curl: req.Msg.Curl, QuotaPerUnit: req.Msg.QuotaPerUnit, NewAPI: req.Msg.Newapi}
 	switch {
 	case req.Msg.ProviderId != "":
-		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)
+		credential, err := s.engine.ModelRouter.EndpointCredential(req.Msg.ProviderId)
 		if err != nil {
 			return fail("请选择已启用且已配置 API Key 的 Provider")
 		}
-		candidate.APIKey = key
+		if !balancequery.SameOrigin(req.Msg.Curl, credential.BaseURL) {
+			return fail("请求地址与所选 Provider 端点不一致，Provider Key 不会发送到该地址")
+		}
+		candidate.APIKey = credential.APIKey
 	case req.Msg.ApiKey != "":
 		candidate.APIKey = req.Msg.ApiKey
 	case cfg.APIKey != "" && cfg.ProviderID == "":

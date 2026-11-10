@@ -81,7 +81,9 @@ func TestBalanceQueryModelRoundTripNeverExposesRequestMaterial(t *testing.T) {
 	cfg := balancequery.Config{Curl: "curl " + server.URL + " -H 'Authorization: Bearer {{API_KEY}}'", ProviderID: "fixture-provider"}
 	raw, _ := json.Marshal(cfg)
 	scope := newTestScope(t, map[string]string{balancequery.ConfigKey: string(raw)})
-	tool := BalanceQueryTool(scope.Config.Get, func(string) (string, error) { return key, nil })
+	tool := BalanceQueryTool(scope.Config.Get, func(string) (balancequery.ProviderCredential, error) {
+		return balancequery.ProviderCredential{APIKey: key, BaseURL: server.URL}, nil
+	})
 	provider := &balanceModelProvider{t: t, key: key, endpoint: server.URL}
 	engine := &llm.Engine{Scope: scope, MaxIterations: 2, Provider: provider, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool}}
 	if got := engine.Run("query synthetic balance"); got != "checked" || provider.rounds != 2 {
@@ -108,14 +110,14 @@ func TestBalanceQueryUsesCurrentProviderKeyAndFailsClosed(t *testing.T) {
 	defer server.Close()
 	raw, _ := json.Marshal(balancequery.Config{Curl: "curl " + server.URL + " -H 'Authorization: Bearer {{API_KEY}}'", ProviderID: "fixture-provider"})
 	get := func(string) string { return string(raw) }
-	tool := BalanceQueryTool(get, func(id string) (string, error) {
+	tool := BalanceQueryTool(get, func(id string) (balancequery.ProviderCredential, error) {
 		if id != "fixture-provider" {
 			t.Fatal("resolved a provider other than the saved selection")
 		}
 		if unavailable.Load() {
-			return "", errors.New("synthetic backend detail: " + key.Load().(string))
+			return balancequery.ProviderCredential{}, errors.New("synthetic backend detail: " + key.Load().(string))
 		}
-		return key.Load().(string), nil
+		return balancequery.ProviderCredential{APIKey: key.Load().(string), BaseURL: server.URL}, nil
 	})
 	for _, current := range []string{"synthetic-first-provider-key", "synthetic-rotated-provider-key"} {
 		key.Store(current)

@@ -7,6 +7,8 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -67,4 +69,18 @@ func FetchQuotaStatus(ctx context.Context, origin string) (QuotaStatus, error) {
 		USDExchangeRate:  payload.Data.USDExchangeRate,
 		QuotaDisplayType: payload.Data.QuotaDisplayType,
 	}, nil
+}
+
+// SameOrigin reports whether a template's request target has the same scheme, host and port as baseURL.
+// Paths are ignored. A template that does not parse, or a base URL without a host, never matches.
+func SameOrigin(curl, baseURL string) bool {
+	origin, err := OriginOf(curl)
+	if err != nil {
+		return false
+	}
+	base, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
+		return false
+	}
+	return strings.EqualFold(origin, base.Scheme+"://"+base.Host)
 }

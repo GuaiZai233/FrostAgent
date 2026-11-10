@@ -179,7 +179,11 @@ func TestBalanceQueryConfigReferencesProviderWithoutCopyingKey(t *testing.T) {
 			t.Fatalf("invalid provider selection changed config: %v", err)
 		}
 	}
-	response, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: balancequery.DefaultCurl, ProviderId: "fixture-provider"}))
+	const sameOriginCurl = "curl https://example.invalid/v1/user/balance -H 'Authorization: Bearer {{API_KEY}}'"
+	if response, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: balancequery.DefaultCurl, ProviderId: "fixture-provider"})); connect.CodeOf(err) != connect.CodeInvalidArgument || response != nil {
+		t.Fatalf("provider key must not be sent to a different origin: %v", err)
+	}
+	response, err := service.SaveBalanceQueryConfig(ctx, connect.NewRequest(&v1.SaveBalanceQueryConfigRequest{Curl: sameOriginCurl, ProviderId: "fixture-provider"}))
 	if err != nil {
 		t.Fatal(err)
 	}

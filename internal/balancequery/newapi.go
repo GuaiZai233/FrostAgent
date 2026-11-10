@@ -3,7 +3,6 @@ package balancequery
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 )
 
 // validateNewAPIPayload rejects a New API response that is not a usable quota payload. A request can
@@ -16,11 +15,8 @@ func validateNewAPIPayload(body string) error {
 		return errors.New("New API 返回的不是有效的 JSON 对象，请检查请求地址与 Key")
 	}
 	if success, ok := root["success"].(bool); ok && !success {
-		message, _ := root["message"].(string)
-		if message == "" {
-			message = "接口返回失败"
-		}
-		return fmt.Errorf("New API 返回失败：%s", message)
+		// The remote message is deliberately not echoed: it could contain the credential and tool errors reach the model.
+		return errors.New("New API 返回失败，请检查请求地址、Key 与令牌权限")
 	}
 	if hasQuotaField(root) {
 		return nil

@@ -7,6 +7,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -218,7 +219,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	// Register tools
 	registry := make(map[string]tools.Tool)
-	balanceTool := tools.BalanceQueryTool(config.Get, routerManager.EndpointAPIKey)
+	balanceTool := tools.BalanceQueryTool(config.Get, func(endpointID string) (balancequery.ProviderCredential, error) {
+		credential, err := routerManager.EndpointCredential(endpointID)
+		return balancequery.ProviderCredential{APIKey: credential.APIKey, BaseURL: credential.BaseURL}, err
+	})
 	registry[balanceTool.Name()] = balanceTool
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool

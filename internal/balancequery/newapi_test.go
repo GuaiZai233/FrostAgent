@@ -49,9 +49,22 @@ func TestNewAPIQueryRejectsEmptySuccess(t *testing.T) {
 }
 
 func TestConvertQuotaHandlesNestedAccountData(t *testing.T) {
-	got := ConvertQuota(`{"success":true,"data":{"quota":92275,"used_quota":1000}}`, DefaultQuotaPerUnit, "CNY")
-	want := `{"data":{"quota":"0.18455 CNY","used_quota":"0.002 CNY"},"success":true}`
+	got := ConvertQuota(`{"success":true,"data":{"quota":92275,"used_quota":1000}}`, DefaultQuotaPerUnit, 7.3, "USD")
+	want := `{"data":{"quota":"0.18455 USD","used_quota":"0.002 USD"},"success":true}`
 	if got != want {
 		t.Fatalf("ConvertQuota() = %s, want %s", got, want)
+	}
+}
+
+func TestNewAPIErrorDoesNotEchoRemoteMessage(t *testing.T) {
+	const secret = "synthetic-echoed-newapi-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":false,"message":"bad token ` + secret + `"}`))
+	}))
+	defer server.Close()
+	cfg := Config{Curl: "curl " + server.URL + "/api/user/self -H 'Authorization: Bearer {{API_KEY}}'", APIKey: "synthetic-newapi-key", NewAPI: true}
+	_, err := Execute(context.Background(), cfg)
+	if err == nil || strings.Contains(err.Error(), secret) {
+		t.Fatalf("remote failure must not echo the message, got %v", err)
 	}
 }

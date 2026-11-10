@@ -30,7 +30,14 @@ type Config struct {
 	QuotaDisplayType string  `json:"quota_display_type,omitempty"`
 }
 
-type KeyResolver func(providerID string) (string, error)
+// ProviderCredential is a provider's key with its base URL, read atomically from one published endpoint.
+type ProviderCredential struct {
+	APIKey  string
+	BaseURL string
+}
+
+// KeyResolver resolves a provider credential for backend use only.
+type KeyResolver func(providerID string) (ProviderCredential, error)
 
 func Load(get func(string) string) (Config, error) {
 	cfg := Config{Curl: DefaultCurl}
@@ -65,11 +72,15 @@ func LoadResolved(get func(string) string, resolve KeyResolver) (Config, error) 
 		if resolve == nil {
 			return Config{}, errors.New("额度查询 Provider 不可用，请联系管理员")
 		}
-		key, err := resolve(cfg.ProviderID)
-		if err != nil || key == "" {
+		credential, err := resolve(cfg.ProviderID)
+		if err != nil || credential.APIKey == "" {
 			return Config{}, errors.New("额度查询 Provider 的 API Key 不可用，请联系管理员")
 		}
-		cfg.APIKey, cfg.ProviderID = key, ""
+		// The provider key is only ever sent to the provider's current origin.
+		if !SameOrigin(cfg.Curl, credential.BaseURL) {
+			return Config{}, errors.New("额度查询请求地址与 Provider 端点不一致，请重新选择 Provider 或填写 Key")
+		}
+		cfg.APIKey, cfg.ProviderID = credential.APIKey, ""
 	}
 	return cfg, nil
 }

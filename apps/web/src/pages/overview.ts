@@ -347,10 +347,16 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           const defaultKeyPlaceholder = key.placeholder;
           const endpointRow = dialog.querySelector<HTMLElement>('#balance-query-endpoint-row')!;
           const useEndpoint = dialog.querySelector<HTMLInputElement>('#balance-query-use-endpoint')!;
+          // New API mode is remembered separately from the temporary preset selector, so reopening a saved New API
+          // template, editing its placeholder host, or saving again keeps the New API fields and values.
+          let newApiMode = !!cfg.newapi;
           preset.onchange = () => {
             if (saving) return;
             const selected = balanceQueryPresets[preset.value];
-            if (selected) curl.value = selected.curl;
+            if (selected) {
+              curl.value = selected.curl;
+              newApiMode = preset.value === "newapi-key" || preset.value === "newapi-account";
+            }
             updateRetypeKey();
             key.placeholder = selected ? selected.keyPlaceholder : defaultKeyPlaceholder;
             presetHint.textContent = selected ? selected.keyHint : '';
@@ -452,7 +458,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           reuseKey.onchange = () => { syncCredentials(); };
           // New API presets can reuse a provider's endpoint: the curl box is replaced by the provider's
           // scheme and host (everything after the first slash removed), and the provider's key is reused.
-          const isNewApi = () => preset.value === 'newapi-key' || preset.value === 'newapi-account';
+          const isNewApi = () => newApiMode;
           // Quota conversion is only offered for New API presets; disabled or hidden means no conversion (0).
           const quotaBox = dialog.querySelector<HTMLElement>('#balance-query-quota')!;
           const quotaEnabled = dialog.querySelector<HTMLInputElement>('#balance-query-quota-enabled')!;
@@ -510,17 +516,21 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             curl.required = !active;
             if (active) {
               const origin = selectedProviderOrigin();
-              if (origin) curl.value = `curl ${origin}${balanceQueryPresets[preset.value].path} \\\n  -H 'Authorization: Bearer {{API_KEY}}'`;
+              if (origin) curl.value = `curl ${origin}${(balanceQueryPresets[preset.value] ?? balanceQueryPresets["newapi-key"]).path} \\\n  -H 'Authorization: Bearer {{API_KEY}}'`;
             }
             syncCredentials();
           };
           useEndpoint.onchange = () => {
             // Turning endpoint reuse off restores the preset's own template. The key choice is never changed here.
-            if (!useEndpoint.checked && isNewApi()) curl.value = balanceQueryPresets[preset.value].curl;
+            const presetCurl = balanceQueryPresets[preset.value]?.curl;
+            if (!useEndpoint.checked && isNewApi() && presetCurl) curl.value = presetCurl;
             applyEndpointMode();
           };
           providerGroup.addEventListener('change', () => { if (useEndpoint.checked) applyEndpointMode(); });
           syncCredentials();
+          // Apply the restored New API mode to the endpoint and quota sections before the user interacts.
+          applyQuotaBox();
+          applyEndpointMode();
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
             if (saving) return;

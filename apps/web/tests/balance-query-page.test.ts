@@ -16,6 +16,8 @@ const root = document.querySelector<HTMLElement>('#root')!;
 const instance = { id: 'fixture-balance', name: 'Balance', enabled: true, created_at: '' };
 const defaultCurl = "curl https://api.deepseek.com/user/balance -H 'Authorization: Bearer {{API_KEY}}'";
 let savedCurl = defaultCurl;
+let savedNewApi = false;
+let savedQuotaPerUnit = 0;
 let savedKey = '';
 let savedProvider = '';
 let providers = [
@@ -48,7 +50,7 @@ globalThis.fetch = async (input, init) => {
   }
   if (path.endsWith('/GetBalanceQueryConfig')) {
     if (deferGet) await new Promise<void>((resolve) => { releaseGet = resolve; });
-    return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
+    return Response.json({ newapi: savedNewApi, quotaPerUnit: savedQuotaPerUnit, curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
   }
   assert.ok(path.endsWith('/SaveBalanceQueryConfig'), path);
   const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
@@ -61,6 +63,8 @@ globalThis.fetch = async (input, init) => {
     return Response.json({ code: 'invalid_argument', message: '请求地址已变更，请重新输入 Key，不会复用原有密钥' }, { status: 400 });
   }
   savedCurl = body.curl;
+  savedNewApi = !!body.newapi;
+  savedQuotaPerUnit = body.quotaPerUnit || 0;
   if (body.clearApiKey) {
     savedKey = '';
     savedProvider = '';
@@ -68,7 +72,7 @@ globalThis.fetch = async (input, init) => {
     savedProvider = body.providerId || '';
     if (savedProvider) savedKey = ''; else if (body.apiKey) savedKey = body.apiKey;
   }
-  return Response.json({ curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
+  return Response.json({ newapi: savedNewApi, quotaPerUnit: savedQuotaPerUnit, curl: savedCurl, apiKeyConfigured: !!savedKey || !!savedProvider, providerId: savedProvider, providers });
 };
 const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
 const openConfig = async () => { root.querySelector<HTMLButtonElement>('[data-tool-config="balance_query"]')!.click(); await flush(); };
@@ -378,6 +382,17 @@ try {
     await flush();
     assert.equal(saves.length, quotaBefore + 1);
     assert.equal(saves.at(-1)!.quotaPerUnit, 500000, 'enabled quota ratio must be sent with the save');
+    // Reopening keeps the New API mode: the quota fields stay visible with the saved ratio, and a resave keeps newapi.
+    document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')?.click();
+    await flush();
+    await openConfig();
+    const reopened = document.querySelector<HTMLDialogElement>('dialog')!;
+    assert.equal(reopened.querySelector<HTMLElement>('#balance-query-quota')!.hidden, false, 'saved New API template must reopen with quota fields');
+    assert.equal(reopened.querySelector<HTMLInputElement>('#balance-query-quota-ratio')!.value, '500000');
+    reopened.querySelector<HTMLFormElement>('#balance-query-form')!.dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await flush();
+    assert.equal(saves.at(-1)!.newapi, true, 'resaving a reopened New API template must keep newapi');
+    assert.equal(saves.at(-1)!.quotaPerUnit, 500000, 'resaving must keep the quota ratio');
     savedKey = '';
     await openConfig();
     const offDialog = document.querySelector<HTMLDialogElement>('dialog')!;

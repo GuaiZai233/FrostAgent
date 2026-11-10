@@ -14,6 +14,9 @@ const DefaultQuotaPerUnit = 500000
 // DefaultQuotaDisplayType labels converted amounts when the template has no display type set.
 const DefaultQuotaDisplayType = "USD"
 
+// DefaultUSDExchangeRate converts dollars to CNY when a CNY display has no rate configured.
+const DefaultUSDExchangeRate = 7.3
+
 // quotaFields are the New API response fields measured in internal quota units.
 var quotaFields = map[string]bool{
 	"quota": true, "used_quota": true,
@@ -31,21 +34,22 @@ func ValidateQuotaPerUnit(v float64) error {
 	return nil
 }
 
-// ConvertQuota rewrites New API quota fields in a JSON object into dollars with a unit suffix.
-// Non-JSON bodies and bodies without quota fields are returned unchanged.
-func ConvertQuota(body string, perUnit float64, unit string) string {
-	if unit == "" {
-		unit = DefaultQuotaDisplayType
-	}
+// ConvertQuota rewrites New API quota fields into a readable amount with a unit label, following New API's
+// per-currency rules: TOKENS shows the raw quota; CNY shows dollars times the exchange rate; any other
+// display type (USD by default) shows dollars. Non-JSON bodies and bodies without quota fields are unchanged.
+func ConvertQuota(body string, perUnit, usdRate float64, unit string) string {
 	if perUnit <= 0 {
 		return body
+	}
+	if unit == "" {
+		unit = DefaultQuotaDisplayType
 	}
 	var fields map[string]any
 	if json.Unmarshal([]byte(body), &fields) != nil {
 		return body
 	}
-	changed := convertQuotaFields(fields, perUnit, unit)
-	if data, ok := fields["data"].(map[string]any); ok && convertQuotaFields(data, perUnit, unit) {
+	changed := convertQuotaFields(fields, perUnit, usdRate, unit)
+	if data, ok := fields["data"].(map[string]any); ok && convertQuotaFields(data, perUnit, usdRate, unit) {
 		changed = true
 	}
 	if !changed {
@@ -58,25 +62,41 @@ func ConvertQuota(body string, perUnit float64, unit string) string {
 	return string(out)
 }
 
-func formatDollars(v float64) string {
-	s := strconv.FormatFloat(v, 'f', 6, 64)
-	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
-	if s == "" || s == "-" {
-		return "0"
-	}
-	return s
-}
-
 // convertQuotaFields rewrites quota-valued numbers in one object and reports whether any changed.
-func convertQuotaFields(fields map[string]any, perUnit float64, unit string) bool {
+func convertQuotaFields(fields map[string]any, perUnit, usdRate float64, unit string) bool {
 	changed := false
 	for name, value := range fields {
 		number, ok := value.(float64)
 		if !ok || !quotaFields[name] {
 			continue
 		}
-		fields[name] = formatDollars(number/perUnit) + " " + unit
+		fields[name] = formatQuotaAmount(number, perUnit, usdRate, unit)
 		changed = true
 	}
 	return changed
+}
+
+// formatQuotaAmount applies the display rule for one quota value.
+func formatQuotaAmount(quota, perUnit, usdRate float64, unit string) string {
+	switch strings.ToUpper(unit) {
+	case "TOKENS":
+		return formatDecimal(quota) + " TOKENS"
+	case "CNY":
+		rate := usdRate
+		if rate <= 0 {
+			rate = DefaultUSDExchangeRate
+		}
+		return formatDecimal(quota/perUnit*rate) + " CNY"
+	default:
+		return formatDecimal(quota/perUnit) + " " + unit
+	}
+}
+
+func formatDecimal(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 6, 64)
+	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	if s == "" || s == "-" {
+		return "0"
+	}
+	return s
 }
