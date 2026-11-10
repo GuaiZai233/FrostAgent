@@ -34,7 +34,7 @@ func TestTestBalanceQueryReturnsActualResponseBody(t *testing.T) {
 	if err != nil || !response.Msg.Ok {
 		t.Fatalf("test connection failed: %v, %v", response, err)
 	}
-	if !strings.Contains(response.Msg.Message, `"quota":"0.18455 Dollar"`) {
+	if !strings.Contains(response.Msg.Message, `"quota":"0.18455 USD"`) {
 		t.Fatalf("success message must carry the converted response body, got %q", response.Msg.Message)
 	}
 }

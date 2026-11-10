@@ -49,8 +49,8 @@ func TestNewAPIQueryRejectsEmptySuccess(t *testing.T) {
 }
 
 func TestConvertQuotaHandlesNestedAccountData(t *testing.T) {
-	got := ConvertQuota(`{"success":true,"data":{"quota":92275,"used_quota":1000}}`, DefaultQuotaPerUnit)
-	want := `{"data":{"quota":"0.18455 Dollar","used_quota":"0.002 Dollar"},"success":true}`
+	got := ConvertQuota(`{"success":true,"data":{"quota":92275,"used_quota":1000}}`, DefaultQuotaPerUnit, "CNY")
+	want := `{"data":{"quota":"0.18455 CNY","used_quota":"0.002 CNY"},"success":true}`
 	if got != want {
 		t.Fatalf("ConvertQuota() = %s, want %s", got, want)
 	}

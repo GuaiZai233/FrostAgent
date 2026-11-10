@@ -11,6 +11,9 @@ import (
 // DefaultQuotaPerUnit is the New API default ratio of internal quota units per dollar.
 const DefaultQuotaPerUnit = 500000
 
+// DefaultQuotaDisplayType labels converted amounts when the template has no display type set.
+const DefaultQuotaDisplayType = "USD"
+
 // quotaFields are the New API response fields measured in internal quota units.
 var quotaFields = map[string]bool{
 	"quota": true, "used_quota": true,
@@ -30,7 +33,10 @@ func ValidateQuotaPerUnit(v float64) error {
 
 // ConvertQuota rewrites New API quota fields in a JSON object into dollars with a unit suffix.
 // Non-JSON bodies and bodies without quota fields are returned unchanged.
-func ConvertQuota(body string, perUnit float64) string {
+func ConvertQuota(body string, perUnit float64, unit string) string {
+	if unit == "" {
+		unit = DefaultQuotaDisplayType
+	}
 	if perUnit <= 0 {
 		return body
 	}
@@ -38,8 +44,8 @@ func ConvertQuota(body string, perUnit float64) string {
 	if json.Unmarshal([]byte(body), &fields) != nil {
 		return body
 	}
-	changed := convertQuotaFields(fields, perUnit)
-	if data, ok := fields["data"].(map[string]any); ok && convertQuotaFields(data, perUnit) {
+	changed := convertQuotaFields(fields, perUnit, unit)
+	if data, ok := fields["data"].(map[string]any); ok && convertQuotaFields(data, perUnit, unit) {
 		changed = true
 	}
 	if !changed {
@@ -62,14 +68,14 @@ func formatDollars(v float64) string {
 }
 
 // convertQuotaFields rewrites quota-valued numbers in one object and reports whether any changed.
-func convertQuotaFields(fields map[string]any, perUnit float64) bool {
+func convertQuotaFields(fields map[string]any, perUnit float64, unit string) bool {
 	changed := false
 	for name, value := range fields {
 		number, ok := value.(float64)
 		if !ok || !quotaFields[name] {
 			continue
 		}
-		fields[name] = formatDollars(number/perUnit) + " Dollar"
+		fields[name] = formatDollars(number/perUnit) + " " + unit
 		changed = true
 	}
 	return changed

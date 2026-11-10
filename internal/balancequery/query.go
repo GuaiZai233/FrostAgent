@@ -71,7 +71,7 @@ func Execute(ctx context.Context, cfg Config) (string, error) {
 			return "", err
 		}
 	}
-	result := ConvertQuota(string(data), cfg.QuotaPerUnit)
+	result := ConvertQuota(string(data), cfg.QuotaPerUnit, cfg.QuotaDisplayType)
 	if cfg.APIKey != "" && containsSecret(result, cfg.APIKey) {
 		return "", errors.New("额度查询结果包含 API key，已阻止返回")
 	}
