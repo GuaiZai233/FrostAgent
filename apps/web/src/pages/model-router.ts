@@ -18,12 +18,16 @@ import { icon } from '../components/icons';
 import { toast } from '../components/toast';
 import { randomUUID } from '../utils/random-id';
 import { escapeHtml } from '../utils/formatters';
+import { shouldApplyInferredCapabilities } from './model-capability-policy';
 import { bindingFor, bindingOptions, setBinding, workloads } from '../utils/model-bindings';
 
 const apiKeyStorageUnspecified = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_UNSPECIFIED;
 const apiKeyStorageManual = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_MANUAL;
 const apiKeyStorageSecretFile = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_SECRET_FILE;
 const apiKeyStorageWindowsCredentialManager = ModelAPIKeyStorage.MODEL_API_KEY_STORAGE_WINDOWS_CREDENTIAL_MANAGER;
+
+// Capability boxes stay locked this long while models.dev metadata is requested.
+const capabilityLockMs = 2000;
 
 function newId(prefix: string): string {
   return `${prefix}_${randomUUID().replaceAll('-', '').slice(0, 16)}`;
@@ -598,11 +602,12 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
       title: existing ? '编辑 Model' : '新增 Model',
       maxWidth: '36rem',
       bodyHtml: `
-        <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
+        <div class="form-group"><label class="form-label">显示名称（留空自动生成）</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label" for="model-max-input">最大输入 Tokens（可选）</label><input class="input" id="model-max-input" type="number" min="0" step="1" value="${model.maxInputTokens || ''}" placeholder="未配置时，超限输入将跳过处理"></div>
-        <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision', 'embedding'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''}>${capability}</label>`).join('')}</div></div>
+        <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision', 'embedding'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''} ${model.upstreamModel.trim() ? 'disabled' : ''}>${capability}</label>`).join('')}</div><p class="form-hint text-muted" id="model-capability-status" style="display:${model.upstreamModel.trim() ? 'block' : 'none'}">正在获取元数据...</p></div>
+        <p class="form-hint" id="model-capability-hint" style="display:none">根据 models.dev 的列表自动获取并勾选了元数据，可能存在偏差，请以实际表现为准。</p>
         <label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox" id="model-enabled" ${model.enabled ? 'checked' : ''}>启用 Model</label>`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="model-confirm">保存</button>`,
       onMount: (dialog, close) => {
@@ -612,6 +617,79 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
         const upstreamOptions = dialog.querySelector<HTMLElement>('#upstream-model-options')!;
         const fetchButton = dialog.querySelector<HTMLButtonElement>('#fetch-models')!;
         let fetchedModels: string[] = [];
+        const displayInput = dialog.querySelector<HTMLInputElement>('#model-name')!;
+        const capabilityHint = dialog.querySelector<HTMLElement>('#model-capability-hint')!;
+        const capabilityStatus = dialog.querySelector<HTMLElement>('#model-capability-status')!;
+        // The display name last filled in from the upstream model; undefined
+        // while the user has typed their own name.
+        let autoDisplayName: string | undefined;
+        let inferSeq = 0;
+        const syncDisplayName = () => {
+          const upstream = upstreamInput.value.trim();
+          if (!upstream) return;
+          const current = displayInput.value.trim();
+          if (current === '' || (autoDisplayName !== undefined && current === autoDisplayName)) {
+            displayInput.value = upstream;
+            autoDisplayName = upstream;
+          }
+        };
+        // While a lookup is pending the capability boxes stay locked and the
+        // status line shows. After capabilityLockMs the boxes unlock no matter
+        // what; a response that arrives later is discarded so the user's manual
+        // choice is never overwritten.
+        const setCapabilityPending = (pending: boolean) => {
+          capabilityStatus.style.display = pending ? 'block' : 'none';
+          dialog.querySelectorAll<HTMLInputElement>('.model-cap').forEach((input) => {
+            input.disabled = pending;
+          });
+        };
+        const inferCapabilities = async () => {
+          const name = upstreamInput.value.trim();
+          const seq = ++inferSeq;
+          capabilityHint.style.display = 'none';
+          if (!name) {
+            setCapabilityPending(false);
+            return;
+          }
+          setCapabilityPending(true);
+          let settled = false;
+          const timer = window.setTimeout(() => {
+            if (settled || seq !== inferSeq) return;
+            settled = true;
+            setCapabilityPending(false);
+          }, capabilityLockMs);
+          try {
+            const response = await api.inferModelCapabilities(name);
+            if (settled || seq !== inferSeq) return;
+            settled = true;
+            window.clearTimeout(timer);
+            setCapabilityPending(false);
+            // Lookups never overwrite the saved tags of an unchanged existing model.
+            const apply = shouldApplyInferredCapabilities({
+              isNewModel: !existing,
+              openedUpstream: model.upstreamModel,
+              upstream: name,
+            });
+            capabilityHint.style.display = response.found && apply ? 'block' : 'none';
+            if (!response.found || !apply) return;
+            // models.dev only describes text/tools/vision; other tags such as
+            // embedding keep whatever the user chose.
+            dialog.querySelectorAll<HTMLInputElement>('.model-cap').forEach((input) => {
+              if (!['text', 'tools', 'vision'].includes(input.value)) return;
+              input.checked = response.capabilities.includes(input.value);
+            });
+          } catch {
+            if (settled || seq !== inferSeq) return;
+            settled = true;
+            window.clearTimeout(timer);
+            setCapabilityPending(false);
+            capabilityHint.style.display = 'none';
+          }
+        };
+        const commitUpstream = () => {
+          syncDisplayName();
+          void inferCapabilities();
+        };
         const closeUpstreamOptions = () => {
           if (upstreamOptions.matches(':popover-open')) upstreamOptions.hidePopover();
         };
@@ -660,9 +738,15 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
           const option = (event.target as HTMLElement).closest<HTMLElement>('[data-model-index]');
           if (!option) return;
           const selected = fetchedModels[Number(option.dataset.modelIndex)];
-          if (selected !== undefined) upstreamInput.value = selected;
+          if (selected !== undefined) {
+            upstreamInput.value = selected;
+            commitUpstream();
+          }
           closeUpstreamOptions();
         });
+        upstreamInput.addEventListener('change', commitUpstream);
+        // Opening an existing model looks up its metadata within the same lock window.
+        if (upstreamInput.value.trim()) void inferCapabilities();
         fetchButton.addEventListener('click', async () => {
           if (fetchButton.disabled) return;
           const endpointId = endpointSelect.value;
@@ -690,9 +774,14 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
           }
         });
         dialog.querySelector('#model-confirm')?.addEventListener('click', () => {
-          model.displayName = dialog.querySelector<HTMLInputElement>('#model-name')!.value;
-          model.endpointId = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!.value;
-          model.upstreamModel = dialog.querySelector<HTMLInputElement>('#model-upstream')!.value;
+          const upstreamModel = upstreamInput.value.trim();
+          if (!upstreamModel) {
+            toast.error('请填写上游模型名称');
+            return;
+          }
+          model.displayName = displayInput.value.trim() || upstreamModel;
+          model.endpointId = endpointSelect.value;
+          model.upstreamModel = upstreamModel;
           model.enabled = dialog.querySelector<HTMLInputElement>('#model-enabled')!.checked;
           const maximumInput=dialog.querySelector<HTMLInputElement>("#model-max-input")!.value;
           const maxInputTokens=maximumInput===""?0:Number(maximumInput);
