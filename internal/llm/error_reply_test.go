@@ -12,6 +12,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
 func TestDialogueErrorsExposeOnlyTypeAndLookupUUID(t *testing.T) {
@@ -113,5 +114,82 @@ func TestDeliveryErrorRetainsDiagnosticsInOwningStore(t *testing.T) {
 	entry := assertReferencedError(t, store, reply, "消息发送失败")
 	if delivered || !strings.Contains(entry.Content, raw.Error()) || strings.Contains(reply, "endpoint.invalid") {
 		t.Fatalf("unsafe delivery failure: %s", reply)
+	}
+}
+
+func TestVisionFailuresKeepLegacyFallbackAndInteractiveDiagnostics(t *testing.T) {
+	store := logs.New("vision-instance", "test", 10)
+	scope := runtimescope.New(nil, nil, store)
+	raw := errors.New("Post https://endpoint.invalid/private: synthetic-secret")
+	provider := &failedDialogueProvider{err: raw}
+	if got := CallVisionModel(scope.Context(), provider, core.RouteContext{}, "[]"); got != "" {
+		t.Fatalf("legacy vision fallback changed: %q", got)
+	}
+	_, err := CallVisionModelWithError(scope.Context(), provider, core.RouteContext{}, "[]")
+	if !errors.Is(err, raw) {
+		t.Fatalf("interactive caller lost vision diagnostics: %v", err)
+	}
+	providerOK := &staticProvider{response: &core.ChatResponse{Message: core.ChatMessage{Content: "synthetic description"}}}
+	if got := CallVisionModel(scope.Context(), providerOK, core.RouteContext{}, "[]"); got != "synthetic description" {
+		t.Fatalf("successful vision description changed: %q", got)
+	}
+}
+
+func TestStickerPairFailuresNeverDeliverAndKeepReferences(t *testing.T) {
+	const raw = "Post https://endpoint.invalid/private: synthetic-secret"
+	for _, tc := range []struct {
+		name, summary, diagnostic string
+		stage                     security.WatchdogStage
+		policy                    bool
+	}{
+		{name: "missing", summary: "工具调用失败：工具未找到", diagnostic: "send_message"},
+		{name: "execution", summary: "工具执行失败", diagnostic: raw},
+		{name: "oversize", summary: "工具执行失败：工具结果过大，配对消息未发送"},
+		{name: "invalid pair", summary: "配对消息发送失败：消息无效", diagnostic: "文字消息无效"},
+		{name: "argument failure", summary: "安全审查失败：服务暂时不可用，该工具调用已被阻止", stage: security.StageToolArgument, diagnostic: "eval_id="},
+		{name: "argument block", summary: "安全审查拦截：该工具调用已被阻止", stage: security.StageToolArgument, policy: true, diagnostic: "eval_id="},
+		{name: "result failure", summary: "安全审查失败：服务暂时不可用，外部工具结果已隔离", stage: security.StageToolResult, diagnostic: "eval_id="},
+		{name: "result block", summary: "安全审查拦截：外部工具结果已隔离", stage: security.StageToolResult, policy: true, diagnostic: "eval_id="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := logs.New("pair-instance", "test", 30)
+			engine := &Engine{Scope: runtimescope.New(nil, nil, store), ToolRegistry: map[string]ToolExecutor{}}
+			output := core.ToolExecutionResult{Content: "prepared", MessagePayload: `{"messages":[{"type":"plain","text":"synthetic"}]}`}
+			textTool := &structuredResultTool{staticTool: staticTool{name: "send_message"}, output: output}
+			stickerTool := &structuredResultTool{staticTool: staticTool{name: "send_sticker"}, output: output}
+			switch tc.name {
+			case "execution":
+				textTool.err = errors.New(raw)
+			case "oversize":
+				textTool.output.Content = strings.Repeat("x", MaxToolOutputBytes+1)
+			case "invalid pair":
+				textTool.output.MessagePayload = "invalid"
+			}
+			if tc.name != "missing" {
+				engine.ToolRegistry[textTool.Name()] = textTool
+			}
+			engine.ToolRegistry[stickerTool.Name()] = stickerTool
+			if tc.stage != "" {
+				engine.Security = security.NewController(t.TempDir())
+				engine.Security.SetMode(security.ControlModeAggressive)
+				engine.Security.Watchdog.SetClassifier(&mockGateClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+					if input.Stage != tc.stage {
+						return security.ClassificationResult{RiskLevel: security.RiskLevelNone}, nil
+					}
+					if !tc.policy {
+						return security.ClassificationResult{}, errors.New(raw)
+					}
+					return security.ClassificationResult{Category: security.RiskCategoryMaliciousExecution, RiskLevel: security.RiskLevelCritical}, nil
+				}})
+			}
+			deliveries := 0
+			run := RunContext{SessionID: "pair-session", ActorPlatform: "test", ActorUserID: "synthetic-actor", SendHook: func(string) error { deliveries++; return nil }}
+			call := func(name string) ToolCall { return ToolCall{Function: ToolCallFunction{Name: name, Arguments: "{}"}} }
+			reply, _ := engine.deliverStickerPair(WithRunContext(engine.Context(), run), &run, call("send_message"), call("send_sticker"))
+			entry := assertReferencedError(t, store, reply, tc.summary)
+			if deliveries != 0 || strings.Contains(reply, "endpoint.invalid") || !strings.Contains(entry.Content, tc.diagnostic) {
+				t.Fatalf("unsafe pair failure: delivered=%d reply=%q diagnostic=%+v", deliveries, reply, entry)
+			}
+		})
 	}
 }

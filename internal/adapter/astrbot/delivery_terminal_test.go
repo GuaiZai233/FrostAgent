@@ -65,10 +65,22 @@ func TestAstrBotDeliveredThenTerminalDoesNotDuplicate(t *testing.T) {
 			trigger := base
 			trigger.MessageID, trigger.Content = "fixture-trigger", "later trigger"
 			sendAutoDecorationEvent(t, conn, trigger)
-			if action := readAutoDecorationAction(t, conn, "delivered reply"); action.Action != "send_message" || action.Content != "confirmed reply" {
+			readTriggerAction := func(label string) Action {
+				for {
+					action := readAutoDecorationAction(t, conn, label)
+					// The next same-sender turn can interrupt the earlier turn after
+					// its silence noop was written but before its deferred cleanup.
+					// That cleanup may send another noop for the earlier event.
+					if action.Action == "noop" && action.Echo == "reply_"+earlier.MessageID {
+						continue
+					}
+					return action
+				}
+			}
+			if action := readTriggerAction("delivered reply"); action.Action != "send_message" || action.Content != "confirmed reply" {
 				t.Fatalf("missing delivered reply: %+v", action)
 			}
-			if action := readAutoDecorationAction(t, conn, "terminal"); action.Action != "noop" {
+			if action := readTriggerAction("terminal"); action.Action != "noop" || action.Echo != "reply_"+trigger.MessageID {
 				t.Fatalf("terminal produced a second message: %+v", action)
 			}
 
