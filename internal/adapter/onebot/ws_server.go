@@ -1255,22 +1255,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
-			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "引用消息校验失败", err, conn.historyKey(event))
 			if wakeSignals.Proactive {
 				engine.TrimSession(session)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 			return
 		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(finalMessages)
 		if buildErr != nil {
-			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", buildErr, conn.historyKey(event))
 			if wakeSignals.Proactive {
 				engine.TrimSession(session)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 			return
 		}
 		if len(oneBotSegments) > 0 {

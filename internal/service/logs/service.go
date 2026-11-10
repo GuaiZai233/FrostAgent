@@ -32,6 +32,20 @@ func (s *Service) ListLogs(
 	req *connect.Request[v1.ListLogsRequest],
 ) (*connect.Response[v1.ListLogsResponse], error) {
 	store := s.selectedStore(req.Header())
+	if value := strings.TrimSpace(req.Msg.GetErrorUuid()); value != "" {
+		id, ok := logspkg.NormalizeErrorUUID(value)
+		if !ok {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("错误 UUID 必须为 UUIDv4"))
+		}
+		entry, found := store.FindError(id)
+		if !found {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到错误日志，可能已清理、覆盖或重启；请确认实例和日志来源"))
+		}
+		return connect.NewResponse(&v1.ListLogsResponse{
+			Entries:    []*v1.LogEntry{convertEntry(entry)},
+			Pagination: &v1.Pagination{PageSize: 1, Total: 1},
+		}), nil
+	}
 	var entries []logspkg.LogEntry
 	if store != nil {
 		entries = store.Snapshot()
@@ -173,6 +187,7 @@ func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 		Summary:      e.Content,
 		HasDetail:    strings.TrimSpace(e.Content) != "",
 		TraceId:      e.TraceID,
+		ErrorUuid:    e.ErrorUUID,
 	}
 	switch e.Category {
 	case logspkg.LLM_REQUEST:

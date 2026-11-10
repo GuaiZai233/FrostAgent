@@ -58,8 +58,7 @@ type Client struct {
 	ObserveUsage func(*core.Usage)
 }
 
-// HTTPError preserves the upstream response body so the agent can relay the
-// provider's original error text according to the current product contract.
+// HTTPError preserves the upstream response body for administrator diagnostics.
 type HTTPError struct {
 	Status     string
 	StatusCode int

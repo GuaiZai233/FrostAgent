@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
@@ -37,6 +38,7 @@ type CommandContext struct {
 	CallerUserID string
 	RouteScope   modelrouter.Scope
 	Reply        func(ctx context.Context, text string, isIntermediate bool) error
+	ReplyPrivate func(ctx context.Context, text string) error
 }
 
 // Executor orchestrates administrator message command execution.
@@ -77,6 +79,8 @@ func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd Parse
 	}
 
 	switch cmd.Type {
+	case CmdLog:
+		return e.executeLog(ctx, cmdCtx, cmd)
 	case CmdReset:
 		return e.executeReset(ctx, cmdCtx)
 	case CmdBan:
@@ -90,6 +94,36 @@ func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd Parse
 	default:
 		return fmt.Errorf("未知指令：%s", cmd.Type)
 	}
+}
+
+func (e *Executor) executeLog(ctx context.Context, cmdCtx CommandContext, cmd ParsedCommand) error {
+	if e == nil || e.Engine == nil || !IsAdmin(cmdCtx.CallerUserID, e.scope()) {
+		return errors.New("log 指令仅允许管理员使用")
+	}
+	if len(cmd.Args) != 1 {
+		return errors.New("log 指令格式错误：log <uuidv4>")
+	}
+	id, ok := logs.NormalizeErrorUUID(cmd.Args[0])
+	if !ok {
+		return errors.New("错误 UUID 必须为完整的 UUIDv4")
+	}
+	entry, found := e.Engine.Log().FindError(id)
+	if !found {
+		return cmdCtx.Reply(ctx, "未找到当前实例的错误日志，可能已清理、覆盖或重启。", false)
+	}
+	detail := fmt.Sprintf("Bot 错误信息\n错误 UUID：%s\n时间：%s\n类型：%s\n%s",
+		entry.ErrorUUID, entry.Timestamp.Format(time.RFC3339), entry.Category, entry.Content)
+	if !cmdCtx.IsGroup {
+		return cmdCtx.Reply(ctx, detail, false)
+	}
+	if cmdCtx.ReplyPrivate == nil {
+		return cmdCtx.Reply(ctx, "无法发送私聊日志，请私聊 Bot 后使用 log 指令查询。", false)
+	}
+	if err := cmdCtx.ReplyPrivate(ctx, detail); err != nil {
+		e.Engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("错误日志私聊发送失败: %v", err))
+		return cmdCtx.Reply(ctx, "私聊日志发送失败或未确认送达，请私聊 Bot 后使用 log 指令查询。", false)
+	}
+	return cmdCtx.Reply(ctx, "错误日志已私聊发送。", false)
 }
 
 func (e *Executor) executeReset(ctx context.Context, cmdCtx CommandContext) error {

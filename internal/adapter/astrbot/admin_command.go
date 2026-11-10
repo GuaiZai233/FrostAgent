@@ -10,6 +10,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"strings"
+	"time"
 )
 
 func extractMentionedUserIDs(metadata map[string]any) []string {
@@ -36,9 +37,13 @@ func extractMentionedUserIDs(metadata map[string]any) []string {
 }
 
 // extractAstrBotAdminCommand parses an AstrBot event to see if it is an administrator command candidate.
-// It strictly requires a real @ targeting the bot (event.IsAt == true).
+// Commands require event.IsAt, except the log lookup command.
 func extractAstrBotAdminCommand(event Event, prefix string) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
 	if !event.IsAt {
+		cmd, isCandidate, err = admincmd.ParseCandidate(event.Content, prefix)
+		if cmd.Type == admincmd.CmdLog {
+			return cmd, isCandidate, err
+		}
 		return cmd, false, nil
 	}
 	text := admincmd.StripLeadingMention(event.Content)
@@ -189,6 +194,14 @@ func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
 			RouteScope:   routeScope,
 			Reply: func(ctx context.Context, replyText string, isIntermediate bool) error {
 				return sendAstrBotAdminReply(event, conn, replyText, isIntermediate)
+			},
+			ReplyPrivate: func(ctx context.Context, text string) error {
+				return conn.writeActionAndWaitTurn(Action{
+					Type: "action", Action: "send_message", Platform: platform,
+					SessionID: fmt.Sprintf("%s:private:%s", platform, callerID),
+					TargetID:  callerID, MessageType: "private", UserID: callerID,
+					Content: text,
+				}, nil, 10*time.Second, "私聊日志")
 			},
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {

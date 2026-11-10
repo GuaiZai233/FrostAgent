@@ -826,7 +826,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
-				Content:   fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Content:   e.Log().ReportError(logs.LLM_RESPONSE, "LLM 响应失败：模型路由错误", err, runCtx.SessionID),
 				Error:     err,
 				LLMFailed: true,
 			}
@@ -1124,9 +1124,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		resp, err, commitErr := e.chatAndSettle(ctx, chatReq, reservationID, callBilling)
 		if err != nil {
-			e.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
 			return AgentRunResult{
-				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Content:       e.Log().ReportError(logs.LLM_RESPONSE, "LLM 响应失败："+llmErrorType(err), err, runCtx.SessionID),
 				LLMFailed:     true,
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,

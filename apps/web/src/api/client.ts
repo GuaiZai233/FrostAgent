@@ -727,6 +727,7 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       pageToken: string,
       minLevel: LogLevel,
       sourceFilter: string,
+      errorUuid = '',
     ): Promise<ListLogsResponse> {
       return logClient.listLogs({
         pagination: {
@@ -735,6 +736,7 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
         },
         minLevel,
         sourceFilter,
+        errorUuid,
       });
     },
 
