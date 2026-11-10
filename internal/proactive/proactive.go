@@ -21,7 +21,7 @@ const (
 	EnvWhitelistEnabled = "ENABLE_PROACTIVE_REPLY_WHITELIST"
 
 	// PromptPrefix is prepended to the prompt when proactive reply is triggered.
-	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。"
+	PromptPrefix = "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话、模棱两可的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认人类在讲自己。触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。"
 
 	// MinProbability defines the minimum probability when proactive reply is turned on (0.01).
 	MinProbability = 0.01
