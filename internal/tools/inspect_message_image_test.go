@@ -115,9 +115,6 @@ func TestInspectMessageImageToolUsesVisionProviderAndSelectedIndex(t *testing.T)
 	}
 }
 
-// Deployments that bind the vision workload to follow_dialogue still go
-// through engine.VisionProvider; the tool never bypasses a disabled vision
-// workload through engine.Provider.
 func TestInspectMessageImageToolDefaultsToFirstImage(t *testing.T) {
 	vision := &inspectImageProviderStub{reply: "视觉模型识别了这张图。"}
 	engine := &llm.Engine{VisionProvider: vision}
@@ -223,6 +220,9 @@ func TestInspectMessageImageToolIsProactiveSafeAndVisibilityGated(t *testing.T) 
 	if !tool.IsEnabled() {
 		t.Fatal("inspect_message_image should be enabled when a model provider exists")
 	}
+	if !InspectMessageImageTool(&llm.Engine{Provider: &inspectImageProviderStub{}}).IsEnabled() {
+		t.Fatal("inspect_message_image must be enabled with only the dialogue provider")
+	}
 
 	empty := InspectMessageImageTool(&llm.Engine{})
 	if empty.IsEnabled() {
@@ -289,7 +289,7 @@ func inspectImageRouterSnapshot(t *testing.T, disabledGroup string) *modelrouter
 	return manager.Snapshot()
 }
 
-func TestInspectMessageImageToolRespectsDisabledVisionRoute(t *testing.T) {
+func TestInspectMessageImageToolFallsBackWhenVisionRouteDisabled(t *testing.T) {
 	snapshot := inspectImageRouterSnapshot(t, "42")
 	vision := &inspectImageProviderStub{reply: "视觉模型结果"}
 	dialogue := &inspectImageProviderStub{reply: "对话模型结果"}
@@ -306,11 +306,11 @@ func TestInspectMessageImageToolRespectsDisabledVisionRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect image: %v", err)
 	}
-	if !strings.Contains(content, "已禁用视觉模型") {
-		t.Fatalf("disabled vision route was not respected: %q", content)
+	if !strings.Contains(content, "对话模型结果") {
+		t.Fatalf("disabled vision route must fall back to dialogue: %q", content)
 	}
-	if vision.count() != 0 || dialogue.count() != 0 {
-		t.Fatalf("disabled route must not call any provider, vision=%d dialogue=%d", vision.count(), dialogue.count())
+	if vision.count() != 0 || dialogue.count() != 1 {
+		t.Fatalf("provider calls vision=%d dialogue=%d, want 0/1", vision.count(), dialogue.count())
 	}
 
 	runContext.RouteScope.GroupID = "43"
@@ -318,8 +318,130 @@ func TestInspectMessageImageToolRespectsDisabledVisionRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inspect image with enabled route: %v", err)
 	}
-	if !strings.Contains(content, "视觉模型结果") || vision.count() != 1 || dialogue.count() != 0 {
+	if !strings.Contains(content, "视觉模型结果") || vision.count() != 1 || dialogue.count() != 1 {
 		t.Fatalf("enabled vision route was not used: content=%q vision=%d dialogue=%d", content, vision.count(), dialogue.count())
+	}
+}
+
+func TestInspectMessageImageToolFallsBackWithoutVisionProvider(t *testing.T) {
+	dialogue := &inspectImageProviderStub{reply: "主模型识别的图片内容"}
+	engine := &llm.Engine{Provider: dialogue}
+	content, err := runInspectMessageImage(t, engine, llm.RunContext{
+		LoadObservedImage: func(context.Context, string, int) ([]byte, error) {
+			return testPNGImage, nil
+		},
+	}, `{"message_id":"synthetic-message"}`)
+	if err != nil {
+		t.Fatalf("inspect image: %v", err)
+	}
+	if !strings.Contains(content, dialogue.reply) || dialogue.count() != 1 {
+		t.Fatalf("dialogue fallback failed: content=%q calls=%d", content, dialogue.count())
+	}
+	request, err := json.Marshal(dialogue.requests[0].Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(request), "data:image/png;base64,"+base64.StdEncoding.EncodeToString(testPNGImage)) {
+		t.Fatalf("dialogue fallback did not receive image bytes: %s", request)
+	}
+}
+
+func TestInspectMessageImageToolUsesScopedRouteSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		vision      modelrouter.Binding
+		groupVision modelrouter.Binding
+		dialogueOff bool
+		wantModel   string
+	}{
+		{name: "unconfigured", wantModel: "group-dialogue"},
+		{name: "disabled", vision: modelrouter.Binding{Mode: modelrouter.BindingDisabled}, wantModel: "group-dialogue"},
+		{name: "dedicated", vision: modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "vision"}, wantModel: "vision"},
+		{name: "follow dialogue", vision: modelrouter.Binding{Mode: modelrouter.BindingFollowDialogue}, wantModel: "group-dialogue"},
+		{name: "group disables dedicated", vision: modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "vision"}, groupVision: modelrouter.Binding{Mode: modelrouter.BindingDisabled}, wantModel: "group-dialogue"},
+		{name: "dialogue disabled", dialogueOff: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var modelsMu sync.Mutex
+			var models []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Model string `json:"model"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				modelsMu.Lock()
+				models = append(models, request.Model)
+				modelsMu.Unlock()
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{
+					"message": map[string]string{"role": "assistant", "content": "described by " + request.Model},
+				}}})
+			}))
+			defer server.Close()
+			manager := modelrouter.New(filepath.Join(t.TempDir(), "router.json"))
+			cfg := manager.Draft()
+			cfg.Endpoints = []modelrouter.Endpoint{{ID: "endpoint", DisplayName: "Endpoint", BaseURL: server.URL, Enabled: true}}
+			for _, id := range []string{"global-dialogue", "group-dialogue", "vision"} {
+				cfg.Models = append(cfg.Models, modelrouter.Model{
+					ID: id, DisplayName: id, EndpointID: "endpoint", UpstreamModel: id, Enabled: true,
+				})
+			}
+			cfg.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "global-dialogue"}
+			if tc.vision.Mode != "" {
+				cfg.GlobalBindings[modelrouter.WorkloadVision] = tc.vision
+			}
+			groupBindings := map[modelrouter.Workload]modelrouter.Binding{
+				modelrouter.WorkloadDialogue: {Mode: modelrouter.BindingModel, ModelID: "group-dialogue"},
+			}
+			if tc.groupVision.Mode != "" {
+				groupBindings[modelrouter.WorkloadVision] = tc.groupVision
+			}
+			if tc.dialogueOff {
+				groupBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingDisabled}
+			}
+			cfg.GroupOverrides = []modelrouter.GroupOverride{{Platform: "onebot", GroupID: "7", Bindings: groupBindings}}
+			if err := manager.SaveDraft(cfg); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.Publish(); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := manager.Snapshot()
+			// A later publish must not change the model selected for this turn.
+			cfg.GlobalBindings[modelrouter.WorkloadVision] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "global-dialogue"}
+			cfg.GroupOverrides = nil
+			if err := manager.SaveDraft(cfg); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manager.Publish(); err != nil {
+				t.Fatal(err)
+			}
+			engine := &llm.Engine{
+				ModelRouter:    manager,
+				Provider:       manager.Provider(modelrouter.WorkloadDialogue, false, time.Second),
+				VisionProvider: manager.Provider(modelrouter.WorkloadVision, false, time.Second),
+			}
+			content, err := runInspectMessageImage(t, engine, llm.RunContext{
+				RouteScope: modelrouter.Scope{Platform: "onebot", GroupID: "7"}, RouteSnapshot: snapshot,
+				LoadObservedImage: func(context.Context, string, int) ([]byte, error) { return testPNGImage, nil },
+			}, `{"message_id":"synthetic-message"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			modelsMu.Lock()
+			defer modelsMu.Unlock()
+			if tc.wantModel == "" {
+				if len(models) != 0 || !strings.Contains(content, "模型不可用") {
+					t.Fatalf("disabled dialogue was called: models=%v content=%q", models, content)
+				}
+			} else if len(models) != 1 || models[0] != tc.wantModel || !strings.Contains(content, "described by "+tc.wantModel) {
+				t.Fatalf("models=%v content=%q, want %s", models, content, tc.wantModel)
+			}
+		})
 	}
 }
 

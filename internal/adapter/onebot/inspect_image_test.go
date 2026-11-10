@@ -122,6 +122,12 @@ func TestLoadObservedImageCountsUnreadableImageSlots(t *testing.T) {
 }
 
 func TestWSInspectMessageImageUsesGetMsgAndVision(t *testing.T) {
+	t.Run("dedicated vision", func(t *testing.T) { testWSInspectMessageImage(t, true) })
+	t.Run("dialogue fallback", func(t *testing.T) { testWSInspectMessageImage(t, false) })
+}
+
+func testWSInspectMessageImage(t *testing.T, dedicatedVision bool) {
+	t.Helper()
 	imageBytes := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x03}
 	visionProvider := &mockLLMProvider{responses: []*core.ChatResponse{{
 		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "历史消息里的图片是一张海报。"},
@@ -143,7 +149,13 @@ func TestWSInspectMessageImageUsesGetMsgAndVision(t *testing.T) {
 		{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "我看过那张海报了"}},
 	}}
 	engine := newTestEngine(dialogueProvider)
-	engine.VisionProvider = visionProvider
+	if dedicatedVision {
+		engine.VisionProvider = visionProvider
+	} else {
+		dialogueProvider.responses = []*core.ChatResponse{
+			dialogueProvider.responses[0], visionProvider.responses[0], dialogueProvider.responses[1],
+		}
+	}
 	engine.ToolRegistry[tools.InspectMessageImageToolName] = tools.InspectMessageImageTool(engine)
 
 	srv, wsURL := startWSTestServer(engine)
@@ -226,13 +238,29 @@ func TestWSInspectMessageImageUsesGetMsgAndVision(t *testing.T) {
 		t.Fatalf("send final ack: %v", err)
 	}
 
-	if visionProvider.reqCount != 1 {
-		t.Fatalf("vision provider calls = %d, want 1", visionProvider.reqCount)
+	wantVisionCalls, wantDialogueCalls, finalRequestIndex := 1, 2, 1
+	if !dedicatedVision {
+		wantVisionCalls, wantDialogueCalls, finalRequestIndex = 0, 3, 2
 	}
-	if dialogueProvider.reqCount < 2 {
-		t.Fatalf("dialogue provider calls = %d, want at least 2", dialogueProvider.reqCount)
+	if visionProvider.reqCount != wantVisionCalls {
+		t.Fatalf("vision provider calls = %d, want %d", visionProvider.reqCount, wantVisionCalls)
 	}
-	secondRequest, err := json.Marshal(dialogueProvider.requests[1].Messages)
+	if dialogueProvider.reqCount != wantDialogueCalls {
+		t.Fatalf("dialogue provider calls = %d, want %d", dialogueProvider.reqCount, wantDialogueCalls)
+	}
+	imageProvider := visionProvider
+	imageRequestIndex := 0
+	if !dedicatedVision {
+		imageProvider, imageRequestIndex = dialogueProvider, 1
+	}
+	imageRequest, err := json.Marshal(imageProvider.requests[imageRequestIndex].Messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(imageRequest), "data:image/png;base64,"+base64.StdEncoding.EncodeToString(imageBytes)) {
+		t.Fatalf("image description request lost image bytes: %s", imageRequest)
+	}
+	secondRequest, err := json.Marshal(dialogueProvider.requests[finalRequestIndex].Messages)
 	if err != nil {
 		t.Fatalf("marshal second dialogue request: %v", err)
 	}

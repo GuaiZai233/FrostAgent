@@ -339,12 +339,19 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
               ${disabled ? '<span class="badge badge-destructive">已禁用</span>' : '<span class="badge badge-success">运行时生效</span>'}
             </div>
             <select class="select" data-global-workload="${workload.value}">${bindingOptions(draft, binding, false, '继承实例默认', workload.value !== ModelWorkload.REFLECTION, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select>
+            ${workloadHint(workload.value)}
           </div>`;
         }).join('')}
       </div>
       ${dialogueModelHasVision()
         ? '<div class="card p-3 mt-3 text-xs text-muted flex gap-2" role="note"><span aria-hidden="true">ⓘ</span><span>主对话模型已勾选识图能力，当多模态模型 Disable 时，图片内容会直接输入主对话模型。</span></div>'
         : ''}`;
+  }
+
+  function workloadHint(workload: ModelWorkload): string {
+    return workload === ModelWorkload.VISION
+      ? '<p class="text-xs text-muted mt-2">仅用于图片内容转述，如果配置，将默认使用该模型处理图片后，再传入主模型。</p>'
+      : '';
   }
 
   function dialogueModelHasVision(): boolean {
@@ -809,7 +816,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
       maxWidth: '38rem',
       bodyHtml: `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem"><div class="form-group"><label class="form-label">平台</label><input class="input" id="group-platform" value="${escapeHtml(group.platform)}"></div><div class="form-group"><label class="form-label">群 ID</label><input class="input font-mono" id="group-id" value="${escapeHtml(group.groupId)}"></div></div>
-        ${workloads.map((workload) => `<div class="card router-group-card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(draft, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION && workload.value !== ModelWorkload.EMBEDDING, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select></div>`).join('')}`,
+        ${workloads.map((workload) => `<div class="card router-group-card p-3"><div class="flex items-center justify-between gap-2 mb-2"><strong class="text-sm">${workload.label}</strong></div><select class="select group-binding" data-workload="${workload.value}">${bindingOptions(draft, bindingFor(group.bindings, workload.value), true, '继承实例默认', workload.value !== ModelWorkload.REFLECTION && workload.value !== ModelWorkload.EMBEDDING, workload.value !== ModelWorkload.DIALOGUE && workload.value !== ModelWorkload.EMBEDDING)}</select>${workloadHint(workload.value)}</div>`).join('')}`,
       footerHtml: `<button class="btn btn-outline btn-sm dialog-close-btn">取消</button><button class="btn btn-primary btn-sm" id="group-confirm">保存</button>`,
       onMount: (dialog, close) => {
         dialog.querySelector('#group-confirm')?.addEventListener('click', () => {

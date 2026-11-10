@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { create } from '@bufbuild/protobuf';
-import { ModelRouterConfigurationSchema } from '@frostagent/proto';
+import { ModelRouterConfigurationSchema, ModelWorkload } from '@frostagent/proto';
 import { ModelRouterEditorError } from '../src/api/model-router-editor';
 import { toast } from '../src/components/toast';
 import { mountDialoguePage } from '../src/pages/dialogue';
@@ -197,6 +197,29 @@ try {
   assert.equal(confirmation.isConnected, false, 'unmount must dismiss destructive confirmation');
   assert.equal(discardCalls, 2);
   routerRoot.remove();
+
+  const hintRoot = root();
+  const stopHintRouter = mountModelRouterPage(hintRoot, {
+    hasInstance: true,
+    async getModelRouterState() {
+      return { active, draft: active, hasDraftSecretChanges: false, loadError: '' };
+    },
+  } as unknown as NonNullable<Parameters<typeof mountModelRouterPage>[1]>);
+  await settle();
+  const visionHint = '仅用于图片内容转述，如果配置，将默认使用该模型处理图片后，再传入主模型。';
+  click(hintRoot, '[data-router-tab="global"]');
+  const globalVision = hintRoot.querySelector(`[data-global-workload="${ModelWorkload.VISION}"]`)!;
+  assert.equal(globalVision.nextElementSibling?.textContent, visionHint);
+  assert.ok(globalVision.nextElementSibling?.classList.contains('text-muted'));
+  click(hintRoot, '[data-router-tab="groups"]');
+  click(hintRoot, '#add-group');
+  const groupDialog = document.querySelector('dialog')!;
+  const groupVision = groupDialog.querySelector(`[data-workload="${ModelWorkload.VISION}"]`)!;
+  assert.equal(groupVision.nextElementSibling?.textContent, visionHint);
+  assert.ok(groupVision.nextElementSibling?.classList.contains('text-muted'));
+  click(groupDialog, '.dialog-close-btn');
+  stopHintRouter();
+  hintRoot.remove();
 
   console.log('PASS: safe Markdown prompt preview, bounded MCP details, and unified discard UI');
 } finally {
