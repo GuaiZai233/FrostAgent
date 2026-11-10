@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Service) balanceConfigResponse(cfg balancequery.Config) *connect.Response[v1.BalanceQueryConfigResponse] {
-	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit}
+	response := &v1.BalanceQueryConfigResponse{Curl: cfg.Curl, ApiKeyConfigured: cfg.APIKey != "", ProviderId: cfg.ProviderID, QuotaPerUnit: cfg.QuotaPerUnit, Newapi: cfg.NewAPI}
 	if s.engine.ModelRouter != nil {
 		if catalog, err := s.engine.ModelRouter.ActiveChecked(); err == nil {
 			for _, endpoint := range catalog.Endpoints {
@@ -65,6 +65,7 @@ func (s *Service) SaveBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	}
 	cfg.Curl = req.Msg.Curl
 	cfg.QuotaPerUnit = req.Msg.QuotaPerUnit
+	cfg.NewAPI = req.Msg.Newapi
 	validated := cfg
 	if req.Msg.ClearApiKey {
 		if req.Msg.ApiKey != "" || req.Msg.ProviderId != "" {
@@ -122,7 +123,7 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	if err := balancequery.ValidateQuotaPerUnit(req.Msg.QuotaPerUnit); err != nil {
 		return fail(err.Error())
 	}
-	candidate := balancequery.Config{Curl: req.Msg.Curl, QuotaPerUnit: req.Msg.QuotaPerUnit}
+	candidate := balancequery.Config{Curl: req.Msg.Curl, QuotaPerUnit: req.Msg.QuotaPerUnit, NewAPI: req.Msg.Newapi}
 	switch {
 	case req.Msg.ProviderId != "":
 		key, err := s.engine.ModelRouter.EndpointAPIKey(req.Msg.ProviderId)
@@ -154,16 +155,6 @@ func (s *Service) TestBalanceQueryConfig(ctx context.Context, req *connect.Reque
 	return connect.NewResponse(&v1.TestBalanceQueryConfigResponse{Ok: true, Message: "连接成功，接口返回：\n" + truncateRunes(body, testResultMaxRunes)}), nil
 }
 
-// ClearBalanceQueryConfig deletes the stored configuration so balance_query reports unconfigured.
-func (s *Service) ClearBalanceQueryConfig(ctx context.Context, req *connect.Request[v1.ClearBalanceQueryConfigRequest]) (*connect.Response[v1.BalanceQueryConfigResponse], error) {
-	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
-	if err := s.engine.Config.Update(balancequery.ConfigKey, "", true); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, errors.New("清除额度查询配置失败"))
-	}
-	return s.balanceConfigResponse(balancequery.Config{Curl: balancequery.DefaultCurl}), nil
-}
-
 // testResultMaxRunes bounds the response body shown back to the operator by the test action.
 const testResultMaxRunes = 2000
 
@@ -173,4 +164,14 @@ func truncateRunes(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "…（已截断）"
+}
+
+// ClearBalanceQueryConfig deletes the stored configuration so balance_query reports unconfigured.
+func (s *Service) ClearBalanceQueryConfig(ctx context.Context, req *connect.Request[v1.ClearBalanceQueryConfigRequest]) (*connect.Response[v1.BalanceQueryConfigResponse], error) {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	if err := s.engine.Config.Update(balancequery.ConfigKey, "", true); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("清除额度查询配置失败"))
+	}
+	return s.balanceConfigResponse(balancequery.Config{Curl: balancequery.DefaultCurl}), nil
 }

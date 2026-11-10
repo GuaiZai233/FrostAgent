@@ -682,14 +682,14 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.getBalanceQueryConfig({});
     },
 
-    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false, quotaPerUnit = 0) {
-      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey, quotaPerUnit });
+    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false, quotaPerUnit = 0, newapi = false) {
+      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey, quotaPerUnit, newapi });
     },
     clearBalanceQueryConfig() {
       return botClient.clearBalanceQueryConfig({});
     },
-    testBalanceQueryConfig(curl: string, apiKey: string, providerId = '', quotaPerUnit = 0) {
-      return botClient.testBalanceQueryConfig({ curl, apiKey, providerId, quotaPerUnit });
+    testBalanceQueryConfig(curl: string, apiKey: string, providerId = '', quotaPerUnit = 0, newapi = false) {
+      return botClient.testBalanceQueryConfig({ curl, apiKey, providerId, quotaPerUnit, newapi });
     },
 
     getSessions(

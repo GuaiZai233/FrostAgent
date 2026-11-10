@@ -47,6 +47,8 @@ message SaveBalanceQueryConfigRequest {
   string provider_id = 4;
   // Quota-to-dollar ratio for New API results; 0 disables conversion.
   double quota_per_unit = 5;
+  // The template targets a New API endpoint; the response must then be a valid New API payload.
+  bool newapi = 6;
 }
 
 // Deletes the whole stored balance_query configuration, returning the tool to unconfigured.
@@ -59,6 +61,7 @@ message TestBalanceQueryConfigRequest {
   string api_key = 2;
   string provider_id = 3;
   double quota_per_unit = 4;
+  bool newapi = 5;
 }
 
 message TestBalanceQueryConfigResponse {
@@ -72,6 +75,7 @@ message BalanceQueryConfigResponse {
   string provider_id = 3;
   repeated BalanceQueryProvider providers = 4;
   double quota_per_unit = 5;
+  bool newapi = 6;
 }
 
 message BalanceQueryProvider {

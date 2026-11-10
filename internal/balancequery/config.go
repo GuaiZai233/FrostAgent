@@ -23,6 +23,8 @@ type Config struct {
 	Keyless bool `json:"keyless,omitempty"`
 	// QuotaPerUnit converts New API quota fields to dollars; 0 disables conversion.
 	QuotaPerUnit float64 `json:"quota_per_unit,omitempty"`
+	// NewAPI marks a New API template whose responses must be validated as quota payloads.
+	NewAPI bool `json:"newapi,omitempty"`
 }
 
 type KeyResolver func(providerID string) (string, error)

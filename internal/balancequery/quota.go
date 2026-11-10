@@ -38,13 +38,8 @@ func ConvertQuota(body string, perUnit float64) string {
 	if json.Unmarshal([]byte(body), &fields) != nil {
 		return body
 	}
-	changed := false
-	for name, value := range fields {
-		number, ok := value.(float64)
-		if !ok || !quotaFields[name] {
-			continue
-		}
-		fields[name] = formatDollars(number/perUnit) + " Dollar"
+	changed := convertQuotaFields(fields, perUnit)
+	if data, ok := fields["data"].(map[string]any); ok && convertQuotaFields(data, perUnit) {
 		changed = true
 	}
 	if !changed {
@@ -64,4 +59,18 @@ func formatDollars(v float64) string {
 		return "0"
 	}
 	return s
+}
+
+// convertQuotaFields rewrites quota-valued numbers in one object and reports whether any changed.
+func convertQuotaFields(fields map[string]any, perUnit float64) bool {
+	changed := false
+	for name, value := range fields {
+		number, ok := value.(float64)
+		if !ok || !quotaFields[name] {
+			continue
+		}
+		fields[name] = formatDollars(number/perUnit) + " Dollar"
+		changed = true
+	}
+	return changed
 }

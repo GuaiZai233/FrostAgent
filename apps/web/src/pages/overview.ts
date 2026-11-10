@@ -316,7 +316,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
           <label id="balance-query-endpoint-row" class="flex items-center gap-2 text-sm" hidden><input id="balance-query-use-endpoint" type="checkbox" class="checkbox">复用现有 Provider 端点</label>
           <label class="flex items-center gap-2 text-sm"><input id="balance-query-reuse-key" type="checkbox" class="checkbox" ${cfg.providerId ? 'checked' : ''}>复用已有配置的 Key</label>
           <fieldset id="balance-query-providers" class="flex flex-col gap-2" ${cfg.providerId ? '' : 'hidden'}><legend class="form-label">选择一个 Provider</legend>${providers || '<p class="text-xs text-muted">暂无 Provider，请先在供应商页面配置 API Key。</p>'}${missingProvider ? '<p class="text-xs text-destructive">原 Provider 已不可用，请重新选择。</p>' : ''}<p class="text-xs text-muted">直接使用所选 Provider 当前已发布的 API Key，无需重复填写。</p></fieldset>
-          <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"><button type="button" id="balance-query-clear-key" class="btn btn-outline btn-sm shrink-0" ${cfg.apiKeyConfigured && !cfg.providerId ? '' : 'disabled'}>清除</button></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
+          <div id="balance-query-manual-key" class="form-group" ${cfg.providerId ? 'hidden' : ''}><label class="form-label" for="balance-query-key">Key</label><div class="flex items-center gap-2"><input id="balance-query-key" class="input flex-1" type="password" autocomplete="new-password" placeholder="${cfg.apiKeyConfigured && !cfg.providerId ? '已配置；留空保留原密钥' : '填写查询接口的 API Key'}"></div><p id="balance-query-key-hint" class="text-xs text-muted">${cfg.apiKeyConfigured && !cfg.providerId ? '已配置。留空保存会保留原密钥。' : '填写查询接口的 Key。'}</p><p id="balance-query-preset-hint" class="text-xs text-muted" hidden></p></div>
           <div id="balance-query-quota" class="form-group" hidden>
             <label class="flex items-center gap-2 text-sm"><input id="balance-query-quota-enabled" type="checkbox" class="checkbox" ${cfg.quotaPerUnit > 0 ? 'checked' : ''}>内部 Quota 转换</label>
             <div id="balance-query-quota-ratio-row" class="flex items-center gap-2 text-sm" ${cfg.quotaPerUnit > 0 ? '' : 'hidden'}><span>每 1 Dollar 对应的 Quota</span><input id="balance-query-quota-ratio" class="input font-mono" type="number" min="0" step="any" value="${cfg.quotaPerUnit > 0 ? cfg.quotaPerUnit : 500000}" style="width:10rem"></div>
@@ -330,7 +330,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
         onMount: (dialog, close) => {
           closeConfigDialog = close;
           const key = dialog.querySelector<HTMLInputElement>('#balance-query-key')!;
-          const clearKeyButton = dialog.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
           const keyHint = dialog.querySelector<HTMLElement>('#balance-query-key-hint')!;
           const reuseKey = dialog.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
           const providerGroup = dialog.querySelector<HTMLFieldSetElement>('#balance-query-providers')!;
@@ -354,7 +353,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             applyEndpointMode();
             applyQuotaBox();
           };
-          let clearKey = false;
           let retypeKey = false;
           // Any edit to the stored request template (preset or hand-written) requires the key to be
           // re-entered. The backend separately enforces the endpoint rule with the real curl parser.
@@ -403,7 +401,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             testButton.disabled = true;
             testButton.textContent = '测试中...';
             try {
-              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '', quotaValue());
+              const result = await api.testBalanceQueryConfig(curl.value, useProvider ? '' : key.value, useProvider ? provider!.value : '', quotaValue(), isNewApi());
               if (isUnmounted || !dialog.isConnected) return;
               const resultBox = dialog.querySelector<HTMLElement>('#balance-query-test-result')!;
               if (result.ok) {
@@ -430,13 +428,10 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             // Custom templates may leave the key blank (the backend keeps the stored key only for the same endpoint).
             // A chosen preset always needs its own key when none is stored or the template has changed.
             const presetChosen = preset.value !== '';
-            key.required = !reuseKey.checked && !clearKey && (!!cfg.providerId || (presetChosen && (!cfg.apiKeyConfigured || retypeKey)));
-            clearKeyButton.disabled = saving || reuseKey.checked || !cfg.apiKeyConfigured || !!cfg.providerId || clearKey;
-            keyHint.textContent = clearKey
-              ? '保存后将清除已配置的 API Key。'
-              : cfg.apiKeyConfigured && !cfg.providerId
-              ? '已配置。留空保存会保留原密钥；点击「清除」后保存会删除密钥。'
-              : '填写查询接口的 API Key。';
+            key.required = !reuseKey.checked && (!!cfg.providerId || (presetChosen && (!cfg.apiKeyConfigured || retypeKey)));
+            keyHint.textContent = cfg.apiKeyConfigured && !cfg.providerId
+              ? '已配置。留空保存会保留原密钥。'
+              : '填写查询接口的 Key。';
             reuseKey.disabled = saving;
             providerInputs.forEach((input) => { input.disabled = saving || input.dataset.available !== 'true'; });
           };
@@ -449,7 +444,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             preset.disabled = pending;
             syncCredentials();
           };
-          reuseKey.onchange = () => { clearKey = false; syncCredentials(); };
+          reuseKey.onchange = () => { syncCredentials(); };
           // New API presets can reuse a provider's endpoint: the curl box is replaced by the provider's
           // scheme and host (everything after the first slash removed), and the provider's key is reused.
           const isNewApi = () => preset.value === 'newapi-key' || preset.value === 'newapi-account';
@@ -492,18 +487,6 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             applyEndpointMode();
           };
           providerGroup.addEventListener('change', () => { if (useEndpoint.checked) applyEndpointMode(); });
-          clearKeyButton.onclick = () => {
-            if (saving || reuseKey.checked || !cfg.apiKeyConfigured || clearKey) return;
-            clearKey = true;
-            key.value = '';
-            syncCredentials();
-            key.focus();
-          };
-          key.oninput = () => {
-            if (!clearKey) return;
-            clearKey = false;
-            syncCredentials();
-          };
           syncCredentials();
           dialog.querySelector<HTMLFormElement>('#balance-query-form')!.onsubmit = async (event) => {
             event.preventDefault();
@@ -516,13 +499,11 @@ export function mountOverviewPage(container: HTMLElement): () => void {
               error.textContent = retypeKey ? '修改请求模板后请重新输入 Key，不会复用原有密钥' : '请填写 API Key';
               return;
             }
-            const clear = !reuseKey.checked && clearKey;
             setSaving(true);
             try {
-              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', clear, quotaValue());
+              await api.saveBalanceQueryConfig(curl.value, reuseKey.checked ? '' : key.value, reuseKey.checked ? provider!.value : '', false, quotaValue(), isNewApi());
               if (isUnmounted || !dialog.isConnected) return;
               toolRevision++;
-              clearKey = false;
               key.value = '';
               const hadToolsDialog = !!closeToolsDialog;
               close();

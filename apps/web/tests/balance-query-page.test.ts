@@ -101,9 +101,6 @@ try {
   assert.match(document.querySelector('.fa-toast-error')?.textContent ?? '', /请先点击卡片后进行配置/);
   assert.equal(toolUpdates['balance_query'], undefined, 'forced balance_query enable must not reach the API');
   await openConfig();
-  const clearButton = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
-  assert.ok(clearButton, 'clear-key action must exist');
-  assert.equal(clearButton.disabled, true, 'clear-key action must be disabled without a stored key');
   assert.equal(document.querySelector<HTMLElement>('#balance-query-providers')!.hidden, true);
   assert.equal(document.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, defaultCurl);
   let key = document.querySelector<HTMLInputElement>('#balance-query-key')!;
@@ -126,7 +123,6 @@ try {
   key = document.querySelector<HTMLInputElement>('#balance-query-key')!;
   assert.equal(key.value, '', 'stored key must never populate the frontend field');
   assert.match(key.placeholder, /留空保留/);
-  assert.equal(document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!.disabled, false);
   assert.equal(document.querySelector<HTMLTextAreaElement>('#balance-query-curl')!.value, customCurl);
   await save();
   assert.equal(savedKey, 'synthetic-ui-balance-key');
@@ -135,7 +131,6 @@ try {
   const reuse = document.querySelector<HTMLInputElement>('#balance-query-reuse-key')!;
   reuse.click();
   assert.equal(document.querySelector<HTMLInputElement>('#balance-query-key')!.disabled, true);
-  assert.equal(document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!.disabled, true);
   assert.equal(document.querySelector<HTMLElement>('#balance-query-manual-key')!.hidden, true);
   assert.equal(document.querySelector<HTMLElement>('#balance-query-providers')!.hidden, false);
   const savesBeforeSelection = saves.length;
@@ -228,19 +223,6 @@ try {
   }
   failSave = false;
   await openConfig();
-  const clearButtonAfterSave = document.querySelector<HTMLButtonElement>('#balance-query-clear-key')!;
-  assert.equal(clearButtonAfterSave.disabled, false, 'clear-key action must be enabled for a stored key');
-  clearButtonAfterSave.click();
-  assert.equal(document.querySelector<HTMLInputElement>('#balance-query-key')!.value, '');
-  assert.match(document.querySelector('#balance-query-key-hint')!.textContent!, /清除/);
-  await save();
-  assert.equal(saves.at(-1)!.clearApiKey, true);
-  assert.equal(savedKey, '');
-  assert.equal(document.querySelectorAll('dialog').length, 0);
-  await flush();
-  const clearedCard = [...root.querySelectorAll<HTMLElement>('.overview-tool-card')].find((card) => card.textContent?.includes('balance_query'))!;
-  assert.equal(clearedCard.querySelector('.overview-tool-unconfigured')?.textContent, '未配置');
-  assert.equal(clearedCard.querySelector<HTMLInputElement>('[data-tool-toggle="balance_query"]')!.checked, false);
   providers = [];
   savedProvider = 'deleted-provider';
   await openConfig();
@@ -423,4 +405,4 @@ try {
   dom.window.close();
   Object.assign(globalThis, originals);
 }
-console.log('PASS: balance query defaults, unavailable toggle, clear-key, provider reuse, credentials, pending-save dismissal, preset selection, failure retry and instance lifecycle');
+console.log('PASS: balance query defaults, unavailable toggle, provider reuse, credentials, pending-save dismissal, preset selection, failure retry and instance lifecycle');
