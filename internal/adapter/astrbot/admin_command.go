@@ -159,7 +159,7 @@ func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
 		}
 		if err := engine.Security.CheckAccess(principal); err != nil {
 			if errors.Is(err, security.ErrLocked) {
-				_ = sendAstrBotAdminReply(event, conn, security.RejectGatewayMsg, false)
+				_ = sendAstrBotAdminReply(event, conn, engine.Log().ReportError(logs.SYSTEM, security.RejectGatewayMsg, err), false)
 			}
 			return true // Fail-closed: locked or security error
 		}
@@ -206,11 +206,11 @@ func handleAdminCommand(conn *wsConn, event Event, engine *llm.Engine) bool {
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {
 			if !errors.Is(err, security.ErrLocked) {
-				_ = sendAstrBotAdminReply(event, conn, fmt.Sprintf("执行指令失败：%v", err), false)
+				_ = sendAstrBotAdminReply(event, conn, engine.Log().ReportError(logs.SYSTEM, "管理员指令执行失败", err, sessionID), false)
 			}
 		}
 	}) {
-		_ = sendAstrBotAdminReply(event, conn, "实例未就绪，无法执行指令。", false)
+		_ = sendAstrBotAdminReply(event, conn, engine.Log().ReportError(logs.SYSTEM, "管理员指令执行失败：实例未就绪", nil, sessionID), false)
 	}
 
 	return true

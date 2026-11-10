@@ -22,7 +22,8 @@ func (e *Engine) deliverStickerPair(ctx context.Context, run *RunContext, textCa
 	}
 	payload, err := combineStickerPairPayloads(textOutput.MessagePayload, stickerOutput.MessagePayload)
 	if err != nil {
-		return "文字未发送：配对贴纸消息无效。", fmt.Sprintf("表情包未发送：%v", err)
+		reply := e.Log().ReportError(logs.TOOL, "配对消息发送失败：消息无效", err, run.SessionID)
+		return reply, reply
 	}
 	result, _ := e.deliverToolResult(ctx, core.ToolExecutionResult{MessagePayload: payload}, payload)
 	return result, result
@@ -34,15 +35,15 @@ func (e *Engine) prepareStickerPairTool(ctx context.Context, run *RunContext, ca
 	}
 	if blocked, decision := e.securityEvaluate(*run, security.StageToolArgument, security.SourceToolArgument, call.Function.Arguments, call.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 		if decision.IsFailure {
-			return core.ToolExecutionResult{}, "FrostAgent安全控制：安全审查服务暂时不可用，该工具调用已被阻止。"
+			return core.ToolExecutionResult{}, security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，该工具调用已被阻止", decision, run.SessionID)
 		}
-		return core.ToolExecutionResult{}, "FrostAgent安全控制：该工具调用已被阻止。"
+		return core.ToolExecutionResult{}, security.ReportRejection(e.Log(), "安全审查拦截：该工具调用已被阻止", decision, run.SessionID)
 	} else if decision.Action == security.WatchdogWarn {
 		mergeSecurityNotice(run, decision.WarningNotice)
 	}
 	tool, exists := e.findToolExecutor(call.Function.Name)
 	if !exists {
-		return core.ToolExecutionResult{}, "FrostAgent错误：工具未找到"
+		return core.ToolExecutionResult{}, e.Log().ReportError(logs.TOOL, "工具调用失败：工具未找到", fmt.Errorf("tool=%s", call.Function.Name), run.SessionID)
 	}
 	e.Log().InfoWithConsoleSummary(logs.TOOL, formatToolCallLog(call.Function.Name, call.Function.Arguments), "【智能体调用工具】"+call.Function.Name)
 	output, err := executeInterruptibleTool(ctx, tool, call)
@@ -50,10 +51,10 @@ func (e *Engine) prepareStickerPairTool(ctx context.Context, run *RunContext, ca
 		return core.ToolExecutionResult{}, "消息发送取消：执行已被打断"
 	}
 	if err != nil {
-		return core.ToolExecutionResult{}, fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+		return core.ToolExecutionResult{}, e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", call.Function.Name, err), run.SessionID)
 	}
 	if len(output.Content) > MaxToolOutputBytes || len(output.MessagePayload) > MaxToolOutputBytes {
-		return core.ToolExecutionResult{}, "FrostAgent错误：工具结果过大，配对消息未发送。"
+		return core.ToolExecutionResult{}, e.Log().ReportError(logs.TOOL, "工具执行失败：工具结果过大，配对消息未发送", nil, run.SessionID)
 	}
 	securityContent := output.Content
 	if output.MessagePayload != "" && output.MessagePayload != output.Content {
@@ -61,12 +62,12 @@ func (e *Engine) prepareStickerPairTool(ctx context.Context, run *RunContext, ca
 	}
 	if blocked, decision := e.securityEvaluate(*run, security.StageToolResult, security.SourceToolResult, securityContent, call.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 		if decision.IsFailure {
-			return core.ToolExecutionResult{}, "FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
+			return core.ToolExecutionResult{}, security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，外部工具结果已隔离", decision, run.SessionID)
 		}
 		if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 			return core.ToolExecutionResult{}, decision.SanitizedContent
 		}
-		return core.ToolExecutionResult{}, "FrostAgent安全控制：外部工具结果已隔离。"
+		return core.ToolExecutionResult{}, security.ReportRejection(e.Log(), "安全审查拦截：外部工具结果已隔离", decision, run.SessionID)
 	} else if decision.Action == security.WatchdogWarn {
 		mergeSecurityNotice(run, decision.WarningNotice)
 	}

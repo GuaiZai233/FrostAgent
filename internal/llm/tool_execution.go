@@ -3,8 +3,8 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 type contextualToolExecutor interface {
@@ -88,7 +88,7 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 		}
 		return err
 	}); err != nil {
-		return fmt.Sprintf("消息发送失败：%v", err), false
+		return e.Log().ReportError(logs.WEBSOCKET, "消息发送失败", err, run.SessionID), false
 	}
 	return "消息已发送", true
 }

@@ -542,7 +542,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 	// Empty files
 	badFilesOut, _ := createVerTool.ExecuteContext(adminCtx, `{"action_id": "act_test_3", "files": {}}`)
-	if !strings.Contains(badFilesOut, "files 文件映射不能为空") {
+	if !strings.HasPrefix(badFilesOut, "[FrostAgent 错误] 创建版本参数校验失败 (Ref_ID: ") {
 		t.Fatalf("expected empty files error, got: %s", badFilesOut)
 	}
 	// Successful version creation

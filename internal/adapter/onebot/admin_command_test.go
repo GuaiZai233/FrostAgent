@@ -383,7 +383,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 			t.Errorf("expected send_group_msg action, got %s", act.Action)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); !strings.Contains(msg, security.RejectGatewayMsg) {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("expected reply containing RejectGatewayMsg, got %q", msg)
 		}
 	case <-time.After(2 * time.Second):
@@ -411,7 +411,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 	select {
 	case act := <-actionCh:
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); !strings.Contains(msg, security.RejectGatewayMsg) {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("expected reply containing RejectGatewayMsg on unban attempt, got %q", msg)
 		}
 	case <-time.After(2 * time.Second):
@@ -902,7 +902,8 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 		{"type": "at", "data": map[string]any{"qq": "10001"}},
 		{"type": "text", "data": map[string]any{"text": " /ban all"}},
 	})
-	if !strings.Contains(reply, "不支持对全体成员或全局通配符执行该操作") {
+	assertFailureReference(t, engine.Log(), reply, "不支持对全体成员或全局通配符执行该操作")
+	if !strings.HasPrefix(reply, "[FrostAgent 错误] 管理员指令执行失败 (Ref_ID: ") {
 		t.Errorf("expected wildcard rejection, got: %q", reply)
 	}
 
@@ -911,8 +912,8 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 		{"type": "at", "data": map[string]any{"qq": "10001"}},
 		{"type": "text", "data": map[string]any{"text": " /ban [@测试昵称]"}},
 	})
-	if !strings.Contains(reply, "包含非法字符或非ASCII字符（禁止使用昵称）") {
+	assertFailureReference(t, engine.Log(), reply, "包含非法字符或非ASCII字符（禁止使用昵称）")
+	if !strings.HasPrefix(reply, "[FrostAgent 错误] 管理员指令执行失败 (Ref_ID: ") {
 		t.Errorf("expected nickname rejection, got: %q", reply)
 	}
 }
-

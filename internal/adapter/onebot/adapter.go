@@ -503,7 +503,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					}
 				}
 				if directReply {
-					msg := a.engine.Security.RejectMessage(principal, decision)
+					summary := a.engine.Security.RejectMessage(principal, decision)
+					msg := security.ReportRejection(a.engine.Log(), summary, decision)
 					action := "send_private_msg"
 					type1 := "user_id"
 					id := strconv.FormatInt(event.UserID, 10)

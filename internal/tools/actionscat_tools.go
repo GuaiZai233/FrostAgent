@@ -128,7 +128,7 @@ func ActionsCatListActionsTool(client *actionscat.Client) Tool {
 
 			actions, err := client.ListActions(ctx)
 			if err != nil {
-				return fmt.Sprintf("获取 ActionsCat actions 列表失败: %v", err), nil
+				return reportToolFailure(ctx, "获取 ActionsCat actions 列表失败", err), nil
 			}
 
 			var filtered []AgentActionDTO
@@ -207,7 +207,7 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 				Wait            *bool             `json:"wait"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -240,9 +240,9 @@ func ActionsCatRunActionTool(client *actionscat.Client) Tool {
 			if err != nil {
 				errMsg := err.Error()
 				if strings.Contains(strings.ToLower(errMsg), "no active build") || strings.Contains(strings.ToLower(errMsg), "no_active_build") {
-					return fmt.Sprintf("触发 ActionsCat Action %s 失败: 该动作尚未激活构建版本 (active_build_id 为空)，无法运行。请先在 ActionsCat 中构建并激活版本后再执行。", input.ActionID), nil
+					return reportToolFailure(ctx, fmt.Sprintf("触发 ActionsCat Action %s 失败：该动作尚未激活构建版本 (active_build_id 为空)，无法运行。请先在 ActionsCat 中构建并激活版本后再执行。", input.ActionID), err), nil
 				}
-				return fmt.Sprintf("触发 ActionsCat Action %s 失败: %v", input.ActionID, err), nil
+				return reportToolFailure(ctx, "触发 ActionsCat Action 失败", fmt.Errorf("action=%s: %w", input.ActionID, err)), nil
 			}
 
 			dto := toAgentRunDTO(run, true)
@@ -293,7 +293,7 @@ func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 				IncludeLogs *bool  `json:"include_logs"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.RunID) == "" {
 				return "缺少必填参数 'action_id' 或 'run_id'", nil
@@ -306,7 +306,7 @@ func ActionsCatGetRunTool(client *actionscat.Client) Tool {
 
 			run, err := client.GetRun(ctx, input.ActionID, input.RunID)
 			if err != nil {
-				return fmt.Sprintf("查询 Run 状态失败: %v", err), nil
+				return reportToolFailure(ctx, "查询 Run 状态失败", err), nil
 			}
 
 			dto := toAgentRunDTO(run, includeLogs)
@@ -368,7 +368,7 @@ func ActionsCatCreateActionTool(client *actionscat.Client, scopes ...*runtimesco
 				MaxConcurrency int    `json:"max_concurrency"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.Name) == "" {
 				return "缺少必填参数 'name'", nil
@@ -380,7 +380,7 @@ func ActionsCatCreateActionTool(client *actionscat.Client, scopes ...*runtimesco
 				MaxConcurrency: input.MaxConcurrency,
 			})
 			if err != nil {
-				return fmt.Sprintf("创建 ActionsCat Action 失败: %v", err), nil
+				return reportToolFailure(ctx, "创建 ActionsCat Action 失败", err), nil
 			}
 
 			result := struct {
@@ -654,7 +654,7 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 
 			var input createVersionInput
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -662,12 +662,12 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 
 			req, err := prepareCreateVersionReq(input)
 			if err != nil {
-				return fmt.Sprintf("创建版本参数校验失败: %v", err), nil
+				return reportToolFailure(ctx, "创建版本参数校验失败", err), nil
 			}
 
 			ver, err := client.CreateVersion(ctx, input.ActionID, req)
 			if err != nil {
-				return fmt.Sprintf("创建 ActionsCat Action 版本失败: %v", err), nil
+				return reportToolFailure(ctx, "创建 ActionsCat Action 版本失败", err), nil
 			}
 
 			result := struct {
@@ -732,7 +732,7 @@ func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimesco
 				VersionID string `json:"version_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.VersionID) == "" {
 				return "缺少必填参数 'action_id' 或 'version_id'", nil
@@ -741,12 +741,12 @@ func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimesco
 			bld, err := client.BuildVersion(ctx, input.ActionID, input.VersionID)
 			if err != nil {
 				if errors.Is(err, actionscat.ErrBuildUnknownResult) {
-					return fmt.Sprintf("构建请求异常 (服务端异常、超时、网络传输中断或响应不可解析)，构建结果未知 (后端可能已生成构建记录或仍在编译中)。\n"+
+					return reportToolFailure(ctx, fmt.Sprintf("构建请求异常：构建结果未知 (后端可能已生成构建记录或仍在编译中)。 "+
 						"【恢复指引】：严禁立即重复触发构建！请先调用 actionscat_list_builds(action_id=%q, version_id=%q) "+
 						"查询该版本是否已在后台生成构建以及其实时状态。若第一次查询暂时为空，请等待短暂间隔后再查询一次；在确认服务端没有生成该 version 的 Build 前不要立即重试构建。若状态为 succeeded，可直接获取 build_id 进行激活；若 building 则稍后重试查询。",
-						input.ActionID, input.VersionID), nil
+						input.ActionID, input.VersionID), err), nil
 				}
-				return fmt.Sprintf("构建版本失败: %v", err), nil
+				return reportToolFailure(ctx, "构建版本失败", err), nil
 			}
 
 			if bld.Status != "succeeded" {
@@ -812,7 +812,7 @@ func ActionsCatGetBuildTool(client *actionscat.Client) Tool {
 				IncludeLogs *bool  `json:"include_logs"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.BuildID) == "" {
 				return "缺少必填参数 'action_id' 或 'build_id'", nil
@@ -825,7 +825,7 @@ func ActionsCatGetBuildTool(client *actionscat.Client) Tool {
 
 			bld, err := client.GetBuild(ctx, input.ActionID, input.BuildID)
 			if err != nil {
-				return fmt.Sprintf("查询 Build 状态失败: %v", err), nil
+				return reportToolFailure(ctx, "查询 Build 状态失败", err), nil
 			}
 
 			dto := toAgentBuildDTO(bld, includeLogs)
@@ -875,7 +875,7 @@ func ActionsCatListBuildsTool(client *actionscat.Client) Tool {
 				VersionID string `json:"version_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -883,7 +883,7 @@ func ActionsCatListBuildsTool(client *actionscat.Client) Tool {
 
 			builds, err := client.ListBuilds(ctx, input.ActionID)
 			if err != nil {
-				return fmt.Sprintf("查询构建列表失败: %v", err), nil
+				return reportToolFailure(ctx, "查询构建列表失败", err), nil
 			}
 
 			var filtered []AgentBuildDTO
@@ -960,7 +960,7 @@ func ActionsCatActivateBuildTool(client *actionscat.Client, scopes ...*runtimesc
 				BuildID   string `json:"build_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" || strings.TrimSpace(input.VersionID) == "" || strings.TrimSpace(input.BuildID) == "" {
 				return "缺少必填参数 'action_id'、'version_id' 或 'build_id'", nil
@@ -981,12 +981,12 @@ func ActionsCatActivateBuildTool(client *actionscat.Client, scopes ...*runtimesc
 				VersionID: input.VersionID,
 				BuildID:   input.BuildID,
 			}); err != nil {
-				return fmt.Sprintf("激活构建失败: %v", err), nil
+				return reportToolFailure(ctx, "激活构建失败", err), nil
 			}
 
 			act, err := client.GetAction(ctx, input.ActionID)
 			if err != nil {
-				return fmt.Sprintf("构建已激活，但获取更新后的 Action 失败: %v", err), nil
+				return reportToolFailure(ctx, "构建已激活，但获取更新后的 Action 失败", err), nil
 			}
 
 			resp := struct {
@@ -1116,7 +1116,7 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 
 			var input createVersionInput
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -1124,25 +1124,25 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 
 			req, err := prepareCreateVersionReq(input)
 			if err != nil {
-				return fmt.Sprintf("部署参数校验失败: %v", err), nil
+				return reportToolFailure(ctx, "部署参数校验失败", err), nil
 			}
 
 			// Step 1: Create Version
 			ver, err := client.CreateVersion(ctx, input.ActionID, req)
 			if err != nil {
-				return fmt.Sprintf("部署失败 (创建版本阶段): %v", err), nil
+				return reportToolFailure(ctx, "部署失败 (创建版本阶段)", err), nil
 			}
 
 			// Step 2: Build Version
 			bld, err := client.BuildVersion(ctx, input.ActionID, ver.ID)
 			if err != nil {
 				if errors.Is(err, actionscat.ErrBuildUnknownResult) {
-					return fmt.Sprintf("部署中断: 版本 %s 构建请求异常 (服务端异常、超时、网络传输中断或响应不可解析)，构建结果未知 (后端可能已生成构建记录或仍在编译中)。\n"+
+					return reportToolFailure(ctx, fmt.Sprintf("部署中断：版本 %s 构建请求异常，构建结果未知 (后端可能已生成构建记录或仍在编译中)。 "+
 						"【恢复指引】：严禁立即重新部署或重复提交构建！请先调用 actionscat_list_builds(action_id=%q, version_id=%q) "+
 						"检查该版本是否已在后台生成构建。若第一次查询暂时为空，请等待短暂间隔后再查询一次；在确认服务端未生成 Build 前严禁重复构建。若构建成功 (succeeded)，可调用 actionscat_activate_build 完成激活；若失败则排查日志后新建版本。",
-						ver.ID, input.ActionID, ver.ID), nil
+						ver.ID, input.ActionID, ver.ID), err), nil
 				}
-				return fmt.Sprintf("部署失败 (编译构建阶段): %v", err), nil
+				return reportToolFailure(ctx, "部署失败 (编译构建阶段)", err), nil
 			}
 
 			// Step 3: Check Build Status
@@ -1164,13 +1164,13 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 				VersionID: ver.ID,
 				BuildID:   bld.ID,
 			}); err != nil {
-				return fmt.Sprintf("部署失败 (激活构建阶段): %v", err), nil
+				return reportToolFailure(ctx, "部署失败 (激活构建阶段)", err), nil
 			}
 
 			// Step 5: Return updated runnable action
 			act, err := client.GetAction(ctx, input.ActionID)
 			if err != nil {
-				return fmt.Sprintf("部署成功已激活，但获取最终 Action 状态失败: %v", err), nil
+				return reportToolFailure(ctx, "部署成功已激活，但获取最终 Action 状态失败", err), nil
 			}
 
 			resp := struct {
@@ -1250,7 +1250,7 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 				Enabled  *bool  `json:"enabled"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -1276,7 +1276,7 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 				DeliveryContext: delivery,
 			})
 			if err != nil {
-				return fmt.Sprintf("创建 ActionsCat 定时触发器失败: %v", err), nil
+				return reportToolFailure(ctx, "创建 ActionsCat 定时触发器失败", err), nil
 			}
 
 			resp := struct {
@@ -1344,7 +1344,7 @@ func ActionsCatListSchedulesTool(client *actionscat.Client) Tool {
 				ActionID string `json:"action_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -1352,7 +1352,7 @@ func ActionsCatListSchedulesTool(client *actionscat.Client) Tool {
 
 			schedules, err := client.ListSchedules(ctx, input.ActionID)
 			if err != nil {
-				return fmt.Sprintf("查询定时触发器列表失败: %v", err), nil
+				return reportToolFailure(ctx, "查询定时触发器列表失败", err), nil
 			}
 
 			resp := struct {
@@ -1410,14 +1410,14 @@ func ActionsCatDeleteScheduleTool(client *actionscat.Client, scopes ...*runtimes
 				ScheduleID string `json:"schedule_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ScheduleID) == "" {
 				return "缺少必填参数 'schedule_id'", nil
 			}
 
 			if err := client.DeleteSchedule(ctx, strings.TrimSpace(input.ScheduleID)); err != nil {
-				return fmt.Sprintf("删除定时触发器失败: %v", err), nil
+				return reportToolFailure(ctx, "删除定时触发器失败", err), nil
 			}
 
 			return fmt.Sprintf("定时触发器 %s 已成功删除。", input.ScheduleID), nil
@@ -1506,7 +1506,7 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 				Enabled          *bool             `json:"enabled"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -1526,7 +1526,7 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 			}
 			if matchType == "regex" {
 				if _, err := regexp.Compile(pattern); err != nil {
-					return fmt.Sprintf("匹配表达式 %q 不是合法的正则表达式: %v", pattern, err), nil
+					return reportToolFailure(ctx, "匹配表达式校验失败：不是合法的正则表达式", err), nil
 				}
 			}
 
@@ -1560,7 +1560,7 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 				Enabled:          enabled,
 			})
 			if err != nil {
-				return fmt.Sprintf("创建 ActionsCat 事件匹配器失败: %v", err), nil
+				return reportToolFailure(ctx, "创建 ActionsCat 事件匹配器失败", err), nil
 			}
 
 			resp := struct {
@@ -1608,7 +1608,7 @@ func ActionsCatListMatchersTool(client *actionscat.Client) Tool {
 				ActionID string `json:"action_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.ActionID) == "" {
 				return "缺少必填参数 'action_id'", nil
@@ -1616,7 +1616,7 @@ func ActionsCatListMatchersTool(client *actionscat.Client) Tool {
 
 			matchers, err := client.ListMatchers(ctx, input.ActionID)
 			if err != nil {
-				return fmt.Sprintf("查询事件匹配器列表失败: %v", err), nil
+				return reportToolFailure(ctx, "查询事件匹配器列表失败", err), nil
 			}
 
 			resp := struct {
@@ -1674,14 +1674,14 @@ func ActionsCatDeleteMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 				MatcherID string `json:"matcher_id"`
 			}
 			if err := json.Unmarshal([]byte(args), &input); err != nil {
-				return fmt.Sprintf("参数解析错误: %v", err), nil
+				return reportToolFailure(ctx, "参数解析错误", err), nil
 			}
 			if strings.TrimSpace(input.MatcherID) == "" {
 				return "缺少必填参数 'matcher_id'", nil
 			}
 
 			if err := client.DeleteMatcher(ctx, strings.TrimSpace(input.MatcherID)); err != nil {
-				return fmt.Sprintf("删除事件匹配器失败: %v", err), nil
+				return reportToolFailure(ctx, "删除事件匹配器失败", err), nil
 			}
 
 			return fmt.Sprintf("事件匹配器 %s 已成功删除。", input.MatcherID), nil

@@ -356,7 +356,7 @@ func TestHandleAdminCommand_AstrBot_LockedAdminRejected(t *testing.T) {
 		if act.Type != "action" || act.Action != "send_message" {
 			t.Errorf("expected send_message action, got: %+v", act)
 		}
-		if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("expected RejectGatewayMsg, got: %q", act.Content)
 		}
 	case <-time.After(2 * time.Second):
@@ -384,7 +384,7 @@ func TestHandleAdminCommand_AstrBot_LockedAdminRejected(t *testing.T) {
 		if act.Type != "action" || act.Action != "send_message" {
 			t.Errorf("expected send_message action, got: %+v", act)
 		}
-		if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("expected RejectGatewayMsg on unban attempt, got: %q", act.Content)
 		}
 	case <-time.After(2 * time.Second):
@@ -957,4 +957,3 @@ func TestAstrBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 		}
 	}
 }
-

@@ -137,7 +137,7 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 		}
 		if err := engine.Security.CheckAccess(principal); err != nil {
 			if errors.Is(err, security.ErrLocked) {
-				sendOneBotReply(event, conn, security.RejectGatewayMsg)
+				sendOneBotReply(event, conn, engine.Log().ReportError(logs.SYSTEM, security.RejectGatewayMsg, err))
 			}
 			return true // Fail-closed: locked or security error
 		}
@@ -183,11 +183,11 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {
 			if !errors.Is(err, security.ErrLocked) {
-				sendOneBotReply(event, conn, fmt.Sprintf("执行指令失败：%v", err))
+				sendOneBotReply(event, conn, engine.Log().ReportError(logs.SYSTEM, "管理员指令执行失败", err, sessionID))
 			}
 		}
 	}) {
-		sendOneBotReply(event, conn, "实例未就绪，无法执行指令。")
+		sendOneBotReply(event, conn, engine.Log().ReportError(logs.SYSTEM, "管理员指令执行失败：实例未就绪", nil, sessionID))
 	}
 
 	return true

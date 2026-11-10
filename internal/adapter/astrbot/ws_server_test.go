@@ -722,8 +722,11 @@ func TestAstrBotStickerDeliveryReceiptControlsQuota(t *testing.T) {
 				if msg.Role == core.RoleTool && msg.ToolCallID == "sticker_call" {
 					foundResult = true
 					result, _ := msg.Content.(string)
-					if tc.delivered && result != "消息已发送" || !tc.delivered && !strings.Contains(result, tc.errorText) {
+					if tc.delivered && result != "消息已发送" || !tc.delivered && !strings.HasPrefix(result, "[FrostAgent 错误] 消息发送失败 (Ref_ID: ") {
 						t.Fatalf("unexpected delivery result: %q", result)
+					}
+					if !tc.delivered {
+						assertFailureReference(t, engine.Log(), result, tc.errorText)
 					}
 				}
 			}
@@ -1472,7 +1475,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		if act.Action != "send_message" {
 			t.Errorf("期望 action=send_message, 实际=%s", act.Action)
 		}
-		if act.Content != security.RejectInspectorMsg {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectInspectorMsg+" (Ref_ID: ") {
 			t.Errorf("期望 inspector 报错 %q, 实际=%q", security.RejectInspectorMsg, act.Content)
 		}
 	})
@@ -1513,7 +1516,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		if err := json.Unmarshal(respBytes, &act); err != nil {
 			t.Fatalf("解析已封禁 action 失败: %v", err)
 		}
-		if act.Content != security.RejectGatewayMsg {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("期望 gateway 报错 %q, 实际=%q", security.RejectGatewayMsg, act.Content)
 		}
 	})
@@ -1591,7 +1594,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		if act.GroupID != "grp_sec_303" {
 			t.Errorf("期望 group_id=grp_sec_303, 实际=%s", act.GroupID)
 		}
-		if act.Content != security.RejectInspectorMsg {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectInspectorMsg+" (Ref_ID: ") {
 			t.Errorf("期望群聊 inspector 报错 %q, 实际=%q", security.RejectInspectorMsg, act.Content)
 		}
 	})
@@ -1641,7 +1644,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		if act.GroupID != "grp_sec_303" {
 			t.Errorf("期望 group_id=grp_sec_303, 实际=%s", act.GroupID)
 		}
-		if act.Content != security.RejectGatewayMsg {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("期望群聊 gateway 报错 %q, 实际=%q", security.RejectGatewayMsg, act.Content)
 		}
 	})
@@ -1683,7 +1686,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		if err := json.Unmarshal(respBytes, &act); err != nil {
 			t.Fatalf("解析 action 失败: %v", err)
 		}
-		if act.Content != security.RejectFailureMsg {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectFailureMsg+" (Ref_ID: ") {
 			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
 		}
 	})
@@ -1730,7 +1733,7 @@ func TestAstrBotSecurityRejectionReplies(t *testing.T) {
 		if err := json.Unmarshal(respBytes, &act); err != nil {
 			t.Fatalf("解析 action 失败: %v", err)
 		}
-		if act.Content != security.RejectFailureMsg {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectFailureMsg+" (Ref_ID: ") {
 			t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
 		}
 	})
@@ -1791,7 +1794,7 @@ func TestAstrBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T
 	if err := json.Unmarshal(respBytes, &act); err != nil {
 		t.Fatalf("解析 action 失败: %v", err)
 	}
-	if act.Content != security.RejectFailureMsg {
+	if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectFailureMsg+" (Ref_ID: ") {
 		t.Errorf("期望 failure 报错 %q, 实际=%q", security.RejectFailureMsg, act.Content)
 	}
 
@@ -2576,7 +2579,7 @@ func TestAstrBotAutonomousBanPurgesSessionAndCompactBuffer(t *testing.T) {
 	if act.Action != "send_message" {
 		t.Fatalf("expected action=send_message, got %s", act.Action)
 	}
-	if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+	if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 		t.Errorf("expected rejection message containing %q, got %q", security.RejectGatewayMsg, act.Content)
 	}
 
@@ -2891,7 +2894,7 @@ func TestAstrBot_IntermediateAssistantStaging_SendMessageThenBanUser_PurgesBoth(
 	if err := json.Unmarshal(banRespBytes, &banAct); err != nil {
 		t.Fatalf("unmarshal ban action failed: %v", err)
 	}
-	if banAct.Action != "send_message" || !strings.Contains(banAct.Content, security.RejectGatewayMsg) {
+	if banAct.Action != "send_message" || !strings.HasPrefix(banAct.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 		t.Fatalf("expected rejection gateway message, got: %+v", banAct)
 	}
 	waitAstrBotTurnCompletion(t, engine, event)

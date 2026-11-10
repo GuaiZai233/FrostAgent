@@ -39,6 +39,10 @@ func (s *Store) FindError(value string) (LogEntry, bool) {
 // ReportError retains diagnostics and returns only an explicitly safe summary
 // and its lookup UUID. Callers must not include raw errors in summary.
 func (s *Store) ReportError(category Category, summary string, err error, traceID ...string) string {
-	id := s.Error(category, fmt.Sprintf("%s：%v", summary, err), traceID...)
-	return fmt.Sprintf("FrostAgent 错误：%s\n错误 UUID：%s", summary, id)
+	content := summary
+	if err != nil {
+		content += fmt.Sprintf("：%v", err)
+	}
+	id := s.Error(category, content, traceID...)
+	return fmt.Sprintf("[FrostAgent 错误] %s (Ref_ID: %s)", summary, id)
 }

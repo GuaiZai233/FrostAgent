@@ -85,10 +85,8 @@ func TestEngineModelOutputClassifierFailure(t *testing.T) {
 	if result.LLMFailed {
 		t.Fatal("security classifier failure must not be classified as dialogue LLM failure")
 	}
-	want := "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
-	if result.Content != want {
-		t.Fatalf("expected classifier failure message %q, got %q", want, result.Content)
-	}
+	want := "安全审查失败：服务暂时不可用，模型输出已拦截"
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var watchdogErrors []logs.LogEntry
@@ -116,7 +114,7 @@ func TestEngineModelOutputClassifierFailure(t *testing.T) {
 		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
 	}
 	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
 		}
 	}
@@ -151,10 +149,8 @@ func TestEngineModelOutputPolicyBlock(t *testing.T) {
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-002",
 	})
-	want := "FrostAgent安全控制：模型输出已拦截。"
-	if result.Content != want {
-		t.Fatalf("expected policy block message %q, got %q", want, result.Content)
-	}
+	want := "安全审查拦截：模型输出已拦截"
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
 }
 
 func TestEngineModelOutputPolicyFilter(t *testing.T) {
@@ -254,10 +250,8 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-003",
 	})
-	want := "got tool response: FrostAgent安全控制：安全审查服务暂时不可用，该工具调用已被阻止。"
-	if result.Content != want {
-		t.Fatalf("expected tool argument failure message %q, got %q", want, result.Content)
-	}
+	want := "安全审查失败：服务暂时不可用，该工具调用已被阻止"
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var watchdogErrors []logs.LogEntry
@@ -288,7 +282,7 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
 	}
 	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
 		}
 	}
@@ -346,10 +340,8 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-004",
 	})
-	want := "got tool response: FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
-	if result.Content != want {
-		t.Fatalf("expected tool result failure message %q, got %q", want, result.Content)
-	}
+	want := "安全审查失败：服务暂时不可用，外部工具结果已隔离"
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var watchdogErrors []logs.LogEntry
@@ -380,7 +372,7 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
 	}
 	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
 		}
 	}
@@ -426,10 +418,8 @@ func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
 		ActorUserID:   "actor-access-failure",
 	})
 
-	want := "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
-	if result.Content != want {
-		t.Fatalf("expected service failure message %q, got %q", want, result.Content)
-	}
+	want := "安全审查失败：服务暂时不可用，模型输出已拦截"
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var storageErrors []logs.LogEntry
@@ -460,7 +450,7 @@ func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
 		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
 	}
 	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
 		}
 	}
@@ -539,7 +529,7 @@ func TestEngineToolArgumentAccessStoreFailure(t *testing.T) {
 		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
 	}
 	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
 		}
 	}
@@ -638,7 +628,7 @@ func TestEngineToolResultAccessStoreFailure(t *testing.T) {
 		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
 	}
 	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
+		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
 		}
 	}
@@ -680,10 +670,8 @@ func TestEngineModelOutputAccessStoreLocked(t *testing.T) {
 		ActorUserID:   "actor-locked-during-chat",
 	})
 
-	want := "FrostAgent安全控制：模型输出已拦截。"
-	if result.Content != want {
-		t.Fatalf("expected policy block message %q, got %q", want, result.Content)
-	}
+	want := "安全审查拦截：模型输出已拦截"
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var foundLog bool

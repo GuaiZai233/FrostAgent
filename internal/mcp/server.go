@@ -9,6 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+
 	officialmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -560,28 +563,28 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 
 	// Double-check 1: server enabled and still owned.
 	if retired || !enabled {
-		return fmt.Sprintf("Tool %q is currently disabled because MCP server %q has been disabled.", remoteName, serverID), nil
+		return reportToolError(ctx, "MCP 工具调用失败：服务器已禁用", fmt.Errorf("server=%s tool=%s", serverID, remoteName)), nil
 	}
 
 	// Double-check 2: tool enabled in catalog
 	item, exists := s.catalog.Get(remoteName)
 	if !exists {
-		return fmt.Sprintf("Tool %q was not found on MCP server %q.", remoteName, serverID), nil
+		return reportToolError(ctx, "MCP 工具调用失败：工具未找到", fmt.Errorf("server=%s tool=%s", serverID, remoteName)), nil
 	}
 	if !item.Enabled {
-		return fmt.Sprintf("Tool %q is currently disabled.", remoteName), nil
+		return reportToolError(ctx, "MCP 工具调用失败：工具已禁用", fmt.Errorf("server=%s tool=%s", serverID, remoteName)), nil
 	}
 
 	// Double-check 3: server available
 	if status != StatusConnected || session == nil {
-		return fmt.Sprintf("Tool %q is temporarily unavailable because MCP server %q is not connected.", remoteName, serverID), nil
+		return reportToolError(ctx, "MCP 工具调用失败：服务器未连接", fmt.Errorf("server=%s tool=%s", serverID, remoteName)), nil
 	}
 
 	// Parse arguments string into map
 	var argMap map[string]any
 	if args != "" && args != "{}" {
 		if err := json.Unmarshal([]byte(args), &argMap); err != nil {
-			return fmt.Sprintf("FrostAgent错误：工具参数 JSON 解析失败: %v", err), nil
+			return reportToolError(ctx, "MCP 工具调用失败：参数 JSON 解析失败", err), nil
 		}
 	}
 	if argMap == nil {
@@ -595,10 +598,17 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 
 	result, err := session.CallTool(ctx, callParams)
 	if err != nil {
-		return fmt.Sprintf("Tool %q execution error on server %q: %v", remoteName, serverID, err), nil
+		return reportToolError(ctx, "MCP 工具执行失败", fmt.Errorf("server=%s tool=%s: %w", serverID, remoteName, err)), nil
 	}
 
+	if result != nil && result.IsError {
+		return reportToolError(ctx, "MCP 工具执行失败", errors.New(FormatToolResult(result))), nil
+	}
 	return FormatToolResult(result), nil
+}
+
+func reportToolError(ctx context.Context, summary string, err error) string {
+	return runtimescope.FromContext(ctx).Log().ReportError(logs.TOOL, summary, err)
 }
 
 func (s *ServerRuntime) createTransport(cfg TransportConfig) (officialmcp.Transport, error) {

@@ -19,10 +19,10 @@ func FormatReceipt(actualMinor int64, promptTokens, completionTokens int, balanc
 
 // FormatInsufficientFundsMessage formats the polite error message when balance is insufficient.
 func FormatInsufficientFundsMessage(balanceMinor int64) string {
-	return fmt.Sprintf("⚠️ 您的雪花余额不足（当前余额：%s 片），无法发起对话。请联系管理员充值后再试~", FormatSnowflakes(balanceMinor))
+	return fmt.Sprintf("计费失败：雪花余额不足（当前余额：%s 片），请联系管理员充值", FormatSnowflakes(balanceMinor))
 }
 
 // FormatBillingUnavailableMessage formats the error message when Alcyone service is unreachable.
 func FormatBillingUnavailableMessage() string {
-	return "⚠️ 计费系统暂时不可用，无法发起对话，请稍后重试。"
+	return "计费失败：计费系统暂时不可用，请稍后重试"
 }

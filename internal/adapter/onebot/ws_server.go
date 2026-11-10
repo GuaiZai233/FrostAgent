@@ -400,16 +400,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err != nil {
 			if errors.Is(err, billing.ErrInsufficientFunds) {
 				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+				sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 				return
 			}
-			engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务不可用 (fail-closed, vision): %w", err)), turn)
 			return
 		}
 		if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), billing.ErrInsufficientFunds), turn)
 			return
 		}
 	}
@@ -493,7 +492,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if wakeSignals.Proactive {
 			return
 		}
-		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。", turn)
+		sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, "消息处理失败：单条消息长度过长，超出处理限制", nil, conn.historyKey(event)), turn)
 		return
 	}
 
@@ -1229,8 +1228,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	} else {
-		replyText = "系统出错，引擎未初始化"
-		engine.Log().Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
+		replyText = conn.Scope.Log().ReportError(logs.SYSTEM, "消息处理失败：引擎未初始化", nil)
+		sendDirectReply(action, type1, id, echo, event, conn, replyText, turn)
+		return
 	}
 
 	// 5. Prepare the final message for OneBot by parsing the engine's response.

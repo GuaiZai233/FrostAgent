@@ -951,16 +951,15 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				if err != nil {
 					if errors.Is(err, billing.ErrInsufficientFunds) {
 						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 雪花余额不足，拒绝视觉处理", event.UserID))
-						sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+						sendDirectReply(event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 						return
 					}
-					engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-					sendDirectReply(event, conn, billing.FormatBillingUnavailableMessage(), turn)
+					sendDirectReply(event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务不可用 (fail-closed, vision): %w", err)), turn)
 					return
 				}
 				if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 					engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 用户 [%s] 余额为 0，拒绝视觉处理", event.UserID))
-					sendDirectReply(event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+					sendDirectReply(event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 					return
 				}
 			}

@@ -107,11 +107,11 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 				if err != nil {
-					return textResult(fmt.Sprintf("获取群成员档案失败: %v", err)), nil
+					return textResult(engine.Log().ReportError(logs.TOOL, "获取群成员档案失败", err, runContext.SessionID)), nil
 				}
 				updated, err := groupStore.SetObservedMemberPreferredName(userID, name, nil)
 				if err != nil {
-					return textResult(fmt.Sprintf("设置成员称呼失败: %v", err)), nil
+					return textResult(engine.Log().ReportError(logs.TOOL, "设置成员称呼失败", err, runContext.SessionID)), nil
 				}
 				if !updated {
 					return textResult("当前群尚未观察到该成员，无法设置称呼"), nil
@@ -133,7 +133,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					}
 					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if err != nil {
-						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
+						return textResult(engine.Log().ReportError(logs.TOOL, "获取群记忆存储失败", err, runContext.SessionID)), nil
 					}
 					entry := memory.MemoryEntry{
 						ID:        memory.GenerateID(),
@@ -158,7 +158,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 						entry.SourceSenderID = runContext.ActorUserID
 					}
 					if err := groupStore.Save(entry); err != nil {
-						return textResult(fmt.Sprintf("写入群记忆失败: %v", err)), nil
+						return textResult(engine.Log().ReportError(logs.TOOL, "写入群记忆失败", err, runContext.SessionID)), nil
 					}
 					return core.ToolExecutionResult{Content: "群记忆已写入", MemoryWritten: true}, nil
 				}
@@ -171,7 +171,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					params.Content,
 					params.Tags,
 				); err != nil {
-					return textResult(fmt.Sprintf("写入失败: %v", err)), nil
+					return textResult(engine.Log().ReportError(logs.TOOL, "写入失败", err, runContext.SessionID)), nil
 				}
 				return core.ToolExecutionResult{Content: "记忆已写入", MemoryWritten: true}, nil
 
@@ -191,7 +191,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					}
 					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if err != nil {
-						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
+						return textResult(engine.Log().ReportError(logs.TOOL, "获取群记忆存储失败", err, runContext.SessionID)), nil
 					}
 					var entries []memory.MemoryEntry
 					if engine.MemoryEmbeddings != nil {
@@ -205,7 +205,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 						entries, err = groupStore.SearchByTags(tags, 0)
 					}
 					if err != nil {
-						return textResult(fmt.Sprintf("搜索群记忆失败: %v", err)), nil
+						return textResult(engine.Log().ReportError(logs.TOOL, "搜索群记忆失败", err, runContext.SessionID)), nil
 					}
 					filtered := engine.MemoryGateway.FilterGroup(entries)
 					filtered = engine.MemoryReader.Limit(filtered)
@@ -241,7 +241,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					entries, err = engine.MemoryReader.SearchByTags(ctx, tags)
 				}
 				if err != nil {
-					return textResult(fmt.Sprintf("搜索失败: %v", err)), nil
+					return textResult(engine.Log().ReportError(logs.TOOL, "搜索失败", err, runContext.SessionID)), nil
 				}
 				filtered := engine.MemoryGateway.Filter(entries, currentUser)
 				filtered = engine.MemoryReader.Limit(filtered)
@@ -268,11 +268,11 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					}
 					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if err != nil {
-						return textResult(fmt.Sprintf("获取群记忆存储失败: %v", err)), nil
+						return textResult(engine.Log().ReportError(logs.TOOL, "获取群记忆存储失败", err, runContext.SessionID)), nil
 					}
 					entries, err := groupStore.ListAll()
 					if err != nil {
-						return textResult(fmt.Sprintf("列出群记忆失败: %v", err)), nil
+						return textResult(engine.Log().ReportError(logs.TOOL, "列出群记忆失败", err, runContext.SessionID)), nil
 					}
 					filtered := engine.MemoryGateway.FilterGroup(entries)
 					filtered = engine.MemoryReader.Limit(filtered)
@@ -287,7 +287,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				entries, err := engine.MemoryReader.Recall(context.Background(), "")
 				if err != nil {
-					return textResult(fmt.Sprintf("列出失败: %v", err)), nil
+					return textResult(engine.Log().ReportError(logs.TOOL, "列出失败", err, runContext.SessionID)), nil
 				}
 				filtered := engine.MemoryGateway.Filter(entries, currentUser)
 				filtered = engine.MemoryReader.Limit(filtered)
@@ -309,7 +309,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				status, started, err := engine.MemoryReflections.Start(currentUser)
 				if err != nil {
-					return textResult(fmt.Sprintf("启动记忆反思失败: %v", err)), nil
+					return textResult(engine.Log().ReportError(logs.TOOL, "启动记忆反思失败", err, runContext.SessionID)), nil
 				}
 				if !started {
 					target := status.Owner

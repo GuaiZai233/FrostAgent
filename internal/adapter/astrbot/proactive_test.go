@@ -489,7 +489,7 @@ func TestAstrBotProactiveSecuritySilentDrop(t *testing.T) {
 		if action.Action != "send_message" {
 			t.Fatalf("期望 action=send_message, 实际=%s", action.Action)
 		}
-		if action.Content != security.RejectGatewayMsg && !strings.Contains(action.Content, "封禁") && !strings.Contains(action.Content, "security") {
+		if !strings.HasPrefix(action.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") && !strings.Contains(action.Content, "封禁") && !strings.Contains(action.Content, "security") {
 			t.Fatalf("期望收到封禁拒绝提示，实际=%s", action.Content)
 		}
 	})
@@ -1297,7 +1297,7 @@ func TestAstrBotProactiveSecurityOptionA(t *testing.T) {
 		if act.Action != "send_message" {
 			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
 		}
-		if !strings.Contains(act.Content, "FrostAgent安全控制：模型输出已拦截。") {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] 安全审查拦截：模型输出已拦截 (Ref_ID: ") {
 			t.Fatalf("显式唤醒拦截应发送安全提示，实际=%s", act.Content)
 		}
 	})
@@ -1379,7 +1379,7 @@ func TestAstrBotProactiveSecurityOptionA(t *testing.T) {
 		if act.Action != "send_message" {
 			t.Fatalf("期望 action=send_message, 实际=%s", act.Action)
 		}
-		if !strings.Contains(act.Content, security.RejectGatewayMsg) {
+		if !strings.HasPrefix(act.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Fatalf("显式唤醒 ban_user 应发送封禁提示，实际=%s", act.Content)
 		}
 	})

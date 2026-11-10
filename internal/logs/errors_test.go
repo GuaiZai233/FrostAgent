@@ -17,6 +17,9 @@ func TestErrorUUIDCorrelatesReplyStoreAndStream(t *testing.T) {
 	if !valid || !strings.Contains(reply, id) || strings.Contains(reply, raw) || strings.Contains(reply, "endpoint.invalid") {
 		t.Fatalf("unsafe or uncorrelated reply: %s", reply)
 	}
+	if want := "[FrostAgent 错误] LLM 响应失败：网络请求失败 (Ref_ID: " + id + ")"; reply != want {
+		t.Fatalf("unexpected reply format: %q", reply)
+	}
 	found, ok := store.FindError(strings.ToUpper(id))
 	if !ok || found.Content != entry.Content || !strings.Contains(found.Content, raw) || found.TraceID != "synthetic-trace" {
 		t.Fatalf("lost diagnostics: %+v", found)
@@ -36,6 +39,16 @@ func TestErrorUUIDCorrelatesReplyStoreAndStream(t *testing.T) {
 	store.Clear()
 	if _, ok := store.FindError(second); ok {
 		t.Fatal("cleared error still queryable")
+	}
+}
+
+func TestReportErrorWithoutUnderlyingError(t *testing.T) {
+	store := New("synthetic-instance", "test", 2)
+	reply := store.ReportError(SYSTEM, "消息处理失败：输入过长", nil)
+	_, suffix, _ := strings.Cut(reply, " (Ref_ID: ")
+	entry, found := store.FindError(strings.TrimSuffix(suffix, ")"))
+	if !found || entry.Content != "消息处理失败：输入过长" {
+		t.Fatalf("missing fixed-error diagnostics: %+v", entry)
 	}
 }
 

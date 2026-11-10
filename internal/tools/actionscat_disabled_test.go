@@ -144,8 +144,15 @@ func (p *disablingActionsCatProvider) Chat(ctx context.Context, req core.ChatReq
 		p.t.Fatalf("tools remain exposed after disabling: %v", req.Tools)
 	}
 	last := req.Messages[len(req.Messages)-1]
-	if last.Role != core.RoleTool || last.Content != "ActionsCat已被FrostAgent管理员禁用。" {
-		p.t.Fatalf("stale call response = %+v", last)
+	content, _ := last.Content.(string)
+	prefix := "[FrostAgent 错误] 工具调用失败：ActionsCat 已被管理员禁用 (Ref_ID: "
+	if last.Role != core.RoleTool || !strings.HasPrefix(content, prefix) {
+		p.t.Errorf("stale call response = %+v", last)
+	} else {
+		id := strings.TrimSuffix(strings.TrimPrefix(content, prefix), ")")
+		if _, found := p.scope.Log().FindError(id); !found {
+			p.t.Errorf("missing stale-call diagnostics: %q", content)
+		}
 	}
 	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "disabled"}}, nil
 }
