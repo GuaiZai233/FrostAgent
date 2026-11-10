@@ -317,8 +317,11 @@ type SessionContext struct {
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
 	// memories). Empty until the first LLM request for this session.
 	lastSystemPrompt string
-	lastModelName    string
-	groupName        string
+	// lastUserPrompt is the user-role content actually sent in the most recent
+	// request, including adapter-injected <response_context> guidance.
+	lastUserPrompt string
+	lastModelName  string
+	groupName      string
 }
 
 // GroupName returns the cached group name for this session, if any.
@@ -467,6 +470,26 @@ func (s *SessionContext) SetLastPromptTrace(systemPrompt, modelName string) {
 	defer s.mu.Unlock()
 	s.lastSystemPrompt = systemPrompt
 	s.lastModelName = modelName
+}
+
+// SetLastUserPrompt records the user-role segment of the most recent request.
+// SetLastUserPromptAtEpoch records the request user segment only while the run
+// still belongs to the session epoch, so a run that crosses /reset cannot
+// repopulate the inspector with stale content. Epoch 0 skips the check.
+func (s *SessionContext) SetLastUserPromptAtEpoch(epoch uint64, userPrompt string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if epoch != 0 && s.epoch != epoch {
+		return
+	}
+	s.lastUserPrompt = userPrompt
+}
+
+// LastUserPrompt returns the user-role segment of the most recent request.
+func (s *SessionContext) LastUserPrompt() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastUserPrompt
 }
 
 // LastPromptTrace returns the system prompt and model from the most recent LLM call.
@@ -1060,6 +1083,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
+	s.lastUserPrompt = ""
 	s.privateCompacting = false
 	s.UpdatedAt = time.Now()
 	conversationID := s.ConversationID
@@ -2631,6 +2655,7 @@ func (s *SessionContext) Clear() {
 	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
 	s.lastModelName = ""
+	s.lastUserPrompt = ""
 	s.UpdatedAt = time.Now()
 }
 

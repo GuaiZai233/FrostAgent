@@ -895,6 +895,19 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
+			var lastUser string
+			for _, message := range messages {
+				if message.Role == "user" {
+					// Overwrite on every user turn so an unrecognised content type
+					// cannot leave the previous request's text behind.
+					lastUser = userContentText(message.Content)
+				}
+			}
+			var traceEpoch uint64
+			if hasRunCtx {
+				traceEpoch = runCtx.Epoch
+			}
+			sess.SetLastUserPromptAtEpoch(traceEpoch, lastUser)
 		}
 		modelTools := e.EffectiveTools()
 		if hasRunCtx && runCtx.Proactive {
@@ -1694,4 +1707,26 @@ func mergeSecurityNotice(runCtx *RunContext, notice string) {
 	if !strings.Contains(runCtx.SecurityNotice, notice) {
 		runCtx.SecurityNotice = runCtx.SecurityNotice + "\n\n" + notice
 	}
+}
+
+// userContentText extracts the speakable text of a user message. Multimodal
+// parts contribute their text and a placeholder per image; unknown shapes yield
+// an empty string rather than a stale value.
+func userContentText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []core.ContentPart:
+		var lines []string
+		for _, part := range v {
+			switch {
+			case part.Type == string(core.ContentPartTypeText) && part.Text != "":
+				lines = append(lines, part.Text)
+			case part.Type == string(core.ContentPartTypeImage):
+				lines = append(lines, "[图片]")
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	return ""
 }
