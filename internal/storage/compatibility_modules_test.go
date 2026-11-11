@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -89,5 +91,24 @@ func TestCompatibilityRestartPreservesRestoredTask(t *testing.T) {
 		before, _ := json.Marshal(task)
 		after, _ := json.Marshal(tasks[0])
 		t.Fatalf("restored history changed: %s -> %s", before, after)
+	}
+}
+
+func TestInstalledCompatibilityModulesNeedNoDDL(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	db, err := Open(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	reader, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "frostagent.db"))+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	readonly := &DB{SQL: reader, Backend: SQLite}
+	if err := readonly.ensureCompatibilityModules(ctx); err != nil {
+		t.Fatalf("installed migrations attempted a write: %v", err)
 	}
 }

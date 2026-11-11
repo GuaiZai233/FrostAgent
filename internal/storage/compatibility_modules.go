@@ -51,6 +51,44 @@ func (d *DB) ensureCompatibilityModules(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	columns, err := d.tableColumns(ctx, tx, "module_migrations")
+	if err != nil {
+		return err
+	}
+	if len(columns) > 0 {
+		var count int
+		if err := tx.QueryRowContext(ctx, d.Bind(`SELECT COUNT(*) FROM module_migrations WHERE id IN (?, ?)`), endpointMetadataMigration, computerUseMetadataMigration).Scan(&count); err != nil {
+			return err
+		}
+		ready := count == 2
+		endpointColumns, err := d.tableColumns(ctx, tx, "provider_endpoints")
+		if err != nil {
+			return err
+		}
+		formatFound := false
+		for _, column := range endpointColumns {
+			if column.name == "api_format" && column.kind == "text" && column.notNull {
+				formatFound = true
+			}
+		}
+		ready = ready && formatFound
+		for table, expected := range compatibleComputerUseColumns {
+			found, err := d.tableColumns(ctx, tx, table)
+			if err != nil {
+				return err
+			}
+			if len(found) == 0 {
+				ready = false
+				continue
+			}
+			if err := matchColumnLayout(table, found, expected); err != nil {
+				return err
+			}
+		}
+		if ready {
+			return tx.Commit()
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS module_migrations (id TEXT PRIMARY KEY)`); err != nil {
 		return err
 	}

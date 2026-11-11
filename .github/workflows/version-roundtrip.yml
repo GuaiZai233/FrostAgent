@@ -23,7 +23,7 @@ jobs:
       - name: Check out pinned v15 compatibility build
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: 3f1ed7fe66e163557d7f88e081c40260c0459d4b
+          ref: 409e50b5262ea3324f092560ee0cdcf206f93a1f
           path: .compat-v15
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
