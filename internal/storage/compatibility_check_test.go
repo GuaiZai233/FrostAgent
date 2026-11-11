@@ -58,7 +58,7 @@ func exerciseCheckConstraintCompatibility(t *testing.T, backend Backend) {
 				VALUES ('synthetic-check-instance', 'Synthetic check', '2026-01-01T00:00:00Z', 1)`)
 			compatibilityExec(t, db, `INSERT INTO settings (scope, instance_id, key, value)
 				VALUES ('instance', 'synthetic-check-instance', 'synthetic-setting', 'preserve exactly')`)
-			compatibilityMetadata(t, db, 16, true, 14)
+			compatibilityMetadata(t, db, 17, true, 14)
 			before := compatibilitySnapshot(t, db.SQL, backend)
 			definition := compatibilityInstanceDefinition(t, db.SQL, backend)
 			if test.unsafe {
@@ -88,7 +88,7 @@ func exerciseCheckConstraintCompatibility(t *testing.T, backend Backend) {
 					t.Fatalf("CHECK in quoted names, literals or comments was misidentified: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, 16, 14)
+				assertCompatibilityVersions(t, opened, 17, 14)
 				if after := compatibilitySnapshot(t, opened.SQL, backend); !reflect.DeepEqual(before, after) {
 					t.Fatal("compatible startup changed metadata or rows")
 				}

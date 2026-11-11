@@ -20,6 +20,7 @@ for (const testFile of [
   'actionscat-disabled.test.ts',
   'actionscat-page.test.ts',
   'model-router-editor.test.ts',
+  'endpoint-formats.test.ts',
   'model-capability-policy.test.ts',
   'mcp-presets-page.test.ts',
   'prompt-merge.test.ts',

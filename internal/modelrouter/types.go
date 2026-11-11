@@ -52,6 +52,7 @@ type Endpoint struct {
 	ID               string        `json:"id"`
 	DisplayName      string        `json:"display_name"`
 	BaseURL          string        `json:"base_url"`
+	APIFormat        string        `json:"api_format,omitempty"`
 	APIKeySource     APIKeyStorage `json:"api_key_source"`
 	APIKeyRef        string        `json:"api_key_ref,omitempty"`
 	APIKeyConfigured bool          `json:"api_key_configured"`
@@ -107,6 +108,7 @@ type Target struct {
 	APIKeyRef           string
 	ModelID             string
 	ModelDisplayName    string
+	APIFormat           string
 	BaseURL             string
 	UpstreamModel       string
 	MaxInputTokens      int

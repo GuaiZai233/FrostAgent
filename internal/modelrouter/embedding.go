@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/api"
 	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
 )
 
@@ -59,7 +60,7 @@ func (m *Manager) EmbeddingSession(ctx context.Context, scope Scope) (Target, co
 	if err != nil {
 		return Target{}, nil, err
 	}
-	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, 120*time.Second)
+	client := api.NewClient(target.BaseURL, apiKey, api.Format(target.APIFormat), 120*time.Second)
 	client.Logger = m.Log()
 	client.ObserveUsage = m.usageObserver("embedding")
 	return target, client, nil
@@ -83,6 +84,9 @@ func EmbeddingFingerprint(target Target) string {
 	// Credentials and display names do not define the vector space.
 	value := fmt.Sprintf("%s\x00%s\x00%s\x00%d", target.EndpointID,
 		strings.TrimRight(target.BaseURL, "/"), target.UpstreamModel, target.MaxInputTokens)
+	if target.APIFormat != "" {
+		value += "\x00" + target.APIFormat
+	}
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
 }

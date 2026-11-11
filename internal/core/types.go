@@ -1,5 +1,7 @@
 package core
 
+import "encoding/json"
+
 // ──────────────────────────────────────────────
 //  LLM Chat Types — single source of truth
 // ──────────────────────────────────────────────
@@ -52,10 +54,20 @@ type ChatStreamEvent struct {
 
 // ChatMessage represents a single message in the conversation.
 type ChatMessage struct {
-	Role       MessageRole
-	Content    any // string | []ContentPart
-	ToolCalls  []ToolCall
-	ToolCallID string
+	Role          MessageRole
+	Content       any // string | []ContentPart
+	ToolCalls     []ToolCall
+	ToolCallID    string
+	ProviderState *ProviderState `json:"provider_state,omitempty"`
+}
+
+// ProviderState preserves opaque reasoning/signature items for tool continuations.
+// It is replayed only to the same protocol and model with unmodified content.
+type ProviderState struct {
+	Format      string          `json:"format"`
+	Model       string          `json:"model"`
+	Content     json.RawMessage `json:"content"`
+	Fingerprint string          `json:"fingerprint"`
 }
 
 // ContentPart represents a piece of multimodal content (text/image).

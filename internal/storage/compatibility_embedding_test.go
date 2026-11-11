@@ -26,12 +26,12 @@ func exerciseEmbeddingCacheCompatibility(t *testing.T, backend Backend) {
 		alterCacheKey bool
 	}{
 		{name: "legacy-v15", version: 15},
-		{name: "declared-v16", version: 16, declared: true},
-		{name: "extension-references-scopes", parent: "memory_embedding_scopes", version: 16, declared: true},
-		{name: "extension-references-vectors", parent: "memory_embeddings", version: 16, declared: true},
-		{name: "uppercase-scope-reference", parent: "MEMORY_EMBEDDING_SCOPES", version: 16, declared: true},
-		{name: "uppercase-vector-reference", parent: "MEMORY_EMBEDDINGS", version: 16, declared: true},
-		{name: "altered-native-cache-key", version: 16, declared: true, alterCacheKey: true},
+		{name: "declared-v16", version: 17, declared: true},
+		{name: "extension-references-scopes", parent: "memory_embedding_scopes", version: 17, declared: true},
+		{name: "extension-references-vectors", parent: "memory_embeddings", version: 17, declared: true},
+		{name: "uppercase-scope-reference", parent: "MEMORY_EMBEDDING_SCOPES", version: 17, declared: true},
+		{name: "uppercase-vector-reference", parent: "MEMORY_EMBEDDINGS", version: 17, declared: true},
+		{name: "altered-native-cache-key", version: 17, declared: true, alterCacheKey: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
@@ -79,7 +79,11 @@ func exerciseEmbeddingCacheCompatibility(t *testing.T, backend Backend) {
 					t.Fatalf("existing embedding-cache relationship was rejected: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, test.version, 14)
+				expectedVersion, expectedFloor := test.version, 14
+				if !test.declared {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				compatibilityUpdateInstance(t, opened)
 				assertCompatibilityJSON(t, opened)
 				after := compatibilitySnapshot(t, opened.SQL, backend)

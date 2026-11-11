@@ -194,6 +194,10 @@ var migrations = []migration{
 		info_json TEXT NOT NULL, body TEXT NOT NULL, package_json TEXT NOT NULL,
 		size_bytes INTEGER NOT NULL, PRIMARY KEY (instance_id, name)
 	)`}},
+	// v15 was used by the Computer Use development branch. Its module tables
+	// are preserved when upgrading to the endpoint-format schema.
+	{version: 15, preservesCompatibility: true},
+	{version: 16, statements: []string{`ALTER TABLE provider_endpoints ADD COLUMN api_format TEXT NOT NULL DEFAULT ''`}},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
