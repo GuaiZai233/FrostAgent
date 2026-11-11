@@ -75,7 +75,7 @@ docker compose up -d --build
 
 ### 接入 AstrBot 等框架
 
-在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。可以使用此 AstrBot 插件：[astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) 进行连接。注意，为避免冲突，请关闭 AstrBot 自带的 LLM 功能！
+在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。可以使用此 AstrBot 插件：[astrbot_plugin_frostagent_adapter](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter) 进行连接。注意，为避免冲突，请关闭 AstrBot 自带的 LLM 功能！
 
 ## 附加功能
 
