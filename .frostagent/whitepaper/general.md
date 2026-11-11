@@ -199,7 +199,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 上游 ACK 门禁：通过 `SendActionAndWait` 监听平台响应。若上游返回错误码（如 LuckyLillia 在媒体转换抛错时整体报错，或群禁言/风控），FrostAgent 坚决不向持久历史提交该 assistant 消息，记录瞬态 `DeliveryFailure` 并向工具调用返回错误；若上游返回成功（如 NapCat 部分元素转换异常时局部过滤但整体返回成功），FrostAgent 尊重平台 ACK 并正常提交历史；
   - **入站媒体异常可观测性 (Inbound Media Resolution Observability)**：
     - 针对 NapCat“局部容错丢弃媒体但仍上报文本”与 LuckyLillia“媒体异常导致整条事件无法分发”的上游行为差异，适配器在收到媒体段但数据缺失或下载失败时输出明确的诊断日志，杜绝未记录的静默语义漂移。
-- **AstrBot 适配器 (`internal/adapter/astrbot` 与 `adapters/astrbot_plugin_frostagent`)**：
+- **AstrBot 适配器 (`internal/adapter/astrbot` 与独立的 [AstrBot 插件](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter))**：
+  - Python 插件源码、回归测试和 WebSocket 兼容性 CI 已迁至上述独立仓库，按 AGPL-3.0 发布；本仓库继续维护 Go 端桥接协议及测试。
   - 基于双向 WebSocket 长连接的轻量 JSON 专有协议；
   - 具备跨平台会话与记忆前缀隔离（如 `astrbot:group:<id>` / `astrbot:user:<id>`）；
   - 支持群聊无感 running compact 实时摄入与记忆反思；
@@ -226,7 +227,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
          5. `HasImages == false`（未包含图片/表情等多媒体附件或媒体组件结构）；
          6. `HasOtherContent == false`（未包含非文本/非图片组件，如 Face 表情、语音 Record、视频 Video、文件 File 等特殊段）；
          7. `strings.TrimSpace(UserText) == ""`（未包含除空格外的正文内容）。
-       - **结构化元数据保留与双端一致性 (Structural Interaction Metadata Preservation)**：针对 AstrBot 插件（`adapters/astrbot_plugin_frostagent/main.py`）将非纯文本段（At、Face、Record、Image 等）与纯文本分离导致入站 `Content` 丢失组件结构的现象，插件在构建载荷时主动遍历消息段组件链与 raw OneBot segments，抽取 `has_other_mention`（是否存在非 Bot 本身的 @）、`has_other_content`（是否存在除 Plain/Reply/Image/MFace/At 外的其他特殊组件）以及 `has_media_content`（是否存在图片/表情等多媒体结构，无论附件是否成功下载/转换 Base64），并将其保留在入站 `payload["metadata"]` 中。Go 端适配器（`internal/adapter/astrbot/ws_server.go`）解析该元数据并注入 `IsMentionOnlyAstrBot`，杜绝 `@Bot + @OtherUser`、`@Bot + Face` 以及媒体转换失败时的 `@Bot + Image` 在 AstrBot 侧因 `Content` 为空而误判为纯 @ 交互的结构性语义漂移（Semantic Drift）；
+       - **结构化元数据保留与双端一致性 (Structural Interaction Metadata Preservation)**：针对 AstrBot 插件（独立仓库 [main.py](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter/blob/main/main.py)）将非纯文本段（At、Face、Record、Image 等）与纯文本分离导致入站 `Content` 丢失组件结构的现象，插件在构建载荷时主动遍历消息段组件链与 raw OneBot segments，抽取 `has_other_mention`（是否存在非 Bot 本身的 @）、`has_other_content`（是否存在除 Plain/Reply/Image/MFace/At 外的其他特殊组件）以及 `has_media_content`（是否存在图片/表情等多媒体结构，无论附件是否成功下载/转换 Base64），并将其保留在入站 `payload["metadata"]` 中。Go 端适配器（`internal/adapter/astrbot/ws_server.go`）解析该元数据并注入 `IsMentionOnlyAstrBot`，杜绝 `@Bot + @OtherUser`、`@Bot + Face` 以及媒体转换失败时的 `@Bot + Image` 在 AstrBot 侧因 `Content` 为空而误判为纯 @ 交互的结构性语义漂移（Semantic Drift）；
        - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷、非文本段（Face/Record）以及图片转换失败场景进行语义一致性回归校验。
 - **共存与独立控制**：
   - 支持通过实例数据库设置（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
@@ -266,14 +267,17 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
   - **持久历史纯净性与请求快照隔离**：主动回复的前置指导指令严格且仅在当前轮次的大模型请求快照（`requestPrompt` / `messages[len(messages)-1].Content`）最前端拼接，而持久化会话历史（`durablePrompt` / `session.AddMessage`）严格保持纯净原始输入，绝不包含主动回复引导词：
-    `此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话、模棱两可的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认人类在讲自己。触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。`
+    ```text
+    此为触发主动回复逻辑的消息，**一般情况下，并没有在说你，不要自以为是**。请根据上下文、参与对话的成员，分析对话主体是谁。如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话、模棱两可的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。不要默认人类在讲自己。触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。
+    如果你认为有必要看图以获得更完整的上下文，调用 inspect_message_image 工具获取图片内容。如果触发主动回复逻辑的消息上面一条正好有图片，**必须查看它**。
+    ```
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
   - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
   - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息，AstrBot 下发 `suppress_llm: true` 的终态 `noop`。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。AstrBot 插件 0.2.2 在下载/去重前附带 `metadata.sticker_only`，防止下载失败或附件合并丢失普通图片信息；旧插件只在空文本且当前附件全部明确标记为表情包、没有缺失槽位时保守识别，不从 `[图片]` 等展示文本猜测。
   - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的规范静默终止工具 `stay_silent`；
   - **工具规范性与执行拦截**：底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）统一采用标准拼写 `stay_silent`，模型调用该工具即判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
-  - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（`adapters/astrbot_plugin_frostagent`）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
+  - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（独立仓库 [astrbot_plugin_frostagent_adapter](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter)）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
 - **入站安全审查 Fail-Closed 与主动静默丢弃 (Security Gating & Silent Dropping)**：
   - 未唤醒的普通群聊背景消息旁路安全网关审查以节约延迟与 Token 开销；而一旦命中主动回复，该消息被正式提升为入站对话请求，必须与显式唤醒消息一样严格流经安全看门狗（`security.Controller.GateIngress`），杜绝利用概率触发绕过敏感词检测或越狱防护的安全旁路漏洞；
   - **主动触发被阻断时的静默丢弃防打扰门禁**：若命中主动回复的消息被安全审查拦截（命中黑名单、高危敏感词或安全服务内部异常 Fail-Closed），系统严格区分显式唤醒（`isExplicitlyWoken` / `isExplicitWake`）与主动命中：仅对显式 @ 或叫名字的请求发送安全拒绝回复，而对后台随机 Roll 命中的违规或服务故障消息执行完全静默丢弃，绝不向群聊发送打扰性安全报错。在 AstrBot 适配器中，静默丢弃同样下发携带 `suppress_llm: true` 的协议级 `noop` 控制动作，在杜绝向群发送可见消息的同时，可靠抑制 AstrBot 原生兜底 LLM；普通未唤醒的群聊闲聊背景消息则保持原有的无抑制 `noop`（`suppress_llm: false`），完整保持客户端原生事件传播链。

@@ -63,7 +63,21 @@ try {
   await settle();
   assert.equal(saved.endpoints[0].apiFormat, '', 'saving old endpoints must retain their URL behavior');
   assert.equal(saved.endpoints[0].baseUrl, 'https://relay.invalid/v1');
-  console.log('PASS: endpoint format selection, custom URL, and legacy editing');
+  click(root, '[data-router-tab="models"]');
+  click(root, '#add-model');
+  dialog = document.querySelector('dialog')!;
+  const endpointSelect = dialog.querySelector<HTMLSelectElement>('#model-endpoint')!;
+  endpointSelect.value = saved.endpoints[1].id;
+  endpointSelect.dispatchEvent(new dom.window.Event('change'));
+  assert.equal(dialog.querySelector<HTMLButtonElement>('#fetch-models')!.disabled, true);
+  assert.equal(dialog.querySelector<HTMLButtonElement>('#model-confirm')!.disabled, false);
+  dialog.querySelector<HTMLInputElement>('#model-upstream')!.value = 'synthetic-custom-model';
+  click(dialog, '#model-confirm');
+  await settle();
+  assert.equal(dialog.isConnected, false, 'custom endpoints must allow manually entered models to save');
+  assert.equal(saved.models[0].endpointId, saved.endpoints[1].id);
+  assert.equal(saved.models[0].upstreamModel, 'synthetic-custom-model');
+  console.log('PASS: endpoint formats, custom model saves, and legacy editing');
 } finally {
   document.querySelector('dialog')?.remove();
   stop?.();

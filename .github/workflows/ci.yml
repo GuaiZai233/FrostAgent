@@ -152,14 +152,6 @@ jobs:
           version: '1.75.0'
           setup_only: true
 
-      - name: Run AstrBot plugin unit tests
-        run: |
-          python3 -m venv "$RUNNER_TEMP/astrbot-ws-tests"
-          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m pip install websockets==12.0
-          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m unittest discover -s adapters/astrbot_plugin_frostagent -p 'test_*.py' -v
-          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m pip install websockets==15.0.1
-          "$RUNNER_TEMP/astrbot-ws-tests/bin/python" -m unittest adapters.astrbot_plugin_frostagent.tests.test_websocket_transport -v
-
       - name: Run frontend instance isolation regression
         run: pnpm --filter @frostagent/web test
 

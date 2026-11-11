@@ -77,7 +77,7 @@ After creating an instance, configure the connection on the "Connections" page.
 
 With the appropriate adapter, FrostAgent can replace the LLM response module in agent frameworks such as AstrBot without affecting their existing plugin ecosystems.
 
-You can connect to FrostAgent using the [astrbot_plugin_frostagent](adapters/astrbot_plugin_frostagent) plugin.
+You can connect to FrostAgent using the [astrbot_plugin_frostagent_adapter](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter) plugin.
 
 **Note:** Disable AstrBot's built-in LLM functionality to avoid conflicts.
 
