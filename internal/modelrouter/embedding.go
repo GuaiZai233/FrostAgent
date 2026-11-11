@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -82,11 +83,26 @@ func (m *Manager) MemoryChat(ctx context.Context, route core.RouteContext, req c
 
 func EmbeddingFingerprint(target Target) string {
 	// Credentials and display names do not define the vector space.
-	value := fmt.Sprintf("%s\x00%s\x00%s\x00%d", target.EndpointID,
-		strings.TrimRight(target.BaseURL, "/"), target.UpstreamModel, target.MaxInputTokens)
-	if target.APIFormat != "" {
-		value += "\x00" + target.APIFormat
+	baseURL := strings.TrimRight(target.BaseURL, "/")
+	routeKind := ""
+	if format := api.Format(target.APIFormat); format != api.Legacy {
+		endpoint, err := format.URL(target.BaseURL, "embeddings", target.UpstreamModel)
+		if err != nil {
+			routeKind = "\x00unsupported-embedding-format\x00" + target.APIFormat
+		} else if parsed, err := url.Parse(endpoint); err == nil && strings.HasSuffix(parsed.EscapedPath(), "/embeddings") {
+			// Express standard routes as their legacy base URL so equivalent
+			// presets and exact URLs can reuse indexes written by older versions.
+			parsed.Path = strings.TrimSuffix(parsed.Path, "/embeddings")
+			parsed.RawPath = strings.TrimSuffix(parsed.RawPath, "/embeddings")
+			baseURL = parsed.String()
+		} else {
+			// Other exact URLs must not collide with a legacy base that would
+			// append /embeddings. Preserve trailing slashes and query parameters.
+			baseURL, routeKind = endpoint, "\x00exact-embedding-url"
+		}
 	}
+	value := fmt.Sprintf("%s\x00%s\x00%s\x00%d%s", target.EndpointID,
+		baseURL, target.UpstreamModel, target.MaxInputTokens, routeKind)
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
 }

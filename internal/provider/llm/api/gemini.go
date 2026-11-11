@@ -5,9 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"mime"
-	"net/url"
-	"path"
 	"strings"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -36,23 +33,14 @@ func geminiContent(content any) ([]any, error) {
 			continue
 		}
 		value := part.ImageURL.URL
-		if strings.HasPrefix(value, "data:") {
-			media, data, err := dataImage(value)
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, map[string]any{"inlineData": map[string]any{"mimeType": media, "data": data}})
-		} else {
-			parsed, err := url.Parse(value)
-			if err != nil {
-				return nil, err
-			}
-			media := mime.TypeByExtension(path.Ext(parsed.Path))
-			if media == "" {
-				media = "image/jpeg"
-			}
-			result = append(result, map[string]any{"fileData": map[string]any{"mimeType": media, "fileUri": value}})
+		if !strings.HasPrefix(value, "data:") {
+			return nil, fmt.Errorf("Gemini image URLs are unsupported; provide a base64 data URL")
 		}
+		media, data, err := dataImage(value)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, map[string]any{"inlineData": map[string]any{"mimeType": media, "data": data}})
 	}
 	return result, nil
 }
