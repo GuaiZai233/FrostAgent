@@ -51,11 +51,7 @@ func (f Format) URL(base, operation, model string) (string, error) {
 		return "", err
 	}
 	path := strings.TrimRight(parsed.Path, "/")
-	if !strings.HasSuffix(path, "/"+version) {
-		path += "/" + version
-	}
-	parsed.Path = path
-	parsed.RawPath = ""
+	versioned := strings.HasSuffix(path, "/"+version)
 	if operation == "chat/completions" {
 		switch f {
 		case Responses:
@@ -73,7 +69,10 @@ func (f Format) URL(base, operation, model string) (string, error) {
 	if operation == "embeddings" && (f == Anthropic || f == Gemini) {
 		return "", fmt.Errorf("此 API 格式不支持 OpenAI Embedding，请使用独立的 OpenAI 兼容端点")
 	}
-	return url.JoinPath(parsed.String(), operation)
+	if versioned {
+		return url.JoinPath(base, operation)
+	}
+	return url.JoinPath(base, version, operation)
 }
 
 func (f Format) Authorize(request *http.Request, key string) {

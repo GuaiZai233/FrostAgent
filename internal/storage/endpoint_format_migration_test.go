@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"reflect"
 	"testing"
 )
 
@@ -25,6 +26,17 @@ func TestEndpointFormatMigration(t *testing.T) {
 			if err := db.RequireNativeSchema(ctx, "export complete backup"); err != nil {
 				t.Fatal(err)
 			}
+			compatibilityExec(t, db, `CREATE TABLE unknown_module (id TEXT PRIMARY KEY, payload TEXT NOT NULL)`)
+			compatibilityExec(t, db, `INSERT INTO unknown_module VALUES ('synthetic-row', 'preserve-me')`)
+			before := compatibilitySnapshot(t, db.SQL, backend)
+			if err := db.RequireNativeSchema(ctx, "export complete backup"); err == nil {
+				t.Fatal("unknown module data lost its protection after migration")
+			}
+			after := compatibilitySnapshot(t, db.SQL, backend)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("module protection modified the database")
+			}
+
 		})
 	}
 }

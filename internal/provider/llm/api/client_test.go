@@ -23,6 +23,7 @@ func TestEndpointPaths(t *testing.T) {
 		{Legacy, "https://relay.invalid", "chat/completions", "", "https://relay.invalid/chat/completions"},
 		{ChatCompletions, "https://relay.invalid/", "chat/completions", "", "https://relay.invalid/v1/chat/completions"},
 		{ChatCompletions, "https://relay.invalid/proxy/v1/", "chat/completions", "", "https://relay.invalid/proxy/v1/chat/completions"},
+		{ChatCompletions, "https://relay.invalid/proxy%2Froute", "chat/completions", "", "https://relay.invalid/proxy%2Froute/v1/chat/completions"},
 		{Responses, "https://relay.invalid/proxy", "chat/completions", "", "https://relay.invalid/proxy/v1/responses"},
 		{Anthropic, "https://relay.invalid/v1", "chat/completions", "", "https://relay.invalid/v1/messages"},
 		{Gemini, "https://relay.invalid", "chat/completions", "models/test-model", "https://relay.invalid/v1beta/models/test-model:generateContent"},

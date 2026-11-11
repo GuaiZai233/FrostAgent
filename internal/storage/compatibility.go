@@ -124,15 +124,20 @@ func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation 
 		return err
 	}
 	for _, table := range tables {
+		if _, known := compatibleCoreColumns[table]; known {
+			continue
+		}
 		switch table {
-		case "computer_use_config", "computer_use_projects", "computer_use_tasks":
-			var count int
-			if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil {
-				return err
-			}
-			if count > 0 {
-				return fmt.Errorf("%s requires a program supporting the Computer Use module; its data cannot be preserved by this program", operation)
-			}
+		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "memory_embeddings", "memory_embedding_scopes":
+			continue
+		}
+		var count int
+		quoted := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
+		if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+quoted).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%s cannot preserve unknown module table %q; use a program supporting that module", operation, table)
 		}
 	}
 	return nil
