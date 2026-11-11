@@ -24,10 +24,10 @@ func responsesContent(content any) ([]any, error) {
 	return result, nil
 }
 
-func responsesRequest(req core.ChatRequest) (any, error) {
+func responsesRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	input := make([]any, 0)
 	for _, msg := range req.Messages {
-		if msg.Role == core.RoleAssistant && stateMatches(msg, Responses, req.Model) {
+		if msg.Role == core.RoleAssistant && stateMatches(msg, Responses, req.Model, origin) {
 			var items []any
 			if err := decodeJSON(msg.ProviderState.Content, &items); err != nil {
 				return nil, err
@@ -83,7 +83,7 @@ func responsesRequest(req core.ChatRequest) (any, error) {
 	return payload, nil
 }
 
-func decodeResponses(raw []byte, model string) (*core.ChatResponse, error) {
+func decodeResponses(raw []byte, model string, origin stateOrigin) (*core.ChatResponse, error) {
 	var payload struct {
 		Output []json.RawMessage `json:"output"`
 		Status string            `json:"status"`
@@ -158,6 +158,6 @@ func decodeResponses(raw []byte, model string) (*core.ChatResponse, error) {
 	if text.Len() == 0 && len(result.Message.ToolCalls) == 0 {
 		return result, fmt.Errorf("no message or tool calls in Responses response")
 	}
-	rememberState(&result.Message, Responses, model, payload.Output)
+	rememberState(&result.Message, Responses, model, payload.Output, origin)
 	return result, nil
 }

@@ -18,7 +18,8 @@ import (
 // Client keeps the existing OpenAI transport for compatible protocols.
 type Client struct {
 	*openai.Client
-	Format Format
+	Format     Format
+	EndpointID string
 }
 
 func NewClient(baseURL, key string, format Format, timeout time.Duration) *Client {
@@ -35,14 +36,17 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		client.RequestURL = endpoint
 		return client.Chat(ctx, req)
 	}
+	// Bind opaque state to the same configured endpoint and effective URL.
+	// URL resolution also makes versioned and unversioned bases equivalent.
+	origin := stateOrigin{EndpointID: c.EndpointID, URL: endpoint}
 	var payload any
 	switch c.Format {
 	case Responses:
-		payload, err = responsesRequest(req)
+		payload, err = responsesRequest(req, origin)
 	case Anthropic:
-		payload, err = anthropicRequest(req)
+		payload, err = anthropicRequest(req, origin)
 	case Gemini:
-		payload, err = geminiRequest(req)
+		payload, err = geminiRequest(req, origin)
 	}
 	if err != nil {
 		return nil, err
@@ -75,11 +79,11 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	var result *core.ChatResponse
 	switch c.Format {
 	case Responses:
-		result, err = decodeResponses(raw, req.Model)
+		result, err = decodeResponses(raw, req.Model, origin)
 	case Anthropic:
-		result, err = decodeAnthropic(raw, req.Model)
+		result, err = decodeAnthropic(raw, req.Model, origin)
 	case Gemini:
-		result, err = decodeGemini(raw, req.Model)
+		result, err = decodeGemini(raw, req.Model, origin)
 	}
 	if result != nil && c.ObserveUsage != nil {
 		c.ObserveUsage(result.Usage)

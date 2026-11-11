@@ -159,11 +159,19 @@ func TestNativeToolContinuations(t *testing.T) {
 			if err != nil || final.Message.Content != "done" || observations != 2 {
 				t.Fatalf("continuation: %+v, %v; observations=%d", final, err, observations)
 			}
+			endpoint, err := tc.format.URL(server.URL, "chat/completions", req.Model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			origin := stateOrigin{URL: endpoint}
+			if !stateMatches(reloaded, tc.format, req.Model, origin) {
+				t.Fatal("same-origin persisted state no longer matches")
+			}
 			reloaded.Content = "edited"
-			if stateMatches(reloaded, tc.format, req.Model) {
+			if stateMatches(reloaded, tc.format, req.Model, origin) {
 				t.Error("replayed stale protocol state")
 			}
-			if stateMatches(first.Message, tc.format, "other-model") {
+			if stateMatches(first.Message, tc.format, "other-model", origin) {
 				t.Error("replayed state to another model")
 			}
 		})
@@ -229,16 +237,17 @@ func TestNativeToolArgumentNumbersSurviveReplay(t *testing.T) {
 		{Gemini, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{"value":9007199254740993}}}]}}]}`},
 	} {
 		t.Run(string(tc.format), func(t *testing.T) {
+			origin := stateOrigin{EndpointID: "fixture-endpoint", URL: "https://relay.invalid/native"}
 			var response *core.ChatResponse
 			var err error
 			var payload any
 			switch tc.format {
 			case Responses:
-				response, err = decodeResponses([]byte(tc.raw), "fixture-model")
+				response, err = decodeResponses([]byte(tc.raw), "fixture-model", origin)
 			case Anthropic:
-				response, err = decodeAnthropic([]byte(tc.raw), "fixture-model")
+				response, err = decodeAnthropic([]byte(tc.raw), "fixture-model", origin)
 			case Gemini:
-				response, err = decodeGemini([]byte(tc.raw), "fixture-model")
+				response, err = decodeGemini([]byte(tc.raw), "fixture-model", origin)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -249,11 +258,11 @@ func TestNativeToolArgumentNumbersSurviveReplay(t *testing.T) {
 			req := core.ChatRequest{Model: "fixture-model", Messages: []core.ChatMessage{response.Message}}
 			switch tc.format {
 			case Responses:
-				payload, err = responsesRequest(req)
+				payload, err = responsesRequest(req, origin)
 			case Anthropic:
-				payload, err = anthropicRequest(req)
+				payload, err = anthropicRequest(req, origin)
 			case Gemini:
-				payload, err = geminiRequest(req)
+				payload, err = geminiRequest(req, origin)
 			}
 			raw, marshalErr := json.Marshal(payload)
 			if err != nil || marshalErr != nil || !strings.Contains(string(raw), "9007199254740993") {

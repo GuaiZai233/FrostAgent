@@ -62,7 +62,7 @@ type ChatMessage struct {
 }
 
 // ProviderState preserves opaque reasoning/signature items for tool continuations.
-// It is replayed only to the same protocol and model with unmodified content.
+// It is replayed only to the same endpoint, protocol and model with unmodified content.
 type ProviderState struct {
 	Format      string          `json:"format"`
 	Model       string          `json:"model"`

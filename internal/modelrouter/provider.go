@@ -82,6 +82,7 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 	}
 	req.Model = target.UpstreamModel
 	client := api.NewClient(target.BaseURL, apiKey, api.Format(target.APIFormat), p.timeout)
+	client.EndpointID = target.EndpointID
 	client.Logger = p.manager.Log()
 	module := string(p.workload)
 	if req.UsageModule != "" {
@@ -161,6 +162,7 @@ func (m *Manager) TestModelForOwner(modelID, owner string) (string, time.Duratio
 		return "", 0, err
 	}
 	client := api.NewClient(endpoint.BaseURL, apiKey, api.Format(endpoint.APIFormat), 0)
+	client.EndpointID = endpoint.ID
 	client.Logger = m.Log()
 	started := time.Now()
 	for _, capability := range model.Capabilities {

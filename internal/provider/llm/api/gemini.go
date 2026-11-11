@@ -45,7 +45,7 @@ func geminiContent(content any) ([]any, error) {
 	return result, nil
 }
 
-func geminiRequest(req core.ChatRequest) (any, error) {
+func geminiRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	contents := make([]map[string]any, 0)
 	system := make([]any, 0)
 	names := make(map[string]string)
@@ -67,7 +67,7 @@ func geminiRequest(req core.ChatRequest) (any, error) {
 			names[tc.ID] = tc.Function.Name
 			nativeIDs[tc.ID] = tc.ID
 		}
-		if msg.Role == core.RoleAssistant && stateMatches(msg, Gemini, req.Model) {
+		if msg.Role == core.RoleAssistant && stateMatches(msg, Gemini, req.Model, origin) {
 			if err := decodeJSON(msg.ProviderState.Content, &parts); err != nil {
 				return nil, err
 			}
@@ -165,7 +165,7 @@ func geminiRequest(req core.ChatRequest) (any, error) {
 	return payload, nil
 }
 
-func decodeGemini(raw []byte, model string) (*core.ChatResponse, error) {
+func decodeGemini(raw []byte, model string, origin stateOrigin) (*core.ChatResponse, error) {
 	var payload struct {
 		Candidates []struct {
 			Content struct {
@@ -244,6 +244,6 @@ func decodeGemini(raw []byte, model string) (*core.ChatResponse, error) {
 	if text.Len() == 0 && len(result.Message.ToolCalls) == 0 {
 		return result, fmt.Errorf("no message or tool calls in Gemini response")
 	}
-	rememberState(&result.Message, Gemini, model, candidate.Content.Parts)
+	rememberState(&result.Message, Gemini, model, candidate.Content.Parts, origin)
 	return result, nil
 }

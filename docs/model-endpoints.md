@@ -12,6 +12,8 @@
 
 四种预设格式按各自协议转换文本、图片、工具定义、工具调用与结果，以及用量。模型测试和运行时使用相同的格式。
 
+Responses、Anthropic 和 Gemini 的隐藏续接状态绑定 Endpoint ID 和实际请求地址；只有端点、协议、模型及消息均匹配时才会重放。切换端点或读取无法确认来源的旧状态时，只沿用普通消息和工具记录。
+
 Gemini 原生格式的图片输入需使用 base64 data URL，会转换为 `inlineData`；普通图片 URL、Files API URI 和 GCS URI 在本适配器中均不支持，会在发送请求前明确报错。
 
 自定义模式使用 **OpenAI Chat Completions** 请求与响应格式，支持 URL 查询参数，需手动填写模型名称。如需自定义 Embedding 路径，请单独建立自定义端点，填写完整的 Embedding URL。

@@ -32,7 +32,7 @@ func anthropicContent(content any) ([]any, error) {
 	return blocks, nil
 }
 
-func anthropicRequest(req core.ChatRequest) (any, error) {
+func anthropicRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	messages := make([]map[string]any, 0)
 	system := make([]any, 0)
 	for _, msg := range req.Messages {
@@ -45,7 +45,7 @@ func anthropicRequest(req core.ChatRequest) (any, error) {
 			continue
 		}
 		role := string(msg.Role)
-		if msg.Role == core.RoleAssistant && stateMatches(msg, Anthropic, req.Model) {
+		if msg.Role == core.RoleAssistant && stateMatches(msg, Anthropic, req.Model, origin) {
 			if err := decodeJSON(msg.ProviderState.Content, &content); err != nil {
 				return nil, err
 			}
@@ -96,7 +96,7 @@ func anthropicRequest(req core.ChatRequest) (any, error) {
 	return payload, nil
 }
 
-func decodeAnthropic(raw []byte, model string) (*core.ChatResponse, error) {
+func decodeAnthropic(raw []byte, model string, origin stateOrigin) (*core.ChatResponse, error) {
 	var payload struct {
 		Type    string            `json:"type"`
 		Content []json.RawMessage `json:"content"`
@@ -160,6 +160,6 @@ func decodeAnthropic(raw []byte, model string) (*core.ChatResponse, error) {
 	if text.Len() == 0 && len(result.Message.ToolCalls) == 0 {
 		return result, fmt.Errorf("no message or tool calls in Anthropic response")
 	}
-	rememberState(&result.Message, Anthropic, model, payload.Content)
+	rememberState(&result.Message, Anthropic, model, payload.Content, origin)
 	return result, nil
 }
