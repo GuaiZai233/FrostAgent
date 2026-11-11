@@ -373,6 +373,9 @@ func (d *DB) PauseComputerUseTasks(ctx context.Context, instanceID string) error
 		return err
 	}
 	for _, task := range tasks {
+		if task.Code == "restored_requires_rebind" {
+			continue
+		}
 		switch task.State {
 		case "succeeded", "failed", "cancelled", "completed":
 			continue

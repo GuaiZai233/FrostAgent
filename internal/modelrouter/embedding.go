@@ -55,6 +55,9 @@ func (m *Manager) EmbeddingSession(ctx context.Context, scope Scope) (Target, co
 	if err != nil {
 		return Target{}, nil, fmt.Errorf("Embedding 模型未配置或不可用: %w", err)
 	}
+	if target.APIFormat != "" {
+		return Target{}, nil, fmt.Errorf("Endpoint 使用 %s 格式，需要 v16；配置已保留", target.APIFormat)
+	}
 	apiKey, err := snapshotAPIKey(m, snapshot, target)
 	if err != nil {
 		return Target{}, nil, err

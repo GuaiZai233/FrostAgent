@@ -26,7 +26,7 @@ func prepareEmbeddingV12(t *testing.T, db *DB, modelColumn, memoryColumn bool) {
 		`DROP TABLE computer_use_tasks`,
 		`DROP TABLE computer_use_projects`,
 		`DROP TABLE computer_use_config`,
-		`UPDATE schema_meta SET version=12 WHERE id=1`,
+		`UPDATE schema_meta SET version=12, min_compatible_version=12 WHERE id=1`,
 	} {
 		if _, err := db.SQL.Exec(statement); err != nil {
 			t.Fatal(err)

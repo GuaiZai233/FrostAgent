@@ -18,6 +18,8 @@ import (
 
 const SchemaVersion = 15
 
+const SupportedSchemaVersion = 16
+
 type Backend string
 
 const (
@@ -113,6 +115,10 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 		}
 	}
 	if err = db.initSchema(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = db.ensureCompatibilityModules(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}

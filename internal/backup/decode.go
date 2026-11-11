@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"io"
 	"strings"
 )
@@ -20,6 +21,7 @@ type DecodedInstance struct {
 	Stickers    Stickers
 	Images      map[string][]byte
 	Skills      []skills.Package
+	TokenUsage  *tokenusage.Snapshot
 	ComputerUse *ComputerUse
 }
 
@@ -43,7 +45,7 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 		}
 		if name != "manifest.json" && name != "setting.json" && name != "memory.json" &&
 			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" &&
-			name != "computer_use.json" {
+			name != "computer_use.json" && name != "token_usage.json" {
 			if !strings.HasPrefix(name, "sticker/files/") || !validStickerFilename(strings.TrimPrefix(name, "sticker/files/")) {
 				return decoded, fmt.Errorf("unexpected ZIP member %q", name)
 			}
@@ -96,6 +98,15 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, err
 		}
 		decoded.Skills = validated
+	}
+	if data, ok := files["token_usage.json"]; ok {
+		decoded.TokenUsage = &tokenusage.Snapshot{}
+		if err := json.Unmarshal(data, decoded.TokenUsage); err != nil {
+			return decoded, err
+		}
+		if err := tokenusage.Validate(*decoded.TokenUsage); err != nil {
+			return decoded, err
+		}
 	}
 	if data, ok := files["computer_use.json"]; ok {
 		var metadata ComputerUse

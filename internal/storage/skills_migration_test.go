@@ -46,7 +46,7 @@ func exerciseSkillsMigrationRollback(t *testing.T, backend Backend) {
 	var step migration
 	for _, candidate := range migrations {
 		if candidate.version == 14 {
-			step = migration{14, append([]string(nil), candidate.statements...)}
+			step = migration{version: 14, statements: append([]string(nil), candidate.statements...)}
 			break
 		}
 	}

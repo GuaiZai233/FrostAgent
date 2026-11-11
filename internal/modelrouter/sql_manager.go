@@ -80,6 +80,7 @@ func (m *Manager) saveSQLDraft(cfg Configuration, owner string) error {
 	} else {
 		cfg.GlobalBindings, cfg.GroupOverrides = defaultConfiguration().GlobalBindings, nil
 	}
+	preserveEndpointFormats(&cfg, m.active)
 	normalizeConfiguration(&cfg)
 	if err := validateStoredConfiguration(cfg); err != nil {
 		return err
@@ -286,8 +287,8 @@ func writeCatalogTx(ctx context.Context, db *storage.DB, tx *sql.Tx, cfg Configu
 			enabled = 1
 		}
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO provider_endpoints
-   (id, display_name, base_url, api_key_source, api_key_ref, enabled, position) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			endpoint.ID, endpoint.DisplayName, endpoint.BaseURL, endpoint.APIKeySource, endpoint.APIKeyRef, enabled, pos); err != nil {
+   (id, display_name, base_url, api_key_source, api_key_ref, enabled, position, api_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			endpoint.ID, endpoint.DisplayName, endpoint.BaseURL, endpoint.APIKeySource, endpoint.APIKeyRef, enabled, pos, endpoint.APIFormat); err != nil {
 			return err
 		}
 	}

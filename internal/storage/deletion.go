@@ -68,7 +68,7 @@ func (d *DB) ConfirmDeletion(ctx context.Context, instanceID string) error {
 	if err := tx.QueryRowContext(ctx, d.Bind(`SELECT backup_version FROM pending_deletions WHERE instance_id = ?`), instanceID).Scan(&version); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, d.Bind(`DELETE FROM settings WHERE scope = 'instance' AND instance_id = ?`), instanceID); err != nil {
+	if _, err := tx.ExecContext(ctx, d.Bind(`DELETE FROM settings WHERE scope IN ('instance','token_usage') AND instance_id = ?`), instanceID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, d.Bind(`DELETE FROM security_audit WHERE instance_id = ?`), instanceID); err != nil {

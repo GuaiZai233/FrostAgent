@@ -116,7 +116,7 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), version); err != nil {
+	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = ? WHERE id = 1`), version, version); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -159,7 +159,7 @@ func TestSQLiteMigratesPopulatedSchemas(t *testing.T) {
 }
 
 func TestSQLiteRejectsFutureAndPreBaselineSchemaWithoutMutation(t *testing.T) {
-	for _, version := range []int{0, SchemaVersion + 1} {
+	for _, version := range []int{0, SupportedSchemaVersion + 1} {
 		t.Run(strconv.Itoa(version), func(t *testing.T) {
 			root := t.TempDir()
 			db, err := Open(context.Background(), root)
@@ -167,7 +167,7 @@ func TestSQLiteRejectsFutureAndPreBaselineSchemaWithoutMutation(t *testing.T) {
 				t.Fatal(err)
 			}
 			populateMigrationFixture(t, db)
-			if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ? WHERE id = 1`), version); err != nil {
+			if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = ? WHERE id = 1`), version, version); err != nil {
 				t.Fatal(err)
 			}
 			if err := db.Close(); err != nil {
@@ -204,7 +204,7 @@ func TestSQLiteFailedMigrationRollsBackAndRetries(t *testing.T) {
 	}
 	prepareOldSchema(t, db, 7)
 	populateMigrationFixture(t, db)
-	err = db.applyMigration(context.Background(), migration{8, []string{
+	err = db.applyMigration(context.Background(), migration{version: 8, statements: []string{
 		`CREATE INDEX memory_source_message_idx ON memory_entries(instance_id, source_message_id)`,
 		`THIS IS NOT SQL`,
 	}})

@@ -93,7 +93,15 @@ type Tool struct {
 
 // Usage tracks token usage.
 type Usage struct {
-	PromptTokens     int // 输入消耗
-	CompletionTokens int // 输出消耗
-	TotalTokens      int
+	PromptTokens       int // 输入消耗
+	CompletionTokens   int // 输出消耗
+	TotalTokens        int
+	Reported           *UsageReported
+	CachedPromptTokens *int
+}
+
+type UsageReported struct {
+	Prompt     bool
+	Completion bool
+	Total      bool
 }

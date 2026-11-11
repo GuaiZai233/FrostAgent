@@ -250,6 +250,7 @@ func (m *Manager) SaveDraftForOwner(cfg Configuration, owner string) error {
 	if m.db != nil {
 		return m.saveSQLDraft(cfg, owner)
 	}
+	preserveEndpointFormats(&cfg, m.Draft())
 	normalizeConfiguration(&cfg)
 	if err := validateConfiguration(cfg); err != nil {
 		return err
@@ -560,6 +561,7 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 		ModelID:             model.ID,
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
+		APIFormat:           endpoint.APIFormat,
 		UpstreamModel:       model.UpstreamModel,
 		MaxInputTokens:      model.MaxInputTokens,
 	}, nil
@@ -700,7 +702,7 @@ func validateConfiguration(cfg Configuration) error {
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return fmt.Errorf("endpoint %q has an invalid http/https base url", endpoint.DisplayName)
 		}
-		if parsed.RawQuery != "" || parsed.Fragment != "" {
+		if (parsed.RawQuery != "" && endpoint.APIFormat != "custom") || parsed.Fragment != "" {
 			return fmt.Errorf("endpoint %q must not contain query or fragment", endpoint.DisplayName)
 		}
 		switch endpoint.APIKeySource {

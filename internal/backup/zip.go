@@ -3,11 +3,13 @@ package backup
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,6 +50,11 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		return nil, err
 	}
 
+	usageStore, _ := tokenusage.New(db, instanceID, "")
+	usage, err := usageStore.Snapshot(context.Background())
+	if err != nil {
+		return nil, err
+	}
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
@@ -60,6 +67,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		{"setting.json", settings},
 		{"skills.json", skillPackages},
 		{"computer_use.json", computerUse},
+		{"token_usage.json", usage},
 		{"memory.json", memories},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},

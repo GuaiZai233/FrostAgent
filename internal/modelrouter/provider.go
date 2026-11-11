@@ -81,6 +81,9 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 			return nil, limitErr
 		}
 	}
+	if target.APIFormat != "" {
+		return nil, fmt.Errorf("Endpoint 使用 %s 格式，请使用支持该协议的 v16 版本；配置已保留", target.APIFormat)
+	}
 	req.Model = target.UpstreamModel
 	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
 	client.Logger = p.manager.Log()
@@ -214,6 +217,9 @@ func (m *Manager) previewEndpointForOwner(endpointID, modelID, owner string) (En
 	apiKey, err := m.secrets.ResolveDraft(endpoint)
 	if err != nil {
 		return Endpoint{}, Model{}, "", fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
+	}
+	if endpoint.APIFormat != "" {
+		return Endpoint{}, Model{}, "", fmt.Errorf("Endpoint 使用 %s 格式，请使用支持该协议的 v16 版本；配置已保留", endpoint.APIFormat)
 	}
 	return endpoint, model, apiKey, nil
 }
