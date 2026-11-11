@@ -68,6 +68,13 @@ function endpointUsesAPIKeyInput(storage: ModelAPIKeyStorage): boolean {
   return storage === apiKeyStorageManual || storage === apiKeyStorageWindowsCredentialManager;
 }
 
+function disableDialogControls(dialog: HTMLElement): () => void {
+  const controls = Array.from(dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button'))
+    .map((control) => ({ control, disabled: control.disabled }));
+  controls.forEach(({ control }) => { control.disabled = true; });
+  return () => controls.forEach(({ control, disabled }) => { control.disabled = disabled; });
+}
+
 function globalBindingDisabled(bindings: ModelBinding[], workload: ModelWorkload): boolean {
   const binding = bindingFor(bindings, workload);
   if (
@@ -116,13 +123,13 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
     }
   }
 
-  async function saveDraft(updatePage = true): Promise<boolean> {
+  async function saveDraft(updatePage = true, configuration = draft): Promise<boolean> {
     if (updatePage) {
       busy = true;
       render();
     }
     try {
-      const response = await api.saveModelRouterDraft(draft, !updatePage);
+      const response = await api.saveModelRouterDraft(configuration, !updatePage);
       if (!response.success || !response.draft) {
         toast.error(response.error || '同步配置失败');
         return false;
@@ -457,6 +464,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
     let keyStorage = endpointAPIKeyStorage(endpoint);
     let secretInput = '';
     let clearSecret = false;
+    let savingEndpoint = false;
     let secretFile = keyStorage === apiKeyStorageSecretFile ? endpoint.apiKeyRef : '';
     const secretInputField = () => `<div style="position:relative"><input type="password" autocomplete="new-password" class="input font-mono" id="endpoint-key" value="" placeholder="留空则保留现有 Secret" style="padding-right:2.5rem"><button type="button" class="btn btn-ghost btn-icon-sm text-muted" id="endpoint-key-reveal" title="短暂显示 API Key" aria-label="短暂显示 API Key" aria-pressed="false" style="position:absolute;right:0.125rem;top:50%;transform:translateY(-50%);width:2rem;height:2rem">${icon('eye', 'w-3.5 h-3.5')}</button></div>`;
     const secretAction = () => endpoint.apiKeyConfigured && keyStorage === endpointAPIKeyStorage(endpoint)
@@ -476,6 +484,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
     void openDialog({
       title: existing ? '编辑 Endpoint' : '新增 Endpoint',
       maxWidth: '34rem',
+      canDismiss: () => !savingEndpoint,
       bodyHtml: `
         <div class="form-group"><label class="form-label">显示名称</label><input class="input" id="endpoint-name" value="${escapeHtml(endpoint.displayName)}"></div>
         <div class="form-group"><label class="form-label">Base URL</label><input class="input font-mono" id="endpoint-url" value="${escapeHtml(endpoint.baseUrl)}" placeholder="https://example.com/v1"><p class="form-hint text-destructive" id="endpoint-url-warning" style="display:${endpointWarns(endpoint.baseUrl) ? 'block' : 'none'}">这里建议填写 Base URL，也就是不以 /chat/completions 结尾。如果执意继续，很可能引起错误。</p></div>
@@ -540,61 +549,59 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
         });
         renderStorageDetails();
         dialog.querySelector('#endpoint-confirm')?.addEventListener('click', async (event) => {
+          if (savingEndpoint) return;
           captureStorageValue();
           if (keyStorage === apiKeyStorageSecretFile && !secretFile.trim()) {
             toast.error('请填写 Secret 文件路径');
             return;
           }
           const confirmButton = event.currentTarget as HTMLButtonElement;
-          confirmButton.disabled = true;
+          const submittedSecret = secretInput;
+          const submittedClearSecret = clearSecret;
+          const restoreControls = disableDialogControls(dialog);
+          savingEndpoint = true;
           confirmButton.setAttribute('aria-busy', 'true');
           confirmButton.innerHTML = '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 保存中...';
-          endpoint.displayName = dialog.querySelector<HTMLInputElement>('#endpoint-name')!.value;
-          endpoint.baseUrl = urlInput.value;
-          endpoint.apiKeySource = keyStorage;
-          endpoint.apiKeyRef = keyStorage === apiKeyStorageSecretFile
-            ? secretFile.trim()
-            : keyStorage === apiKeyStorageWindowsCredentialManager
-                ? `guaitech.frostagent/endpoint/${endpoint.id}`
-                : `endpoint/${endpoint.id}`;
-          endpoint.enabled = dialog.querySelector<HTMLInputElement>('#endpoint-enabled')!.checked;
-          const index = draft.endpoints.findIndex((item) => item.id === endpoint.id);
-          if (index >= 0) draft.endpoints[index] = endpoint;
-          else draft.endpoints.push(endpoint);
-          if (!(await saveDraft(false))) {
-            confirmButton.disabled = false;
-            confirmButton.removeAttribute('aria-busy');
-            confirmButton.textContent = '保存';
-            return;
-          }
-          let secretResponse: { success: boolean; error: string; configured: boolean } | undefined;
           try {
-            if (clearSecret) {
+            endpoint.displayName = dialog.querySelector<HTMLInputElement>('#endpoint-name')!.value;
+            endpoint.baseUrl = urlInput.value;
+            endpoint.apiKeySource = keyStorage;
+            endpoint.apiKeyRef = keyStorage === apiKeyStorageSecretFile
+              ? secretFile.trim()
+              : keyStorage === apiKeyStorageWindowsCredentialManager
+                  ? `guaitech.frostagent/endpoint/${endpoint.id}`
+                  : `endpoint/${endpoint.id}`;
+            endpoint.enabled = dialog.querySelector<HTMLInputElement>('#endpoint-enabled')!.checked;
+            const configuration = cloneConfiguration(draft);
+            const index = configuration.endpoints.findIndex((item) => item.id === endpoint.id);
+            if (index >= 0) configuration.endpoints[index] = endpoint;
+            else configuration.endpoints.push(endpoint);
+            if (!(await saveDraft(false, configuration))) return;
+            let secretResponse: { success: boolean; error: string; configured: boolean } | undefined;
+            if (submittedClearSecret) {
               secretResponse = await api.clearDraftEndpointSecret(endpoint.id);
-            } else if (secretInput !== '') {
-              secretResponse = await api.setDraftEndpointSecret(endpoint.id, secretInput);
+            } else if (submittedSecret !== '') {
+              secretResponse = await api.setDraftEndpointSecret(endpoint.id, submittedSecret);
             }
+            if (secretResponse && !secretResponse.success) {
+              toast.error(secretResponse.error || '保存 API Key 失败');
+              return;
+            }
+            if (secretResponse) {
+              const savedEndpoint = draft.endpoints.find((item) => item.id === endpoint.id);
+              if (savedEndpoint) savedEndpoint.apiKeyConfigured = secretResponse.configured;
+              hasDraftSecretChanges = true;
+            }
+            close();
+            render();
           } catch (err) {
             toast.error('保存 API Key 失败: ' + errorText(err));
-            confirmButton.disabled = false;
+          } finally {
+            savingEndpoint = false;
+            restoreControls();
             confirmButton.removeAttribute('aria-busy');
             confirmButton.textContent = '保存';
-            return;
           }
-          if (secretResponse && !secretResponse.success) {
-            toast.error(secretResponse.error || '保存 API Key 失败');
-            confirmButton.disabled = false;
-            confirmButton.removeAttribute('aria-busy');
-            confirmButton.textContent = '保存';
-            return;
-          }
-          if (secretResponse) {
-            const savedEndpoint = draft.endpoints.find((item) => item.id === endpoint.id);
-            if (savedEndpoint) savedEndpoint.apiKeyConfigured = secretResponse.configured;
-            hasDraftSecretChanges = true;
-          }
-          close();
-          render();
         });
       },
     });
@@ -605,9 +612,11 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
     const model = existing
       ? structuredClone(existing)
       : create(ModelTargetSchema, { id: newId('model'), enabled: true, endpointId: draft.endpoints[0]?.id || '' });
+    let savingModel = false;
     void openDialog({
       title: existing ? '编辑 Model' : '新增 Model',
       maxWidth: '36rem',
+      canDismiss: () => !savingModel,
       bodyHtml: `
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
         <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
@@ -631,6 +640,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
         // while the user has typed their own name.
         let autoDisplayName: string | undefined;
         let inferSeq = 0;
+        let capabilityPending = false;
         const syncDisplayName = () => {
           const upstream = upstreamInput.value.trim();
           if (!upstream) return;
@@ -645,9 +655,10 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
         // what; a response that arrives later is discarded so the user's manual
         // choice is never overwritten.
         const setCapabilityPending = (pending: boolean) => {
+          capabilityPending = pending;
           capabilityStatus.style.display = pending ? 'block' : 'none';
           dialog.querySelectorAll<HTMLInputElement>('.model-cap').forEach((input) => {
-            input.disabled = pending;
+            input.disabled = pending || savingModel;
           });
         };
         const inferCapabilities = async () => {
@@ -755,8 +766,10 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
         // Opening an existing model looks up its metadata within the same lock window.
         if (upstreamInput.value.trim()) void inferCapabilities();
         fetchButton.addEventListener('click', async () => {
-          if (fetchButton.disabled) return;
+          if (fetchButton.disabled || savingModel) return;
           const endpointId = endpointSelect.value;
+          const confirmButton = dialog.querySelector<HTMLButtonElement>('#model-confirm')!;
+          confirmButton.disabled = true;
           fetchButton.disabled = true;
           fetchButton.setAttribute('aria-busy', 'true');
           fetchButton.innerHTML = '<span class="spinner inline-block" style="width:0.875rem;height:0.875rem"></span> 获取中...';
@@ -776,11 +789,13 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
             toast.error('获取模型列表失败: ' + errorText(err));
           } finally {
             fetchButton.disabled = false;
+            confirmButton.disabled = false;
             fetchButton.removeAttribute('aria-busy');
             fetchButton.textContent = '获取名称';
           }
         });
-        dialog.querySelector('#model-confirm')?.addEventListener('click', () => {
+        dialog.querySelector('#model-confirm')?.addEventListener('click', async (event) => {
+          if (savingModel || fetchButton.disabled) return;
           const upstreamModel = upstreamInput.value.trim();
           if (!upstreamModel) {
             toast.error('请填写上游模型名称');
@@ -795,11 +810,26 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
           if(!Number.isInteger(maxInputTokens)||maxInputTokens<0||maxInputTokens>2147483647){toast.error("最大输入 Tokens 必须是非负整数");return;}
           model.maxInputTokens=maxInputTokens;
           model.capabilities = Array.from(dialog.querySelectorAll<HTMLInputElement>('.model-cap:checked')).map((item) => item.value);
-          const index = draft.models.findIndex((item) => item.id === model.id);
-          if (index >= 0) draft.models[index] = model;
-          else draft.models.push(model);
-          close();
-          render();
+          const configuration = cloneConfiguration(draft);
+          const index = configuration.models.findIndex((item) => item.id === model.id);
+          if (index >= 0) configuration.models[index] = model;
+          else configuration.models.push(model);
+          const confirmButton = event.currentTarget as HTMLButtonElement;
+          const restoreControls = disableDialogControls(dialog);
+          savingModel = true;
+          confirmButton.setAttribute('aria-busy', 'true');
+          confirmButton.textContent = '保存中...';
+          try {
+            if (!(await saveDraft(false, configuration))) return;
+            close();
+            render();
+          } finally {
+            savingModel = false;
+            restoreControls();
+            setCapabilityPending(capabilityPending);
+            confirmButton.removeAttribute('aria-busy');
+            confirmButton.textContent = '保存';
+          }
         });
       },
     });
