@@ -197,7 +197,7 @@ var migrations = []migration{
 	// v15 was used by the Computer Use development branch. Its module tables
 	// are preserved when upgrading to the endpoint-format schema.
 	{version: 15, preservesCompatibility: true},
-	{version: 16, statements: []string{`ALTER TABLE provider_endpoints ADD COLUMN api_format TEXT NOT NULL DEFAULT ''`}},
+	{version: 16},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
@@ -274,6 +274,11 @@ func (d *DB) createSchema(ctx context.Context) error {
 				return fmt.Errorf("create schema v%d: %w", step.version, err)
 			}
 		}
+		if step.version == 16 {
+			if err := d.ensureEndpointMetadataTx(ctx, tx); err != nil {
+				return err
+			}
+		}
 		if step.version == 13 {
 			if err := d.repairEmbeddingColumns(ctx, tx); err != nil {
 				return err
@@ -309,6 +314,11 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	}
 	if step.version == 11 {
 		if err := d.migrateProviders(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if step.version == 16 {
+		if err := d.ensureEndpointMetadataTx(ctx, tx); err != nil {
 			return err
 		}
 	}

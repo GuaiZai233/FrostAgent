@@ -18,6 +18,8 @@
 
 Embedding 仍使用 OpenAI 兼容协议。OpenAI 两种预设格式生成 `/v1/embeddings`；Anthropic/Gemini 端点需另配 OpenAI 兼容 Embedding 端点。
 
-数据库保存 `api_format`，升级至 schema 16，兼容性下限为 16。15 为历史 Computer Use 开发版保留；历史模块数据及其完整备份、删除保护继续保留。升级后的数据库需要支持 schema 16 的程序。
+数据库保存 `api_format`，升级至 schema 16，兼容性下限为 16。15 为历史 Computer Use 开发版保留；历史模块数据及其完整备份、删除保护继续保留。升级后的数据库可由本分支及配对的 v15 兼容修补版使用；原始 v15 二进制不支持此范围。完整切换约定见 [版本兼容说明](version-compatibility.md)。
 
 协议参考：[OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)、[Anthropic Messages](https://platform.claude.com/docs/en/api/http/messages)、[Gemini generateContent](https://ai.google.dev/api/generate-content)。
+
+按 Maintainer 决定，备份原样保留完整端点 URL（含查询参数及内嵌凭据）；独立 API Key 和凭据引用继续排除，备份文件需妥善保管。

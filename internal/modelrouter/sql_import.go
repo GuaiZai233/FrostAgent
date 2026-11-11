@@ -99,7 +99,7 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 		oldID := incoming.ID
 		for _, existing := range catalog.Endpoints {
 			if existing.ID == incoming.ID && existing.DisplayName == incoming.DisplayName &&
-				existing.BaseURL == incoming.BaseURL && existing.Enabled == incoming.Enabled {
+				existing.BaseURL == incoming.BaseURL && existing.Enabled == incoming.Enabled && existing.APIFormat == incoming.APIFormat {
 				endpointMap[oldID] = existing.ID
 				break
 			}

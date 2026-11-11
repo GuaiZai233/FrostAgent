@@ -85,7 +85,7 @@ func (d *DB) prepareCompatibility(ctx context.Context, expectedVersion int) erro
 	if err := validateCompatibility(version, minimum); err != nil {
 		return err
 	}
-	if minimum > SchemaVersion {
+	if minimum > SupportedSchemaVersion {
 		return fmt.Errorf("database schema version %d requires compatible schema %d or newer; this program supports %d", version, minimum, SchemaVersion)
 	}
 	if version > SchemaVersion {
@@ -116,8 +116,8 @@ func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation 
 	if err := q.QueryRowContext(ctx, `SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil {
 		return err
 	}
-	if version > SchemaVersion {
-		return fmt.Errorf("%s requires a program supporting database schema %d; this program supports %d and cannot preserve all newer module data", operation, version, SchemaVersion)
+	if version > SupportedSchemaVersion {
+		return fmt.Errorf("%s requires a program supporting database schema %d; this program supports %d and cannot preserve all newer module data", operation, version, SupportedSchemaVersion)
 	}
 	tables, err := d.schemaTables(ctx, q)
 	if err != nil {
@@ -128,7 +128,12 @@ func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation 
 			continue
 		}
 		switch table {
-		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "memory_embeddings", "memory_embedding_scopes":
+		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "memory_embeddings", "memory_embedding_scopes", "module_migrations":
+			continue
+		case "computer_use_config", "computer_use_projects", "computer_use_tasks":
+			if _, err := d.matchColumns(ctx, q, table, compatibleComputerUseColumns[table]); err != nil {
+				return err
+			}
 			continue
 		}
 		var count int
@@ -245,7 +250,7 @@ func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) erro
 			continue
 		}
 		switch table {
-		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models",
+		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "module_migrations",
 			"memory_embeddings", "memory_embedding_scopes", "computer_use_config", "computer_use_projects", "computer_use_tasks":
 		default:
 			return fmt.Errorf("unrecognized legacy table %s", table)
