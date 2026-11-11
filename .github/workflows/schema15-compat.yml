@@ -35,6 +35,6 @@ jobs:
       - name: PostgreSQL compatibility
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
-        run: go test ./internal/storage ./internal/modelrouter ./internal/backup -run 'Postgres|TestProviderSchemaMigration|TestSharedCatalog' -count=1 -timeout 300s
+        run: go test -p 1 ./internal/storage ./internal/modelrouter ./internal/backup -run 'Postgres|TestProviderSchemaMigration|TestSharedCatalog' -count=1 -timeout 300s
       - name: Vet changed packages
         run: go vet ./internal/storage ./internal/modelrouter ./internal/backup ./internal/instance ./internal/tokenusage

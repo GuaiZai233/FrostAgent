@@ -139,7 +139,7 @@ func TestPostgresMigrationFailureRetryAndFutureReject(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer probe.Close()
-	if err := probe.QueryRow(`SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil || version != SchemaVersion+1 {
+	if err := probe.QueryRow(`SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil || version != SupportedSchemaVersion+1 {
 		t.Fatalf("future PostgreSQL schema was modified: %d, %v", version, err)
 	}
 	var count int
