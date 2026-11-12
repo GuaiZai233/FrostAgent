@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+import { setImmediate } from 'node:timers/promises';
+import { mountOverviewPage } from '../src/pages/overview';
+import { instanceState } from '../src/instance-state';
+
+const { JSDOM } = createRequire(resolve('package.json'))('jsdom');
+const dom = new JSDOM('<body><main id="root"></main></body>', { url: 'http://panel.example/' });
+const originals = { window: globalThis.window, document: globalThis.document, Event: globalThis.Event, fetch: globalThis.fetch };
+Object.assign(globalThis, { window: dom.window, document: dom.window.document, Event: dom.window.Event });
+dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
+dom.window.setInterval = () => 1;
+const root = document.querySelector<HTMLElement>('#root')!;
+const instance = { id: 'fixture-qq-extend', name: 'QQ', enabled: true, created_at: '' };
+let groups = '42,43';
+let failSave = false;
+let deferLoad = false;
+let releaseLoad: (() => void) | undefined;
+const writes: Record<string, unknown>[] = [];
+globalThis.fetch = async (input, init) => {
+  const path = new URL(input instanceof Request ? input.url : String(input), dom.window.location.origin).pathname;
+  assert.ok(path === '/api/version' || path === '/api/instances' || path.startsWith(`/instances/${instance.id}/`), 'configuration escaped its instance');
+  if (path === '/api/version') return Response.json({ display: 'synthetic-version' });
+  if (path === '/api/instances') return Response.json({ instances: [instance] });
+  if (path.endsWith('/GetOverview')) return Response.json({ status: 2, tools: [{ name: 'qq_extend_messages', configurable: true, enabled: true, available: true }] });
+  if (path.endsWith('/ListEnvVars')) {
+    if (deferLoad) await new Promise<void>((resolve) => { releaseLoad = resolve; });
+    return Response.json({ envVars: [{ key: 'QQ_EXTEND_MESSAGES_TARGET_GROUPS', value: groups }] });
+  }
+  assert.ok(path.endsWith('/UpdateEnvVar'), path);
+  const body = await (input instanceof Request ? input : new Request(new URL(path, dom.window.location.origin), init)).json();
+  writes.push(body);
+  if (failSave) return Response.json({ success: false, error: 'synthetic save failure' });
+  groups = body.value ?? '';
+  return Response.json({ success: true });
+};
+const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
+const open = async () => { root.querySelector<HTMLButtonElement>('[data-tool-config="qq_extend_messages"]')!.click(); await flush(); };
+const submit = async () => { document.querySelector<HTMLFormElement>('#qq-extend-form')!.dispatchEvent(new dom.window.Event('submit', { bubbles: true, cancelable: true })); await flush(); };
+let cleanup = () => {};
+try {
+  instanceState.select(instance);
+  cleanup = mountOverviewPage(root);
+  await flush();
+  assert.equal(root.querySelector('.overview-tool-configurable')?.textContent, '可配置');
+  await open();
+  let input = document.querySelector<HTMLTextAreaElement>('#qq-extend-groups')!;
+  assert.equal(input.value, '42,43');
+  input.value = '42,bad';
+  await submit();
+  assert.equal(writes.length, 0);
+  assert.match(document.querySelector('#qq-extend-error')!.textContent!, /正整数/);
+  input.value = '44\n45,44';
+  failSave = true;
+  await submit();
+  assert.equal(input.value, '44\n45,44');
+  assert.match(document.querySelector('#qq-extend-error')!.textContent!, /synthetic save failure/);
+  failSave = false;
+  await submit();
+  assert.equal(groups, '44,45');
+  assert.deepEqual(writes.at(-1), { key: 'QQ_EXTEND_MESSAGES_TARGET_GROUPS', value: '44,45' });
+  assert.equal(document.querySelectorAll('dialog').length, 0);
+  await open();
+  input = document.querySelector<HTMLTextAreaElement>('#qq-extend-groups')!;
+  input.value = '';
+  await submit();
+  assert.equal(groups, '');
+  assert.equal(root.querySelector<HTMLInputElement>('[data-tool-toggle]')!.checked, true, 'empty whitelist must retain current-session tool access');
+  deferLoad = true;
+  await open();
+  assert.ok(releaseLoad);
+  instanceState.select(null);
+  releaseLoad!();
+  await flush();
+  assert.equal(document.querySelectorAll('dialog').length, 0, 'late load must not open a dialog for the previous instance');
+} finally {
+  cleanup();
+  Object.assign(globalThis, originals);
+  dom.window.close();
+}

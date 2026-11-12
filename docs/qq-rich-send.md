@@ -5,7 +5,7 @@ FrostAgent 原生提供 QQ 消息组件和互动操作，通过当前对话绑�
 
 ## 工具入口
 
-普通消息继续使用 `send_message`。扩展能力共用一个 `qq` 工具：
+普通消息继续使用 `send_message`。扩展能力共用一个 `qq_extend_messages` 工具：
 
 ```json
 {"action":"discover"}
@@ -22,7 +22,7 @@ FrostAgent 原生提供 QQ 消息组件和互动操作，通过当前对话绑�
 
 ## 消息组件
 
-`send_message.messages` 或 `qq(action=send).arguments.messages` 接受以下组件。
+`send_message.messages` 或 `qq_extend_messages(action=send).arguments.messages` 接受以下组件。
 ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测。
 
 | type | 常用字段 | 含义 |
@@ -97,7 +97,52 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 
 示例 ID 需替换为当前可信上下文中的消息 ID。新建节点使用机器人身份。
 节点内使用媒体 URL，不接受文件上传、群目录、引用段、@全体或依赖本地传输的媒体。
-扩展工具不接受任意目标会话，不提供跨群或跨账号发送入口。
+不指定目标时使用当前会话。跨群发送需要配置下述白名单，不支持跨账号连接。
+
+### 跨会话发送到白名单群
+
+在概览的 `qq_extend_messages` 工具卡片点击“可配置”，编辑允许发送到的群号。
+每行一个群号，也可以用逗号分隔；保存后立即生效，不重启实例。
+对应实例设置为 `QQ_EXTEND_MESSAGES_TARGET_GROUPS`，白名单为空时禁止所有跨会话发送，
+当前会话内的能力仍可使用。此白名单独立于主动回复和群聊压缩白名单。
+
+`send`、`forward_message`、`forward_bundle` 可以在 `arguments` 中增加
+`target_group_id`，把当前群聊或私聊中的内容发送到白名单群：
+
+```json
+{
+  "action":"forward_message",
+  "arguments":{
+    "message_id":"101",
+    "target_group_id":"42"
+  }
+}
+```
+
+```json
+{
+  "action":"send",
+  "arguments":{
+    "target_group_id":"42",
+    "messages":[{"type":"plain","text":"这里是需要同步的内容"}]
+  }
+}
+```
+
+示例群号需要替换为管理员配置的真实目标。`discover` 返回 `target_groups`，
+模型应从中选择准确群号。来源消息 ID 仍须属于当前连接、当前来源会话；
+商城表情也从来源会话解析。只能使用当前 OneBot 连接发送到它可以访问的群。
+
+跨会话发送不自动引用来源消息或 @来源发言者；不接受跨会话 `quote`，需要保留
+原消息时使用转发。显式 `mention_user` 在目标群发送。戳一戳、回应、撤回仍只允许
+当前会话，不接受 `target_group_id`。`send_message` 不增加跨群参数。
+
+每次写入前重新检查白名单；删除目标群后，后续分段和回落停止。只有 ACK 确认
+的部分记入目标群历史，消息 ID 归属目标群，不会混入来源会话的公开回复记录。
+工具返回 `target_session`，例如 `group:42`。超时依然不自动重发。
+
+工具已由 `qq` 改名为 `qq_extend_messages`，不再注册旧名称；旧 `qq` 禁用开关仍被
+识别，避免升级后意外重新启用。在工具卡片切换开关时会更新为新名称。
 
 ### 网关兼容路径
 

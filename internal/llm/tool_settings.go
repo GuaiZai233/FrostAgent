@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+)
 
 const DisabledToolsKey = "DISABLED_TOOLS"
 
@@ -18,7 +21,7 @@ func (e *Engine) ToolEnabled(name string) bool {
 		return false
 	}
 	for _, item := range disabled {
-		if item == name {
+		if item == name || name == qqextend.ToolName && item == "qq" {
 			return false
 		}
 	}

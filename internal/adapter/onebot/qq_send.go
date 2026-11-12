@@ -17,6 +17,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 )
@@ -90,7 +91,7 @@ type qqSender struct {
 	decorate  func([]tools.OneBotSegment) []tools.OneBotSegment
 }
 
-func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg)) func(context.Context, string) (core.PlatformActionResult, error) {
+func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine) func(context.Context, string) (core.PlatformActionResult, error) {
 	return func(ctx context.Context, raw string) (core.PlatformActionResult, error) {
 		var request tools.QQRequest
 		if err := json.Unmarshal([]byte(raw), &request); err != nil {
@@ -102,7 +103,36 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		if c.mock {
 			return core.PlatformActionResult{}, fmt.Errorf("QQ 操作不能在模拟会话中发送")
 		}
-		sessionID := c.historyKey(event)
+		sourceSessionID := c.historyKey(event)
+		sessionID := sourceSessionID
+		destination := event
+		external := false
+		if groupID := request.Arguments.TargetGroupID; groupID != "" {
+			id, _ := qqextend.ParseGroupID(groupID) // ValidateQQRequest checked the ID.
+			external = event.MessageType != "group" || event.GroupID != id
+			if external {
+				if !qqextend.TargetAllowed(qqextend.ConfiguredTargets(c.Scope), groupID) {
+					return core.PlatformActionResult{}, fmt.Errorf("目标群不在 qq_extend_messages 跨会话白名单中")
+				}
+				for _, m := range request.Arguments.Messages {
+					if m.Type == "quote" {
+						return core.PlatformActionResult{}, fmt.Errorf("跨会话发送不能引用来源会话消息，请使用转发")
+					}
+				}
+				destination.MessageType, destination.GroupID = "group", id
+				destination.UserID, destination.MessageID, destination.Message = 0, 0, nil
+				sessionID = c.historyKey(destination)
+			}
+		}
+		var targetSession *llm.SessionContext
+		var targetEpoch uint64
+		if external {
+			if engine == nil || engine.SessionManager == nil {
+				return core.PlatformActionResult{}, fmt.Errorf("目标群会话不可用")
+			}
+			targetSession = engine.SessionManager.GetOrCreate(sessionID)
+			targetEpoch = targetSession.Epoch()
+		}
 		resolve := func(messages []tools.Msg) error {
 			for i, m := range messages {
 				if m.Type == "mface" && m.MessageID != "" {
@@ -123,13 +153,20 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				return core.PlatformActionResult{}, err
 			}
 		}
-		sender := qqSender{event: event,
+		sender := qqSender{event: destination,
 			call: func(action model.OneBotAction) (oneBotAPIResponse, error) {
 				if err := ctx.Err(); err != nil {
 					return oneBotAPIResponse{}, err
 				}
 				if turn.Interrupted() {
 					return oneBotAPIResponse{}, context.Canceled
+				}
+				// Settings are hot: revocation must also stop later split parts and fallbacks.
+				if external && !qqextend.TargetAllowed(qqextend.ConfiguredTargets(c.Scope), request.Arguments.TargetGroupID) {
+					return oneBotAPIResponse{Status: "failed", RetCode: 403}, fmt.Errorf("目标群已移出跨会话白名单，未发送")
+				}
+				if external && targetSession.Epoch() != targetEpoch {
+					return oneBotAPIResponse{Status: "failed", RetCode: 403}, fmt.Errorf("目标群会话已重置，未发送")
 				}
 				timeout := actionACKTimeout(c.Scope)
 				if strings.HasPrefix(action.Action, "upload_") && timeout == defaultActionACKTimeout {
@@ -139,20 +176,22 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 			},
 			reference: func(id string) bool {
 				mid, ok := numericMessageID(id)
-				return ok && c.messageSessionMatches(mid, sessionID)
+				return ok && c.messageSessionMatches(mid, sourceSessionID)
 			},
 			own: func(id string) bool {
 				mid, ok := numericMessageID(id)
-				return ok && c.ownMessageSessionMatches(mid, sessionID)
+				return ok && c.ownMessageSessionMatches(mid, sourceSessionID)
 			},
 			confirmed: func(response oneBotAPIResponse, messages []tools.Msg) {
 				c.rememberActionMessageSession(response, sessionID)
-				if delivered != nil {
+				if external {
+					recordQQTargetDelivery(engine, targetSession, targetEpoch, messages)
+				} else if delivered != nil {
 					delivered(messages)
 				}
 			},
 			decorate: func(segments []tools.OneBotSegment) []tools.OneBotSegment {
-				if event.MessageType == "group" {
+				if !external && event.MessageType == "group" {
 					decorationEvent := event
 					if request.SuppressAutoMention {
 						decorationEvent.UserID = 0
@@ -167,8 +206,38 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				return core.PlatformActionResult{}, fmt.Errorf("表情包发送功能已被禁用")
 			}
 		}
-		return sender.execute(request)
+		result, err := sender.execute(request)
+		if external && err == nil {
+			result.ExternalMessagesSent = result.MessagesSent
+			var content map[string]any
+			if json.Unmarshal([]byte(result.Content), &content) == nil {
+				content["target_session"] = sessionID
+				encoded, _ := json.Marshal(content)
+				result.Content = string(encoded)
+			}
+		}
+		return result, err
 	}
+}
+
+func recordQQTargetDelivery(engine *llm.Engine, session *llm.SessionContext, epoch uint64, messages []tools.Msg) {
+	text := qqDeliveredText(messages)
+	if text == "" {
+		return
+	}
+	session.WithEpochCommit(epoch, func() {
+		session.AddMessageAtEpoch(core.ChatMessage{Role: core.RoleAssistant, Content: text}, epoch)
+		name := engine.Getenv("BOT_NAME")
+		if name == "" {
+			name = defaultBotName
+		}
+		maxBuffer := 0
+		if engine.GroupCompactor != nil {
+			maxBuffer = engine.GroupCompactor.MaxBufferSize()
+		}
+		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: time.Now().Format("15:04:05")}, maxBuffer)
+	})
+	engine.TrimSession(session)
 }
 
 func (c *wsConnection) resolveMarketFace(ctx context.Context, event model.OneBotEvent, m tools.Msg) (tools.Msg, error) {

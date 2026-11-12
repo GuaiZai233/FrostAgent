@@ -12,6 +12,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 )
@@ -22,6 +23,38 @@ func (t settingsTestTool) Name() string                 { return string(t) }
 func (settingsTestTool) Description() string            { return "Synthetic tool" }
 func (settingsTestTool) Parameters() map[string]any     { return nil }
 func (settingsTestTool) Execute(string) (string, error) { return "", nil }
+
+func TestQQExtendCardAndRenamedToolSwitch(t *testing.T) {
+	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := runtimescope.New(config, nil, nil)
+	defer scope.Cancel()
+	engine := &llm.Engine{Scope: scope, ToolRegistry: map[string]llm.ToolExecutor{qqextend.ToolName: tools.QQTool()}}
+	if err := config.Update(llm.DisabledToolsKey, `["qq"]`, false); err != nil {
+		t.Fatal(err)
+	}
+	if engine.ToolEnabled(qqextend.ToolName) {
+		t.Fatal("renaming bypassed the previous disabled switch")
+	}
+	service := New(engine, "test", "")
+	overview, err := service.GetOverview(context.Background(), connect.NewRequest(&v1.GetOverviewRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(overview.Msg.Tools) != 1 || overview.Msg.Tools[0].Name != qqextend.ToolName || !overview.Msg.Tools[0].Configurable || overview.Msg.Tools[0].Enabled {
+		t.Fatalf("%+v", overview.Msg.Tools)
+	}
+	for _, enabled := range []bool{true, false, true} {
+		if _, err := service.SetToolEnabled(context.Background(), connect.NewRequest(&v1.SetToolEnabledRequest{Name: qqextend.ToolName, Enabled: enabled})); err != nil {
+			t.Fatal(err)
+		}
+		if engine.ToolEnabled(qqextend.ToolName) != enabled {
+			t.Fatal("renamed tool switch did not apply")
+		}
+	}
+}
 
 func TestSetToolEnabledRejectsUnconfiguredBalanceQuery(t *testing.T) {
 	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)

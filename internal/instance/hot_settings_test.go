@@ -50,6 +50,10 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 		t.Fatalf("runtime status switch was not applied: %q", got)
 	}
 	update("ENABLE_QUOTE_TRACE", "false")
+	update("QQ_EXTEND_MESSAGES_TARGET_GROUPS", "42,43")
+	if before.Scope.Getenv("QQ_EXTEND_MESSAGES_TARGET_GROUPS") != "42,43" {
+		t.Fatal("QQ target whitelist was not applied live")
+	}
 	update("QUOTE_TRACE_DEPTH", "3")
 	update("BOT_LOOP_USER_IDS", "onebot:synthetic-bot")
 	update("BOT_LOOP_MAX_TURNS", "2")

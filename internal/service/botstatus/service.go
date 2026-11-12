@@ -10,6 +10,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strings"
@@ -73,7 +74,7 @@ func (s *Service) GetOverview(
 			Description:  t.Description(),
 			Enabled:      s.engine.ToolEnabled(t.Name()),
 			Available:    available,
-			Configurable: t.Name() == balancequery.ToolName,
+			Configurable: t.Name() == balancequery.ToolName || t.Name() == qqextend.ToolName,
 		})
 	}
 

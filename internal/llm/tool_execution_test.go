@@ -135,8 +135,8 @@ func TestQQPlatformActionsPassSecurityAndRunGates(t *testing.T) {
 			if tc.oversize {
 				output.PlatformActionPayload = strings.Repeat("x", MaxToolOutputBytes+1)
 			}
-			tool := &structuredResultTool{staticTool: staticTool{name: "qq"}, output: output}
-			engine := &Engine{MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{"qq": tool}, Provider: &sequentialProvider{responses: []core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "qq-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq", Arguments: `{}`}}}}}}}}
+			tool := &structuredResultTool{staticTool: staticTool{name: "qq_extend_messages"}, output: output}
+			engine := &Engine{MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{"qq_extend_messages": tool}, Provider: &sequentialProvider{responses: []core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "qq-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq_extend_messages", Arguments: `{}`}}}}}}}}
 			inspected := false
 			if tc.block {
 				controller := security.NewController(t.TempDir())
@@ -167,5 +167,18 @@ func TestQQPlatformActionsPassSecurityAndRunGates(t *testing.T) {
 				t.Fatalf("calls=%d want=%d inspected=%t", calls, tc.want, inspected)
 			}
 		})
+	}
+}
+
+func TestQQExternalDeliveryDoesNotMarkSourceReply(t *testing.T) {
+	for _, external := range []int{0, 1} {
+		ctx := WithRunContext(context.Background(), RunContext{PlatformActionHook: func(context.Context, string) (core.PlatformActionResult, error) {
+			return core.PlatformActionResult{Content: "confirmed", MessagesSent: 1, ExternalMessagesSent: external}, nil
+		}})
+		engine := &Engine{}
+		content, sourceReply := engine.deliverToolResult(ctx, core.ToolExecutionResult{PlatformActionPayload: `{}`}, "prepared")
+		if content != "confirmed" || sourceReply != (external == 0) {
+			t.Fatalf("external=%d content=%s sourceReply=%t", external, content, sourceReply)
+		}
 	}
 }

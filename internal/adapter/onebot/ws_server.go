@@ -1007,7 +1007,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			AdapterID:          "onebot",
 			InstanceID:         engine.InstanceID,
 			SendHook:           sendHook,
-			PlatformActionHook: conn.qqActionHook(event, turn, recordDelivery),
+			PlatformActionHook: conn.qqActionHook(event, turn, recordDelivery, engine),
 			FinalReplyText:     plainFinalReplyText,
 			CanReplyToMessage: func(messageID string) bool {
 				mid, ok := numericMessageID(messageID)
@@ -1275,7 +1275,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 				engine.RecordBotMessage(stickerSent)
 				deliveries.RecordFinalProgress(qqDeliveredText(acknowledged), turn)
-			})(turn.Context(), string(request))
+			}, engine)(turn.Context(), string(request))
 			var status struct {
 				OK bool `json:"ok"`
 			}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 )
@@ -26,7 +27,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 				message := core.ChatMessage{Role: core.RoleAssistant}
 				switch providerCalls {
 				case 1:
-					message.ToolCalls = []core.ToolCall{{ID: "send-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq", Arguments: `{"action":"send","arguments":{"messages":[{"type":"plain","text":"prefix"},{"type":"file","url":"https://example.invalid/file","name":"fixture.txt"},{"type":"plain","text":"suffix"}]}}`}}}
+					message.ToolCalls = []core.ToolCall{{ID: "send-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq_extend_messages", Arguments: `{"action":"send","arguments":{"messages":[{"type":"plain","text":"prefix"},{"type":"file","url":"https://example.invalid/file","name":"fixture.txt"},{"type":"plain","text":"suffix"}]}}`}}}
 				case 2:
 					result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 					items := qqItems(t, result)
@@ -42,7 +43,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 						if items[2].Status != "confirmed" {
 							t.Errorf("unconfirmed suffix: %s", result)
 						}
-						message.ToolCalls = []core.ToolCall{{ID: "recall-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq", Arguments: `{"action":"recall","arguments":{"message_id":"801"}}`}}}
+						message.ToolCalls = []core.ToolCall{{ID: "recall-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq_extend_messages", Arguments: `{"action":"recall","arguments":{"message_id":"801"}}`}}}
 					}
 				case 3:
 					result, _ := req.Messages[len(req.Messages)-1].Content.(string)
@@ -56,7 +57,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 				return &core.ChatResponse{Message: message}, nil
 			}}
 			engine := newTestEngine(provider)
-			engine.ToolRegistry["qq"] = tools.QQTool()
+			engine.ToolRegistry["qq_extend_messages"] = tools.QQTool()
 			srv, address := startWSTestServer(engine)
 			defer srv.Close()
 			ws, _, err := websocket.DefaultDialer.Dial(address, nil)
@@ -145,5 +146,70 @@ func TestQQFinalStructuredMediaUsesNativeUpload(t *testing.T) {
 	}
 	if err := ws.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 801}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQQCrossSessionToolKeepsSourceAndTargetRepliesSeparate(t *testing.T) {
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{
+		{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "external-fixture", Type: "function", Function: core.ToolCallFunction{Name: qqextend.ToolName, Arguments: `{"action":"send","arguments":{"target_group_id":"42","messages":[{"type":"plain","text":"external fixture"}]}}`}}}}},
+		{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "source acknowledgement"}},
+	}}
+	engine := newTestEngine(provider)
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{qqextend.TargetGroupsKey: "42", "ENABLE_AT_IN_GROUP_MSG": "true", "ENABLE_REPLY_IN_GROUP_MSG": "true"})
+	defer engine.Scope.Cancel()
+	engine.ToolRegistry[qqextend.ToolName] = tools.QQTool()
+	server, address := startWSTestServer(engine)
+	defer server.Close()
+	ws, _, err := websocket.DefaultDialer.Dial(address, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	event := model.OneBotEvent{PostType: "message", MessageType: "private", SelfID: testBotID, UserID: testUserID, MessageID: 101, Message: json.RawMessage(`[{"type":"text","data":{"text":"relay fixture"}}]`)}
+	if err := ws.WriteJSON(event); err != nil {
+		t.Fatal(err)
+	}
+	for index, name := range []string{"send_group_msg", "send_private_msg"} {
+		var action model.OneBotAction
+		if err := ws.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		params := action.Params.(map[string]any)
+		if action.Action != name {
+			t.Fatalf("action=%+v want=%s", action, name)
+		}
+		if index == 0 && fmt.Sprint(params["group_id"]) != "42" || index == 1 && fmt.Sprint(params["user_id"]) != fmt.Sprint(testUserID) {
+			t.Fatalf("incorrect destination: %+v", action)
+		}
+		response := qqOK(201 + index)
+		response.Echo, _ = json.Marshal(action.Echo)
+		if err := ws.WriteJSON(response); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := engine.SessionManager.GetOrCreate(fmt.Sprintf("private:%d", testUserID))
+	target := engine.SessionManager.GetOrCreate("group:42")
+	deadline := time.Now().Add(time.Second)
+	for {
+		sourceMessages := source.Messages()
+		found := false
+		for _, message := range sourceMessages {
+			if message.Role == core.RoleAssistant && message.Content == "external fixture" {
+				t.Fatal("target delivery polluted source history")
+			}
+			found = found || message.Role == core.RoleAssistant && message.Content == "source acknowledgement"
+		}
+		if found {
+			messages := target.Messages()
+			if len(messages) != 1 || messages[0].Content != "external fixture" {
+				t.Fatalf("target history=%+v", messages)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("source acknowledgement was not recorded")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

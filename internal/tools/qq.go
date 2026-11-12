@@ -12,12 +12,13 @@ import (
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 )
 
 // QQRequest is a closed, platform-independent set of messaging operations.
-// Vendor action names and destination IDs are deliberately not model inputs.
+// Vendor action names are not model inputs; cross-session targets are allowlisted.
 type QQRequest struct {
 	Action    string      `json:"action"`
 	Arguments QQArguments `json:"arguments"`
@@ -26,16 +27,17 @@ type QQRequest struct {
 }
 
 type QQArguments struct {
-	Messages  []Msg           `json:"messages,omitempty"`
-	Nodes     []QQForwardNode `json:"nodes,omitempty"`
-	MessageID string          `json:"message_id,omitempty"`
-	UserID    string          `json:"user_id,omitempty"`
-	EmojiID   string          `json:"emoji_id,omitempty"`
-	Set       *bool           `json:"set,omitempty"`
-	Source    string          `json:"source,omitempty"`
-	Summary   string          `json:"summary,omitempty"`
-	Prompt    string          `json:"prompt,omitempty"`
-	News      []string        `json:"news,omitempty"`
+	TargetGroupID string          `json:"target_group_id,omitempty"`
+	Messages      []Msg           `json:"messages,omitempty"`
+	Nodes         []QQForwardNode `json:"nodes,omitempty"`
+	MessageID     string          `json:"message_id,omitempty"`
+	UserID        string          `json:"user_id,omitempty"`
+	EmojiID       string          `json:"emoji_id,omitempty"`
+	Set           *bool           `json:"set,omitempty"`
+	Source        string          `json:"source,omitempty"`
+	Summary       string          `json:"summary,omitempty"`
+	Prompt        string          `json:"prompt,omitempty"`
+	News          []string        `json:"news,omitempty"`
 }
 
 type QQForwardNode struct {
@@ -72,8 +74,8 @@ var qqHelp = map[string]string{
 
 func QQTool() Tool {
 	return Tool{
-		name:        "qq",
-		description: "Native QQ rich messaging in the active conversation. First call action=discover (arguments omitted) for available capabilities, or discover with capability for its parameters. Execute send, forward_bundle, forward_message, poke, reaction, recall using arguments. Supports NapCat and SnowLuma. Never retry an unknown delivery. Ordinary messages use send_message.",
+		name:        qqextend.ToolName,
+		description: "Native QQ rich messaging and interactions. First call action=discover for capabilities and configured target groups, or discover with capability for parameters. Execute send, forward_bundle, forward_message, poke, reaction, recall using arguments. send/forward actions accept target_group_id for cross-session delivery ONLY to an administrator-configured group; omit for the active conversation. Source message IDs must belong to the active conversation. Supports NapCat and SnowLuma. Never retry an unknown delivery. Ordinary replies use send_message.",
 		parameter: map[string]any{"type": "object", "properties": map[string]any{
 			"action":     map[string]any{"type": "string", "enum": []string{"discover", "send", "forward_bundle", "forward_message", "poke", "reaction", "recall"}},
 			"capability": map[string]any{"type": "string", "description": "Capability name to inspect when action=discover."},
@@ -90,15 +92,22 @@ func QQTool() Tool {
 			}
 			run, _ := llm.RunContextFromContext(ctx)
 			if input.Action == "discover" {
+				groups, err := qqextend.ParseTargetGroups(qqextend.ConfiguredTargets(runtimescope.FromContext(ctx)))
+				if err != nil {
+					groups = []string{}
+				}
 				if input.Capability != "" {
 					help, ok := qqHelp[input.Capability]
 					if !ok {
 						return textResult(""), fmt.Errorf("unknown QQ capability %q", input.Capability)
 					}
-					data, _ := json.Marshal(map[string]any{"capability": input.Capability, "parameters": help, "available": run.PlatformActionHook != nil && !run.Proactive && !run.Mock})
+					if input.Capability == "send" || strings.HasPrefix(input.Capability, "forward_") {
+						help += " Optional target_group_id: exact group ID from target_groups for cross-session delivery; omit to use the active conversation. Source references remain bound to the active conversation. Cross-session sends cannot contain quote components and never inherit automatic reply/@ prefixes."
+					}
+					data, _ := json.Marshal(map[string]any{"capability": input.Capability, "parameters": help, "target_groups": groups, "available": run.PlatformActionHook != nil && !run.Proactive && !run.Mock})
 					return textResult(string(data)), nil
 				}
-				data, _ := json.Marshal(map[string]any{"capabilities": []string{"send", "forward_bundle", "forward_message", "poke", "reaction", "recall"}, "components": []string{"face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface", "image", "record", "video", "file"}, "available": run.PlatformActionHook != nil && !run.Proactive && !run.Mock, "scope": "active conversation only; inspect a capability before calling"})
+				data, _ := json.Marshal(map[string]any{"capabilities": []string{"send", "forward_bundle", "forward_message", "poke", "reaction", "recall"}, "components": []string{"face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface", "image", "record", "video", "file"}, "available": run.PlatformActionHook != nil && !run.Proactive && !run.Mock, "target_groups": groups, "scope": "active conversation; send/forward may target a configured group; inspect a capability before calling"})
 				return textResult(string(data)), nil
 			}
 			if run.Proactive || run.Mock || run.PlatformActionHook == nil {
@@ -151,13 +160,18 @@ func ValidateQQRequest(r QQRequest) error {
 	}
 	a := r.Arguments
 	// Reject parameters belonging to another capability instead of ignoring a target.
-	allowed := map[string]string{"send": "messages", "forward_bundle": "nodes source summary prompt news", "forward_message": "message_id", "poke": "user_id", "reaction": "message_id emoji_id set", "recall": "message_id"}[r.Action]
+	allowed := map[string]string{"send": "messages target_group_id", "forward_bundle": "nodes source summary prompt news target_group_id", "forward_message": "message_id target_group_id", "poke": "user_id", "reaction": "message_id emoji_id set", "recall": "message_id"}[r.Action]
 	b, _ := json.Marshal(a)
 	var fields map[string]any
 	_ = json.Unmarshal(b, &fields)
 	for key := range fields {
 		if !strings.Contains(" "+allowed+" ", " "+key+" ") {
 			return fmt.Errorf("%s does not accept %s", r.Action, key)
+		}
+	}
+	if a.TargetGroupID != "" {
+		if _, err := qqextend.ParseGroupID(a.TargetGroupID); err != nil {
+			return err
 		}
 	}
 	switch r.Action {

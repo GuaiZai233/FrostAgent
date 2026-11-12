@@ -87,7 +87,7 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 		if err != nil {
 			return e.Log().ReportError(logs.WEBSOCKET, "QQ 操作失败", err, run.SessionID), false
 		}
-		return delivery.Content, delivery.MessagesSent > 0
+		return delivery.Content, delivery.MessagesSent > delivery.ExternalMessagesSent
 	}
 	if !ok || run.SendHook == nil || result.MessagePayload == "" || len(result.MessagePayload) > MaxToolOutputBytes {
 		return content, false

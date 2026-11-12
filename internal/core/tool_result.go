@@ -18,6 +18,8 @@ type PlatformActionResult struct {
 	Content      string
 	MessagesSent int
 	StickerSent  bool
+	// ExternalMessagesSent counts sends outside the originating conversation.
+	ExternalMessagesSent int
 }
 
 // StructuredToolExecutor is optional; existing string-returning tools remain valid.

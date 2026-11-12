@@ -86,7 +86,7 @@ func SendMsgTool() Tool {
 								"type":        "string",
 								"description": "The exact trusted message ID to quote/reply to (required for `quote` or `mention_specific`). mention_specific must be the first component and targets only the active conversation.",
 							},
-							"data":          map[string]any{"type": "object", "description": "Native QQ component fields. Inspect qq(action=discover, capability=send) for fields and rich media options."},
+							"data":          map[string]any{"type": "object", "description": "Native QQ component fields. Inspect qq_extend_messages(action=discover, capability=send) for fields and rich media options."},
 							"name":          map[string]any{"type": "string", "description": "Displayed media filename."},
 							"folder_id":     map[string]any{"type": "string", "description": "Destination group-file folder."},
 							"thumb":         map[string]any{"type": "string", "description": "Video thumbnail path or URL."},

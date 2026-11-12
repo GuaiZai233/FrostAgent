@@ -11,6 +11,7 @@ import { renderOverviewTools, renderOverviewToolsAction, type ToolCapability } f
 import { renderTokenUsage } from '../components/token-usage';
 import { mountVersionControl } from '../components/version-panel';
 import { mountInstanceRequired } from '../components/instance-required';
+import { openQQExtendConfig, qqExtendGroupsKey } from './qq-extend-config';
 import '../styles/overview.css';
 
 // Preset curl templates for balance_query. The backend only substitutes {{API_KEY}};
@@ -255,6 +256,7 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     root.querySelectorAll<HTMLButtonElement>('[data-tool-config]').forEach((button) => {
       button.addEventListener('click', () => {
         if (button.dataset.toolConfig === 'balance_query') void openBalanceConfig();
+        if (button.dataset.toolConfig === 'qq_extend_messages') void openQQConfig();
       });
     });
     root.querySelectorAll<HTMLInputElement>('[data-tool-toggle]').forEach((toggle) => {
@@ -296,6 +298,36 @@ export function mountOverviewPage(container: HTMLElement): () => void {
     await loadData();
     if (isUnmounted) return;
     document.querySelector<HTMLButtonElement>('#overview-all-tools')?.click();
+  }
+
+  async function openQQConfig() {
+    if (isUnmounted || configOpening || toolUpdates > 0) return;
+    configOpening = true;
+    const instanceID = instanceState.selected?.id;
+    try {
+      const values = await api.listEnvVars();
+      if (isUnmounted || instanceState.selected?.id !== instanceID) return;
+      await openQQExtendConfig({
+        value: values.find((item) => item.key === qqExtendGroupsKey)?.value ?? '',
+        active: () => !isUnmounted && instanceState.selected?.id === instanceID,
+        mounted: (close) => { closeConfigDialog = close; },
+        closed: () => { closeConfigDialog = undefined; },
+        save: async (value) => {
+          if (isUnmounted || instanceState.selected?.id !== instanceID) throw new Error('实例已切换，请重新打开配置');
+          const result = await api.updateEnvVar({ key: qqExtendGroupsKey, value, isSecret: false });
+          if (!result.success) throw new Error(result.error || '保存白名单失败');
+          if (!isUnmounted && instanceState.selected?.id === instanceID) {
+            toolRevision++;
+            toast.success('QQ 扩展消息白名单已保存');
+          }
+        },
+      });
+    } catch (err) {
+      if (!isUnmounted) toast.error(String(err));
+    } finally {
+      configOpening = false;
+      if (!isUnmounted) void loadData();
+    }
   }
 
   async function openBalanceConfig() {

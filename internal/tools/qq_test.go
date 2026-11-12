@@ -7,7 +7,11 @@ import (
 	"testing"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"path/filepath"
 )
 
 func qqTestContext() context.Context {
@@ -18,6 +22,9 @@ func qqTestContext() context.Context {
 
 func TestQQDiscoveryAndPreparation(t *testing.T) {
 	tool := QQTool()
+	if tool.Name() != qqextend.ToolName {
+		t.Fatal(tool.Name())
+	}
 	definition, _ := json.Marshal(tool.Parameters())
 	if len(definition) > 1500 {
 		t.Fatalf("QQ schema grew to %d bytes", len(definition))
@@ -68,10 +75,41 @@ func TestQQRejectsInvalidRequestsAndRawActions(t *testing.T) {
 		`{"action":"forward_bundle","arguments":{"nodes":[{"message_id":"101","messages":[{"type":"dice"}]}]}}`,
 		`{"action":"forward_bundle","arguments":{"nodes":[{"messages":[{"type":"file","url":"https://example.invalid"}]}]}}`,
 		`{"action":"recall","arguments":{"message_id":"101","user_id":"10001"}}`,
+		`{"action":"send","arguments":{"target_group_id":"group:42","messages":[{"type":"dice"}]}}`,
+		`{"action":"poke","arguments":{"target_group_id":"42"}}`,
+		`{"action":"reaction","arguments":{"target_group_id":"42","message_id":"101","emoji_id":"14"}}`,
+		`{"action":"recall","arguments":{"target_group_id":"42","message_id":"101"}}`,
 	} {
 		result, err := QQTool().ExecuteResult(qqTestContext(), raw)
 		if err == nil || result.PlatformActionPayload != "" {
 			t.Errorf("accepted invalid request %s: %+v %v", raw, result, err)
+		}
+	}
+}
+
+func TestQQDiscoveryShowsOnlyConfiguredTargets(t *testing.T) {
+	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update(qqextend.TargetGroupsKey, "42,43", false); err != nil {
+		t.Fatal(err)
+	}
+	scope := runtimescope.New(config, nil, nil)
+	defer scope.Cancel()
+	ctx := runtimescope.WithContext(qqTestContext(), scope)
+	result, err := QQTool().ExecuteResult(ctx, `{"action":"discover","capability":"send"}`)
+	if err != nil || !strings.Contains(result.Content, `"target_groups":["42","43"]`) || !strings.Contains(result.Content, "target_group_id") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for _, raw := range []string{
+		`{"action":"send","arguments":{"target_group_id":"42","messages":[{"type":"plain","text":"fixture"}]}}`,
+		`{"action":"forward_message","arguments":{"target_group_id":"42","message_id":"101"}}`,
+		`{"action":"forward_bundle","arguments":{"target_group_id":"42","nodes":[{"message_id":"101"}]}}`,
+	} {
+		result, err := QQTool().ExecuteResult(ctx, raw)
+		if err != nil || !strings.Contains(result.PlatformActionPayload, `"target_group_id":"42"`) {
+			t.Fatalf("%+v %v", result, err)
 		}
 	}
 }
@@ -83,7 +121,7 @@ func TestQQRejectsMissingAdapterProactiveAndMock(t *testing.T) {
 		}
 		for _, tool := range []Tool{QQTool(), SendMsgTool()} {
 			args := `{"messages":[{"type":"dice"}]}`
-			if tool.Name() == "qq" {
+			if tool.Name() == "qq_extend_messages" {
 				args = `{"action":"send","arguments":` + args + `}`
 			}
 			if result, err := tool.ExecuteResult(llm.WithRunContext(context.Background(), run), args); err == nil || result.PlatformActionPayload != "" {

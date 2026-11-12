@@ -8,6 +8,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"maps"
@@ -35,6 +36,7 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	qqextend.TargetGroupsKey:               {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
@@ -705,6 +707,10 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 func validateUpdate(key, value string) error {
+	if key == qqextend.TargetGroupsKey {
+		_, err := qqextend.ParseTargetGroups(value)
+		return err
+	}
 	if key == "ENABLE_MULTI_SEGMENT_REPLY" && value != "" && value != "true" && value != "false" {
 		return errors.New("允许多段回复必须为 true 或 false")
 	}
