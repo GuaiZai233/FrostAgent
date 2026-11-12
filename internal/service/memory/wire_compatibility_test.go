@@ -1,11 +1,36 @@
 package memsvc
 
 import (
-	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"strings"
 	"testing"
 
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestLegacyVisibilityWireFieldIsIgnored(t *testing.T) {
+	entry := &v1.MemoryEntry{Id: "synthetic-legacy", Owner: "synthetic-user", Content: "fact", Scope: "private"}
+	wire, err := proto.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire = protowire.AppendTag(wire, 6, protowire.BytesType)
+	wire = protowire.AppendString(wire, "public")
+	var decoded v1.MemoryEntry
+	if err := proto.Unmarshal(wire, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Owner != entry.Owner || decoded.Scope != entry.Scope {
+		t.Fatalf("legacy field changed scope: %v", &decoded)
+	}
+	raw, err := protojson.Marshal(&decoded)
+	if err != nil || strings.Contains(string(raw), "visibility") || strings.Contains(string(raw), "public") {
+		t.Fatalf("legacy visibility exported: %s %v", raw, err)
+	}
+}
 
 func TestProtobufWireBackwardCompatibility(t *testing.T) {
 	// 1. ListMemoriesRequest: tag 1 = owner, tag 2 = pagination, tag 3 = scope, tag 4 = group_id
@@ -34,14 +59,13 @@ func TestProtobufWireBackwardCompatibility(t *testing.T) {
 		t.Errorf("ListMemoriesRequest roundtrip mismatch: %+v", &unmarshaledList)
 	}
 
-	// 2. UpdateMemoryRequest: tag 1 = id, tag 2 = content, tag 3 = tags, tag 4 = visibility, tag 5 = scope, tag 6 = group_id
+	// 2. UpdateMemoryRequest: tag 1 = id, tag 2 = content, tag 3 = tags, tag 4 reserved, tag 5 = scope, tag 6 = group_id
 	updateReq := &v1.UpdateMemoryRequest{
-		Id:         "mem_123",
-		Content:    "updated content",
-		Tags:       []string{"t1", "t2"},
-		Visibility: "private",
-		Scope:      "group",
-		GroupId:    "mock_group_100",
+		Id:      "mem_123",
+		Content: "updated content",
+		Tags:    []string{"t1", "t2"},
+		Scope:   "group",
+		GroupId: "mock_group_100",
 	}
 	updateData, err := proto.Marshal(updateReq)
 	if err != nil {
@@ -54,7 +78,6 @@ func TestProtobufWireBackwardCompatibility(t *testing.T) {
 	if unmarshaledUpdate.GetId() != "mem_123" ||
 		unmarshaledUpdate.GetContent() != "updated content" ||
 		len(unmarshaledUpdate.GetTags()) != 2 ||
-		unmarshaledUpdate.GetVisibility() != "private" ||
 		unmarshaledUpdate.GetScope() != "group" ||
 		unmarshaledUpdate.GetGroupId() != "mock_group_100" {
 		t.Errorf("UpdateMemoryRequest roundtrip mismatch: %+v", &unmarshaledUpdate)
@@ -109,7 +132,6 @@ func TestProtobufWireBackwardCompatibility(t *testing.T) {
 		Content:         "verbatim quote",
 		Tags:            []string{"t1"},
 		Source:          "extract",
-		Visibility:      "group",
 		CreatedAt:       "2026-10-09T00:00:00Z",
 		UpdatedAt:       "2026-10-09T00:00:00Z",
 		AccessCount:     5,

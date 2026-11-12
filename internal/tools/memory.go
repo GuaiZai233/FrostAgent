@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"strings"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -17,7 +17,7 @@ import (
 func NewMemoryTool(engine *llm.Engine) Tool {
 	return Tool{
 		name:        "memory",
-		description: "管理你的记忆。可以写入新记忆（write）、搜索记忆（search）、列出自己的记忆（list）、在后台整理记忆主题（reflect），或在群聊中设置已观察成员的优先称呼（set_member_name）。警告：请谨慎使用list，除非用户明确要求！",
+		description: "管理当前作用域的记忆。群聊写入始终属于当前群；搜索和列出可读取当前群及本轮发言者的用户记忆，不能读取其他用户或其他群。可以 write、search、list、reflect、set_member_name。警告：请谨慎使用list，除非用户明确要求！",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -29,6 +29,11 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				"user_id": map[string]any{
 					"type":        "string",
 					"description": "set_member_name 时可选；目标成员的 QQ 号。不填则使用当前发言者的可信身份。只允许当前群已观察的成员。",
+				},
+				"scope": map[string]any{
+					"type":        "string",
+					"enum":        []string{"current", "user", "group"},
+					"description": "仅用于 search/list：current（默认）搜索本轮可读范围；user 只读本轮发言者的用户记忆；group 只读当前群记忆。用户和群由后端可信身份确定，不能指定其他目标。write 始终写入当前会话作用域。",
 				},
 				"preferred_name": map[string]any{
 					"type":        "string",
@@ -61,6 +66,7 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 			var params struct {
 				Query         string   `json:"query"`
+				Scope         string   `json:"scope"`
 				Action        string   `json:"action"`
 				Content       string   `json:"content"`
 				Tags          []string `json:"tags"`
@@ -136,16 +142,18 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 						return textResult(engine.Log().ReportError(logs.TOOL, "获取群记忆存储失败", err, runContext.SessionID)), nil
 					}
 					entry := memory.MemoryEntry{
-						ID:        memory.GenerateID(),
-						Owner:     memory.GroupOwnerExplicit,
-						OwnerType: memory.OwnerGroup,
-						ScopeType: memory.ScopeGroup,
-						GroupID:   groupID,
-						Content:   params.Content,
-						Tags:      params.Tags,
-						Source:    memory.SourceManual,
-						CreatedAt: time.Now(),
-						UpdatedAt: time.Now(),
+						ID:              memory.GenerateID(),
+						Owner:           memory.GroupOwnerExplicit,
+						OwnerType:       memory.OwnerGroup,
+						ScopeType:       memory.ScopeGroup,
+						GroupID:         groupID,
+						Content:         params.Content,
+						Tags:            params.Tags,
+						Source:          memory.SourceManual,
+						SourceMessageID: runContext.MemorySource.MessageID,
+						SourceSenderID:  runContext.ActorUserID,
+						CreatedAt:       time.Now(),
+						UpdatedAt:       time.Now(),
 					}
 					_, hasTextEvidence := memory.ValidateEvidence(runContext.MemorySource.Content, params.Evidence)
 					isText := params.SourceMedia == "text" &&
@@ -175,127 +183,21 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				}
 				return core.ToolExecutionResult{Content: "记忆已写入", MemoryWritten: true}, nil
 
-			case "search":
-				// Clean and validate tags
+			case "search", "list":
 				tags := cleanSearchTags(params.Tags)
 				query := strings.TrimSpace(params.Query)
-				if len(tags) == 0 && query == "" {
-					return textResult("搜索需要提供 query 或 tags 参数（1～6个标签）"), nil
-				}
-				if query == "" && len(tags) > 6 {
-					return textResult("搜索最多支持 6 个不同的 tags 标签"), nil
-				}
-				if groupID != "" {
-					if engine.GroupManager == nil {
-						return textResult("群记忆功能未启用"), nil
+				if params.Action == "search" {
+					if len(tags) == 0 && query == "" {
+						return textResult("搜索需要提供 query 或 tags 参数（1～6个标签）"), nil
 					}
-					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
-					if err != nil {
-						return textResult(engine.Log().ReportError(logs.TOOL, "获取群记忆存储失败", err, runContext.SessionID)), nil
-					}
-					var entries []memory.MemoryEntry
-					if engine.MemoryEmbeddings != nil {
-						if query == "" {
-							query = strings.Join(tags, ", ")
-						}
-						entries, err = engine.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, query, 20)
-					} else if query != "" {
-						entries, err = groupStore.Search(query, 0)
-					} else {
-						entries, err = groupStore.SearchByTags(tags, 0)
-					}
-					if err != nil {
-						return textResult(engine.Log().ReportError(logs.TOOL, "搜索群记忆失败", err, runContext.SessionID)), nil
-					}
-					filtered := engine.MemoryGateway.FilterGroup(entries)
-					filtered = engine.MemoryReader.Limit(filtered)
-					if len(filtered) == 0 {
-						return textResult("未找到相关群记忆"), nil
-					}
-					if !runContext.Mock {
-						if err := groupStore.RecordRecall(filtered); err != nil {
-							engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新群记忆召回次数失败: %v", err))
-						}
-						now := time.Now()
-						for i := range filtered {
-							filtered[i].AccessCount++
-							filtered[i].UpdatedAt = now
-						}
-					}
-					result, _ := json.Marshal(filtered)
-					return textResult(string(result)), nil
-				}
-				if engine.MemoryReader == nil {
-					return textResult("记忆搜索功能未启用"), nil
-				}
-				var entries []memory.MemoryEntry
-				var err error
-				if engine.MemoryEmbeddings != nil {
-					if query == "" {
-						query = strings.Join(tags, ", ")
-					}
-					entries, err = engine.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: currentUser}, query, 20)
-				} else if query != "" {
-					entries, err = engine.MemoryReader.Recall(ctx, query)
-				} else {
-					entries, err = engine.MemoryReader.SearchByTags(ctx, tags)
-				}
-				if err != nil {
-					return textResult(engine.Log().ReportError(logs.TOOL, "搜索失败", err, runContext.SessionID)), nil
-				}
-				filtered := engine.MemoryGateway.Filter(entries, currentUser)
-				filtered = engine.MemoryReader.Limit(filtered)
-				if len(filtered) == 0 {
-					return textResult("未找到相关记忆"), nil
-				}
-				if !runContext.Mock {
-					if err := engine.MemoryReader.RecordRecall(filtered); err != nil {
-						engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
-					}
-					now := time.Now()
-					for i := range filtered {
-						filtered[i].AccessCount++
-						filtered[i].UpdatedAt = now
+					if query == "" && len(tags) > 6 {
+						return textResult("搜索最多支持 6 个不同的 tags 标签"), nil
 					}
 				}
-				result, _ := json.Marshal(filtered)
-				return textResult(string(result)), nil
-
-			case "list":
-				if groupID != "" {
-					if engine.GroupManager == nil {
-						return textResult("群记忆功能未启用"), nil
-					}
-					groupStore, err := engine.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
-					if err != nil {
-						return textResult(engine.Log().ReportError(logs.TOOL, "获取群记忆存储失败", err, runContext.SessionID)), nil
-					}
-					entries, err := groupStore.ListAll()
-					if err != nil {
-						return textResult(engine.Log().ReportError(logs.TOOL, "列出群记忆失败", err, runContext.SessionID)), nil
-					}
-					filtered := engine.MemoryGateway.FilterGroup(entries)
-					filtered = engine.MemoryReader.Limit(filtered)
-					if len(filtered) == 0 {
-						return textResult("当前群还没有任何记忆"), nil
-					}
-					result, _ := json.Marshal(filtered)
-					return textResult(string(result)), nil
+				if params.UserID != "" {
+					return textResult("记忆读取身份由本轮发送者确定，user_id 仅用于 set_member_name"), nil
 				}
-				if engine.MemoryGateway == nil {
-					return textResult("记忆功能未启用"), nil
-				}
-				entries, err := engine.MemoryReader.Recall(context.Background(), "")
-				if err != nil {
-					return textResult(engine.Log().ReportError(logs.TOOL, "列出失败", err, runContext.SessionID)), nil
-				}
-				filtered := engine.MemoryGateway.Filter(entries, currentUser)
-				filtered = engine.MemoryReader.Limit(filtered)
-				if len(filtered) == 0 {
-					return textResult("你还没有任何记忆"), nil
-				}
-				result, _ := json.Marshal(filtered)
-				return textResult(string(result)), nil
+				return readMemoryTool(ctx, engine, runContext, params.Scope, query, tags, params.Action == "list")
 
 			case "reflect":
 				if groupID != "" {
@@ -343,4 +245,78 @@ func cleanSearchTags(tags []string) []string {
 		}
 	}
 	return result
+}
+
+// readMemoryTool resolves a model-selected scope kind against trusted turn
+// authority. It never accepts an arbitrary owner or conversation identifier.
+func readMemoryTool(ctx context.Context, engine *llm.Engine, run llm.RunContext, requested, query string, tags []string, list bool) (core.ToolExecutionResult, error) {
+	if requested != "" && requested != "current" && requested != "user" && requested != "group" {
+		return textResult("scope 仅支持 current、user、group"), nil
+	}
+	var scopes []memory.SearchScope
+	for _, scope := range run.MemoryReadScopes() {
+		if requested == "user" && scope.Type != memory.ScopePrivate || requested == "group" && scope.Type != memory.ScopeGroup {
+			continue
+		}
+		scopes = append(scopes, scope)
+	}
+	if len(scopes) == 0 {
+		return textResult("当前轮次没有所请求作用域的读取权限"), nil
+	}
+	batches := make([][]memory.MemoryEntry, 0, len(scopes))
+	for _, scope := range scopes {
+		var entries []memory.MemoryEntry
+		var err error
+		if list {
+			entries, err = engine.ListMemoryScope(ctx, scope)
+		} else {
+			entries, err = engine.SearchMemoryScope(ctx, scope, query, tags)
+		}
+		if err != nil {
+			return textResult(engine.Log().ReportError(logs.TOOL, "读取记忆失败", err, run.SessionID)), nil
+		}
+		batches = append(batches, entries)
+	}
+	// Give both authorized scopes room within the existing recall budget.
+	var filtered []memory.MemoryEntry
+	for offset := 0; ; offset++ {
+		added := false
+		for _, entries := range batches {
+			if offset < len(entries) {
+				filtered = append(filtered, entries[offset])
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	if engine.MemoryReader != nil {
+		filtered = engine.MemoryReader.Limit(filtered)
+	} else if len(filtered) > 20 {
+		filtered = filtered[:20]
+	}
+	if len(filtered) == 0 {
+		return textResult("未找到相关记忆"), nil
+	}
+	if !list && !run.Mock {
+		for _, scope := range scopes {
+			var recalled []memory.MemoryEntry
+			for _, entry := range filtered {
+				if entry.ScopeType == scope.Type {
+					recalled = append(recalled, entry)
+				}
+			}
+			if err := engine.RecordMemoryScopeRecall(scope, recalled); err != nil {
+				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("更新记忆召回次数失败: %v", err))
+			}
+		}
+		now := time.Now()
+		for i := range filtered {
+			filtered[i].AccessCount++
+			filtered[i].UpdatedAt = now
+		}
+	}
+	result, _ := json.Marshal(filtered)
+	return textResult(string(result)), nil
 }

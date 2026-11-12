@@ -2142,8 +2142,8 @@ func TestDistillGroupMemories_SpeakerAttributionEvidenceVerification(t *testing.
 	if !ok {
 		t.Fatalf("entry 1 missing, expected Content='I drink matcha latte'")
 	}
-	if e1.Owner != "syn_user_alice_99" {
-		t.Errorf("entry 1 owner mismatch: got %q, want %q", e1.Owner, "syn_user_alice_99")
+	if e1.Owner != memory.GroupOwnerExplicit {
+		t.Errorf("entry 1 owner mismatch: got %q, want %q", e1.Owner, memory.GroupOwnerExplicit)
 	}
 	if e1.Evidence != "I drink matcha latte" {
 		t.Errorf("entry 1 evidence mismatch: got %q, want %q", e1.Evidence, "I drink matcha latte")
@@ -2273,8 +2273,8 @@ func TestDistillGroupMemories_EvidencePlusFabricatedSuffix(t *testing.T) {
 	if entries[0].SourceSenderID != "syn_user_zhangsan_01" {
 		t.Errorf("expected source_sender_id %q, got %q", "syn_user_zhangsan_01", entries[0].SourceSenderID)
 	}
-	if entries[0].Owner != "syn_user_zhangsan_01" {
-		t.Errorf("expected owner to be %q, got %q", "syn_user_zhangsan_01", entries[0].Owner)
+	if entries[0].Owner != memory.GroupOwnerExplicit {
+		t.Errorf("expected group owner %q, got %q", memory.GroupOwnerExplicit, entries[0].Owner)
 	}
 }
 
@@ -2409,31 +2409,31 @@ func TestDistillGroupMemories_PolarityAndClauseScopedAttributionRegressions(t *t
 		entriesByContent[ent.Content] = append(entriesByContent[ent.Content], ent)
 	}
 
-	// 1. Valid quoted self-claim: "我今天来打机" -> Owner == speakerID
+	// 1. Valid quoted self-claim: "我今天来打机" -> group scope, speaker remains provenance
 	selfEntries, ok := entriesByContent["我今天来打机"]
 	if !ok || len(selfEntries) == 0 {
 		t.Fatalf("expected preserved self-claim '我今天来打机' to be saved")
 	}
-	if selfEntries[0].Owner != speakerID {
-		t.Errorf("expected '我今天来打机' owner to be %q, got %q", speakerID, selfEntries[0].Owner)
+	if selfEntries[0].Owner != memory.GroupOwnerExplicit {
+		t.Errorf("expected '我今天来打机' owner to be %q, got %q", memory.GroupOwnerExplicit, selfEntries[0].Owner)
 	}
 	if selfEntries[0].SourceMessageID != "msg_0" {
 		t.Errorf("expected source message id 'msg_0', got %q", selfEntries[0].SourceMessageID)
 	}
 
-	// 2. Preserved negative verbatim claim: "我不喜欢舞萌" -> Owner == speakerID
+	// 2. Preserved negative verbatim claim: "我不喜欢舞萌" -> group scope, speaker remains provenance
 	negEntries, ok := entriesByContent["我不喜欢舞萌"]
 	if !ok || len(negEntries) == 0 {
 		t.Fatalf("expected preserved negative claim '我不喜欢舞萌' to be saved")
 	}
-	if negEntries[0].Owner != speakerID {
-		t.Errorf("expected '我不喜欢舞萌' owner to be %q, got %q", speakerID, negEntries[0].Owner)
+	if negEntries[0].Owner != memory.GroupOwnerExplicit {
+		t.Errorf("expected '我不喜欢舞萌' owner to be %q, got %q", memory.GroupOwnerExplicit, negEntries[0].Owner)
 	}
 	if negEntries[0].SourceMessageID != "msg_2" {
 		t.Errorf("expected source message id 'msg_2', got %q", negEntries[0].SourceMessageID)
 	}
 
-	// 3. Valid group fact: "李四喜欢玩舞萌" (IsSelf: false) -> Owner == GroupOwnerExplicit
+	// 3. Valid group fact: "李四喜欢玩舞萌" -> Owner == GroupOwnerExplicit
 	groupEntries, ok := entriesByContent["李四喜欢玩舞萌"]
 	if !ok || len(groupEntries) == 0 {
 		t.Fatalf("expected group fact '李四喜欢玩舞萌' to be saved")
@@ -2637,8 +2637,8 @@ func TestGroupDistillation_DropStagedUnrelatedMessageDoesNotCancelInflightCommit
 	if entries[0].Content != msgA {
 		t.Errorf("expected content %q, got %q", msgA, entries[0].Content)
 	}
-	if entries[0].Owner != senderID_A {
-		t.Errorf("expected owner %q, got %q", senderID_A, entries[0].Owner)
+	if entries[0].Owner != memory.GroupOwnerExplicit {
+		t.Errorf("expected group owner %q, got %q", memory.GroupOwnerExplicit, entries[0].Owner)
 	}
 }
 
@@ -2852,8 +2852,8 @@ func TestGroupDistillation_WindowA_UnrelatedSnapshotRemainsValidAndCommits(t *te
 	if entries[0].Content != msgB {
 		t.Errorf("expected content %q, got %q", msgB, entries[0].Content)
 	}
-	if entries[0].Owner != senderID_B {
-		t.Errorf("expected owner %q, got %q", senderID_B, entries[0].Owner)
+	if entries[0].Owner != memory.GroupOwnerExplicit {
+		t.Errorf("expected group owner %q, got %q", memory.GroupOwnerExplicit, entries[0].Owner)
 	}
 
 	// Now attempt to distill revoked snapshot A: must be rejected and produce 0 extra entries
@@ -2978,7 +2978,7 @@ func TestGroupDistillation_SameSenderDistinctMessages_RevocationOfTurnBDoesNotIn
 	if len(entries) != 1 {
 		t.Fatalf("expected snapshot A to commit 1 entry despite turn B being dropped, got %d", len(entries))
 	}
-	if entries[0].Content != msgA || entries[0].Owner != senderAlice {
+	if entries[0].Content != msgA || entries[0].Owner != memory.GroupOwnerExplicit {
 		t.Errorf("unexpected entry from snapshot A: %+v", entries[0])
 	}
 

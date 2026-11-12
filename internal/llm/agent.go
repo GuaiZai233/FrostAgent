@@ -412,6 +412,40 @@ func (e *Engine) RunMessagesWithContext(
 					}
 				}
 			}
+			if e.MemoryReader != nil && e.MemoryGateway != nil {
+				for _, scope := range runContext.MemoryReadScopes() {
+					if scope.Type != memory.ScopePrivate {
+						continue
+					}
+					if e.MemoryCatalog != nil {
+						catalogContext, err := e.MemoryCatalog.FormatForPrompt(scope.Owner)
+						if err != nil {
+							return e.memoryFailure("read sender memory catalog", err)
+						}
+						if catalogContext != "" {
+							systemPrompt += "\n\n" + catalogContext
+						}
+					}
+					entries, err := e.SearchMemoryScope(ctx, scope, extractLastUserMessage(messages), nil)
+					if err != nil {
+						if e.MemoryEmbeddings != nil {
+							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("发言者用户记忆向量召回失败，继续对话: %v", err))
+							continue
+						}
+						return e.memoryFailure("recall sender memory", err)
+					}
+					entries = e.MemoryReader.Limit(entries)
+					if len(entries) == 0 {
+						continue
+					}
+					systemPrompt += "\n\n" + e.MemoryGateway.FormatForGroupUserContext(entries, scope.Owner)
+					if !runContext.Mock {
+						if err := e.RecordMemoryScopeRecall(scope, entries); err != nil {
+							return e.memoryFailure("record sender memory recall", err)
+						}
+					}
+				}
+			}
 		} else {
 			if owner != "" && e.MemoryCatalog != nil {
 				catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)

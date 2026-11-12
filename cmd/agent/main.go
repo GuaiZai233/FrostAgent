@@ -83,11 +83,7 @@ func main() {
 			return
 		}
 		for _, e := range entries {
-			vis := "🔒"
-			if e.Visibility == memory.VisibilityPublic {
-				vis = "🌐"
-			}
-			fmt.Printf("[%s] %s | owner=%s | access=%d | %s\n", vis, e.ID, e.Owner, e.AccessCount, e.Content)
+			fmt.Printf("%s | user=%s | access=%d | %s\n", e.ID, e.Owner, e.AccessCount, e.Content)
 		}
 		fmt.Printf("\n共 %d 条记忆\n", len(entries))
 
@@ -98,19 +94,11 @@ func main() {
 			os.Exit(1)
 		}
 		owners := map[string]int{}
-		pub, priv := 0, 0
 		for _, e := range entries {
 			owners[e.Owner]++
-			if e.Visibility == memory.VisibilityPublic {
-				pub++
-			} else {
-				priv++
-			}
 		}
 		fmt.Printf("记忆总数: %d\n", len(entries))
-		fmt.Printf("  公开: %d\n", pub)
-		fmt.Printf("  私有: %d\n", priv)
-		fmt.Println("按归属者:")
+		fmt.Println("按用户作用域:")
 		for o, n := range owners {
 			fmt.Printf("  %s: %d 条\n", o, n)
 		}

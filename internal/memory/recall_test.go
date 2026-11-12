@@ -18,7 +18,6 @@ func TestStoreIncrementAccessCount(t *testing.T) {
 		Owner:       "alice",
 		Content:     "Alice loves coding in Go",
 		Tags:        []string{"golang", "programming"},
-		Visibility:  VisibilityPrivate,
 		AccessCount: 0,
 		CreatedAt:   oldTime,
 		UpdatedAt:   oldTime,
@@ -28,7 +27,6 @@ func TestStoreIncrementAccessCount(t *testing.T) {
 		Owner:       "alice",
 		Content:     "Alice uses Vim",
 		Tags:        []string{"editor", "vim"},
-		Visibility:  VisibilityPrivate,
 		AccessCount: 2,
 		CreatedAt:   oldTime,
 		UpdatedAt:   oldTime,
@@ -104,7 +102,6 @@ func TestReaderRecordRecall(t *testing.T) {
 		Owner:       "bob",
 		Content:     "Bob likes tea",
 		Tags:        []string{"tea", "drink"},
-		Visibility:  VisibilityPrivate,
 		AccessCount: 0,
 	}
 	if err := store.Save(entry); err != nil {

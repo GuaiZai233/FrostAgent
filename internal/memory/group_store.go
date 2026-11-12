@@ -510,7 +510,11 @@ func (s *GroupStore) SetObservedMemberPreferredName(userID, preferredName string
 // loadMemoryLocked reads the group memory entries from disk.
 func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 	if s.sql != nil {
-		return s.sql.load()
+		brain, err := s.sql.load()
+		if err == nil {
+			s.normalizeGroupBrain(brain)
+		}
+		return brain, err
 	}
 	data, err := os.ReadFile(s.memoryPath)
 	if err != nil {
@@ -523,12 +527,26 @@ func (s *GroupStore) loadMemoryLocked() (*BrainData, error) {
 	if err := json.Unmarshal(data, &brain); err != nil {
 		return nil, fmt.Errorf("parse group memory: %w", err)
 	}
-	for i := range brain.Entries {
-		brain.Entries[i].ScopeType = ScopeGroup
-		brain.Entries[i].GroupID = s.groupID
-		brain.Entries[i].Owner = CanonicalOwner(brain.Entries[i].Owner)
-	}
+	s.normalizeGroupBrain(&brain)
 	return &brain, nil
+}
+
+// normalizeGroupBrain retires member ownership without moving any record to a
+// user scope. Sender and message IDs remain provenance, not access authority.
+func (s *GroupStore) normalizeGroupBrain(brain *BrainData) {
+	normalize := func(entry *MemoryEntry) {
+		entry.ScopeType, entry.GroupID = ScopeGroup, s.groupID
+		entry.Owner, entry.OwnerType = GroupOwnerExplicit, OwnerGroup
+	}
+	for i := range brain.Entries {
+		normalize(&brain.Entries[i])
+	}
+	for i := range brain.MergeArchives {
+		brain.MergeArchives[i].Owner = GroupOwnerExplicit
+		for j := range brain.MergeArchives[i].Sources {
+			normalize(&brain.MergeArchives[i].Sources[j])
+		}
+	}
 }
 
 // saveMemoryLocked writes the group memory data to disk atomically.
@@ -585,11 +603,7 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 		if incoming.CreatedAt.IsZero() {
 			incoming.CreatedAt = now
 		}
-		if incoming.Owner == "" {
-			incoming.Owner = GroupOwnerExplicit
-		} else {
-			incoming.Owner = CanonicalOwner(incoming.Owner)
-		}
+		incoming.Owner, incoming.OwnerType = GroupOwnerExplicit, OwnerGroup
 
 		matchedIdx := -1
 		for idx, existing := range brain.Entries {
@@ -601,10 +615,6 @@ func (s *GroupStore) SaveGroupEntriesConditionallyContext(
 
 		if matchedIdx >= 0 {
 			existing := &brain.Entries[matchedIdx]
-			if existing.Source != SourceManual && existing.Owner != incoming.Owner {
-				existing.Owner = GroupOwnerExplicit
-				existing.OwnerType = OwnerGroup
-			}
 			if existing.SourceMessageID == "" && incoming.SourceMessageID != "" {
 				existing.SourceMessageID = incoming.SourceMessageID
 			}
@@ -1059,21 +1069,9 @@ func (s *GroupStore) applyReflectionWithMerges(
 		existingIDs[mergedID] = true
 
 		mergedOwner := GroupOwnerExplicit
-		if len(currentSources) > 0 {
-			firstOwner := currentSources[0].Owner
-			allSame := true
-			for _, cs := range currentSources[1:] {
-				if cs.Owner != firstOwner {
-					allSame = false
-					break
-				}
-			}
-			if allSame && firstOwner != "" {
-				mergedOwner = firstOwner
-			}
-		}
 
 		merged := buildMergedEntry(mergedID, mergedOwner, merge, currentSources, now)
+		merged.OwnerType = OwnerGroup
 		merged.ScopeType = ScopeGroup
 		merged.GroupID = s.groupID
 		mergedEntries = append(mergedEntries, merged)
@@ -1171,11 +1169,7 @@ func (s *GroupStore) ImportData(data ExportData, overwrite bool) (int, int, erro
 	for _, entry := range data.Entries {
 		entry.ScopeType = ScopeGroup
 		entry.GroupID = s.groupID
-		if entry.Owner == "" {
-			entry.Owner = GroupOwnerExplicit
-		} else {
-			entry.Owner = CanonicalOwner(entry.Owner)
-		}
+		entry.Owner, entry.OwnerType = GroupOwnerExplicit, OwnerGroup
 		if entry.CreatedAt.IsZero() {
 			entry.CreatedAt = now
 		}
@@ -1266,9 +1260,9 @@ func isSameGroupMemory(existing, incoming MemoryEntry) bool {
 	}
 
 	// 4. When neither has SourceMessageID (e.g. legacy records or synthetic test entries without message IDs),
-	// match only if both are automatic sources, have matching owner, and have matching content or evidence.
+	// match only if both are automatic sources, have matching sender, and have matching content or evidence.
 	if existing.SourceMessageID == "" && incoming.SourceMessageID == "" {
-		if existing.Source == SourceManual || existing.Owner != incoming.Owner {
+		if existing.Source == SourceManual || existing.SourceSenderID != incoming.SourceSenderID {
 			return false
 		}
 		if existing.Evidence != "" && incoming.Evidence != "" && existing.Evidence == incoming.Evidence {

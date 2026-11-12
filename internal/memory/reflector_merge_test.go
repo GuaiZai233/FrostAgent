@@ -81,7 +81,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Content:     "用户喜欢打舞萌",
 			Tags:        []string{"舞萌"},
 			Source:      SourceExtract,
-			Visibility:  VisibilityPrivate,
 			AccessCount: 2,
 		},
 		{
@@ -90,7 +89,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Content:     "用户的舞萌 dx rating 为 w6",
 			Tags:        []string{"舞萌", "dx rating"},
 			Source:      SourceExtract,
-			Visibility:  VisibilityPublic,
 			AccessCount: 5,
 		},
 	})
@@ -119,8 +117,8 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 	}
 
 	merged := applied.Remaining[0]
-	if merged.Source != SourceReflect || merged.Visibility != VisibilityPrivate {
-		t.Fatalf("unexpected merged source/visibility: %q/%q", merged.Source, merged.Visibility)
+	if merged.Source != SourceReflect {
+		t.Fatalf("unexpected merged source: %q", merged.Source)
 	}
 	if merged.AccessCount != 5 {
 		t.Fatalf("unexpected merged ranking fields: access=%d", merged.AccessCount)
@@ -279,20 +277,18 @@ func TestReflectLegacyAndCanonicalOwnerSinglePassAndCatalog(t *testing.T) {
 	legacyBrain := BrainData{
 		Entries: []MemoryEntry{
 			{
-				ID:         "mem_001",
-				Owner:      "aiocqhttp:user:test_user_42",
-				Content:    "用户喜欢打舞萌",
-				Tags:       []string{"舞萌"},
-				Source:     SourceExtract,
-				Visibility: VisibilityPrivate,
+				ID:      "mem_001",
+				Owner:   "aiocqhttp:user:test_user_42",
+				Content: "用户喜欢打舞萌",
+				Tags:    []string{"舞萌"},
+				Source:  SourceExtract,
 			},
 			{
-				ID:         "mem_002",
-				Owner:      "test_user_42",
-				Content:    "用户的舞萌 dx rating 为 w6",
-				Tags:       []string{"w6"},
-				Source:     SourceExtract,
-				Visibility: VisibilityPrivate,
+				ID:      "mem_002",
+				Owner:   "test_user_42",
+				Content: "用户的舞萌 dx rating 为 w6",
+				Tags:    []string{"w6"},
+				Source:  SourceExtract,
 			},
 		},
 	}

@@ -65,7 +65,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               </button>
             </div>
 
-            <select id="memory-owner-select" class="select text-xs" style="width: 9rem;" title="筛选归属者">
+            <select id="memory-owner-select" class="select text-xs" style="width: 9rem;" title="筛选用户作用域" ${currentScope === 'group' ? 'hidden' : ''}>
               <option value="">全部归属者</option>
             </select>
 
@@ -438,7 +438,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                   <input type="checkbox" id="memory-select-all" class="checkbox" aria-label="全选" />
                 </th>
                 <th style="width: 4rem;">来源</th>
-                <th style="width: 8rem;">归属者 (QQ)</th>
+                <th style="width: 8rem;">用户作用域</th>
                 <th>记忆内容</th>
                 <th style="width: 10rem;">标签</th>
                 <th style="width: 5.5rem;">召回次数</th>
@@ -561,7 +561,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
                   <input type="checkbox" id="memory-select-all" class="checkbox" aria-label="全选" />
                 </th>
                 <th style="width: 4rem;">来源</th>
-                <th style="width: 8rem;">归属 (群/成员)</th>
+                <th style="width: 8rem;">作用域</th>
                 <th>记忆内容</th>
                 <th style="width: 10rem;">标签</th>
                 <th style="width: 5.5rem;">召回次数</th>
@@ -724,9 +724,9 @@ export function mountMemoryPage(container: HTMLElement): () => void {
           `
             : '<span class="text-muted text-xs">-</span>';
 
-        const isGroupOwner = mem.owner === 'group';
+        const isGroupOwner = currentScope === 'group';
         const displayContent = memoryDisplayContent(mem);
-        const ownerDisplay = isGroupOwner ? '群整体 (group)' : mem.owner;
+        const ownerDisplay = isGroupOwner ? '当前群' : mem.owner;
 
         return `
           <tr>
@@ -739,7 +739,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               </span>
             </td>
             <td>
-              <button class="badge badge-outline text-xs px-2 py-0.5 cursor-pointer flex items-center gap-1 hover:bg-muted transition-colors font-normal" data-action="filter-owner" data-owner="${escapeHtml(mem.owner)}" title="筛选此归属者">
+              <button class="badge badge-outline text-xs px-2 py-0.5 flex items-center gap-1 font-normal" ${isGroupOwner ? 'disabled' : 'data-action="filter-owner"'} data-owner="${escapeHtml(mem.owner)}" title="记忆所属作用域">
                 ${icon(isGroupOwner ? 'users' : 'user', 'w-3 h-3 text-muted')}
                 <span>${escapeHtml(ownerDisplay)}</span>
               </button>
@@ -1016,7 +1016,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
     const isGroup = currentScope === 'group';
     const defaultOwner = isGroup ? 'group' : 'webui';
     const ownerHelp = isGroup
-      ? '个人第一人称声明请填写群员 QQ；规则、第三人陈述与公共事实请填写 group'
+      ? '群记忆统一属于当前群，消息发送者仅作为来源记录'
       : '专属用户的 QQ 号或唯一标识';
 
     openDialog({
@@ -1025,8 +1025,8 @@ export function mountMemoryPage(container: HTMLElement): () => void {
       bodyHtml: `
         <div class="flex flex-col gap-3.5">
           <div class="form-group">
-            <label class="form-label" for="add-mem-owner">归属者 (Owner)</label>
-            <input id="add-mem-owner" class="input text-xs" placeholder="${escapeHtml(defaultOwner)}" value="${escapeHtml(defaultOwner)}" />
+            <label class="form-label" for="add-mem-owner">作用域</label>
+            <input id="add-mem-owner" ${isGroup ? 'disabled' : ''} class="input text-xs" placeholder="${escapeHtml(defaultOwner)}" value="${escapeHtml(defaultOwner)}" />
             <p class="text-[11px] text-muted mt-1">${escapeHtml(ownerHelp)}</p>
           </div>
           <div class="form-group">
@@ -1057,7 +1057,7 @@ export function mountMemoryPage(container: HTMLElement): () => void {
             toast.error('记忆内容不能为空');
             return;
           }
-          const owner = ownerInput.value.trim() || defaultOwner;
+          const owner = isGroup ? 'group' : ownerInput.value.trim() || defaultOwner;
           const tags = tagsInput.value
             .split(',')
             .map((t) => t.trim())
@@ -1102,8 +1102,8 @@ export function mountMemoryPage(container: HTMLElement): () => void {
               <span class="ml-1 font-medium text-foreground">${escapeHtml(mem.scope === 'group' ? `群聊 (${mem.groupId || '-'})` : '私聊')}</span>
             </div>
             <div>
-              <span class="text-muted">归属者:</span>
-              <span class="ml-1 font-medium text-foreground">${escapeHtml(mem.owner === 'group' ? '群整体 (group)' : mem.owner)}</span>
+              <span class="text-muted">${mem.scope === 'group' ? '群作用域' : '用户作用域'}:</span>
+              <span class="ml-1 font-medium text-foreground">${escapeHtml(mem.scope === 'group' ? mem.groupId : mem.owner)}</span>
             </div>
             <div>
               <span class="text-muted">来源:</span>
