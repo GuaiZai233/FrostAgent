@@ -24,10 +24,11 @@ func TestAwarenessFinalReplySegments(t *testing.T) {
 		}{
 			{"markers after blank lines", "first\n\n" + replyformat.SegmentMark + "second\n\n" + replyformat.SegmentMark + "third", true, "3", []string{"first", "second", "third"}},
 			{"disabled", "first" + replyformat.SegmentMark + "second\n\n" + protected, false, "1", []string{"firstsecond\n\n" + protected}},
+			{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n" + protected, true, "1", []string{"firstsecond\n\n" + protected}},
 			{"protected code", "first" + replyformat.SegmentMark + protected + "\n\n```text\n" + replyformat.SegmentMark + "\n```", true, "0", []string{"first", protected, "```text\n" + replyformat.SegmentMark + "\n```"}},
 			{"marker only", replyformat.SegmentMark, true, "0", nil},
 			{"disabled marker only", replyformat.SegmentMark, false, "0", nil},
-			{"limited", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, "1", nil},
+			{"limited", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, "2", nil},
 		} {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {
 				e, service, config, sends := awarenessFixture(t)
@@ -49,7 +50,8 @@ func TestAwarenessFinalReplySegments(t *testing.T) {
 					got = append(got, send[0].Text)
 				}
 				if tc.name == "limited" {
-					if len(got) != 1 || (got[0] != "first" && got[0] != "second" && got[0] != "third") {
+					joined := strings.Join(got, ",")
+					if len(got) != 2 || (joined != "first,second" && joined != "first,third" && joined != "second,third") {
 						t.Fatalf("limit ignored: %q", got)
 					}
 				} else if !reflect.DeepEqual(got, tc.want) {

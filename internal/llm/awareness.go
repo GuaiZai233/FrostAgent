@@ -294,7 +294,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	if deliveries.Text() != "" {
 		return
 	}
-	parts := replyformat.SplitLimited(result.Content, e.Getenv(replyformat.EnvKey) == "true", replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)))
+	parts := replyformat.SplitLimited(result.Content, replyformat.Enabled(e.Getenv), replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)))
 	for _, part := range parts {
 		if err := sendMessages([]proactive.AwarenessMessage{{Type: "plain", Text: part}}); err != nil {
 			e.Log().Warn(logs.SYSTEM, "主动感知发送失败: "+err.Error())
