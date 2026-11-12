@@ -26,19 +26,25 @@ class MockElement {
   set innerHTML(html: string) {
     this.html = html;
     this.children.clear();
-    for (const match of html.matchAll(/<([a-z]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
+    for (const match of html.matchAll(/<([a-z]+)\b([^>]*)>/g)) {
       const child = new MockElement();
       const attr = (name: string) => match[2].match(new RegExp(`\\b${name}="([^"]*)"`))?.[1] ?? '';
+      if (!attr('id') && !match[2].includes('data-awareness-')) continue;
       child.tag = match[1];
       child.type = attr('type');
       child.value = attr('value');
       child.min = attr('min');
       child.max = attr('max');
       child.disabled = /\bdisabled\b/.test(match[2]);
-      this.children.set('#' + match[3], child);
+      for (const entry of match[2].matchAll(/data-awareness-([a-z]+)="([^"]*)"/g)) {
+        child.dataset[`awareness${entry[1][0].toUpperCase()}${entry[1].slice(1)}`] = entry[2];
+      }
+      this.children.set('#' + (attr('id') || `awareness-${this.children.size}`), child);
     }
   }
   get innerHTML() { return this.html; }
+  prepend(child: MockElement) { this.children.set(`prepended-${this.children.size}`, child); }
+  setCustomValidity(message: string) { this.dataset.validationMessage = message; }
   addEventListener(type: string, callback: (event: Event) => unknown) {
     this.listeners.set(type, callback);
   }
@@ -57,6 +63,7 @@ class MockElement {
       (!this.min || Number(this.value) >= Number(this.min)) && (!this.max || Number(this.value) <= Number(this.max)));
   }
   querySelector(selector: string): MockElement | null {
+    if (selector.startsWith('[data-awareness-')) return this.querySelectorAll(selector)[0] ?? null;
     return this.children.get(selector) ?? null;
   }
   private all(): MockElement[] {
@@ -64,6 +71,11 @@ class MockElement {
       .concat(this.querySelectorAll('[data-bot-user-index]'));
   }
   querySelectorAll(selector: string): MockElement[] {
+    const awareness = selector.match(/^\[data-awareness-([a-z]+)(?:="([^"]*)")?\]$/);
+    if (awareness) {
+      const key = `awareness${awareness[1][0].toUpperCase()}${awareness[1].slice(1)}`;
+      return this.all().filter((child) => child.dataset[key] !== undefined && (awareness[2] === undefined || child.dataset[key] === awareness[2]));
+    }
     if (selector === 'input, select, button') return this.all().filter((child) => ['input', 'select', 'button'].includes(child.tag));
     if (selector === 'input[type="number"]') return this.all().filter((child) => child.type === 'number');
     if (selector !== '[data-bot-user-index]') return [];
@@ -83,7 +95,7 @@ class MockElement {
 const errors: string[] = [];
 Object.assign(globalThis, {
   window: Object.assign(new EventTarget(), { location: { origin: 'http://localhost' } }),
-  document: { querySelectorAll: () => [] },
+  document: { querySelectorAll: () => [], createElement: () => new MockElement() },
 });
 instanceState.select({ id: 'fixture-instance', name: 'fixture', enabled: false, created_at: '' });
 toast.error = (message) => { errors.push(message); };

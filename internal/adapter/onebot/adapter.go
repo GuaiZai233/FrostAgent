@@ -655,6 +655,15 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 
 		if !wsConn.mock {
+			if a.engine != nil && a.engine.Awareness != nil && event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private") {
+				id := strconv.FormatInt(event.UserID, 10)
+				if event.MessageType == "group" {
+					id = strconv.FormatInt(event.GroupID, 10)
+				}
+				target := llm.AwarenessTargetFor("qq", event.MessageType, id)
+				target.AdapterID = "onebot"
+				a.engine.Awareness.Observe(target)
+			}
 			wsConn.observeStickers(event)
 		}
 		wsConn.inFlight.Add(1)

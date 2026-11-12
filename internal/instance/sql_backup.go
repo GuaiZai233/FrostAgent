@@ -141,6 +141,7 @@ func (m *Manager) importSettingsWithComputerUse(id string, data backup.Settings,
 		r.Engine.GroupManager.CarrySQLStoresFrom(oldRuntime.Engine.GroupManager)
 		r.Engine.MemoryEmbeddings.CarryIndexesFrom(oldRuntime.Engine.MemoryEmbeddings)
 		oldRuntime.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
+		r.Engine.Awareness.CarryFrom(oldRuntime.Engine.Awareness)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = r, c
