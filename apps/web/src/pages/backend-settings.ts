@@ -653,7 +653,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       'thinking-status-cb': 'ENABLE_THINKING_STATUS',
     };
     for (const [id, key] of Object.entries(toggles)) {
-      element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
+      element<HTMLInputElement>(id).checked = (key === 'GROUP_REPLY_ON_MENTION' || key === 'ENABLE_THINKING_STATUS') ? value(key) !== 'false' : value(key) === 'true';
     }
     quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
     quoteDepth.value = value('QUOTE_TRACE_DEPTH');

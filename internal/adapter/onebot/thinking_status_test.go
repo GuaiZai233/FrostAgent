@@ -15,7 +15,7 @@ import (
 )
 
 func TestThinkingStatusDeliveryDoesNotGateReply(t *testing.T) {
-	for _, mode := range []string{"ok", "rejected", "no-ack", "disabled"} {
+	for _, mode := range []string{"ok", "rejected", "no-ack", "default", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			release := make(chan struct{})
 			defer func() {
@@ -40,8 +40,12 @@ func TestThinkingStatusDeliveryDoesNotGateReply(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode != "disabled" {
-				if err := cfg.Update(thinking.EnvKey, "true", false); err != nil {
+			if mode != "default" {
+				value := "true"
+				if mode == "disabled" {
+					value = "false"
+				}
+				if err := cfg.Update(thinking.EnvKey, value, false); err != nil {
 					t.Fatal(err)
 				}
 			}

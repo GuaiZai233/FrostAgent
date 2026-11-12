@@ -13,7 +13,7 @@ func (c *wsConn) startThinkingStatus(event Event, engine *llm.Engine, turn *llm.
 		return func() {}
 	}
 	return thinking.Start(c.Context(), turn.Context(), thinking.Interval,
-		func() bool { return engine.Getenv(thinking.EnvKey) == "true" },
+		func() bool { return engine.Getenv(thinking.EnvKey) != "false" },
 		func(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err

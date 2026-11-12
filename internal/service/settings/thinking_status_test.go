@@ -26,10 +26,20 @@ func TestThinkingStatusSettingPersistenceAndHotApply(t *testing.T) {
 	}
 	svc := NewScoped(store, nil, nil)
 	scope := runtimescope.New(store, nil, nil)
-	if scope.Getenv(thinking.EnvKey) == "true" {
-		t.Fatal("must default to disabled")
+	if got := scope.Getenv(thinking.EnvKey); got != "" {
+		t.Fatalf("legacy instance must have an unset thinking status, got %q", got)
 	}
-	for _, value := range []string{"true", "false"} {
+	if err := instanceconfig.InitializeInstanceSettings(db, "fresh-instance"); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := instanceconfig.OpenDatabase(db, "fresh-instance", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fresh.Get(thinking.EnvKey); got != "true" {
+		t.Fatalf("new instance must default to enabled, got %q", got)
+	}
+	for _, value := range []string{"false", "true"} {
 		res, err := svc.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{Updates: []*v1.EnvVar{{Key: thinking.EnvKey, Value: value}}}))
 		if err != nil || !res.Msg.Success {
 			t.Fatalf("update: %v %v", res, err)
@@ -53,7 +63,10 @@ func TestThinkingStatusSettingPersistenceAndHotApply(t *testing.T) {
 	if _, err := svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{Key: thinking.EnvKey})); err != nil {
 		t.Fatal(err)
 	}
-	if scope.Getenv(thinking.EnvKey) == "true" {
-		t.Fatal("clear must disable")
+	if got := scope.Getenv(thinking.EnvKey); got != "" {
+		t.Fatalf("clearing an override must restore default-on behavior, got %q", got)
+	}
+	if got := svc.resetHint(thinking.EnvKey); got != "开启" {
+		t.Fatalf("reset hint must match default-on behavior, got %q", got)
 	}
 }

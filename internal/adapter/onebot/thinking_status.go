@@ -14,7 +14,7 @@ func (c *wsConnection) startThinkingStatus(event model.OneBotEvent, engine *llm.
 		return func() {}
 	}
 	return thinking.Start(c.Context(), turn.Context(), thinking.Interval,
-		func() bool { return engine.Getenv(thinking.EnvKey) == "true" },
+		func() bool { return engine.Getenv(thinking.EnvKey) != "false" },
 		func(ctx context.Context) error {
 			_, err := c.sendActionAndWaitContext(model.OneBotAction{
 				Action: "set_input_status",

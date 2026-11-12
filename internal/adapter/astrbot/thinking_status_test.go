@@ -10,7 +10,7 @@ import (
 )
 
 func TestThinkingStatusCapabilityAndFinalReply(t *testing.T) {
-	for _, mode := range []string{"supported", "legacy", "string-capability", "disabled"} {
+	for _, mode := range []string{"supported", "default", "legacy", "string-capability", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			release := make(chan struct{})
 			defer func() {
@@ -21,7 +21,7 @@ func TestThinkingStatusCapabilityAndFinalReply(t *testing.T) {
 				}
 			}()
 			engine := newTestEngine(&mockLLMProvider{customChat: func(ctx context.Context, _ core.ChatRequest) (*core.ChatResponse, error) {
-				if mode == "supported" {
+				if mode == "supported" || mode == "default" {
 					select {
 					case <-release:
 					case <-ctx.Done():
@@ -30,11 +30,15 @@ func TestThinkingStatusCapabilityAndFinalReply(t *testing.T) {
 				}
 				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "answer"}}, nil
 			}})
-			value := "true"
-			if mode == "disabled" {
-				value = "false"
+			env := map[string]string{"STICKER_ACTIVITY": "0"}
+			if mode != "default" {
+				value := "true"
+				if mode == "disabled" {
+					value = "false"
+				}
+				env[thinking.EnvKey] = value
 			}
-			engine.Scope = newTestScopeWithEnv(t, map[string]string{thinking.EnvKey: value, "STICKER_ACTIVITY": "0"})
+			engine.Scope = newTestScopeWithEnv(t, env)
 			srv, _, url := startWSTestServer(engine)
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {
@@ -57,7 +61,7 @@ func TestThinkingStatusCapabilityAndFinalReply(t *testing.T) {
 			if err := conn.ReadJSON(&action); err != nil {
 				t.Fatal(err)
 			}
-			if mode == "supported" {
+			if mode == "supported" || mode == "default" {
 				if action.Action != "thinking_status" || !action.IsIntermediate || action.Echo != "hook_synthetic-message" || action.UserID != event.UserID || action.Platform != "telegram" {
 					t.Fatalf("wrong status: %+v", action)
 				}

@@ -42,7 +42,7 @@ var knownEnvVars = map[string]envEntry{
 	proactive.AwarenessGroupWhitelistEnabled:   {"主动感知是否仅对群聊白名单生效", false, false, false},
 	proactive.AwarenessGroupWhitelist:          {"主动感知群聊白名单", false, false, false},
 
-	"ENABLE_THINKING_STATUS":               {"当Bot开始思考轮次时，展示正在输入的标识。（QQ：对方正在输入……; Telegram：Typing…）", false, false, false},
+	"ENABLE_THINKING_STATUS":               {"当Bot开始思考轮次时，展示正在输入的标识（默认开启）。（QQ：对方正在输入……; Telegram：Typing…）", false, false, false},
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
