@@ -38,20 +38,29 @@ func (c *wsConnection) groupName(groupID int64) string {
 	}
 
 	now := time.Now()
+	fallback := ""
 	c.groupMu.Lock()
 	if cached, ok := c.groupCache[groupID]; ok {
 		if now.Before(cached.ExpiresAt) {
 			c.groupMu.Unlock()
+			if cached.Name == "" {
+				return c.persistedGroupName(groupID)
+			}
 			return cached.Name
 		}
-		delete(c.groupCache, groupID)
+		if cached.Name != "" {
+			fallback = cached.Name
+		}
 	}
 
 	if echo, ok := c.pendingGroupByID[groupID]; ok {
 		pending, exists := c.pendingGroupByEcho[echo]
 		if exists && now.Sub(pending.RequestedAt) < groupInfoPendingTTL {
 			c.groupMu.Unlock()
-			return ""
+			if fallback == "" {
+				return c.persistedGroupName(groupID)
+			}
+			return fallback
 		}
 		delete(c.pendingGroupByID, groupID)
 		delete(c.pendingGroupByEcho, echo)
@@ -65,6 +74,9 @@ func (c *wsConnection) groupName(groupID int64) string {
 		RequestedAt: now,
 	}
 	c.groupMu.Unlock()
+	if fallback == "" {
+		fallback = c.persistedGroupName(groupID)
+	}
 
 	actionBytes, err := json.Marshal(model.OneBotAction{
 		Action: "get_group_info",
@@ -82,6 +94,19 @@ func (c *wsConnection) groupName(groupID int64) string {
 	if err := c.WriteMessage(websocket.TextMessage, actionBytes); err != nil {
 		c.clearPendingGroupInfo(echo)
 		c.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送群信息查询失败 group=%d: %v", groupID, err))
+	}
+	return fallback
+}
+
+// Read durable state only when no usable connection cache exists. A warm cache
+// must not turn every incoming group message into a database/profile read.
+func (c *wsConnection) persistedGroupName(groupID int64) string {
+	if c.engine != nil && c.engine.GroupManager != nil {
+		if store, err := c.engine.GroupManager.GetGroupStore(fmt.Sprint(groupID)); err == nil {
+			if profile, err := store.GetProfile(); err == nil {
+				return profile.GroupName
+			}
+		}
 	}
 	return ""
 }
@@ -149,7 +174,8 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	ttl := groupInfoCacheTTL
 	if !success {
 		ttl = groupInfoFailureTTL
-		name = ""
+		// Refresh failure must not erase the last successfully observed name.
+		name = c.groupCache[pending.GroupID].Name
 	}
 	c.groupCache[pending.GroupID] = cachedGroupInfo{
 		Name:      name,
@@ -158,6 +184,15 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 	c.groupMu.Unlock()
 
 	if success {
+		if c.engine != nil && c.engine.GroupManager != nil {
+			store, err := c.engine.GroupManager.GetGroupStore(fmt.Sprint(pending.GroupID))
+			if err == nil {
+				err = store.UpdateGroupName(name)
+			}
+			if err != nil {
+				c.engine.PauseOnStorageError(err)
+			}
+		}
 		c.Log().Info(
 			logs.WEBSOCKET,
 			fmt.Sprintf("群名称缓存已更新: group=%d name=%q", pending.GroupID, name),

@@ -15,16 +15,16 @@ import (
 // Keep this fixture independent of the compatibility implementation: these are
 // the three tables shipped by the original computer-use v15 migration.
 var compatibilityComputerUseTables = []string{
-	`CREATE TABLE computer_use_config (
+	`CREATE TABLE IF NOT EXISTS computer_use_config (
 		instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE,
 		config_json TEXT NOT NULL
 	)`,
-	`CREATE TABLE computer_use_projects (
+	`CREATE TABLE IF NOT EXISTS computer_use_projects (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		id TEXT NOT NULL, metadata_json TEXT NOT NULL,
 		PRIMARY KEY (instance_id, id)
 	)`,
-	`CREATE TABLE computer_use_tasks (
+	`CREATE TABLE IF NOT EXISTS computer_use_tasks (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		id TEXT NOT NULL, generation BIGINT NOT NULL, metadata_json TEXT NOT NULL,
 		PRIMARY KEY (instance_id, id)
@@ -51,7 +51,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 	ctx := context.Background()
 	t.Run("fresh-metadata", func(t *testing.T) {
 		_, _, db := compatibilityDatabase(t, backend)
-		assertCompatibilityVersions(t, db, 14, 14)
+		assertCompatibilityVersions(t, db, SchemaVersion, SchemaVersion)
 	})
 	for _, preserves := range []bool{false, true} {
 		t.Run(fmt.Sprintf("migration-preserves-compatibility-%v", preserves), func(t *testing.T) {
@@ -59,7 +59,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 			populateMigrationFixture(t, db)
 			before := compatibilitySnapshot(t, db.SQL, backend)
 			step := migration{
-				version: 15,
+				version: SchemaVersion + 1,
 				statements: []string{
 					`CREATE TABLE compatibility_migration_data (id TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 					`INSERT INTO compatibility_migration_data VALUES ('synthetic-row', 'preserve-me')`,
@@ -77,16 +77,16 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 			if err := db.applyMigration(ctx, step); err != nil {
 				t.Fatalf("retry migration: %v", err)
 			}
-			floor := 15
+			floor := SchemaVersion + 1
 			if preserves {
-				floor = 14
+				floor = SchemaVersion
 			}
-			assertCompatibilityVersions(t, db, 15, floor)
+			assertCompatibilityVersions(t, db, SchemaVersion+1, floor)
 			assertMigrationFixture(t, db)
 			compatibilityClose(t, db)
 			if preserves {
 				db = compatibilityReopen(t, root, config)
-				assertCompatibilityVersions(t, db, 15, 14)
+				assertCompatibilityVersions(t, db, SchemaVersion+1, SchemaVersion)
 				assertMigrationFixture(t, db)
 			} else if opened, err := OpenWithConfig(ctx, root, config); err == nil {
 				opened.Close()
@@ -103,7 +103,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 			compatibilityClose(t, db)
 			for range 2 {
 				db = compatibilityReopen(t, root, config)
-				assertCompatibilityVersions(t, db, 14, 14)
+				assertCompatibilityVersions(t, db, SchemaVersion, SchemaVersion)
 				assertMigrationFixture(t, db)
 				compatibilityClose(t, db)
 			}
@@ -112,11 +112,13 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 	t.Run("original-computer-use-v15", func(t *testing.T) {
 		root, config, db := compatibilityDatabase(t, backend)
 		compatibilitySeedComputerUse(t, db)
+		prepareOldSchema(t, db, 14)
 		compatibilityMetadata(t, db, 15, false, nil)
 		compatibilityClose(t, db)
 		for range 2 {
 			db = compatibilityReopen(t, root, config)
-			assertCompatibilityVersions(t, db, 15, 14)
+			assertCompatibilityVersions(t, db, SchemaVersion, SchemaVersion)
+
 			compatibilityUpdateInstance(t, db)
 			assertCompatibilityJSON(t, db)
 			assertMigrationFixture(t, db)
@@ -127,13 +129,13 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		t.Run(fmt.Sprintf("declared-future-floor-%d", floor), func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
 			compatibilitySeedComputerUse(t, db)
-			compatibilityMetadata(t, db, 16, true, floor)
+			compatibilityMetadata(t, db, 17, true, floor)
 			compatibilityExec(t, db, `CREATE TABLE future_extension (id TEXT PRIMARY KEY, payload TEXT NOT NULL)`)
 			compatibilityExec(t, db, `INSERT INTO future_extension VALUES ('synthetic-extension', 'unrecognized-data')`)
 			compatibilityClose(t, db)
 			for range 2 {
 				db = compatibilityReopen(t, root, config)
-				assertCompatibilityVersions(t, db, 16, floor)
+				assertCompatibilityVersions(t, db, 17, floor)
 				compatibilityUpdateInstance(t, db)
 				assertCompatibilityJSON(t, db)
 				var payload string
@@ -147,7 +149,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 	t.Run("future-deletion-protection", func(t *testing.T) {
 		root, config, db := compatibilityDatabase(t, backend)
 		compatibilitySeedComputerUse(t, db)
-		compatibilityMetadata(t, db, 16, true, 14)
+		compatibilityMetadata(t, db, 17, true, 14)
 		compatibilityClose(t, db)
 		db = compatibilityReopen(t, root, config)
 		before := compatibilitySnapshot(t, db.SQL, backend)
@@ -177,7 +179,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 			t.Fatalf("cancellation left deletion marker: %d, %v", pending, err)
 		}
 		assertCompatibilityJSON(t, db)
-		assertCompatibilityVersions(t, db, 16, 14)
+		assertCompatibilityVersions(t, db, 17, 14)
 	})
 
 	rejections := []struct {
@@ -187,7 +189,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		floor    any
 		mutate   func(*testing.T, *DB)
 	}{
-		{"unknown-unmarked-future", 16, false, nil, nil},
+		{"unknown-unmarked-future", 17, false, nil, nil},
 		{"unmarked-v15-missing-table", 15, false, nil, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `DROP TABLE computer_use_tasks`)
 		}},
@@ -197,32 +199,32 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		{"unmarked-v15-altered-table", 15, false, nil, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE computer_use_tasks ADD COLUMN unknown_value TEXT`)
 		}},
-		{"null-floor", 16, true, nil, nil},
-		{"negative-floor", 16, true, -1, nil},
-		{"pre-baseline-floor", 16, true, 6, nil},
-		{"floor-above-version", 16, true, 17, nil},
-		{"requires-newer-program", 16, true, 15, nil},
-		{"missing-core-column", 16, true, 14, func(t *testing.T, db *DB) {
+		{"null-floor", 17, true, nil, nil},
+		{"negative-floor", 17, true, -1, nil},
+		{"pre-baseline-floor", 17, true, 6, nil},
+		{"floor-above-version", 17, true, 18, nil},
+		{"requires-newer-program", 17, true, 17, nil},
+		{"missing-core-column", 17, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE instances DROP COLUMN error`)
 		}},
-		{"unknown-core-column", 16, true, 14, func(t *testing.T, db *DB) {
+		{"unknown-core-column", 17, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE instances ADD COLUMN future_payload TEXT NOT NULL DEFAULT '{}'`)
 		}},
-		{"changed-core-column-type", 16, true, 14, func(t *testing.T, db *DB) {
+		{"changed-core-column-type", 17, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE instances DROP COLUMN error`)
 			compatibilityExec(t, db, `ALTER TABLE instances ADD COLUMN error INTEGER NOT NULL DEFAULT 0`)
 		}},
-		{"extra-core-unique-constraint", 16, true, 14, func(t *testing.T, db *DB) {
+		{"extra-core-unique-constraint", 17, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `CREATE UNIQUE INDEX compatibility_extra_unique ON settings(value)`)
 		}},
-		{"extension-fk-to-replaced-core-row", 16, true, 14, func(t *testing.T, db *DB) {
+		{"extension-fk-to-replaced-core-row", 17, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `CREATE TABLE future_settings (
 				scope TEXT NOT NULL, instance_id TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL,
 				FOREIGN KEY (scope, instance_id, key) REFERENCES settings(scope, instance_id, key) ON DELETE CASCADE
 			)`)
 			compatibilityExec(t, db, `INSERT INTO future_settings VALUES ('instance', 'synthetic-instance', 'UPSTREAM_API_KEY', 'must-not-cascade')`)
 		}},
-		{"core-cascade-fk-to-replaced-core-row", 16, true, 14, func(t *testing.T, db *DB) {
+		{"core-cascade-fk-to-replaced-core-row", 17, true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `INSERT INTO provider_endpoints(id, display_name, base_url, api_key_source, enabled, position)
 				VALUES ('synthetic-provider', 'Synthetic', 'https://model.invalid/v1', 'manual', 1, 0)`)
 			compatibilityExec(t, db, `INSERT INTO provider_models(id, display_name, endpoint_id, upstream_model, enabled, capabilities, position)
@@ -245,7 +247,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 					FOREIGN KEY (model_id) REFERENCES provider_models(id) ON DELETE CASCADE`)
 			}
 		}},
-		{"core-trigger", 16, true, 14, func(t *testing.T, db *DB) {
+		{"core-trigger", 17, true, 14, func(t *testing.T, db *DB) {
 			if db.Backend == SQLite {
 				compatibilityExec(t, db, `CREATE TRIGGER compatibility_update AFTER UPDATE ON instances
 					BEGIN UPDATE settings SET value = 'trigger-value' WHERE key = 'UPSTREAM_API_KEY'; END`)
@@ -324,6 +326,20 @@ func compatibilityExec(t *testing.T, db *DB, statement string, args ...any) {
 
 func compatibilityMetadata(t *testing.T, db *DB, version int, declared bool, floor any) {
 	t.Helper()
+	// Reconstruct the historical pre-endpoint-format Computer Use layout.
+	if version == 15 {
+		columns, err := db.tableColumns(context.Background(), db.SQL, "provider_endpoints")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, column := range columns {
+			if column.name == "api_format" {
+				compatibilityExec(t, db, `ALTER TABLE provider_endpoints DROP COLUMN api_format`)
+				break
+			}
+		}
+	}
+
 	compatibilityExec(t, db, `DROP TABLE schema_meta`)
 	if declared {
 		compatibilityExec(t, db, `CREATE TABLE schema_meta (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, min_compatible_version INTEGER)`)

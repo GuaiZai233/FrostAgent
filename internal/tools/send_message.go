@@ -107,8 +107,11 @@ func SendMsgTool() Tool {
 
 		executeResult: func(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 			run, _ := llm.RunContextFromContext(ctx)
-			if run.Proactive && !proactive.IsSpecificReply(args) {
+			if run.Proactive && !run.Awareness && !proactive.IsSpecificReply(args) {
 				return textResult(""), fmt.Errorf("主动回复只允许 mention_specific 加 plain，且不能指定其他会话")
+			}
+			if run.Awareness && !proactive.AwarenessSendAllowed(args) {
+				return textResult(""), fmt.Errorf("主动感知仅允许当前会话的文本和艾特")
 			}
 			var payload struct {
 				Messages            []Msg  `json:"messages"`

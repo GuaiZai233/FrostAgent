@@ -11,6 +11,9 @@ import (
 // disposable databases. Existing feature data must survive the repair.
 func prepareEmbeddingV12(t *testing.T, db *DB, modelColumn, memoryColumn bool) {
 	t.Helper()
+	if _, err := db.SQL.Exec(`ALTER TABLE provider_endpoints DROP COLUMN api_format`); err != nil {
+		t.Fatal(err)
+	}
 	populateMigrationFixture(t, db)
 	for _, statement := range []string{
 		`INSERT INTO provider_endpoints(id,display_name,base_url,api_key_source,enabled,position) VALUES ('synthetic-provider','Synthetic','https://model.invalid/v1','manual',1,0)`,

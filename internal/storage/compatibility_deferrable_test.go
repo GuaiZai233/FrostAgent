@@ -29,7 +29,7 @@ func TestPostgresMigrationSchemaCompatibilityDeferrableConstraints(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, Postgres)
 			compatibilitySeedComputerUse(t, db)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -61,7 +61,11 @@ func TestPostgresMigrationSchemaCompatibilityDeferrableConstraints(t *testing.T)
 					t.Fatalf("compatible constraint layout was rejected: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				if after := compatibilityPostgresSchemaSnapshot(t, opened.SQL); !reflect.DeepEqual(before, after) {
 					t.Fatal("compatible startup changed rows, metadata or constraints")
 				}

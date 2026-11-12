@@ -42,7 +42,7 @@ func TestPostgresMigrationSchemaCompatibilityCacheLayout(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, Postgres)
 			compatibilitySeedComputerUse(t, db)
 			seedCompatibilityEmbeddingCaches(t, db, false)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -131,7 +131,11 @@ func TestPostgresMigrationSchemaCompatibilityCacheLayout(t *testing.T) {
 				if err != nil {
 					t.Fatalf("safe optional cache layout was rejected: %v", err)
 				}
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				if ready := opened.EmbeddingStorageReady.Load(); ready != (test.change != "no-caches" && test.change != "scopes-only") {
 					t.Fatalf("incorrect cache readiness: %v", ready)
 				}

@@ -73,15 +73,11 @@ After creating an instance, configure the connection on the "Connections" page.
 - **Reverse WebSocket (FrostAgent as server)**: The upstream connects to FrostAgent. Enable a reverse WebSocket client in the upstream messaging platform implementation and paste the copied OneBot URL, for example `ws://127.0.0.1:11023/instances/<instance-id>/ws/onebot`.
 - **Forward WebSocket (FrostAgent as client)**: The upstream provides a WebSocket server. Enter its `ws://` or `wss://` URL and optional access token on the FrostAgent "Connections" page.
 
-### Integration with Frameworks Such as AstrBot
-
-With the appropriate adapter, FrostAgent can replace the LLM response module in agent frameworks such as AstrBot without affecting their existing plugin ecosystems.
-
-You can connect to FrostAgent using the [astrbot_plugin_frostagent_adapter](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter) plugin.
-
-**Note:** Disable AstrBot's built-in LLM functionality to avoid conflicts.
-
 ## Additional Features
+
+### Automatic Context Compaction
+
+Group and private conversations support background compaction. Private chats retain the latest turn alongside a rolling summary. See [context compaction](docs/context-compact.md) for configuration and session lifetime details (Chinese).
 
 ### Integration with ActionsCat
 

@@ -223,16 +223,19 @@ func TestCommitPrivateCompact_PreservesNewMessagesUnderConcurrentTrim(t *testing
 		t.Errorf("expected msg 7 preserved, got: %+v", history[4])
 	}
 
-	// 8. Verify sequence slice monotonicity and length alignment
+	// 8. Sequence handles remain unique and aligned; retained messages must not
+	// be renumbered because live execution lanes still reference their IDs.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.historySeq) != len(s.History) {
 		t.Errorf("historySeq length %d != History length %d", len(s.historySeq), len(s.History))
 	}
-	for i := 1; i < len(s.historySeq); i++ {
-		if s.historySeq[i] <= s.historySeq[i-1] {
-			t.Errorf("historySeq not strictly monotonic at index %d: %d <= %d", i, s.historySeq[i], s.historySeq[i-1])
+	seen := make(map[uint64]bool)
+	for _, seq := range s.historySeq {
+		if seen[seq] {
+			t.Errorf("duplicate history sequence: %d", seq)
 		}
+		seen[seq] = true
 	}
 }
 

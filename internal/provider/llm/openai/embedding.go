@@ -27,7 +27,10 @@ func (c *Client) Embed(ctx context.Context, req core.EmbeddingRequest) (*core.Em
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := url.JoinPath(c.BaseURL, "embeddings")
+	endpoint := c.EmbeddingURL
+	if endpoint == "" {
+		endpoint, err = url.JoinPath(c.BaseURL, "embeddings")
+	}
 	if err != nil {
 		return nil, err
 	}

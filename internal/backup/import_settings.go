@@ -49,6 +49,16 @@ func ImportSettings(db *storage.DB, instanceID string, data Settings) error {
 // ImportSettingsWithinCatalogMutation is for instance restore while it holds
 // CatalogMutationMu across every restore phase and its rollback.
 func ImportSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data Settings) error {
+	return importSettingsWithinCatalogMutation(db, instanceID, data, nil)
+}
+
+func ImportSettingsWithComputerUse(db *storage.DB, instanceID string, data Settings, metadata ComputerUse) error {
+	db.CatalogMutationMu.Lock()
+	defer db.CatalogMutationMu.Unlock()
+	return importSettingsWithinCatalogMutation(db, instanceID, data, &metadata)
+}
+
+func importSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data Settings, computerUse *ComputerUse) error {
 	db.ModelRouterMu.Lock()
 	defer db.ModelRouterMu.Unlock()
 	if err := ValidateFormat(data.FormatVersion); err != nil {
@@ -99,6 +109,11 @@ func ImportSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data
 	}
 	if err := dialogue.WriteExamplesTx(ctx, db, tx, instanceID, data.Dialogues); err != nil {
 		return err
+	}
+	if computerUse != nil {
+		if err := writeComputerUseTx(ctx, db, tx, instanceID, *computerUse); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

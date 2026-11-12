@@ -262,6 +262,38 @@ func (s *Service) GetSessions(
 		}
 	}
 
+	// Group profiles retain observed names independently of live sessions and
+	// compact summaries, including groups that never reached a compact batch.
+	if s.engine.GroupManager != nil {
+		groups, err := s.engine.GroupManager.ListGroups()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		for _, group := range groups {
+			id := "group:" + group.GroupID
+			if !memory.IsQQPlatform(group.Platform) {
+				id = group.Platform + ":" + id
+			}
+			canonical := memory.CanonicalSessionKey(id)
+			matched := false
+			for key, view := range viewsByID {
+				if memory.CanonicalSessionKey(key) != canonical {
+					continue
+				}
+				if view.info.GroupName == "" {
+					view.info.GroupName = group.GroupName
+				}
+				viewsByID[key] = view
+				matched = true
+				break
+			}
+			if !matched {
+				viewsByID[id] = sessionView{info: &v1.SessionInfo{SessionId: id, Platform: derivePlatform(id), GroupName: group.GroupName,
+					CreatedAt: group.UpdatedAt.Format(time.RFC3339), LastActive: group.UpdatedAt.Format(time.RFC3339)},
+					createdAt: group.UpdatedAt, updatedAt: group.UpdatedAt}
+			}
+		}
+	}
 	views := make([]sessionView, 0, len(viewsByID))
 	for _, view := range viewsByID {
 		views = append(views, view)

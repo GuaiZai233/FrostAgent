@@ -29,10 +29,16 @@ func compatibilityGuardManager(t *testing.T) *Manager {
 	}, 2); err != nil {
 		t.Fatal(err)
 	}
+
+	return &Manager{db: db, root: root}
+}
+
+func markCompatibleFutureSchema(t *testing.T, db *storage.DB) {
+	t.Helper()
 	for _, statement := range []string{
-		`CREATE TABLE computer_use_config (instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE, config_json TEXT NOT NULL)`,
-		`CREATE TABLE computer_use_projects (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(instance_id, id))`,
-		`CREATE TABLE computer_use_tasks (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, generation BIGINT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(instance_id, id))`,
+		`CREATE TABLE IF NOT EXISTS computer_use_config (instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE, config_json TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS computer_use_projects (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(instance_id, id))`,
+		`CREATE TABLE IF NOT EXISTS computer_use_tasks (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, generation BIGINT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(instance_id, id))`,
 		`INSERT INTO computer_use_config VALUES ('1234abcd', '{"future_config":"synthetic configuration"}')`,
 		`INSERT INTO computer_use_projects VALUES ('1234abcd', 'synthetic-project', '{"future_project":"synthetic metadata"}')`,
 		`INSERT INTO computer_use_tasks VALUES ('1234abcd', 'synthetic-task', 3, '{"pending":{"state":"unknown"},"future_task":"retain exactly"}')`,
@@ -41,12 +47,7 @@ func compatibilityGuardManager(t *testing.T) *Manager {
 			t.Fatal(err)
 		}
 	}
-	return &Manager{db: db, root: root}
-}
-
-func markCompatibleFutureSchema(t *testing.T, db *storage.DB) {
-	t.Helper()
-	if _, err := db.SQL.Exec(`UPDATE schema_meta SET version = 15, min_compatible_version = 14 WHERE id = 1`); err != nil {
+	if _, err := db.SQL.Exec(`UPDATE schema_meta SET version = 17, min_compatible_version = 14 WHERE id = 1`); err != nil {
 		t.Fatal(err)
 	}
 }

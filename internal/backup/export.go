@@ -44,7 +44,6 @@ func ExportSettings(db *storage.DB, instanceID string) (Settings, error) {
 		endpoint.APIKeySource = ""
 		endpoint.APIKeyRef = ""
 		endpoint.APIKeyConfigured = false
-		endpoint.BaseURL = publicURL(endpoint.BaseURL)
 	}
 
 	mcpConfig, err := mcp.NewSQLConfigStore(db, instanceID).Load()

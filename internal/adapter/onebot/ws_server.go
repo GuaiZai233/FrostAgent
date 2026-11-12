@@ -887,14 +887,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			session.WithEpochCommit(startEpoch, func() {
 				if strings.TrimSpace(replyText) == "" {
-					engine.TrimSession(session)
+					engine.TrimSession(session, routeScope)
 					return
 				}
 
 				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
 					return
 				}
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 
 				if event.MessageType == "group" {
 					var msgID string
@@ -1091,13 +1091,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		if wakeSignals.Proactive && (runResult.Error != nil || runResult.OutputBlocked) {
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
 			return
 		}
 
 		if !conn.allowLLMErrorReply(runResult) {
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			if receiptText == "" {
 				return
 			}
@@ -1116,7 +1116,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveries.Text() != "" {
 				deliveries.CommitDelivered()
 			}
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			if event.MessageType == "group" && !runResult.Banned {
 				var msgID string
 				if event.MessageID != 0 {
@@ -1212,7 +1212,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveredText := deliveries.Text(); deliveredText != "" {
 				commitAssistantHistory(deliveredText, true)
 			} else {
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 				if event.MessageType == "group" && !runResult.Banned {
 					var msgID string
 					if event.MessageID != 0 {
@@ -1310,7 +1310,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
 			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "引用消息校验失败", err, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 				return
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
@@ -1320,7 +1320,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if buildErr != nil {
 			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", buildErr, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 				return
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
@@ -1448,7 +1448,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Wording:  reason,
 				})
 				if engine != nil {
-					engine.TrimSession(session)
+					engine.TrimSession(session, routeScope)
 				}
 			}
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))

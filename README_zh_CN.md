@@ -73,11 +73,11 @@ docker compose up -d --build
 - **反向 WebSocket（FrostAgent 作为服务端）**：上游主动连接 FrostAgent。在消息平台上游实现中启用反向 WebSocket 客户端，将复制的 OneBot 地址填入，例如 `ws://127.0.0.1:11023/instances/<实例ID>/ws/onebot`。
 - **正向 WebSocket（FrostAgent 作为客户端）**：上游提供 WebSocket 服务端。在 FrostAgent「连接」页填写上游的 `ws://` 或 `wss://` 地址及可选访问令牌。
 
-### 接入 AstrBot 等框架
-
-在使用适配器的情况下，FrostAgent 可以替代 AstrBot 等智能体框架的 LLM 响应模块，同时不影响其丰富的插件生态。可以使用此 AstrBot 插件：[astrbot_plugin_frostagent_adapter](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter) 进行连接。注意，为避免冲突，请关闭 AstrBot 自带的 LLM 功能！
-
 ## 附加功能
+
+### 上下文自动压缩
+
+群聊和私聊均支持后台 compact。私聊保留最近一轮原消息，并在后续对话中使用滚动摘要。配置与会话生命周期说明见[上下文自动压缩](docs/context-compact.md)。
 
 ### 与 ActionsCat 协同
 

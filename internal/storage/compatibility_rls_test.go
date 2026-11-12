@@ -38,7 +38,7 @@ func TestPostgresMigrationSchemaCompatibilityRowSecurity(t *testing.T) {
 			compatibilitySeedComputerUse(t, db)
 			seedCompatibilityEmbeddingCaches(t, db, false)
 			compatibilityExec(t, db, `DROP TABLE memory_embeddings`)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -134,7 +134,11 @@ func TestPostgresMigrationSchemaCompatibilityRowSecurity(t *testing.T) {
 					t.Fatalf("safe RLS layout was rejected: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 			} else {
 				if err == nil {
 					opened.Close()

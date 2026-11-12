@@ -36,7 +36,14 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
-	qqextend.TargetGroupsKey:               {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
+	qqextend.TargetGroupsKey:                   {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
+	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
+	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},
+	proactive.AwarenessPrivateWhitelistEnabled: {"主动感知是否仅对私聊白名单生效", false, false, false},
+	proactive.AwarenessPrivateWhitelist:        {"主动感知私聊用户白名单", false, false, false},
+	proactive.AwarenessGroupWhitelistEnabled:   {"主动感知是否仅对群聊白名单生效", false, false, false},
+	proactive.AwarenessGroupWhitelist:          {"主动感知群聊白名单", false, false, false},
+
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
@@ -84,9 +91,9 @@ var knownEnvVars = map[string]envEntry{
 	"STICKER_ACTIVITY":                     {"表情包使用积极度（0 禁用，1~10 对应每 50~5 个轮次）", false, false, false},
 	"STICKER_ACTIVITY_MODE":                {"表情包积极度计数模式（bot_turns / all_messages）", false, false, false},
 	"ENABLE_STICKER_CONFIRM":               {"返回表情包的具体描述，Bot 的返回表情包行为将会更精准，但会降低响应速度。", false, false, false},
-	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊 running compact 每批原消息数量", false, true, false},
+	"GROUP_COMPACT_BUFFER_SIZE":            {"群聊和私聊 running compact 的消息批量阈值", false, true, false},
 	"GROUP_COMPACT_MAX_BUFFER_SIZE":        {"群聊 running compact 最大缓冲消息数量", false, false, false},
-	"GROUP_COMPACT_MIN_INTERVAL":           {"同群 running compact 最小触发间隔（如 30s）", false, true, false},
+	"GROUP_COMPACT_MIN_INTERVAL":           {"同一群聊或私聊 running compact 最小触发间隔（如 30s）", false, true, false},
 	"GROUP_RAW_CONTEXT_MAX_CHARS":          {"群聊未压缩原消息临时上下文的最大字符数（默认 12000）", false, false, false},
 	"MEMORY_EXTRACT_BATCH_MIN":             {"自动记忆提取的最小累计轮数", false, false, false},
 	"MEMORY_EXTRACT_BATCH_MAX":             {"自动记忆提取的最大累计轮数", false, false, false},
@@ -710,6 +717,14 @@ func validateUpdate(key, value string) error {
 	if key == qqextend.TargetGroupsKey {
 		_, err := qqextend.ParseTargetGroups(value)
 		return err
+	}
+	if key == proactive.AwarenessInterval {
+		if _, _, err := proactive.ParseAwarenessInterval(value); err != nil {
+			return err
+		}
+	}
+	if (key == proactive.AwarenessEnabled || key == proactive.AwarenessPrivateWhitelistEnabled || key == proactive.AwarenessGroupWhitelistEnabled) && value != "" && value != "true" && value != "false" {
+		return errors.New("主动感知开关必须为 true 或 false")
 	}
 	if key == "ENABLE_MULTI_SEGMENT_REPLY" && value != "" && value != "true" && value != "false" {
 		return errors.New("允许多段回复必须为 true 或 false")

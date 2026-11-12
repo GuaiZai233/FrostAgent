@@ -49,6 +49,10 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		return nil, err
 	}
 
+	computerUse, err := ExportComputerUse(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
 	usageStore, _ := tokenusage.New(db, instanceID, "")
 	usage, err := usageStore.Snapshot(context.Background())
 	if err != nil {
@@ -65,6 +69,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		{"manifest.json", manifest},
 		{"setting.json", settings},
 		{"skills.json", skillPackages},
+		{"computer_use.json", computerUse},
 		{"token_usage.json", usage},
 		{"memory.json", memories},
 		{"group_summaries.json", summaries},

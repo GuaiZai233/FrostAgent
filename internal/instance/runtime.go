@@ -490,6 +490,26 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)
 	dispatcher.RegisterAdapter(ab)
+	engine.Awareness = &llm.AwarenessService{Engine: engine, Resolve: func(target llm.AwarenessTarget) (llm.AwarenessSender, bool) {
+		switch target.AdapterID {
+		case "onebot":
+			return ob.SendAwareness, ob.AwarenessReady()
+		case "astrbot":
+			return ab.SendAwareness, ab.AwarenessReady()
+		}
+		if !memory.IsQQPlatform(target.Platform) {
+			return ab.SendAwareness, ab.AwarenessReady()
+		}
+		// Until an inbound route is known, two usable adapters are ambiguous.
+		onebotReady, astrbotReady := ob.AwarenessReady(), ab.AwarenessReady()
+		if onebotReady == astrbotReady {
+			return nil, false
+		}
+		if onebotReady {
+			return ob.SendAwareness, true
+		}
+		return ab.SendAwareness, true
+	}}
 	// Read-only self-description. Registered after the adapters so it can report
 	// live platform connections; every value is read at call time.
 	frostInfoTool := tools.FrostAgentInfoTool(tools.FrostAgentInfoSource{
@@ -558,6 +578,9 @@ func (r *Runtime) StartBackground() {
 	}
 	r.backgroundOnce.Do(func() {
 		r.StartEmbeddings()
+		if r.Engine.Awareness != nil {
+			r.Scope.Go(func() { r.Engine.Awareness.Run(r.Scope.Context()) })
+		}
 		if r.onebotClient {
 			r.Scope.Go(func() { r.Onebot.RunClient(r.Scope.Context()) })
 		}

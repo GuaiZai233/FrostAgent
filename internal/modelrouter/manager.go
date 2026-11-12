@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/api"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
@@ -562,6 +563,7 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 		ModelID:             model.ID,
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
+		APIFormat:           endpoint.APIFormat,
 		UpstreamModel:       model.UpstreamModel,
 		MaxInputTokens:      model.MaxInputTokens,
 		Capabilities:        append([]string(nil), model.Capabilities...),
@@ -699,11 +701,14 @@ func validateConfiguration(cfg Configuration) error {
 		if _, exists := endpointIDs[endpoint.ID]; exists {
 			return fmt.Errorf("endpoint id %q is duplicated", endpoint.ID)
 		}
+		if !api.Format(endpoint.APIFormat).Valid() {
+			return fmt.Errorf("endpoint %q has unknown API format", endpoint.DisplayName)
+		}
 		parsed, err := url.Parse(endpoint.BaseURL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return fmt.Errorf("endpoint %q has an invalid http/https base url", endpoint.DisplayName)
 		}
-		if parsed.RawQuery != "" || parsed.Fragment != "" {
+		if (parsed.RawQuery != "" && api.Format(endpoint.APIFormat) != api.Custom) || parsed.Fragment != "" {
 			return fmt.Errorf("endpoint %q must not contain query or fragment", endpoint.DisplayName)
 		}
 		switch endpoint.APIKeySource {

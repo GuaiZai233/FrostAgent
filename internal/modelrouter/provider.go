@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
-	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/openai"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/api"
 )
 
 type snapshotContextKey struct{}
@@ -82,7 +81,8 @@ func (p *routedProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.
 		}
 	}
 	req.Model = target.UpstreamModel
-	client := openai.NewClientWithTimeout(target.BaseURL, apiKey, p.timeout)
+	client := api.NewClient(target.BaseURL, apiKey, api.Format(target.APIFormat), p.timeout)
+	client.EndpointID = target.EndpointID
 	client.Logger = p.manager.Log()
 	module := string(p.workload)
 	if req.UsageModule != "" {
@@ -101,7 +101,7 @@ func (m *Manager) ListUpstreamModelsForOwner(endpointID, owner string) ([]string
 	if err != nil {
 		return nil, err
 	}
-	fullURL, err := url.JoinPath(endpoint.BaseURL, "models")
+	fullURL, err := api.Format(endpoint.APIFormat).URL(endpoint.BaseURL, "models", "")
 	if err != nil {
 		return nil, err
 	}
@@ -109,9 +109,7 @@ func (m *Manager) ListUpstreamModelsForOwner(endpointID, owner string) ([]string
 	if err != nil {
 		return nil, err
 	}
-	if apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+apiKey)
-	}
+	api.Format(endpoint.APIFormat).Authorize(request, apiKey)
 	client := &http.Client{Timeout: 30 * time.Second}
 	response, err := client.Do(request)
 	if err != nil {
@@ -132,6 +130,9 @@ func (m *Manager) ListUpstreamModelsForOwner(endpointID, owner string) ([]string
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("解析模型列表失败: %w", err)
@@ -139,6 +140,11 @@ func (m *Manager) ListUpstreamModelsForOwner(endpointID, owner string) ([]string
 	models := make([]string, 0, len(payload.Data))
 	for _, item := range payload.Data {
 		if name := strings.TrimSpace(item.ID); name != "" {
+			models = append(models, name)
+		}
+	}
+	for _, item := range payload.Models {
+		if name := strings.TrimSpace(strings.TrimPrefix(item.Name, "models/")); name != "" {
 			models = append(models, name)
 		}
 	}
@@ -155,7 +161,8 @@ func (m *Manager) TestModelForOwner(modelID, owner string) (string, time.Duratio
 	if err != nil {
 		return "", 0, err
 	}
-	client := openai.NewClient(endpoint.BaseURL, apiKey)
+	client := api.NewClient(endpoint.BaseURL, apiKey, api.Format(endpoint.APIFormat), 0)
+	client.EndpointID = endpoint.ID
 	client.Logger = m.Log()
 	started := time.Now()
 	for _, capability := range model.Capabilities {
