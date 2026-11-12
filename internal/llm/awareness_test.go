@@ -218,3 +218,27 @@ func TestAwarenessWorkerTriggersWhitelistedPrivateWithoutIncomingMessage(t *test
 		t.Fatal("worker did not stop with runtime context")
 	}
 }
+
+func TestAwarenessKeepsConfiguredCompactBufferAndIsolatesSkills(t *testing.T) {
+	e, service, _, _ := awarenessFixture(t)
+	e.GroupCompactor = &GroupCompactor{maxBufferSize: 300}
+	target := AwarenessTargetFor("fixture-platform", "group", "fixture-group")
+	session := e.SessionManager.GetOrCreate(target.SessionID)
+	if err := session.ActivateSkill("fixture-human-skill", "fixture-revision", "private arguments", session.Epoch()); err != nil {
+		t.Fatal(err)
+	}
+	for range 220 {
+		session.AppendGroupCompactMessage(GroupCompactMessage{Role: "user", SenderID: "fixture-member", Content: "retained context"}, 300)
+	}
+	e.Provider = injectionProvider(func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		state := e.skillSession(ctx)
+		if state == nil || state == session || len(state.skillSnapshot()) != 0 {
+			t.Fatal("system trigger inherited shared skill state")
+		}
+		return finalInjection("A new thought"), nil
+	})
+	service.Trigger(e.Context(), target)
+	if count := session.GroupCompactBufferCount(); count != 221 {
+		t.Fatalf("configured compact buffer was truncated: %d", count)
+	}
+}

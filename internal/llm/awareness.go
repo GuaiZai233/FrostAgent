@@ -189,6 +189,9 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	stop := context.AfterFunc(turn.Context(), cancel)
 	defer stop()
 	epoch := turn.Epoch()
+	// No PrepareTurnMessages call exists for a system trigger. Give this turn
+	// its own empty skill state without appending a synthetic user message.
+	turn.skillState = &SessionContext{epoch: epoch}
 	deliveries := NewPublicReplyLog(session, epoch)
 	defer func() {
 		deliveries.CommitDelivered()
@@ -256,7 +259,11 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 		}
 		deliveries.Record(text.String(), func(live bool) {
 			if live && target.Kind == "group" {
-				session.AppendGroupCompactMessage(GroupCompactMessage{Role: "assistant", Sender: e.Getenv("BOT_NAME"), Content: text.String(), Time: time.Now().Format(time.RFC3339)}, 0)
+				maxBufferSize := 0
+				if e.GroupCompactor != nil {
+					maxBufferSize = e.GroupCompactor.MaxBufferSize()
+				}
+				session.AppendGroupCompactMessage(GroupCompactMessage{Role: "assistant", Sender: e.Getenv("BOT_NAME"), Content: text.String(), Time: time.Now().Format(time.RFC3339)}, maxBufferSize)
 			}
 		})
 		if target.Kind == "group" && e.GroupCompactor != nil {
