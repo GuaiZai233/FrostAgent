@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,6 +64,8 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ws.Close()
+			var writeMu sync.Mutex
+			write := func(value any) error { writeMu.Lock(); defer writeMu.Unlock(); return ws.WriteJSON(value) }
 			actions := make(chan string, 8)
 			readError := make(chan error, 1)
 			go func() {
@@ -81,14 +84,14 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 						response["retcode"] = 100
 						response["wording"] = "permission denied"
 					}
-					if err := ws.WriteJSON(response); err != nil {
+					if err := write(response); err != nil {
 						readError <- err
 						return
 					}
 				}
 			}()
 			event := model.OneBotEvent{PostType: "message", MessageType: "private", SelfID: testBotID, UserID: testUserID, MessageID: 101, Message: json.RawMessage(`[{"type":"text","data":{"text":"fixture request"}}]`)}
-			if err := ws.WriteJSON(event); err != nil {
+			if err := write(event); err != nil {
 				t.Fatal(err)
 			}
 			select {

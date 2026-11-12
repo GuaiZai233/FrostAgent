@@ -301,6 +301,7 @@ func (s qqSender) execute(request tools.QQRequest) (core.PlatformActionResult, e
 			if err != nil {
 				return core.PlatformActionResult{}, err
 			}
+			normalizeQQCards(n.Messages, segments)
 			nodes = append(nodes, tools.OneBotSegment{Type: "node", Data: map[string]any{"user_id": strconv.FormatInt(s.event.SelfID, 10), "nickname": "FrostAgent", "content": segments}})
 		}
 		candidates = s.forwardActions(nodes, a)
@@ -450,6 +451,7 @@ type qqSendPart struct {
 	start, end int
 	messages   []tools.Msg
 	segments   []tools.OneBotSegment
+	format     string
 }
 
 func qqSeparateMessage(m tools.Msg) bool {
@@ -526,6 +528,7 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 		if err != nil {
 			return nil, err
 		}
+		part.format = normalizeQQCards(wireMessages, segments)
 		part.segments = segments
 		parts = append(parts, part)
 		start = end
@@ -571,14 +574,14 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 	action := s.sendAction(segments)
 	var response oneBotAPIResponse
 	var err error
-	var fallback string
+	fallback := part.format
 	isFile := len(part.messages) == 1 && part.messages[0].Type == "file"
 	if isFile {
 		action = s.uploadFileAction(part.messages[0], part.segments[0].Data["file"].(string))
 	}
 	response, err = s.call(action)
 	if err == nil {
-		return response, action.Action, "", nil
+		return response, action.Action, fallback, nil
 	}
 	if qqPathRejected(response) {
 		chain, inlineErr := qqInlinePart(part)
@@ -621,6 +624,19 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 
 func qqInlinePart(part qqSendPart) ([]tools.OneBotSegment, error) {
 	budget := maxQQInlineBytes
+	// Account for media already inlined during preparation before admitting any
+	// additional fallback reads from this same message (including thumbnails).
+	for _, segment := range part.segments {
+		for _, key := range []string{"file", "thumb"} {
+			source, _ := segment.Data[key].(string)
+			if strings.HasPrefix(source, "base64://") {
+				budget -= qqInlineSize(source)
+			}
+		}
+	}
+	if budget < 0 {
+		return nil, fmt.Errorf("inline media exceeds the shared 30 MiB budget")
+	}
 	chain := make([]tools.OneBotSegment, len(part.segments))
 	changed := false
 	for i, segment := range part.segments {
@@ -651,6 +667,17 @@ func qqInlinePart(part qqSendPart) ([]tools.OneBotSegment, error) {
 		return nil, nil
 	}
 	return chain, nil
+}
+
+func qqInlineSize(source string) int64 {
+	encoded := strings.TrimPrefix(source, "base64://")
+	size := base64.StdEncoding.DecodedLen(len(encoded))
+	if strings.HasSuffix(encoded, "==") {
+		size -= 2
+	} else if strings.HasSuffix(encoded, "=") {
+		size--
+	}
+	return int64(size)
 }
 
 func (s qqSender) uploadFileAction(m tools.Msg, source string) model.OneBotAction {
@@ -703,24 +730,52 @@ func (s qqSender) componentFallback(m tools.Msg, segments []tools.OneBotSegment)
 		data["subType"] = 1
 		return []model.OneBotAction{messageAction(tools.OneBotSegment{Type: "image", Data: data})}
 	case "share":
-		d := m.Data
-		ark, _ := json.Marshal(map[string]any{"app": "com.tencent.structmsg", "view": "news", "ver": "0.0.0.1", "prompt": "[分享] " + d.Title, "meta": map[string]any{"news": map[string]any{"title": d.Title, "desc": d.Content, "jumpUrl": d.URL, "preview": d.Image, "tag": "链接分享"}}})
+		fallthrough
+	case "location":
+		d := qqCardData(m)
 		params := s.target()
 		params["title"] = d.Title
 		params["desc"] = d.Content
 		params["jump_url"] = d.URL
 		params["preview_url"] = d.Image
-		candidates := []model.OneBotAction{messageAction(tools.OneBotSegment{Type: "json", Data: map[string]any{"data": string(ark)}})}
+		var candidates []model.OneBotAction
 		if len(prefix) == 0 {
 			candidates = append(candidates, model.OneBotAction{Action: "send_tuwen_ark", Params: params})
 		}
 		return append(candidates, messageAction(tools.OneBotSegment{Type: "text", Data: map[string]any{"text": d.Title + "\n" + d.Content + "\n" + d.URL}}))
-	case "location":
-		d := m.Data
-		link := fmt.Sprintf("https://apis.map.qq.com/uri/v1/marker?marker=coord:%g,%g;title:%s;addr:%s&referer=FrostAgent", *d.Lat, *d.Lon, url.QueryEscape(d.Title), url.QueryEscape(d.Content))
-		return []model.OneBotAction{messageAction(tools.OneBotSegment{Type: "text", Data: map[string]any{"text": d.Title + "\n" + d.Content + "\n" + link}})}
 	}
 	return nil
+}
+
+func qqCardData(m tools.Msg) *tools.QQMessageData {
+	if m.Type == "share" {
+		return m.Data
+	}
+	d := *m.Data
+	d.URL = fmt.Sprintf("https://apis.map.qq.com/uri/v1/marker?marker=coord:%g,%g;title:%s;addr:%s&referer=FrostAgent", *d.Lat, *d.Lon, url.QueryEscape(d.Title), url.QueryEscape(d.Content))
+	if d.Title == "" {
+		d.Title = "位置"
+	}
+	d.Content = strings.TrimSpace(fmt.Sprintf("%s (%g, %g)", d.Content, *d.Lat, *d.Lon))
+	return &d
+}
+
+func qqShareSegment(d *tools.QQMessageData) tools.OneBotSegment {
+	ark, _ := json.Marshal(map[string]any{"app": "com.tencent.structmsg", "view": "news", "ver": "0.0.0.1", "prompt": "[分享] " + d.Title, "meta": map[string]any{"news": map[string]any{"title": d.Title, "desc": d.Content, "jumpUrl": d.URL, "preview": d.Image, "tag": "链接分享"}}})
+	return tools.OneBotSegment{Type: "json", Data: map[string]any{"data": string(ark)}}
+}
+
+// Both direct messages and custom forward nodes use the same wire-safe card
+// representation. Unsupported raw share/location segments may be discarded.
+func normalizeQQCards(messages []tools.Msg, segments []tools.OneBotSegment) string {
+	format := ""
+	for i, m := range messages {
+		if m.Type == "share" || m.Type == "location" {
+			segments[i] = qqShareSegment(qqCardData(m))
+			format = m.Type + "_ark"
+		}
+	}
+	return format
 }
 
 // Inline transfer is bounded both before and during the read (the file may grow).

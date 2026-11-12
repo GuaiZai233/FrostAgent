@@ -313,6 +313,9 @@ func (e *Engine) RunMessagesWithContext(
 		defer cancel()
 		stop := context.AfterFunc(runContext.Context, cancel)
 		defer stop()
+		if runContext.Context.Err() != nil {
+			cancel()
+		}
 	}
 	if runContext.Turn != nil {
 		var cancel context.CancelFunc

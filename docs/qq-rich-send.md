@@ -108,10 +108,12 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 | 单条转发 | `forward_group_single_msg` / `forward_friend_single_msg` | 当前会话消息 ID 构成的合并转发节点 |
 | 合并转发 | `send_group_forward_msg` / `send_private_forward_msg` | `send_forward_msg` |
 | 商城表情 | `mface` | 带原生商城元数据的 `image` |
-| 分享链接 | `share` | 后端构造的固定分享 Ark、`send_tuwen_ark`、文字链接 |
-| 位置 | `location` | 带坐标和地点说明的腾讯地图链接 |
+| 分享链接 | 后端构造的固定 QQ 分享 Ark | `send_tuwen_ark`、文字链接 |
+| 位置 | 带坐标和腾讯地图链接的固定 QQ 分享 Ark | `send_tuwen_ark`、文字地图链接 |
 
-回落可能降低展示丰富度，例如位置变地图链接；结果的 `fallback` 会注明实际路径。
+NapCat 不支持直接发送 share/location 段，因此 FrostAgent 预先构造固定的 QQ 分享 Ark，
+位置卡片包含坐标和腾讯地图链接；不依赖网关正确报告未知消息段。结果的 `fallback`
+会注明 share_ark/location_ark 以及后续兼容路径。进一步回落为文字会降低展示丰富度。
 网关和 QQ 版本对音乐签名、卡片及商城表情有各自限制，不能由协议构造测试证明真机效果。
 
 协议参考：[NapCat 消息支持表](https://napneko.github.io/develop/msg)、

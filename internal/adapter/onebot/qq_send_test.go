@@ -261,7 +261,19 @@ func TestQQCardAndMarketFaceFallbacks(t *testing.T) {
 			s := qqFixtureSender(func(action model.OneBotAction) (oneBotAPIResponse, error) {
 				calls++
 				if calls == 1 {
+					if tc.msg.Type == "share" || tc.msg.Type == "location" {
+						segments := action.Params.(map[string]any)["message"].([]tools.OneBotSegment)
+						if segments[0].Type != "json" {
+							t.Fatalf("unsupported native segment sent instead of Ark: %+v", segments)
+						}
+					}
 					return qqReject("unsupported message type")
+				}
+				if tc.msg.Type == "share" || tc.msg.Type == "location" {
+					if action.Action != "send_tuwen_ark" {
+						t.Fatalf("missing SnowLuma Ark compatibility: %+v", action)
+					}
+					return qqOK(102), nil
 				}
 				segments := action.Params.(map[string]any)["message"].([]tools.OneBotSegment)
 				if segments[0].Type != tc.wantType {
@@ -435,5 +447,47 @@ func TestQQMixedMediaPathFallbackKeepsOrderedChain(t *testing.T) {
 	result, err := s.send([]tools.Msg{{Type: "plain", Text: "before"}, {Type: "image", Path: path}, {Type: "plain", Text: "after"}})
 	if err != nil || calls != 2 || result.MessagesSent != 1 {
 		t.Fatalf("result=%+v err=%v calls=%d", result, err, calls)
+	}
+}
+
+func TestQQForwardNodesNormalizeShareAndLocation(t *testing.T) {
+	lat, lon := 0.0, 0.0
+	s := qqFixtureSender(func(action model.OneBotAction) (oneBotAPIResponse, error) {
+		nodes := action.Params.(map[string]any)["messages"].([]tools.OneBotSegment)
+		segments := nodes[0].Data["content"].([]tools.OneBotSegment)
+		if len(segments) != 2 || segments[0].Type != "json" || segments[1].Type != "json" {
+			t.Fatalf("unsupported raw card in forward: %+v", segments)
+		}
+		var ark struct {
+			Meta map[string]map[string]any `json:"meta"`
+		}
+		if err := json.Unmarshal([]byte(segments[1].Data["data"].(string)), &ark); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(ark.Meta["news"]["jumpUrl"].(string), "coord:0,0") {
+			t.Fatalf("coordinate missing from location Ark: %+v", ark)
+		}
+		return qqOK(102), nil
+	})
+	_, err := s.execute(tools.QQRequest{Action: "forward_bundle", Arguments: tools.QQArguments{Nodes: []tools.QQForwardNode{{Messages: []tools.Msg{{Type: "share", Data: &tools.QQMessageData{URL: "https://example.invalid", Title: "fixture"}}, {Type: "location", Data: &tools.QQMessageData{Lat: &lat, Lon: &lon}}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQQInlineFallbackIncludesAlreadyInlinedMediaBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture.png")
+	if err := os.WriteFile(path, []byte("one byte exceeds remaining budget"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	part := qqSendPart{messages: []tools.Msg{{Type: "image", Transfer: "inline"}, {Type: "image", Path: path}}, segments: []tools.OneBotSegment{
+		{Type: "image", Data: map[string]any{"file": "base64://" + strings.Repeat("AAAA", int(maxQQInlineBytes/3))}},
+		{Type: "image", Data: map[string]any{"file": "file://" + path}},
+	}}
+	if _, err := qqInlinePart(part); err == nil {
+		t.Fatal("fallback ignored the media already occupying its 30 MiB budget")
+	}
+	if qqInlineSize("base64://Zg==") != 1 || qqInlineSize("base64://Zm8=") != 2 || qqInlineSize("base64://Zm9v") != 3 {
+		t.Fatal("inline size padding was counted incorrectly")
 	}
 }
