@@ -554,6 +554,11 @@ func (s qqSender) send(messages []tools.Msg) (core.PlatformActionResult, error) 
 		if err != nil {
 			break
 		}
+		// Decorate only the first confirmed message in this logical send.
+		// Standalone uploads cannot carry a reply/mention prefix.
+		if action == "send_group_msg" || action == "send_private_msg" {
+			s.decorate = nil
+		}
 		result.MessagesSent++
 		for _, m := range part.messages {
 			result.StickerSent = result.StickerSent || m.IsSticker || m.Type == "mface"
@@ -589,14 +594,14 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 			return response, action.Action, "", fmt.Errorf("%v; inline fallback: %w", err, inlineErr)
 		}
 		if chain != nil {
-			part.segments = chain
+			segments = chain
+			if s.decorate != nil {
+				segments = s.decorate(segments)
+			}
 			if isFile {
 				action = s.uploadFileAction(part.messages[0], chain[0].Data["file"].(string))
 			} else {
-				if s.decorate != nil {
-					chain = s.decorate(chain)
-				}
-				action = s.sendAction(chain)
+				action = s.sendAction(segments)
 			}
 			response, err = s.call(action)
 			fallback = "inline"
@@ -609,7 +614,7 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 			return response, action.Action, fallback, err
 		}
 		if err != nil && qqUnsupported(response) {
-			compat := s.componentFallback(m, part.segments)
+			compat := s.componentFallback(m, segments)
 			if len(compat) > 0 {
 				response, name, used, e := s.tryActions(compat)
 				if used == "" {
@@ -710,9 +715,6 @@ func (s qqSender) componentFallback(m tools.Msg, segments []tools.OneBotSegment)
 	prefix := segments[:len(segments)-1]
 	messageAction := func(segment tools.OneBotSegment) model.OneBotAction {
 		chain := append(append([]tools.OneBotSegment(nil), prefix...), segment)
-		if s.decorate != nil {
-			chain = s.decorate(chain)
-		}
 		return s.sendAction(chain)
 	}
 	switch m.Type {

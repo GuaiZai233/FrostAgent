@@ -289,6 +289,122 @@ func TestQQCardAndMarketFaceFallbacks(t *testing.T) {
 	}
 }
 
+func TestQQSplitSendDecoratesGroupReplyOnce(t *testing.T) {
+	scope := newTestScopeWithEnv(t, map[string]string{
+		"ENABLE_AT_IN_GROUP_MSG": "true", "ENABLE_REPLY_IN_GROUP_MSG": "true",
+	})
+	path := filepath.Join(t.TempDir(), "fixture.png")
+	if err := os.WriteFile(path, []byte("fixture bytes"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := tools.Msg{Type: "plain", Text: "before"}
+	after := tools.Msg{Type: "plain", Text: "after"}
+	card := tools.Msg{Type: "share", Data: &tools.QQMessageData{URL: "https://example.invalid", Title: "fixture"}}
+	file := tools.Msg{Type: "file", URL: "https://example.invalid/file"}
+	mention := fmt.Sprint(testUserID)
+	type attempt struct {
+		action, types, mention, rejection string
+	}
+	for _, tc := range []struct {
+		name     string
+		messages []tools.Msg
+		attempts []attempt
+	}{
+		{"native parts", []tools.Msg{before, card, after}, []attempt{
+			{"send_group_msg", "reply at text", mention, ""},
+			{"send_group_msg", "json", "", ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+		{"later card fallback", []tools.Msg{before, card, after}, []attempt{
+			{"send_group_msg", "reply at text", mention, ""},
+			{"send_group_msg", "json", "", "unsupported message type"},
+			{"send_tuwen_ark", "", "", "unknown action"},
+			{"send_group_msg", "text", "", ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+		{"first card fallback", []tools.Msg{card, after}, []attempt{
+			{"send_group_msg", "reply at json", mention, "unsupported message type"},
+			{"send_group_msg", "reply at text", mention, ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+		{"later explicit prefixes", []tools.Msg{before, card, {Type: "quote", MessageID: "101"}, {Type: "mention_user", MentionUserID: "42"}, card, after}, []attempt{
+			{"send_group_msg", "reply at text", mention, ""},
+			{"send_group_msg", "json", "", ""},
+			{"send_group_msg", "reply at json", "42", "unsupported message type"},
+			{"send_group_msg", "reply at text", "42", ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+		{"leading upload", []tools.Msg{file, before, card, after}, []attempt{
+			{"upload_group_file", "", "", ""},
+			{"send_group_msg", "reply at text", mention, ""},
+			{"send_group_msg", "json", "", ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+		{"leading upload fallback", []tools.Msg{file, after}, []attempt{
+			{"upload_group_file", "", "", "unknown action"},
+			{"send_group_msg", "reply at file", mention, ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+		{"first media path fallback", []tools.Msg{{Type: "image", Path: path}, card, after}, []attempt{
+			{"send_group_msg", "reply at image", mention, "file not found"},
+			{"send_group_msg", "reply at image", mention, ""},
+			{"send_group_msg", "json", "", ""},
+			{"send_group_msg", "text", "", ""},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			s := qqFixtureSender(func(action model.OneBotAction) (oneBotAPIResponse, error) {
+				if calls >= len(tc.attempts) {
+					t.Fatalf("unexpected extra action: %+v", action)
+				}
+				want := tc.attempts[calls]
+				calls++
+				if action.Action != want.action {
+					t.Fatalf("attempt %d action=%s want=%s", calls, action.Action, want.action)
+				}
+				if want.types != "" {
+					segments := action.Params.(map[string]any)["message"].([]tools.OneBotSegment)
+					var types []string
+					for _, segment := range segments {
+						types = append(types, segment.Type)
+						if segment.Type == "reply" && segment.Data["id"] != "101" {
+							t.Fatalf("attempt %d quote=%+v", calls, segment)
+						}
+						if segment.Type == "at" && segment.Data["qq"] != want.mention {
+							t.Fatalf("attempt %d mention=%+v want=%s", calls, segment, want.mention)
+						}
+					}
+					if got := strings.Join(types, " "); got != want.types {
+						t.Fatalf("attempt %d types=%s want=%s", calls, got, want.types)
+					}
+				}
+				if want.rejection != "" {
+					return qqReject(want.rejection)
+				}
+				return qqOK(102 + calls), nil
+			})
+			s.event.MessageID = 101
+			s.decorate = func(segments []tools.OneBotSegment) []tools.OneBotSegment {
+				return wrapGroupReply(segments, s.event, scope)
+			}
+			// Reusing a sender must not carry decoration state into a new send.
+			for range 2 {
+				calls = 0
+				result, err := s.send(tc.messages)
+				if err != nil || calls != len(tc.attempts) {
+					t.Fatalf("calls=%d result=%+v err=%v", calls, result, err)
+				}
+				for _, item := range qqItems(t, result.Content) {
+					if item.Status != "confirmed" {
+						t.Fatal(result.Content)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestQQRealWebsocketACKAndTimeout(t *testing.T) {
 	for _, ack := range []bool{true, false} {
 		t.Run(fmt.Sprint(ack), func(t *testing.T) {
