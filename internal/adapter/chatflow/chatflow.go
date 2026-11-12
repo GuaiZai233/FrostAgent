@@ -56,3 +56,9 @@ func (e *DeliveryError) Error() string {
 	return fmt.Sprintf("message partially delivered; do not repeat confirmed parts: %v", e.Err)
 }
 func (e *DeliveryError) Unwrap() error { return e.Err }
+
+// DeliveryConfirmation exposes confirmed parts to consumers without requiring
+// them to depend on the transport's error type.
+func (e *DeliveryError) DeliveryConfirmation() (string, bool) {
+	return e.DeliveredText, e.Confirmed || e.DeliveredText != ""
+}

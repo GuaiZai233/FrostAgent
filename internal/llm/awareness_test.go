@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/chatflow"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -18,6 +19,76 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
+
+func TestAwarenessPreservesConfirmedPrefixOnPartialDelivery(t *testing.T) {
+	for _, kind := range []string{"private", "group"} {
+		for _, mode := range []string{"final", "tool", "unconfirmed", "reset"} {
+			t.Run(kind+"/"+mode, func(t *testing.T) {
+				e, service, _, _ := awarenessFixture(t)
+				target := AwarenessTargetFor("telegram", kind, "fixture-recipient")
+				session := e.SessionManager.GetOrCreate(target.SessionID)
+				prefix := strings.Repeat("a", 4096)
+				unsent := "unsent suffix"
+				calls := 0
+				service.Resolve = func(AwarenessTarget) (AwarenessSender, bool) {
+					return func(context.Context, AwarenessTarget, []proactive.AwarenessMessage, *SessionTurn) error {
+						calls++
+						if mode == "reset" {
+							if err := e.SessionManager.ResetSession(target.SessionID); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if mode == "unconfirmed" {
+							return errors.New("synthetic delivery failure")
+						}
+						return fmt.Errorf("wrapped: %w", &chatflow.DeliveryError{Err: errors.New("synthetic second chunk failure"), DeliveredText: prefix, Confirmed: true})
+					}, true
+				}
+				args := fmt.Sprintf(`{"messages":[{"type":"plain","text":%q}]}`, prefix+unsent)
+				if mode == "tool" {
+					tool := &proactiveMessageTool{structuredResultTool: structuredResultTool{staticTool: staticTool{name: "send_message"}, output: core.ToolExecutionResult{Content: args, MessagePayload: args}}}
+					e.ToolRegistry = map[string]ToolExecutor{"send_message": tool}
+				}
+				modelCalls := 0
+				e.Provider = injectionProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+					modelCalls++
+					if mode == "tool" && modelCalls == 1 {
+						return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "fixture-call", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: args}}}}}, nil
+					}
+					// A failed tool send must not make the final answer resend its prefix.
+					return finalInjection(prefix + unsent), nil
+				})
+				service.Trigger(e.Context(), target)
+				if calls != 1 {
+					t.Fatalf("confirmed prefix was resent: %d sends", calls)
+				}
+				want := 1
+				if mode == "unconfirmed" || mode == "reset" {
+					want = 0
+				}
+				history := session.Snapshot()
+				if len(history) != want || (want == 1 && (history[0].Role != "assistant" || history[0].Content != prefix)) {
+					t.Fatalf("partial history: count=%d want=%d", len(history), want)
+				}
+				group := session.SnapshotGroupContext(10, 10000, "").RecentStructuredMessages
+				wantGroup := 0
+				if kind == "group" {
+					wantGroup = want
+				}
+				if len(group) != wantGroup || (wantGroup == 1 && (group[0].Role != "assistant" || group[0].Content != prefix)) {
+					t.Fatalf("partial group context: count=%d want=%d", len(group), wantGroup)
+				}
+				failure := session.TakeDeliveryFailure()
+				if want == 1 && (failure == nil || failure.Platform != "telegram" || !strings.Contains(failure.Wording, "synthetic second chunk failure")) {
+					t.Fatalf("remaining delivery failure lost: %+v", failure)
+				}
+				if mode == "reset" && failure != nil {
+					t.Fatal("stale failure crossed reset boundary")
+				}
+			})
+		}
+	}
+}
 
 func awarenessFixture(t *testing.T) (*Engine, *AwarenessService, *instanceconfig.Store, *[][]proactive.AwarenessMessage) {
 	t.Helper()

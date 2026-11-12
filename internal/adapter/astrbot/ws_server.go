@@ -156,6 +156,10 @@ func (c *wsConn) WriteJSON(v any) error {
 }
 
 func (c *wsConn) writeTurnJSON(v any, turn *llm.SessionTurn) error {
+	return c.writeTurnJSONContext(c.Context(), v, turn)
+}
+
+func (c *wsConn) writeTurnJSONContext(ctx context.Context, v any, turn *llm.SessionTurn) error {
 	if c.nativeSend != nil {
 		if c.isClosed() {
 			return errors.New("connection closed")
@@ -165,7 +169,7 @@ func (c *wsConn) writeTurnJSON(v any, turn *llm.SessionTurn) error {
 			return errors.New("unsupported in-process delivery")
 		}
 		action = action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
-		return turn.WithAuthority(func() error { return c.deliverNative(action, turn) })
+		return turn.WithAuthority(func() error { return c.deliverNative(ctx, action, turn) })
 	}
 
 	c.writeMu.Lock()

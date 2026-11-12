@@ -100,6 +100,55 @@ func TestNativeConversationCloseCancelsInflightDelivery(t *testing.T) {
 	}
 }
 
+func TestNativeConversationThinkingStopCancelsInflightStatus(t *testing.T) {
+	started := make(chan struct{})
+	statusCanceled := make(chan struct{})
+	finalSent := make(chan struct{})
+	engine := newTestEngine(&mockLLMProvider{customChat: func(ctx context.Context, _ core.ChatRequest) (*core.ChatResponse, error) {
+		select {
+		case <-started:
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "answer"}}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}})
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_THINKING_STATUS": "true"})
+	p := NewConversation(engine, "telegram", func(ctx context.Context, d chatflow.Delivery) error {
+		switch d.Action {
+		case "thinking_status":
+			close(started)
+			<-ctx.Done()
+			close(statusCanceled)
+			return ctx.Err()
+		case "send_message":
+			select {
+			case <-statusCanceled:
+			default:
+				t.Error("final reply preceded typing cancellation")
+			}
+			if ctx.Err() != nil || d.Message.Content != "answer" {
+				t.Errorf("typing cancellation affected final reply: %+v %v", d, ctx.Err())
+			}
+			close(finalSent)
+		}
+		return nil
+	}, nil)
+	input := nativeFixtureInput()
+	input.Message.Metadata = map[string]any{"thinking_status_supported": true}
+	done := p.Submit(input)
+	t.Cleanup(func() { p.Close(); <-done })
+	select {
+	case <-finalSent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("generated reply blocked on an uncanceled typing request")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("native turn did not finish")
+	}
+}
+
 func TestNativeConversationKeepsOnlyConfirmedFinalPrefix(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{})
 	p := NewConversation(engine, "telegram", func(context.Context, chatflow.Delivery) error {

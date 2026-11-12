@@ -70,7 +70,7 @@ func (c *wsConn) adapterID() string {
 	return "astrbot"
 }
 
-func (c *wsConn) deliverNative(action Action, turn *llm.SessionTurn) error {
+func (c *wsConn) deliverNative(request context.Context, action Action, turn *llm.SessionTurn) error {
 	target := action.TargetID
 	if target == "" {
 		target = action.UserID
@@ -86,8 +86,10 @@ func (c *wsConn) deliverNative(action Action, turn *llm.SessionTurn) error {
 			MentionUserID: part.MentionUserID, MessageID: part.MessageID, Path: part.Path,
 			URL: part.URL, IsSticker: part.IsSticker})
 	}
-	ctx, cancel := context.WithCancel(c.Context())
+	ctx, cancel := context.WithCancel(request)
 	defer cancel()
+	stopConnection := context.AfterFunc(c.Context(), cancel)
+	defer stopConnection()
 	if turn != nil {
 		stop := context.AfterFunc(turn.Context(), cancel)
 		defer stop()

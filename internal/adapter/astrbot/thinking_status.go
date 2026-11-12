@@ -18,7 +18,7 @@ func (c *wsConn) startThinkingStatus(event Event, engine *llm.Engine, turn *llm.
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			err := c.writeTurnJSON(Action{
+			err := c.writeTurnJSONContext(ctx, Action{
 				Type: "action", Action: "thinking_status", Platform: event.Platform,
 				SessionID: event.SessionID, MessageType: event.MessageType, UserID: event.UserID,
 				IsIntermediate: true, Echo: "hook_" + event.MessageID,

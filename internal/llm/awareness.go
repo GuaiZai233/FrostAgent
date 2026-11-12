@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -239,6 +240,21 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	session.Unlock()
 	prompt += "\n" + fmt.Sprintf("当前时间：%s。上次会话活动时间：%s。当前会话：%s。没有触发消息，不要引用或自动艾特上一位发言者。", time.Now().Format(time.RFC3339), lastActive.Format(time.RFC3339), target.SessionID)
 	messages = append(messages, ChatMessage{Role: "system", Content: prompt})
+	recordDelivery := func(text string) {
+		deliveries.NoteConfirmed()
+		deliveries.Record(text, func(live bool) {
+			if live && target.Kind == "group" {
+				maxBufferSize := 0
+				if e.GroupCompactor != nil {
+					maxBufferSize = e.GroupCompactor.MaxBufferSize()
+				}
+				session.AppendGroupCompactMessage(GroupCompactMessage{Role: "assistant", Sender: e.Getenv("BOT_NAME"), Content: text, Time: time.Now().Format(time.RFC3339)}, maxBufferSize)
+			}
+		})
+		if target.Kind == "group" && e.GroupCompactor != nil {
+			e.GroupCompactor.TriggerWithScope(session, owner, modelrouter.Scope{Platform: target.Platform, GroupID: target.ID})
+		}
+	}
 	sendMessages := func(parts []proactive.AwarenessMessage) error {
 		if ctx.Err() != nil || turn.Interrupted() || session.Epoch() != epoch || !s.allowed(target) {
 			return context.Canceled
@@ -249,6 +265,18 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 			}
 		}
 		if err := send(ctx, target, parts, turn); err != nil {
+			var partial interface {
+				error
+				DeliveryConfirmation() (string, bool)
+			}
+			if errors.As(err, &partial) {
+				if text, confirmed := partial.DeliveryConfirmation(); confirmed {
+					recordDelivery(text)
+					session.WithEpochCommit(epoch, func() {
+						session.SetDeliveryFailure(DeliveryFailure{Platform: target.Platform, Action: "send_message", Wording: err.Error()})
+					})
+				}
+			}
 			return err
 		}
 		var text strings.Builder
@@ -259,18 +287,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 				text.WriteString(part.Text)
 			}
 		}
-		deliveries.Record(text.String(), func(live bool) {
-			if live && target.Kind == "group" {
-				maxBufferSize := 0
-				if e.GroupCompactor != nil {
-					maxBufferSize = e.GroupCompactor.MaxBufferSize()
-				}
-				session.AppendGroupCompactMessage(GroupCompactMessage{Role: "assistant", Sender: e.Getenv("BOT_NAME"), Content: text.String(), Time: time.Now().Format(time.RFC3339)}, maxBufferSize)
-			}
-		})
-		if target.Kind == "group" && e.GroupCompactor != nil {
-			e.GroupCompactor.TriggerWithScope(session, owner, modelrouter.Scope{Platform: target.Platform, GroupID: target.ID})
-		}
+		recordDelivery(text.String())
 		return nil
 	}
 	e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动感知逻辑】 "+target.SessionID, "【触发主动感知逻辑】")
@@ -290,7 +307,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 		return
 	}
 	// A confirmed tool message is the public response; do not add a second send.
-	if deliveries.Text() != "" {
+	if deliveries.Confirmed() {
 		return
 	}
 	if err := sendMessages([]proactive.AwarenessMessage{{Type: "plain", Text: result.Content}}); err != nil {
