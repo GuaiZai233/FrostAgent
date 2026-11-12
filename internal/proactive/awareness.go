@@ -19,7 +19,7 @@ const (
 	AwarenessGroupWhitelistEnabled   = "ENABLE_PROACTIVE_AWARENESS_GROUP_WHITELIST"
 	DefaultAwarenessInterval         = "30m - 2h"
 	AwarenessPrivatePrompt           = "此为触发主动陪伴逻辑的系统提示。此触发不关联任何一条具体消息。你需要结合过往的聊天历史，主动询问或关心用户。如果正在进行对话请补充你的想法或继续参与讨论，不要转移话题；如果距离上一次对话较久，可以开启新话题。"
-	AwarenessGroupPrompt             = "此为触发主动陪伴逻辑的系统提示。此触发不关联任何一条具体消息。你需要结合过往的聊天历史，在群里发送水群内容，可以具体到某一位群友（艾特请调用send_message工具）也可以根据总compact内容延续或启动新话题。如果群内正在进行对话请参与讨论。"
+	AwarenessGroupPrompt             = "此为触发主动陪伴逻辑的系统提示。此触发不关联任何一条具体消息。你需要结合过往的聊天历史，在群里发送水群内容，可以具体到某一位群友（艾特请调用send_message工具）也可以根据总compact内容延续或启动新话题。如果群内正在进行对话请参与讨论。如果群内长时间冷群，为避免打扰群友，请调用stay_silent工具放弃该轮次。"
 )
 
 var awarenessDuration = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?[mh]$`)
