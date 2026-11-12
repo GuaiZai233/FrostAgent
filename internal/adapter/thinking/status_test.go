@@ -3,6 +3,7 @@ package thinking
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func receive(t *testing.T, ch <-chan struct{}) {
 }
 
 func TestStatusLifecycle(t *testing.T) {
-	for _, mode := range []string{"stop", "connection", "turn", "disabled", "failure"} {
+	for _, mode := range []string{"stop", "failure"} {
 		t.Run(mode, func(t *testing.T) {
 			conn, cancelConn := context.WithCancel(context.Background())
 			defer cancelConn()
@@ -38,14 +39,6 @@ func TestStatusLifecycle(t *testing.T) {
 			receive(t, calls)
 			if mode != "failure" {
 				receive(t, calls)
-			}
-			switch mode {
-			case "connection":
-				cancelConn()
-			case "turn":
-				cancelTurn()
-			case "disabled":
-				enabled.Store(false)
 			}
 			stop()
 			stop() // Cleanup may be both explicit and deferred.
@@ -84,5 +77,58 @@ func TestDisabledAndCanceledDoNotStart(t *testing.T) {
 	}{{context.Background(), false}, {canceled, true}} {
 		stop := Start(tc.ctx, context.Background(), time.Second, func() bool { return tc.enabled }, func(context.Context) error { t.Error("unexpected status"); return nil })
 		stop()
+	}
+}
+
+// Observe request cancellation before invoking Stop: cleanup must not hide a
+// missing connection or turn cancellation binding.
+func TestContextsCancelInFlightRequest(t *testing.T) {
+	for _, mode := range []string{"connection", "turn"} {
+		t.Run(mode, func(t *testing.T) {
+			connection, cancelConnection := context.WithCancel(context.Background())
+			defer cancelConnection()
+			turn, cancelTurn := context.WithCancel(context.Background())
+			defer cancelTurn()
+			started := make(chan struct{})
+			exited := make(chan struct{})
+			stop := Start(connection, turn, time.Second, func() bool { return true }, func(ctx context.Context) error {
+				close(started)
+				<-ctx.Done()
+				close(exited)
+				return ctx.Err()
+			})
+			defer stop()
+			receive(t, started)
+			if mode == "connection" {
+				cancelConnection()
+			} else {
+				cancelTurn()
+			}
+			receive(t, exited)
+		})
+	}
+}
+
+func TestHotDisableStopsRefreshWithoutExplicitStop(t *testing.T) {
+	var enabled atomic.Bool
+	enabled.Store(true)
+	calls := make(chan struct{}, 10)
+	observedDisabled := make(chan struct{})
+	var once sync.Once
+	stop := Start(context.Background(), context.Background(), 5*time.Millisecond, func() bool {
+		value := enabled.Load()
+		if !value {
+			once.Do(func() { close(observedDisabled) })
+		}
+		return value
+	}, func(context.Context) error { calls <- struct{}{}; return nil })
+	defer stop()
+	receive(t, calls)
+	enabled.Store(false)
+	receive(t, observedDisabled)
+	select {
+	case <-calls:
+		t.Fatal("notification after disabled setting was observed")
+	case <-time.After(15 * time.Millisecond):
 	}
 }
