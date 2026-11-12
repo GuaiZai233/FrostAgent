@@ -210,7 +210,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 顶层仅接受 `action`、`capability` 和 `arguments`；`capability` 仅用于发现，`arguments` 仅用于执行且必须是 JSON 对象。初始工具列表不包含各子操作的完整参数定义。下列能力仍由 `internal/tools/actionscat_tools.go` 执行，保留原有管理员门禁、模拟会话拦截、DTO 脱敏与未知构建结果处理。
 
-`DISABLED_TOOLS` 可禁用整个 `actionscat` 入口；已有配置中的旧名称（例如 `actionscat_list_actions`）仍限制对应能力的发现与执行，清除旧名称后恢复该能力。旧的独立工具名称不再注册为可调用入口。
+`DISABLED_TOOLS` 可禁用整个 `actionscat` 入口；已有配置中的旧名称（例如 `actionscat_list_actions`）仍限制对应能力的发现与执行。概览工具卡片会列出仍被禁用的历史能力，管理员可通过现有开关重新启用，清除该名称后恢复能力，历史卡片随下次概览刷新消失。恢复操作仅移除指定禁用项，保留其他能力和路由总开关的设置；即使集成未配置或已关闭也可清理。旧名称不再注册为可调用入口，也不能用于新增子工具禁用项。
 
 实例设置 `ACTIONSCAT_ENABLED` 默认开启；关闭后立即从 `EffectiveTools` / `ModelTools` 和后续模型请求中移除 `actionscat` 路由工具及其全部能力。工具执行入口仍保留，以拒绝旧模型响应或直接调用：`Execute`、`ExecuteContext`、`ExecuteResult` 均返回错误 `ActionsCat已被FrostAgent管理员禁用。`，错误优先于参数解析、管理员和模拟会话检查，且不会产生后端请求。重新开启后工具立即恢复，不需要重启实例，也不影响其他实例。
 

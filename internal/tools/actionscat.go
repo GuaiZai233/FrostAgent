@@ -26,10 +26,12 @@ func ActionsCatTool(client *actionscat.Client, scopes ...*runtimescope.Scope) To
 		ActionsCatListMatchersTool(client), ActionsCatDeleteMatcherTool(client, scopes...),
 	}
 	byAction := make(map[string]Tool, len(subtools))
+	legacySettings := make(map[string]string, len(subtools))
 	actions := []string{"discover"}
 	for _, tool := range subtools {
 		action := strings.TrimPrefix(tool.Name(), "actionscat_")
 		byAction[action] = tool
+		legacySettings[tool.Name()] = tool.Description()
 		actions = append(actions, action)
 	}
 	return Tool{
@@ -40,9 +42,10 @@ func ActionsCatTool(client *actionscat.Client, scopes ...*runtimescope.Scope) To
 			"capability": map[string]any{"type": "string", "description": "Capability to inspect when action=discover; omit to list capabilities."},
 			"arguments":  map[string]any{"type": "object", "description": "Parameters returned by discover for the selected action."},
 		}, "required": []string{"action"}, "additionalProperties": false},
-		enabled:       client.IsEnabled,
-		configured:    client.IsConfigured,
-		disabledError: actionscat.ErrDisabled,
+		enabled:        client.IsEnabled,
+		configured:     client.IsConfigured,
+		disabledError:  actionscat.ErrDisabled,
+		legacySettings: legacySettings,
 		executeContext: func(ctx context.Context, raw string) (string, error) {
 			var input struct {
 				Action     string          `json:"action"`
