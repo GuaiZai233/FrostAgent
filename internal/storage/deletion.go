@@ -13,7 +13,7 @@ func (d *DB) PrepareDeletion(ctx context.Context, instanceID string, backupVersi
 		return err
 	}
 	defer tx.Rollback()
-	if err := requireNativeSchema(ctx, tx, "prepare instance deletion"); err != nil {
+	if err := d.requireNativeSchema(ctx, tx, "prepare instance deletion"); err != nil {
 		return err
 	}
 	result, err := tx.ExecContext(ctx, d.Bind(`UPDATE instances SET enabled = 0, deleting = 1 WHERE id = ? AND deleting = 0`), instanceID)
@@ -71,7 +71,7 @@ func (d *DB) ConfirmDeletion(ctx context.Context, instanceID string) error {
 	}
 	defer tx.Rollback()
 	var version int
-	if err := requireNativeSchema(ctx, tx, "confirm instance deletion"); err != nil {
+	if err := d.requireNativeSchema(ctx, tx, "confirm instance deletion"); err != nil {
 		return err
 	}
 	if err := tx.QueryRowContext(ctx, d.Bind(`SELECT backup_version FROM pending_deletions WHERE instance_id = ?`), instanceID).Scan(&version); err != nil {

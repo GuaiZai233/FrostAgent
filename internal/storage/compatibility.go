@@ -71,10 +71,10 @@ func (d *DB) prepareCompatibility(ctx context.Context, expectedVersion int) erro
 		if err := tx.QueryRowContext(ctx, `SELECT min_compatible_version FROM schema_meta WHERE id = 1`).Scan(&minimum); err != nil {
 			return fmt.Errorf("read database compatibility: %w", err)
 		}
-	} else if version > SchemaVersion {
+	} else if version == 15 || version > SchemaVersion {
 		// The only pre-marker future layout we know is Computer Use v15.
 		// Do not guess compatibility from a version number or missing marker.
-		if version != 15 || SchemaVersion != 14 {
+		if version != 15 {
 			return fmt.Errorf("database schema version %d is newer than supported version %d and has no compatibility declaration", version, SchemaVersion)
 		}
 		if err := d.validateLegacyComputerUse(ctx, tx); err != nil {
@@ -85,7 +85,7 @@ func (d *DB) prepareCompatibility(ctx context.Context, expectedVersion int) erro
 	if err := validateCompatibility(version, minimum); err != nil {
 		return err
 	}
-	if minimum > SchemaVersion {
+	if minimum > SupportedSchemaVersion {
 		return fmt.Errorf("database schema version %d requires compatible schema %d or newer; this program supports %d", version, minimum, SchemaVersion)
 	}
 	if version > SchemaVersion {
@@ -108,21 +108,47 @@ func (d *DB) prepareCompatibility(ctx context.Context, expectedVersion int) erro
 // instance. Older code cannot export, restore or delete unknown module data.
 // Normal operations on the validated core remain available.
 func (d *DB) RequireNativeSchema(ctx context.Context, operation string) error {
-	return requireNativeSchema(ctx, d.SQL, operation)
+	return d.requireNativeSchema(ctx, d.SQL, operation)
 }
 
-func requireNativeSchema(ctx context.Context, q schemaReader, operation string) error {
+func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation string) error {
 	var version int
 	if err := q.QueryRowContext(ctx, `SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil {
 		return err
 	}
-	if version > SchemaVersion {
-		return fmt.Errorf("%s requires a program supporting database schema %d; this program supports %d and cannot preserve all newer module data", operation, version, SchemaVersion)
+	if version > SupportedSchemaVersion {
+		return fmt.Errorf("%s requires a program supporting database schema %d; this program supports %d and cannot preserve all newer module data", operation, version, SupportedSchemaVersion)
+	}
+	tables, err := d.schemaTables(ctx, q)
+	if err != nil {
+		return err
+	}
+	for _, table := range tables {
+		if _, known := compatibleCoreColumns[table]; known {
+			continue
+		}
+		switch table {
+		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "memory_embeddings", "memory_embedding_scopes", "module_migrations":
+			continue
+		case "computer_use_config", "computer_use_projects", "computer_use_tasks":
+			if _, err := d.matchColumns(ctx, q, table, compatibleComputerUseColumns[table]); err != nil {
+				return err
+			}
+			continue
+		}
+		var count int
+		quoted := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
+		if err := q.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+quoted).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("%s cannot preserve unknown module table %q; use a program supporting that module", operation, table)
+		}
 	}
 	return nil
 }
 
-// These are the columns owned by the v14 writer, not an exhaustive description
+// These are the columns owned by the current writer, not an exhaustive description
 // of future databases. Extra columns are unsafe while some stores replace rows.
 // Updating this contract requires auditing the reader AND writer paths.
 var compatibleCoreColumns = map[string]string{
@@ -142,7 +168,7 @@ var compatibleCoreColumns = map[string]string{
 	"model_bindings":        "instance_id=text platform=text group_id=text workload=text mode=text model_id=text",
 	"model_revisions":       "instance_id=text revision=bigint",
 	"pending_deletions":     "instance_id=text prepared_at=text backup_version=integer",
-	"provider_endpoints":    "id=text display_name=text base_url=text api_key_source=text api_key_ref=text enabled=integer position=integer",
+	"provider_endpoints":    "id=text display_name=text base_url=text api_key_source=text api_key_ref=text enabled=integer position=integer api_format=text",
 	"provider_models":       "id=text display_name=text endpoint_id=text upstream_model=text enabled=integer capabilities=text position=integer max_input_tokens=integer",
 	"provider_revision":     "id=integer revision=bigint",
 	"provider_secrets":      "ref=text secret=text",
@@ -224,7 +250,7 @@ func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) erro
 			continue
 		}
 		switch table {
-		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models",
+		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "module_migrations",
 			"memory_embeddings", "memory_embedding_scopes", "computer_use_config", "computer_use_projects", "computer_use_tasks":
 		default:
 			return fmt.Errorf("unrecognized legacy table %s", table)
@@ -256,7 +282,12 @@ func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) erro
 			return fmt.Errorf("table %s has unrecognized foreign keys", table)
 		}
 	}
-	return nil
+	oldColumns := make(map[string]string, len(compatibleCoreColumns))
+	for table, columns := range compatibleCoreColumns {
+		oldColumns[table] = columns
+	}
+	oldColumns["provider_endpoints"] = strings.TrimSuffix(oldColumns["provider_endpoints"], " api_format=text")
+	return d.validateLayout(ctx, q, oldColumns)
 }
 
 type schemaForeignKey struct{ column, parent, parentColumn, onDelete, onUpdate string }
@@ -304,7 +335,11 @@ func (d *DB) tableForeignKeys(ctx context.Context, q schemaReader, table string)
 }
 
 func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
-	for table, expected := range compatibleCoreColumns {
+	return d.validateLayout(ctx, q, compatibleCoreColumns)
+}
+
+func (d *DB) validateLayout(ctx context.Context, q schemaReader, coreColumns map[string]string) error {
+	for table, expected := range coreColumns {
 		columns, err := d.matchColumns(ctx, q, table, expected)
 		if err != nil {
 			return err
@@ -321,7 +356,7 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		// targets resolved in later schemas. Relation OIDs avoid confusing an
 		// unrelated same-name table with the one an unqualified write uses.
 		targets := []string{"schema_meta", "memory_embedding_scopes", "memory_embeddings"}
-		for table := range compatibleCoreColumns {
+		for table := range coreColumns {
 			targets = append(targets, table)
 		}
 		references, args := postgresRelationReferences(targets)
@@ -379,7 +414,7 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 		return err
 	}
 	for _, table := range tables {
-		if _, core := compatibleCoreColumns[table]; core {
+		if _, core := coreColumns[table]; core {
 			continue
 		}
 		keys, err := d.tableForeignKeys(ctx, q, table)
@@ -395,7 +430,7 @@ func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
 			}) {
 				continue
 			}
-			_, core := compatibleCoreColumns[key.parent]
+			_, core := coreColumns[key.parent]
 			// Only the instance ID is immutable: normal instance renames update
 			// the unique name and can cascade into, or be blocked by, module rows.
 			instanceID := key.parent == "instances" && (key.parentColumn == "id" ||

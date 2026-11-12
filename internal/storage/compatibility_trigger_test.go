@@ -33,7 +33,7 @@ func TestPostgresMigrationSchemaCompatibilitySearchPathTriggers(t *testing.T) {
 			// Remove the vector child so the separate cross-schema FK guard
 			// cannot mask a missing trigger check on the scope target.
 			compatibilityExec(t, db, `DROP TABLE memory_embeddings`)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -103,7 +103,11 @@ func TestPostgresMigrationSchemaCompatibilitySearchPathTriggers(t *testing.T) {
 					t.Fatalf("unrelated trigger or safe fallback target was rejected: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				// A real core write and the import's scope-delete probe must not
 				// fire a trigger on the external same-name relation.
 				if err := opened.CreateInstance(context.Background(), compatibilityArbiterInstance(), 73); err != nil {

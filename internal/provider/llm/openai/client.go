@@ -49,10 +49,12 @@ type chatResponse struct {
 
 // Client implements the core.LLMProvider interface for OpenAI-compatible APIs.
 type Client struct {
-	Logger     *logs.Store
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	Logger       *logs.Store
+	RequestURL   string
+	EmbeddingURL string
+	BaseURL      string
+	APIKey       string
+	HTTPClient   *http.Client
 	// ObserveUsage is called once for each decoded successful API response,
 	// even if its content cannot be used by the caller.
 	ObserveUsage func(*core.Usage)
@@ -155,7 +157,10 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		c.log().LLMRequest(string(jsonData), req.TraceID)
 	}
 
-	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
+	fullURL := c.RequestURL
+	if fullURL == "" {
+		fullURL, err = url.JoinPath(c.BaseURL, "chat/completions")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to join url path: %w", err)
 	}

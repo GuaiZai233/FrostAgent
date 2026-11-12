@@ -1142,8 +1142,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// Map back to internal message for now to maintain compatibility
 		responseMsg := &ChatMessage{
-			Role:    string(resp.Message.Role),
-			Content: resp.Message.Content,
+			Role:          string(resp.Message.Role),
+			Content:       resp.Message.Content,
+			ProviderState: resp.Message.ProviderState,
 		}
 		if len(resp.Message.ToolCalls) > 0 {
 			responseMsg.ToolCalls = make([]ToolCall, len(resp.Message.ToolCalls))
@@ -1650,9 +1651,10 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	res := make([]core.ChatMessage, len(msgs))
 	for i, m := range msgs {
 		coreMsg := core.ChatMessage{
-			Role:       core.MessageRole(m.Role),
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
+			Role:          core.MessageRole(m.Role),
+			Content:       m.Content,
+			ToolCallID:    m.ToolCallID,
+			ProviderState: m.ProviderState,
 		}
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))

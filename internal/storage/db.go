@@ -16,7 +16,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 14
+const SchemaVersion = 16
+
+// SupportedSchemaVersion includes the additive layout understood by this build.
+const SupportedSchemaVersion = 16
 
 type Backend string
 
@@ -113,6 +116,10 @@ func OpenWithConfig(ctx context.Context, dataDir string, config Config) (*DB, er
 		}
 	}
 	if err = db.initSchema(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err = db.ensureCompatibilityModules(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
