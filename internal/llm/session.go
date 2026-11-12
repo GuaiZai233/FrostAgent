@@ -10,6 +10,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"math/rand/v2"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -288,6 +289,7 @@ type SessionContext struct {
 	historySeq         []uint64
 	nextMsgSeq         uint64
 	privateCompacting  bool
+	privateCompactID   uint64
 	privateCompact     *privateCompactInspection
 
 	groupCompactSummary     string
@@ -1085,6 +1087,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.lastModelName = ""
 	s.lastUserPrompt = ""
 	s.privateCompacting = false
+	s.privateCompactID++
 	s.UpdatedAt = time.Now()
 	conversationID := s.ConversationID
 	s.mu.Unlock()
@@ -1112,10 +1115,12 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 
 // PrivateCompactSnapshot captures messages to be summarized in private chat.
 type PrivateCompactSnapshot struct {
-	Messages []ChatMessage
-	Count    int
-	Epoch    uint64
-	LastSeq  uint64
+	Messages  []ChatMessage
+	Count     int
+	Epoch     uint64
+	LastSeq   uint64
+	sequences []uint64
+	id        uint64
 }
 
 var (
@@ -1146,20 +1151,26 @@ func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error
 		}
 	}
 
+	return s.snapshotPrivateCompactLocked(len(s.History)), nil
+}
+
+func (s *SessionContext) snapshotPrivateCompactLocked(count int) PrivateCompactSnapshot {
 	s.privateCompacting = true
-	snapshotMsgs := make([]ChatMessage, len(s.History))
-	copy(snapshotMsgs, s.History)
+	s.privateCompactID++
+	snapshotMsgs := cloneMessages(s.History[:count])
 	var lastSeq uint64
-	if len(s.historySeq) > 0 {
-		lastSeq = s.historySeq[len(s.historySeq)-1]
+	if count > 0 {
+		lastSeq = s.historySeq[count-1]
 	}
 
 	return PrivateCompactSnapshot{
-		Messages: snapshotMsgs,
-		Count:    len(s.History),
-		Epoch:    s.epoch,
-		LastSeq:  lastSeq,
-	}, nil
+		Messages:  snapshotMsgs,
+		Count:     count,
+		Epoch:     s.epoch,
+		LastSeq:   lastSeq,
+		sequences: slices.Clone(s.historySeq[:count]),
+		id:        s.privateCompactID,
+	}
 }
 
 // CommitPrivateCompact commits a private chat summary, replacing the summarized messages
@@ -1171,6 +1182,9 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 	summary = strings.TrimSpace(summary)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if snapshot.id != s.privateCompactID || !s.privateCompacting {
+		return false
+	}
 	defer func() { s.privateCompacting = false }()
 
 	if s.epoch != snapshot.Epoch {
@@ -1190,8 +1204,18 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 
 	var remaining []ChatMessage
 	var remainingSeq []uint64
+	covered := make(map[uint64]ChatMessage, len(snapshot.sequences))
+	for i, seq := range snapshot.sequences {
+		covered[seq] = snapshot.Messages[i]
+	}
 	for i, seq := range s.historySeq {
-		if seq > snapshot.LastSeq {
+		if source, exists := covered[seq]; exists {
+			// Late delivery acknowledgements can extend an existing public reply.
+			// Do not replace newer confirmed content with an older snapshot.
+			if !reflect.DeepEqual(source, s.History[i]) {
+				return false
+			}
+		} else {
 			remaining = append(remaining, s.History[i])
 			remainingSeq = append(remainingSeq, seq)
 		}
@@ -1204,11 +1228,14 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 	)
 	newHistory = append(newHistory, remaining...)
 
-	newSeq := make([]uint64, len(newHistory))
+	newSeq := make([]uint64, 2, len(newHistory))
 	for i := range newSeq {
 		s.nextMsgSeq++
 		newSeq[i] = s.nextMsgSeq
 	}
+	// Retained inputs still belong to live execution lanes and delivery logs.
+	// Their sequence handles must survive asynchronous compaction unchanged.
+	newSeq = append(newSeq, remainingSeq...)
 
 	s.History = newHistory
 	s.historySeq = newSeq
@@ -1285,12 +1312,15 @@ func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
 }
 
 // CancelPrivateCompact releases the private compaction lock if compaction fails.
-func (s *SessionContext) CancelPrivateCompact() {
+func (s *SessionContext) CancelPrivateCompact(snapshots ...PrivateCompactSnapshot) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(snapshots) > 0 && snapshots[0].id != s.privateCompactID {
+		return
+	}
 	s.privateCompacting = false
 }
 
@@ -1375,6 +1405,8 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	}
 
 	s.History = newMessages
+	s.privateCompacting = false
+	s.privateCompactID++
 	s.historySeq = make([]uint64, len(newMessages))
 	for i := range s.historySeq {
 		s.nextMsgSeq++
@@ -2642,6 +2674,8 @@ func (s *SessionContext) Clear() {
 	s.activeSkills = nil
 	s.historySeq = nil
 	s.privateCompact = nil
+	s.privateCompacting = false
+	s.privateCompactID++
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil

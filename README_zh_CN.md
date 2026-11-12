@@ -79,6 +79,10 @@ docker compose up -d --build
 
 ## 附加功能
 
+### 上下文自动压缩
+
+群聊和私聊均支持后台 compact。私聊保留最近一轮原消息，并在后续对话中使用滚动摘要。配置与会话生命周期说明见[上下文自动压缩](docs/context-compact.md)。
+
 ### 与 ActionsCat 协同
 
 [ActionsCat](https://github.com/actionscat/actionscat) 支持静态编排自动化工作流。

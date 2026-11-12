@@ -13,5 +13,5 @@ func recordPartialReply(session *llm.SessionContext, engine *llm.Engine, epoch u
 			stageAssistantGroupMessage(session, engine, text, event.MessageID, nil)
 		}
 	})
-	engine.TrimSession(session)
+	engine.TrimSession(session, astrBotRouteScope(event))
 }

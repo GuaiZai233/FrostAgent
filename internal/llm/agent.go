@@ -1537,11 +1537,24 @@ func effectiveMaxHistory(fallback int, scopes ...*runtimescope.Scope) int {
 
 // TrimSession 将会话持久化的历史裁剪到配置的消息上限
 // （MAX_CONTEXT_MESSAGES env，未配置时回退 SessionManager.MaxHistory）。
-func (e *Engine) TrimSession(session *SessionContext) {
+func (e *Engine) TrimSession(session *SessionContext, routes ...modelrouter.Scope) {
 	if session == nil {
 		return
 	}
-	session.TrimHistory(effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope))
+	limit := effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope)
+	if e.GroupCompactor != nil && isPrivateConversation(session.ConversationID) && !session.IsMock() {
+		route := modelrouter.Scope{Platform: "onebot"}
+		if len(routes) > 0 {
+			route = routes[0]
+		}
+		threshold := max(1, min(e.GroupCompactor.BufferSize(), limit-2))
+		e.triggerPrivateCompact(session, route, threshold)
+		// Keep the configured dialogue budget even when compaction is slow,
+		// unavailable or disabled. A captured snapshot owns its own copy.
+		session.trimPrivateHistory(limit)
+		return
+	}
+	session.TrimHistory(limit)
 }
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
