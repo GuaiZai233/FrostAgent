@@ -23,7 +23,7 @@ func TestNativeContinuationStateStaysWithEndpoint(t *testing.T) {
 		format               api.Format
 		first, final, marker string
 	}{
-		{api.Responses, `{"output":[{"type":"reasoning","summary":[],"encrypted_content":"synthetic-opaque-state"},{"type":"message","content":[{"type":"output_text","text":"visible-reply"}]},{"type":"function_call","call_id":"fixture-call","name":"lookup","arguments":"{\"query\":\"synthetic-query\"}"}]}`, `{"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`, "synthetic-opaque-state"},
+		{api.Responses, `{"output":[{"type":"reasoning","summary":[],"encrypted_content":"synthetic-opaque-state"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"visible-reply"}]},{"type":"function_call","call_id":"fixture-call","name":"lookup","arguments":"{\"query\":\"synthetic-query\"}"}]}`, `{"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`, "synthetic-opaque-state"},
 		{api.Anthropic, `{"content":[{"type":"thinking","thinking":"synthetic-hidden","signature":"synthetic-opaque-state"},{"type":"text","text":"visible-reply"},{"type":"tool_use","id":"fixture-call","name":"lookup","input":{"query":"synthetic-query"}}]}`, `{"content":[{"type":"text","text":"done"}]}`, "synthetic-opaque-state"},
 		{api.Gemini, `{"candidates":[{"content":{"parts":[{"thought":true,"text":"synthetic-hidden","thoughtSignature":"synthetic-opaque-state"},{"text":"visible-reply"},{"functionCall":{"id":"fixture-call","name":"lookup","args":{"query":"synthetic-query"}},"thoughtSignature":"synthetic-opaque-state"}]}}]}`, `{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`, "synthetic-opaque-state"},
 	} {
@@ -41,6 +41,33 @@ func TestNativeContinuationStateStaysWithEndpoint(t *testing.T) {
 						t.Error(err)
 					}
 					body := string(raw)
+					if tc.format == api.Responses && !expectOpaque.Load() {
+						var payload struct {
+							Input []struct {
+								Role    string          `json:"role"`
+								Content json.RawMessage `json:"content"`
+							} `json:"input"`
+						}
+						if err := json.Unmarshal(raw, &payload); err != nil {
+							t.Error(err)
+						}
+						var found bool
+						for _, item := range payload.Input {
+							if item.Role != "assistant" {
+								continue
+							}
+							var text string
+							if err := json.Unmarshal(item.Content, &text); err != nil || text != "visible-reply" {
+								t.Errorf("invalid Responses assistant history: %s", item.Content)
+								http.Error(w, "invalid assistant content", http.StatusBadRequest)
+								return
+							}
+							found = true
+						}
+						if !found {
+							t.Error("Responses continuation lost assistant history")
+						}
+					}
 					if got := strings.Contains(body, tc.marker); got != expectOpaque.Load() {
 						t.Errorf("opaque state replay = %v, want %v", got, expectOpaque.Load())
 					}

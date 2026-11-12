@@ -25,6 +25,10 @@
 
 模型路由器在凭据环境变量为空、凭据来源未知以及来源配置校验失败时，仅返回错误类别；不在错误文本中回显 `APIKeyRef` 或未知 `APIKeySource` 的原始值，避免经调用方日志或适配器错误提示泄露配置。环境变量引用的读取方式、凭据内容与配置拒绝规则保持不变。
 
+### Responses 历史消息兼容
+
+当历史缺少可复用的 Responses 原生状态（例如从 Chat Completions 切换，或端点身份变化）时，assistant 可见文本以 easy-input 消息的字符串 `content` 重建；结构化纯文本按原顺序拼接。assistant 图片等无法表示为文本的内容在发送前明确报错，避免静默丢失历史。system / user 文本与用户图片仍使用 `input_text` / `input_image`，工具调用与结果分别编码为 `function_call` / `function_call_output`。有效且匹配当前端点的原生状态继续原样回放。
+
 ### 模型能力元数据 (models.dev 提示)
 
 进程启动时从 `https://models.dev/models.json?type=all` 拉取一次模型列表，之后每 48 小时刷新一次。成功的结果写入 `data/models_dev_cache.json`；拉取失败时沿用内存中的上一份数据，若本进程也没有缓存则不提供任何元数据。拉取在后台进行，不阻塞启动。

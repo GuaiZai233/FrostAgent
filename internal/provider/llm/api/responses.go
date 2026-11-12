@@ -24,6 +24,25 @@ func responsesContent(content any) ([]any, error) {
 	return result, nil
 }
 
+func responsesMessageContent(msg core.ChatMessage) (any, error) {
+	if msg.Role != core.RoleAssistant {
+		return responsesContent(msg.Content)
+	}
+	parts, err := contentParts(msg.Content)
+	if err != nil {
+		return nil, err
+	}
+	var text strings.Builder
+	for _, part := range parts {
+		if part.Type != "text" {
+			return nil, fmt.Errorf("unsupported Responses assistant content part %q", part.Type)
+		}
+		text.WriteString(part.Text)
+	}
+	// Assistant history uses string content in the easy-input message form.
+	return text.String(), nil
+}
+
 func responsesRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	input := make([]any, 0)
 	for _, msg := range req.Messages {
@@ -48,12 +67,11 @@ func responsesRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 			continue
 		}
 		if msg.Content != nil && msg.Content != "" {
-			parts, err := responsesContent(msg.Content)
+			content, err := responsesMessageContent(msg)
 			if err != nil {
 				return nil, err
 			}
-			// Historical assistant text uses the easy-input message form.
-			input = append(input, map[string]any{"role": msg.Role, "content": parts})
+			input = append(input, map[string]any{"role": msg.Role, "content": content})
 		}
 		for _, tc := range msg.ToolCalls {
 			if _, err := arguments(tc.Function.Arguments); err != nil {
