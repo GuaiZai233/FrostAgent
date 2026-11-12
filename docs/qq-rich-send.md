@@ -46,7 +46,7 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 | `location` | `data.lat`, `data.lon` | 纬度 ±90、经度 ±180，可加 `data.title/content` |
 | `mface` | `message_id`, `sticker_index` | 重发可信消息中的商城表情；索引从 0 开始，默认 0 |
 | `mface` | `data.emoji_id/emoji_package_id/key` | 已有准确原生元数据时直接发送，可加 `data.summary` |
-| `image` / `record` / `video` / `file` | `path` 或 `url` | 本地文件或 HTTP(S) 地址，二选一 |
+| `image` / `record` / `video` / `file` | `path` 或 `url` | 宿主/沙箱文件或 HTTP(S) 地址，二选一 |
 
 商城表情重发会在适配器内读取可信消息的原生元数据。源消息没有完整的
 `emoji_id/emoji_package_id/key` 时返回明确错误；不会编造 key。表情包开关同时
@@ -68,13 +68,47 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 | `transfer` | 本地媒体 | `auto`（默认）、`shared`、`inline` |
 | `is_sticker` | 图片 | 保留既有图片表情标记 |
 
-`auto` 先使用本地路径；收到明确的文件不存在或无法读取回执后，才尝试 base64。
+宿主文件的 `auto` 先使用本地路径；收到明确的文件不存在或无法读取回执后，才尝试 base64。
 `shared` 只走共享文件路径，`inline` 直接携带文件内容。inline 有 30 MiB 上限；
-同次预处理或同条消息的回落共享读取预算。普通共享路径预检保持常数内存，
+整次逻辑发送的所有分段、沙箱文件、视频封面和本地回落共享这一预算。普通共享路径预检保持常数内存，
 不会为了发送一个大文件把完整文件读入内存。网关直接拉取 HTTP(S) 资源。
 
 文件使用群/私聊上传接口，普通消息与文件按原始顺序发送。选定群目录后不使用
 会丢失该目录的文件段回落。视频封面随媒体一起转换，inline 不依赖远端能访问本机路径。
+
+### 图片直链与沙箱产物
+
+以下发送链路适用于原生 OneBot QQ；当前会话用 `send_message`，富消息或白名单跨群用
+`qq_extend_messages`。公开 HTTP(S) 图片直链放在 `image.url`，网关负责拉取并发送图片：
+
+```json
+{"messages":[{"type":"image","url":"https://example.invalid/chart.png"}]}
+```
+
+`execute_command`、Python 或 `run_skill` 生成的文件应保存在当前会话的 `/sandbox/` 下。
+图片用 `image.path`；PDF、表格和其他文档用 `file.path`：
+
+```json
+{"messages":[{"type":"image","path":"/sandbox/chart.png"},{"type":"file","path":"/sandbox/report.pdf"},{"type":"file","path":"/sandbox/table.csv"}]}
+```
+
+`path` 也接受 `sandbox:/sandbox/report.pdf` 和 `sandbox:///sandbox/report.pdf`。
+视频的 `thumb` 同样支持沙箱路径；其他路径仍指向 FrostAgent 宿主文件系统。
+后端在当前来源会话中分块读取文件并生成协议数据，工具结果和模型上下文保留路径，
+无需让模型输出 base64，也无需共享沙箱卷或新增公开下载服务。
+
+沙箱必须已启用；仅接受 `/sandbox/` 内非空普通文件，不接受 `..`、符号链接、目录或设备。
+读取超时、输出截断、文件在读取时变化或超出剩余预算都会停止发送，不回退读取宿主同名文件。
+沙箱的 `auto` 和 `inline` 都通过后端传输；`shared` 会被拒绝。
+
+白名单跨群示例：读取当前群/私聊的沙箱，发送到配置允许的目标群：
+
+```json
+{"action":"send","arguments":{"target_group_id":"42","messages":[{"type":"file","path":"/sandbox/report.pdf"}]}}
+```
+
+目标群不会改变文件来源的会话命名空间。真实 QQ 展示与文件大小限制仍由网关确认，
+平台 ACK 和各组件的发送结果沿用既有规则。
 
 ## 互动与转发
 

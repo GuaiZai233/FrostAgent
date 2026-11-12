@@ -14,6 +14,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 )
 
@@ -103,6 +104,9 @@ func QQTool() Tool {
 					}
 					if input.Capability == "send" || strings.HasPrefix(input.Capability, "forward_") {
 						help += " Optional target_group_id: exact group ID from target_groups for cross-session delivery; omit to use the active conversation. Source references remain bound to the active conversation. Cross-session sends cannot contain quote components and never inherit automatic reply/@ prefixes."
+					}
+					if input.Capability == "send" {
+						help += " Image direct links use {type:image,url:HTTP(S)_URL}. For sandbox-generated images, PDF documents or other Python/skill outputs use path=/sandbox/... or sandbox:/sandbox/...; the backend reads bytes from the current SOURCE session and transfers them inline, sharing the 30 MiB budget. Sandbox files cannot use transfer=shared. Do not print file bytes/base64 into tool output."
 					}
 					data, _ := json.Marshal(map[string]any{"capability": input.Capability, "parameters": help, "target_groups": groups, "available": run.PlatformActionHook != nil && !run.Proactive && !run.Mock})
 					return textResult(string(data)), nil
@@ -262,7 +266,9 @@ func validateQQComponent(m Msg) error {
 		if m.Name != "" && (strings.ContainsAny(m.Name, "/\\\x00") || m.Name == "." || m.Name == "..") {
 			return fmt.Errorf("name must be a filename")
 		}
-		if strings.Contains(m.Thumb, "://") && !webURL(m.Thumb) {
+		if _, recognized, err := sandbox.FilePath(m.Thumb); err != nil {
+			return err
+		} else if !recognized && strings.Contains(m.Thumb, "://") && !webURL(m.Thumb) {
 			return fmt.Errorf("thumb must be a path or HTTP(S) URL")
 		}
 	case "mention_all", "dice", "rps":

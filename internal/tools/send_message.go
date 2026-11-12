@@ -48,7 +48,7 @@ const nativeMentionExample = `{"messages":[{"type":"mention_user","mention_user_
 func SendMsgTool() Tool {
 	return Tool{
 		name:             "send_message",
-		description:      "Send a basic ordered message chain to the active conversation. Use this tool for media, quotes, proactive messages, or platform-native user mentions. QQ rich components, enhanced media options, forwarding, interactions and cross-session sends use qq_extend_messages; discover its parameters when needed. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
+		description:      "Send a basic ordered message chain to the active conversation. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To send an image from an HTTP(S) direct link, use {type:image,url:the_link}; replying with the URL alone does not send an image. On OneBot, files produced by execute_command or run_skill under /sandbox/ can be sent by path, including images and PDF/Python outputs; file bytes are fetched by the backend and must not be printed as base64. QQ rich components, enhanced media options, forwarding, interactions and cross-session sends use qq_extend_messages; discover its parameters when needed. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
 		proactiveAllowed: true,
 		//json schema
 		parameter: map[string]any{
@@ -72,7 +72,7 @@ func SendMsgTool() Tool {
 							},
 							"path": map[string]any{
 								"type":        "string",
-								"description": "A media/file path readable by the delivery adapter. Isolated sandbox paths are not fetched automatically.",
+								"description": "Media/file path. On OneBot, /sandbox/... or sandbox:/sandbox/... reads the current session's sandbox artifact (up to 30 MiB). Other paths refer to the host; sandbox read failures never fall back to host files.",
 							},
 							"url": map[string]any{
 								"type":        "string",

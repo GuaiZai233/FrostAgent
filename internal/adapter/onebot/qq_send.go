@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 )
@@ -83,12 +84,13 @@ type qqItemResult struct {
 // qqSender is bound to one request's connection, conversation and turn authority.
 // Tests replace call, while production always uses the ACK-correlated transport.
 type qqSender struct {
-	event     model.OneBotEvent
-	call      func(model.OneBotAction) (oneBotAPIResponse, error)
-	reference func(string) bool
-	own       func(string) bool
-	confirmed func(oneBotAPIResponse, []tools.Msg)
-	decorate  func([]tools.OneBotSegment) []tools.OneBotSegment
+	event       model.OneBotEvent
+	call        func(model.OneBotAction) (oneBotAPIResponse, error)
+	reference   func(string) bool
+	own         func(string) bool
+	confirmed   func(oneBotAPIResponse, []tools.Msg)
+	decorate    func([]tools.OneBotSegment) []tools.OneBotSegment
+	sandboxFile func(string, int64) ([]byte, error)
 }
 
 func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine) func(context.Context, string) (core.PlatformActionResult, error) {
@@ -154,6 +156,15 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 			}
 		}
 		sender := qqSender{event: destination,
+			sandboxFile: func(name string, limit int64) ([]byte, error) {
+				if turn.Interrupted() {
+					return nil, context.Canceled
+				}
+				if engine == nil {
+					return nil, fmt.Errorf("沙箱文件读取不可用")
+				}
+				return sandbox.ReadFile(ctx, engine.SandboxBackend, sourceSessionID, name, limit)
+			},
 			call: func(action model.OneBotAction) (oneBotAPIResponse, error) {
 				if err := ctx.Err(); err != nil {
 					return oneBotAPIResponse{}, err
@@ -517,10 +528,11 @@ func encodeQQResults(items []qqItemResult) string {
 }
 
 type qqSendPart struct {
-	start, end int
-	messages   []tools.Msg
-	segments   []tools.OneBotSegment
-	format     string
+	start, end      int
+	messages        []tools.Msg
+	segments        []tools.OneBotSegment
+	format          string
+	inlineRemaining *int64
 }
 
 func qqSeparateMessage(m tools.Msg) bool {
@@ -571,15 +583,27 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 				return nil, fmt.Errorf("引用消息必须附带正文")
 			}
 		}
-		part := qqSendPart{start: start, end: end, messages: append([]tools.Msg(nil), messages[start:end]...)}
+		part := qqSendPart{start: start, end: end, messages: append([]tools.Msg(nil), messages[start:end]...), inlineRemaining: &inlineBudget}
 		wireMessages := append([]tools.Msg(nil), part.messages...)
 		for i, m := range wireMessages {
+			if source, copied, err := s.sandboxSource(m.Path, m.Transfer, inlineBudget); err != nil {
+				return nil, err
+			} else if copied {
+				inlineBudget -= qqInlineSize(source)
+				m.Path, m.URL = "", source
+			}
+			if source, copied, err := s.sandboxSource(m.Thumb, m.Transfer, inlineBudget); err != nil {
+				return nil, err
+			} else if copied {
+				inlineBudget -= qqInlineSize(source)
+				m.Thumb = source
+			}
 			if m.Path != "" && (m.Transfer == "inline" || m.Type == "image" && m.IsSticker) {
 				source, err := qqInlineFileLimit(m.Path, inlineBudget)
 				if err != nil {
 					return nil, err
 				}
-				inlineBudget -= int64(len(source)-len("base64://")) * 3 / 4
+				inlineBudget -= qqInlineSize(source)
 				m.Path = ""
 				m.URL = source
 			}
@@ -588,7 +612,7 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 				if err != nil {
 					return nil, err
 				}
-				inlineBudget -= int64(len(source)-len("base64://")) * 3 / 4
+				inlineBudget -= qqInlineSize(source)
 				m.Thumb = source
 			}
 			wireMessages[i] = m
@@ -603,6 +627,27 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 		start = end
 	}
 	return parts, nil
+}
+
+func (s qqSender) sandboxSource(raw, transfer string, limit int64) (string, bool, error) {
+	name, recognized, err := sandbox.FilePath(raw)
+	if err != nil || !recognized {
+		return "", false, err
+	}
+	if transfer == "shared" {
+		return "", false, fmt.Errorf("沙箱文件不支持 shared 传输，请使用 auto 或 inline")
+	}
+	if s.sandboxFile == nil {
+		return "", false, fmt.Errorf("当前会话无法读取沙箱文件")
+	}
+	data, err := s.sandboxFile(name, limit)
+	if err != nil {
+		return "", false, err
+	}
+	if len(data) == 0 || int64(len(data)) > limit {
+		return "", false, fmt.Errorf("沙箱文件为空或超出剩余的 30 MiB 传输额度")
+	}
+	return "base64://" + base64.StdEncoding.EncodeToString(data), true, nil
 }
 
 func (s qqSender) send(messages []tools.Msg) (core.PlatformActionResult, error) {
@@ -698,13 +743,18 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 
 func qqInlinePart(part qqSendPart) ([]tools.OneBotSegment, error) {
 	budget := maxQQInlineBytes
-	// Account for media already inlined during preparation before admitting any
-	// additional fallback reads from this same message (including thumbnails).
-	for _, segment := range part.segments {
-		for _, key := range []string{"file", "thumb"} {
-			source, _ := segment.Data[key].(string)
-			if strings.HasPrefix(source, "base64://") {
-				budget -= qqInlineSize(source)
+	if part.inlineRemaining != nil {
+		// All prepared parts and later fallbacks share one request budget.
+		budget = *part.inlineRemaining
+		defer func() { *part.inlineRemaining = budget }()
+	} else {
+		// Independently constructed parts still account for existing inline data.
+		for _, segment := range part.segments {
+			for _, key := range []string{"file", "thumb"} {
+				source, _ := segment.Data[key].(string)
+				if strings.HasPrefix(source, "base64://") {
+					budget -= qqInlineSize(source)
+				}
 			}
 		}
 	}
@@ -731,7 +781,7 @@ func qqInlinePart(part qqSendPart) ([]tools.OneBotSegment, error) {
 			if err != nil {
 				return nil, err
 			}
-			budget -= int64(len(inline)-len("base64://")) * 3 / 4
+			budget -= qqInlineSize(inline)
 			data[key] = inline
 			changed = true
 		}
