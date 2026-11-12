@@ -242,3 +242,94 @@ func TestAwarenessKeepsConfiguredCompactBufferAndIsolatesSkills(t *testing.T) {
 		t.Fatalf("configured compact buffer was truncated: %d", count)
 	}
 }
+
+func TestAwarenessCandidatesAndReloadPreserveObservedRoutes(t *testing.T) {
+	e, service, config, _ := awarenessFixture(t)
+	service.Observe(AwarenessTargetFor("qq", "private", "fixture-observed"))
+	observed := AwarenessTargetFor("aiocqhttp", "group", "fixture-group")
+	observed.AdapterID = "astrbot"
+	service.Observe(observed)
+	service.Observe(AwarenessTargetFor("qq", "group", "fixture-group"))
+	service.Observe(AwarenessTarget{})
+	e.SessionManager.GetOrCreate("discord:private:fixture-discord")
+	e.SessionManager.GetOrCreate("onebot:private:fixture-alias")
+	e.SessionManager.GetOrCreate("not-a-conversation")
+	e.SessionManager.GetOrCreate("mock:private:fixture-mock").MarkMock()
+	for key, value := range map[string]string{
+		proactive.AwarenessPrivateWhitelistEnabled: "true", proactive.AwarenessPrivateWhitelist: "fixture-listed,telegram:fixture-listed",
+		proactive.AwarenessGroupWhitelistEnabled: "false", proactive.AwarenessGroupWhitelist: "fixture-unlisted",
+	} {
+		if err := config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates := service.candidates()
+	for _, id := range []string{"private:fixture-observed", "group:fixture-group", "discord:private:fixture-discord", "private:fixture-alias", "private:fixture-listed", "telegram:private:fixture-listed"} {
+		if _, ok := candidates[id]; !ok {
+			t.Fatalf("lost candidate %s", id)
+		}
+	}
+	if _, ok := candidates["group:fixture-unlisted"]; ok {
+		t.Fatal("disabled whitelist fabricated an unobserved target")
+	}
+	if _, ok := candidates["mock:private:fixture-mock"]; ok {
+		t.Fatal("included browser mock")
+	}
+	if candidates["group:fixture-group"].AdapterID != "astrbot" {
+		t.Fatal("lost observed adapter preference")
+	}
+	reloaded := &AwarenessService{Engine: e}
+	reloaded.CarryFrom(service)
+	if reloaded.candidates()["group:fixture-group"].AdapterID != "astrbot" {
+		t.Fatal("reload lost route")
+	}
+	reloaded.CarryFrom(nil)
+	reloaded.CarryFrom(reloaded)
+}
+
+func TestAwarenessWorkerRestoresPersistedGroups(t *testing.T) {
+	e, service, config, _ := awarenessFixture(t)
+	e.GroupManager = memory.NewGroupManager(t.TempDir(), e.Scope)
+	store, err := e.GroupManager.GetGroupStoreForPlatform("fixture-platform", "fixture-persisted-group")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateGroupName("Persistent den"); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		proactive.AwarenessInterval: "0.001m - 0.001m", proactive.AwarenessPrivateWhitelistEnabled: "true",
+	} {
+		if err := config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sent := make(chan AwarenessTarget, 4)
+	service.Resolve = func(target AwarenessTarget) (AwarenessSender, bool) {
+		return func(_ context.Context, target AwarenessTarget, _ []proactive.AwarenessMessage, _ *SessionTurn) error {
+			sent <- target
+			return nil
+		}, true
+	}
+	e.Provider = injectionProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+		return finalInjection("A shared topic"), nil
+	})
+	ctx, cancel := context.WithCancel(e.Context())
+	defer cancel()
+	done := make(chan struct{})
+	e.Go(func() { defer close(done); service.Run(ctx) })
+	select {
+	case target := <-sent:
+		if target.Kind != "group" || target.ID != "fixture-persisted-group" {
+			t.Fatalf("wrong restored target: %+v", target)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("persisted group was not scheduled")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop")
+	}
+}
