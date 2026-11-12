@@ -35,6 +35,13 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
+	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},
+	proactive.AwarenessPrivateWhitelistEnabled: {"主动感知是否仅对私聊白名单生效", false, false, false},
+	proactive.AwarenessPrivateWhitelist:        {"主动感知私聊用户白名单", false, false, false},
+	proactive.AwarenessGroupWhitelistEnabled:   {"主动感知是否仅对群聊白名单生效", false, false, false},
+	proactive.AwarenessGroupWhitelist:          {"主动感知群聊白名单", false, false, false},
+
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
@@ -705,6 +712,14 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 func validateUpdate(key, value string) error {
+	if key == proactive.AwarenessInterval {
+		if _, _, err := proactive.ParseAwarenessInterval(value); err != nil {
+			return err
+		}
+	}
+	if (key == proactive.AwarenessEnabled || key == proactive.AwarenessPrivateWhitelistEnabled || key == proactive.AwarenessGroupWhitelistEnabled) && value != "" && value != "true" && value != "false" {
+		return errors.New("主动感知开关必须为 true 或 false")
+	}
 	if key == "ENABLE_MULTI_SEGMENT_REPLY" && value != "" && value != "true" && value != "false" {
 		return errors.New("允许多段回复必须为 true 或 false")
 	}

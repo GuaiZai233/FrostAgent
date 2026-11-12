@@ -166,6 +166,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 			r.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
 			r.Engine.MemoryEmbeddings.CarryIndexesFrom(old.Engine.MemoryEmbeddings)
 			old.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
+			r.Engine.Awareness.CarryFrom(old.Engine.Awareness)
 		}
 		i.mu.Lock()
 		i.runtime, i.config = r, c
@@ -200,6 +201,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 		fallback.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
 		fallback.Engine.MemoryEmbeddings.CarryIndexesFrom(old.Engine.MemoryEmbeddings)
 		old.Engine.SessionManager.TransferSessionsTo(fallback.Engine.SessionManager)
+		fallback.Engine.Awareness.CarryFrom(old.Engine.Awareness)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = fallback, fallbackConfig

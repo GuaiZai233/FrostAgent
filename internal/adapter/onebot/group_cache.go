@@ -50,6 +50,9 @@ func (c *wsConnection) groupName(groupID int64) string {
 	if cached, ok := c.groupCache[groupID]; ok {
 		if now.Before(cached.ExpiresAt) {
 			c.groupMu.Unlock()
+			if cached.Name == "" {
+				return fallback
+			}
 			return cached.Name
 		}
 		if cached.Name != "" {

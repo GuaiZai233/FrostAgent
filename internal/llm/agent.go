@@ -131,6 +131,7 @@ type Engine struct {
 	VisionProvider         core.LLMProvider
 	SessionManager         *SessionManager // 会话上下文管理器
 	Dispatcher             core.MessageDispatcher
+	Awareness              *AwarenessService
 	StartedAt              time.Time // 引擎启动时间
 	Version                string    // 版本号
 	TotalMessagesProcessed atomic.Int64
@@ -335,7 +336,7 @@ func (e *Engine) RunMessagesWithContext(
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
 
-	if len(messages) == 0 || messages[0].Role != "system" {
+	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
 		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
@@ -915,8 +916,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			for _, t := range modelTools {
 				if e.isToolAllowedForProactive(t.Name) {
 					if t.Name == "send_message" {
-						t.Description = proactive.SpecificReplyDescription
-						t.Parameters = proactive.SpecificReplyParameters()
+						if runCtx.Awareness {
+							t.Description = "Send text and native mentions to the current conversation. No triggering message exists. Only known current-group member IDs may be mentioned; session changes, quotes, media and files are unavailable."
+							t.Parameters = proactive.AwarenessParameters()
+						} else {
+							t.Description = proactive.SpecificReplyDescription
+							t.Parameters = proactive.SpecificReplyParameters()
+						}
 					}
 					proactiveTools = append(proactiveTools, t)
 				}
@@ -1266,7 +1272,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					specificReplyCalls++
 				}
 				if !e.isToolAllowedForProactive(tc.Function.Name) ||
-					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactive.IsSpecificReply(tc.Function.Arguments))) {
+					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactiveSendAllowed(runCtx, tc.Function.Arguments))) {
 					e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复批次包含禁止的工具调用 [%s]，整批静默终止", tc.Function.Name), "主动回复禁止副作用工具")
 					// After a confirmed send, finish as a tool-only answer so the
 					// adapters retain public history without sending anything else.
