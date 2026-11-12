@@ -17,6 +17,8 @@ type Tool struct {
 	disabledError  error
 	// configured gates model discovery; stale calls retain executor-specific feedback.
 	configured func() bool
+	// legacySettings lists retired names whose persisted disables can be cleared.
+	legacySettings map[string]string
 	// proactiveAllowed marks tools permitted during an unaddressed proactive
 	// turn. send_message additionally requires the engine's narrow reply gate.
 	proactiveAllowed bool
@@ -39,6 +41,11 @@ func (t Tool) Name() string {
 
 func (t Tool) Description() string {
 	return t.description
+}
+
+// LegacyToolSettings exposes recovery metadata without registering executors.
+func (t Tool) LegacyToolSettings() map[string]string {
+	return t.legacySettings
 }
 
 func (t Tool) Parameters() map[string]any {

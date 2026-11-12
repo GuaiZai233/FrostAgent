@@ -130,14 +130,14 @@ type disablingActionsCatProvider struct {
 func (p *disablingActionsCatProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	p.round++
 	if p.round == 1 {
-		if len(req.Tools) != 1 || req.Tools[0].Name != "actionscat_list_actions" {
+		if len(req.Tools) != 1 || req.Tools[0].Name != "actionscat" {
 			p.t.Fatalf("initial tools = %v", req.Tools)
 		}
 		if err := p.scope.Config.Update("ACTIONSCAT_ENABLED", "false", false); err != nil {
 			p.t.Fatal(err)
 		}
 		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
-			ID: "stale-call", Type: "function", Function: core.ToolCallFunction{Name: "actionscat_list_actions", Arguments: "{}"},
+			ID: "stale-call", Type: "function", Function: core.ToolCallFunction{Name: "actionscat", Arguments: `{"action":"list_actions"}`},
 		}}}}, nil
 	}
 	if len(req.Tools) != 0 {
@@ -159,7 +159,7 @@ func (p *disablingActionsCatProvider) Chat(ctx context.Context, req core.ChatReq
 
 func TestActionsCatDisableDuringModelCallRejectsStaleCall(t *testing.T) {
 	scope := newTestScope(t, map[string]string{"ACTIONSCAT_ENDPOINT": "http://actionscat.example"})
-	tool := ActionsCatListActionsTool(actionscat.New(scope.Getenv))
+	tool := ActionsCatTool(actionscat.New(scope.Getenv), scope)
 	provider := &disablingActionsCatProvider{t: t, scope: scope}
 	engine := &llm.Engine{
 		Scope: scope, MaxIterations: 3, Provider: provider,

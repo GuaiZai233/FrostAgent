@@ -188,18 +188,21 @@ func TestSQLActionsCatDraftVisibilityKeepsRunningRuntime(t *testing.T) {
 		count := 0
 		for _, tool := range runtime.Engine.ModelTools() {
 			if strings.HasPrefix(tool.Name, "actionscat_") {
+				t.Fatalf("legacy ActionsCat tool still exposed: %s", tool.Name)
+			}
+			if tool.Name == "actionscat" {
 				count++
 			}
 		}
 		want := 0
 		if step.enabled && step.configured {
-			want = 16
+			want = 1
 		}
 		if count != want {
 			t.Fatalf("enabled=%v configured=%v exposes %d ActionsCat tools, want %d", step.enabled, step.configured, count, want)
 		}
 		if !step.enabled {
-			_, err := runtime.Engine.ToolRegistry["actionscat_list_actions"].Execute("{}")
+			_, err := runtime.Engine.ToolRegistry["actionscat"].Execute("{}")
 			if !errors.Is(err, actionscat.ErrDisabled) {
 				t.Fatalf("retained tool did not reject disabled call: %v", err)
 			}
