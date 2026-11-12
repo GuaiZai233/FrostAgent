@@ -8,20 +8,32 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     // fallback to execCommand
   }
 
+  const previousFocus = document.activeElement as HTMLElement | null;
+  const textArea = document.createElement('textarea');
   try {
-    const textArea = document.createElement('textarea');
     textArea.value = text;
+    textArea.readOnly = true;
     textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    textArea.style.top = '-999999px';
+    textArea.style.left = '0';
+    textArea.style.top = '0';
     textArea.style.opacity = '0';
-    document.body.appendChild(textArea);
-    textArea.focus();
+    textArea.setAttribute('aria-hidden', 'true');
+
+    // Elements outside a modal dialog are inert and cannot receive selection.
+    const dialogs = document.querySelectorAll('dialog[open]');
+    const host =
+      previousFocus?.closest('dialog[open]') ??
+      dialogs[dialogs.length - 1] ??
+      document.body;
+    host.appendChild(textArea);
+    textArea.focus({ preventScroll: true });
     textArea.select();
-    const success = document.execCommand('copy');
-    textArea.remove();
-    return success;
+    return document.execCommand('copy');
   } catch {
     return false;
+  } finally {
+    textArea.remove();
+    if (previousFocus?.isConnected)
+      previousFocus.focus({ preventScroll: true });
   }
 }
