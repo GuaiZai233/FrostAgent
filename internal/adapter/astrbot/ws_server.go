@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/botloop"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/chatflow"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
@@ -89,6 +90,8 @@ type deliveryReceipt struct {
 type wsConn struct {
 	*runtimescope.Scope
 	conn              *websocket.Conn
+	nativeSend        chatflow.Sender
+	transportID       string
 	generation        string
 	inFlight          sync.WaitGroup
 	closed            atomic.Bool
@@ -153,9 +156,21 @@ func (c *wsConn) WriteJSON(v any) error {
 }
 
 func (c *wsConn) writeTurnJSON(v any, turn *llm.SessionTurn) error {
+	if c.nativeSend != nil {
+		if c.isClosed() {
+			return errors.New("connection closed")
+		}
+		action, ok := v.(Action)
+		if !ok {
+			return errors.New("unsupported in-process delivery")
+		}
+		action = action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
+		return turn.WithAuthority(func() error { return c.deliverNative(action, turn) })
+	}
+
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.conn == nil || c.isClosed() {
+	if (c.conn == nil && c.nativeSend == nil) || c.isClosed() {
 		return errors.New("connection closed")
 	}
 
@@ -218,6 +233,9 @@ func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionT
 }
 
 func (c *wsConn) writeActionAndWaitTurn(action Action, turn *llm.SessionTurn, timeout time.Duration, description string) error {
+	if c.nativeSend != nil {
+		return c.writeTurnJSON(action, turn)
+	}
 	action.DeliveryID = fmt.Sprintf("delivery_%d", atomic.AddUint64(&nextDeliveryID, 1))
 	receipts := make(chan deliveryReceipt, 1)
 	c.pendingDeliveries.Store(action.DeliveryID, receipts)
@@ -1402,6 +1420,19 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				sendErr = conn.writeTurnJSON(action, turn)
 			}
 			if sendErr != nil {
+				var partial *chatflow.DeliveryError
+				if errors.As(sendErr, &partial) && (partial.Confirmed || partial.DeliveredText != "") {
+					deliveries.NoteConfirmed()
+					deliveries.Record(partial.DeliveredText, func(live bool) {
+						if event.MessageType == "group" && !conn.mock {
+							ownerTurn := turn
+							if !live || isProactiveReply(&event) {
+								ownerTurn = nil
+							}
+							stageAssistantGroupMessage(session, engine, partial.DeliveredText, event.MessageID, ownerTurn)
+						}
+					})
+				}
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot SendHook: 发送消息失败: %v", sendErr))
 				return sendErr
 			}
@@ -1424,7 +1455,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		var runCtx context.Context
-		if conn != nil && conn.mock {
+		if conn != nil && (conn.mock || conn.nativeSend != nil) {
 			runCtx = conn.Context()
 		}
 		stopThinking := conn.startThinkingStatus(event, engine, turn)
@@ -1440,7 +1471,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: event.MessageID, SenderID: event.UserID},
 			ActorPlatform:     securityPlatform,
-			AdapterID:         "astrbot",
+			AdapterID:         conn.adapterID(),
 			InstanceID:        engine.InstanceID,
 			SendHook:          sendHook,
 			CanReplyToMessage: canReplyToMessage,
@@ -1642,6 +1673,11 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 				// Only the first segment of a turn carries the reply/@ decoration.
 				sendErr = sendReplyPart(event, conn, part, !last, index == 0, turn)
 				if sendErr != nil {
+					var partial *chatflow.DeliveryError
+					if errors.As(sendErr, &partial) && partial.DeliveredText != "" && index < len(replyParts) {
+						delivered = append(delivered, partial.DeliveredText)
+						deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)
+					}
 					break
 				}
 				if index < len(replyParts) {

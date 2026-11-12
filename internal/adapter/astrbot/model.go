@@ -39,6 +39,7 @@ type Event struct {
 	StickerDeliveryReceipt bool              `json:"sticker_delivery_receipt,omitempty"`
 	botLoopSoft            bool
 	proactiveStickerOnly   bool
+	nativeQuotes           []astrBotQuoteNode
 }
 
 // ActionMessage represents one ordered component in an outbound AstrBot message chain.

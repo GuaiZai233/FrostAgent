@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/chatflow"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/telegram"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
@@ -55,6 +57,7 @@ type Runtime struct {
 	Handler        http.Handler
 	Onebot         *onebot.Adapter
 	Astrbot        *astrbot.Adapter
+	Telegram       *telegram.Adapter
 	backgroundOnce sync.Once
 	onebotClient   bool
 	astrbotClient  bool
@@ -69,7 +72,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	onebotConnection, onebotError := wsclient.Load(config.Get, "ONEBOT")
 	astrbotConnection, astrbotError := wsclient.Load(config.Get, "ASTRBOT")
+	telegramConfig, telegramError := telegram.Load(config.Get)
 	if enabled {
+		if telegramError != nil {
+			return nil, fmt.Errorf("Telegram connection: %w", telegramError)
+		}
 		if onebotError != nil {
 			return nil, fmt.Errorf("OneBot connection: %w", onebotError)
 		}
@@ -480,6 +487,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.Handle("/api/v1/actionscat/", actionsCatSvc)
 	mux.Handle("/api/v1/actionscat", actionsCatSvc)
 
+	tg := telegram.NewAdapter(telegramConfig, func(sender chatflow.Sender) chatflow.Processor {
+		return astrbot.NewConversation(engine, "telegram", sender, actionsCatClient)
+	}, logger)
+	tg.SetStickerStore(stickerStore)
+	dispatcher.RegisterAdapter(tg)
 	ob := onebot.NewAdapter(engine)
 	ab := astrbot.NewAdapter(engine)
 	ob.ConfigureConnection(onebotConnection)
@@ -496,6 +508,11 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			return ob.SendAwareness, ob.AwarenessReady()
 		case "astrbot":
 			return ab.SendAwareness, ab.AwarenessReady()
+		case "telegram":
+			return tg.SendAwareness, tg.Ready()
+		}
+		if target.Platform == "telegram" && telegramConfig.Enabled {
+			return tg.SendAwareness, tg.Ready()
 		}
 		if !memory.IsQQPlatform(target.Platform) {
 			return ab.SendAwareness, ab.AwarenessReady()
@@ -526,6 +543,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			}
 			if ab.ConnectionCount() > 0 {
 				platforms = append(platforms, "astrbot")
+			}
+			if tg.Ready() {
+				platforms = append(platforms, "telegram")
 			}
 			return platforms
 		},
@@ -564,7 +584,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	success = true
 	return &Runtime{
-		Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab,
+		Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab, Telegram: tg,
 		onebotClient:  !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
 		astrbotClient: !astrbotConnection.Disabled && astrbotConnection.Mode == wsclient.Forward,
 	}, nil
@@ -578,6 +598,9 @@ func (r *Runtime) StartBackground() {
 	}
 	r.backgroundOnce.Do(func() {
 		r.StartEmbeddings()
+		if r.Telegram != nil {
+			r.Scope.Go(func() { r.Telegram.Run(r.Scope.Context()) })
+		}
 		if r.Engine.Awareness != nil {
 			r.Scope.Go(func() { r.Engine.Awareness.Run(r.Scope.Context()) })
 		}
@@ -597,6 +620,9 @@ func (r *Runtime) StartEmbeddings() {
 
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
+	if r.Telegram != nil {
+		r.Telegram.Close()
+	}
 	r.Onebot.CloseConnections()
 	r.Astrbot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()
