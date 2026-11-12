@@ -39,19 +39,12 @@ func (c *wsConnection) groupName(groupID int64) string {
 
 	now := time.Now()
 	fallback := ""
-	if c.engine != nil && c.engine.GroupManager != nil {
-		if store, err := c.engine.GroupManager.GetGroupStore(fmt.Sprint(groupID)); err == nil {
-			if profile, err := store.GetProfile(); err == nil {
-				fallback = profile.GroupName
-			}
-		}
-	}
 	c.groupMu.Lock()
 	if cached, ok := c.groupCache[groupID]; ok {
 		if now.Before(cached.ExpiresAt) {
 			c.groupMu.Unlock()
 			if cached.Name == "" {
-				return fallback
+				return c.persistedGroupName(groupID)
 			}
 			return cached.Name
 		}
@@ -64,6 +57,9 @@ func (c *wsConnection) groupName(groupID int64) string {
 		pending, exists := c.pendingGroupByEcho[echo]
 		if exists && now.Sub(pending.RequestedAt) < groupInfoPendingTTL {
 			c.groupMu.Unlock()
+			if fallback == "" {
+				return c.persistedGroupName(groupID)
+			}
 			return fallback
 		}
 		delete(c.pendingGroupByID, groupID)
@@ -78,6 +74,9 @@ func (c *wsConnection) groupName(groupID int64) string {
 		RequestedAt: now,
 	}
 	c.groupMu.Unlock()
+	if fallback == "" {
+		fallback = c.persistedGroupName(groupID)
+	}
 
 	actionBytes, err := json.Marshal(model.OneBotAction{
 		Action: "get_group_info",
@@ -97,6 +96,19 @@ func (c *wsConnection) groupName(groupID int64) string {
 		c.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送群信息查询失败 group=%d: %v", groupID, err))
 	}
 	return fallback
+}
+
+// Read durable state only when no usable connection cache exists. A warm cache
+// must not turn every incoming group message into a database/profile read.
+func (c *wsConnection) persistedGroupName(groupID int64) string {
+	if c.engine != nil && c.engine.GroupManager != nil {
+		if store, err := c.engine.GroupManager.GetGroupStore(fmt.Sprint(groupID)); err == nil {
+			if profile, err := store.GetProfile(); err == nil {
+				return profile.GroupName
+			}
+		}
+	}
+	return ""
 }
 
 // cachedGroupName returns the cached group name if valid without triggering a network request.
