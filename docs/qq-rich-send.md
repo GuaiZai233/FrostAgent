@@ -5,7 +5,9 @@ FrostAgent 原生提供 QQ 消息组件和互动操作，通过当前对话绑�
 
 ## 工具入口
 
-普通消息继续使用 `send_message`。扩展能力共用一个 `qq_extend_messages` 工具：
+`send_message` 仅接收基础消息组件：文字、图片、语音、视频、文件、@用户、引用与
+`mention_specific` 定向回复，目标固定为当前会话。基础媒体保留原有发送与回执链路。
+QQ 富组件、媒体增强字段、转发、互动与白名单跨会话发送统一使用 `qq_extend_messages`：
 
 ```json
 {"action":"discover"}
@@ -22,7 +24,10 @@ FrostAgent 原生提供 QQ 消息组件和互动操作，通过当前对话绑�
 
 ## 消息组件
 
-`send_message.messages` 或 `qq_extend_messages(action=send).arguments.messages` 接受以下组件。
+`qq_extend_messages(action=send).arguments.messages` 接受以下组件。
+其中基础文字、媒体、@与引用也可用于扩展消息的组合或白名单跨群发送。
+`mention_specific` 仅属于 `send_message`。QQ 扩展类型和下述媒体增强字段不会重复
+出现在 `send_message` 的参数定义中；通过基础入口传入会被拒绝并提示使用扩展工具。
 ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测。
 
 | type | 常用字段 | 含义 |
@@ -50,6 +55,9 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 链接、图片、音乐卡片中的外部 URL 仅接受 HTTP(S)。不开放任意 JSON/XML 卡片透传。
 
 ### 媒体增强字段
+
+以下 `name/summary/thumb/folder_id/transfer` 字段仅在扩展入口使用。
+`is_sticker` 保留为两个入口均支持的基础图片标记。
 
 | 字段 | 适用类型 | 含义 |
 | --- | --- | --- |

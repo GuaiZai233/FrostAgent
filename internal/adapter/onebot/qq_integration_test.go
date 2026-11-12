@@ -18,8 +18,12 @@ import (
 )
 
 func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
-	for _, rejectFile := range []bool{false, true} {
-		t.Run(fmt.Sprint(rejectFile), func(t *testing.T) {
+	for _, tc := range []struct {
+		tool       string
+		rejectFile bool
+	}{{qqextend.ToolName, false}, {qqextend.ToolName, true}, {"send_message", false}, {"send_message", true}} {
+		t.Run(fmt.Sprintf("%s/reject=%v", tc.tool, tc.rejectFile), func(t *testing.T) {
+			rejectFile := tc.rejectFile
 			finished := make(chan struct{})
 			providerCalls := 0
 			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
@@ -27,7 +31,11 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 				message := core.ChatMessage{Role: core.RoleAssistant}
 				switch providerCalls {
 				case 1:
-					message.ToolCalls = []core.ToolCall{{ID: "send-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq_extend_messages", Arguments: `{"action":"send","arguments":{"messages":[{"type":"plain","text":"prefix"},{"type":"file","url":"https://example.invalid/file","name":"fixture.txt"},{"type":"plain","text":"suffix"}]}}`}}}
+					args := `{"action":"send","arguments":{"messages":[{"type":"plain","text":"prefix"},{"type":"file","url":"https://example.invalid/file","name":"fixture.txt"},{"type":"plain","text":"suffix"}]}}`
+					if tc.tool == "send_message" {
+						args = `{"messages":[{"type":"plain","text":"prefix"},{"type":"file","url":"https://example.invalid/file"},{"type":"plain","text":"suffix"}]}`
+					}
+					message.ToolCalls = []core.ToolCall{{ID: "send-fixture", Type: "function", Function: core.ToolCallFunction{Name: tc.tool, Arguments: args}}}
 				case 2:
 					result, _ := req.Messages[len(req.Messages)-1].Content.(string)
 					items := qqItems(t, result)
@@ -58,6 +66,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 			}}
 			engine := newTestEngine(provider)
 			engine.ToolRegistry["qq_extend_messages"] = tools.QQTool()
+			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 			srv, address := startWSTestServer(engine)
 			defer srv.Close()
 			ws, _, err := websocket.DefaultDialer.Dial(address, nil)

@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"path/filepath"
 )
 
@@ -131,13 +132,52 @@ func TestQQRejectsMissingAdapterProactiveAndMock(t *testing.T) {
 	}
 }
 
-func TestQQSendMessageUsesDeferredNativeDelivery(t *testing.T) {
-	result, err := SendMsgTool().ExecuteResult(qqTestContext(), `{"messages":[{"type":"plain","text":"hello"},{"type":"face","data":{"id":"14"}}]}`)
-	if err != nil || result.PlatformActionPayload == "" || result.MessagePayload != "" {
-		t.Fatalf("native preparation: %+v %v", result, err)
+func TestSendMessageRejectsQQExtensions(t *testing.T) {
+	t.Setenv(sticker.ActivityEnvKey, "1")
+	tool := SendMsgTool()
+	for _, message := range []string{
+		`{"type":"face","data":{"id":"14"}}`,
+		`{"type":"dice"}`, `{"type":"rps"}`, `{"type":"mention_all"}`,
+		`{"type":"contact","data":{"type":"group","id":"42"}}`,
+		`{"type":"music","data":{"type":"qq","id":"fixture-song"}}`,
+		`{"type":"share","data":{"url":"https://example.invalid","title":"fixture"}}`,
+		`{"type":"location","data":{"lat":0,"lon":0}}`,
+		`{"type":"mface","message_id":"101"}`,
+		`{"type":"file","url":"https://example.invalid/file","name":"fixture.txt"}`,
+		`{"type":"file","url":"https://example.invalid/file","folder_id":"fixture"}`,
+		`{"type":"video","url":"https://example.invalid/video","thumb":"https://example.invalid/thumb"}`,
+		`{"type":"image","url":"https://example.invalid/image","summary":"fixture"}`,
+		`{"type":"image","url":"https://example.invalid/image","transfer":"inline"}`,
+		`{"type":"image","url":"https://example.invalid/image","data":null}`,
+		`{"type":"image","url":"https://example.invalid/image","sticker_index":0}`,
+	} {
+		args := `{"messages":[` + message + `]}`
+		result, err := tool.ExecuteResult(qqTestContext(), args)
+		if err == nil || !strings.Contains(err.Error(), qqextend.ToolName) || result.MessagePayload != "" || result.PlatformActionPayload != "" {
+			t.Fatalf("extension accepted by basic tool: %s -> %+v %v", args, result, err)
+		}
+		result, err = QQTool().ExecuteResult(qqTestContext(), `{"action":"send","arguments":`+args+`}`)
+		// Bare data/sticker_index on an image are rejected by the basic boundary
+		// even when their zero values have no effect in the extension tool.
+		if err != nil || result.PlatformActionPayload == "" {
+			t.Fatalf("extension unavailable through dedicated tool: %s -> %+v %v", args, result, err)
+		}
 	}
-	if !strings.Contains(result.PlatformActionPayload, `"action":"send"`) {
-		t.Fatal(result.PlatformActionPayload)
+}
+
+func TestSendMessageKeepsBasicMediaDelivery(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		ctx := context.Background()
+		if native {
+			ctx = qqTestContext()
+		}
+		for _, kind := range []string{"image", "record", "video", "file"} {
+			args := `{"messages":[{"type":"plain","text":"fixture"},{"type":"` + kind + `","url":"https://example.invalid/media"}]}`
+			result, err := SendMsgTool().ExecuteResult(ctx, args)
+			if err != nil || (result.PlatformActionPayload != "") != native || (result.MessagePayload != "") == native {
+				t.Fatalf("basic %s route changed (native=%v): %+v %v", kind, native, result, err)
+			}
+		}
 	}
 }
 

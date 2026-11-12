@@ -48,7 +48,7 @@ const nativeMentionExample = `{"messages":[{"type":"mention_user","mention_user_
 func SendMsgTool() Tool {
 	return Tool{
 		name:             "send_message",
-		description:      "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Omit session for mention_specific. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
+		description:      "Send a basic ordered message chain to the active conversation. Use this tool for media, quotes, proactive messages, or platform-native user mentions. QQ rich components, enhanced media options, forwarding, interactions and cross-session sends use qq_extend_messages; discover its parameters when needed. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
 		proactiveAllowed: true,
 		//json schema
 		parameter: map[string]any{
@@ -63,7 +63,7 @@ func SendMsgTool() Tool {
 						"properties": map[string]any{
 							"type": map[string]any{
 								"type":        "string",
-								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote", "mention_specific", "face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface"},
+								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote", "mention_specific"},
 								"description": "The component type. Use `mention_user` for a platform-native user mention.",
 							},
 							"text": map[string]any{
@@ -72,7 +72,7 @@ func SendMsgTool() Tool {
 							},
 							"path": map[string]any{
 								"type":        "string",
-								"description": "The local or sandbox file path required for media/file types.",
+								"description": "A media/file path readable by the delivery adapter. Isolated sandbox paths are not fetched automatically.",
 							},
 							"url": map[string]any{
 								"type":        "string",
@@ -86,20 +86,11 @@ func SendMsgTool() Tool {
 								"type":        "string",
 								"description": "The exact trusted message ID to quote/reply to (required for `quote` or `mention_specific`). mention_specific must be the first component and targets only the active conversation.",
 							},
-							"data":          map[string]any{"type": "object", "description": "Native QQ component fields. Inspect qq_extend_messages(action=discover, capability=send) for fields and rich media options."},
-							"name":          map[string]any{"type": "string", "description": "Displayed media filename."},
-							"folder_id":     map[string]any{"type": "string", "description": "Destination group-file folder."},
-							"thumb":         map[string]any{"type": "string", "description": "Video thumbnail path or URL."},
-							"summary":       map[string]any{"type": "string", "description": "Image preview description."},
-							"transfer":      map[string]any{"type": "string", "enum": []string{"auto", "shared", "inline"}},
-							"sticker_index": map[string]any{"type": "integer", "minimum": 0, "description": "Zero-based market sticker index in a trusted source message for type=mface."},
+							"is_sticker": map[string]any{"type": "boolean", "description": "Mark an image as a sticker."},
 						},
-						"required": []string{"type"},
+						"required":             []string{"type"},
+						"additionalProperties": false,
 					},
-				},
-				"session": map[string]any{
-					"type":        "string",
-					"description": "Target session identifier (format: 'platform_id:message_type:session_id'). Omit to default to the active session.",
 				},
 			},
 			"required": []string{"messages"},
@@ -125,11 +116,17 @@ func SendMsgTool() Tool {
 			if len(payload.Messages) == 0 {
 				return textResult(""), fmt.Errorf("send_message 至少需要一条 messages")
 			}
+			if payload.Session != "" {
+				return textResult(""), fmt.Errorf("send_message 仅发送到当前会话；发送到白名单群请使用 qq_extend_messages 的 target_group_id")
+			}
+			if err := validateBasicMessageFields(args); err != nil {
+				return textResult(""), err
+			}
 			// This internal delivery flag is derived here, not accepted from the model.
 			payload.SuppressAutoMention = false
 
 			for i, msg := range payload.Messages {
-				if (msg.IsSticker || msg.Type == "mface") && sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
+				if msg.IsSticker && sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
 					return textResult(`{"error":"表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"}`), nil
 				}
 				switch msg.Type {
@@ -166,15 +163,11 @@ func SendMsgTool() Tool {
 					if strings.TrimSpace(msg.Path) == "" && strings.TrimSpace(msg.URL) == "" {
 						return textResult(""), fmt.Errorf("messages[%d] 需要 path 或 url", i)
 					}
-				case "face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface":
-					if err := validateQQComponent(msg); err != nil {
-						return textResult(""), err
-					}
 				default:
-					return textResult(""), fmt.Errorf("messages[%d].type 不支持: %s", i, msg.Type)
+					return textResult(""), fmt.Errorf("send_message 不支持 messages[%d].type=%s；QQ 扩展组件请使用 qq_extend_messages", i, msg.Type)
 				}
 			}
-			if NeedsQQDelivery(payload.Messages) || run.PlatformActionHook != nil && hasQQMedia(payload.Messages) {
+			if run.PlatformActionHook != nil && hasQQMedia(payload.Messages) {
 				if run.Proactive || run.Mock || run.PlatformActionHook == nil || payload.Session != "" {
 					return textResult(""), fmt.Errorf("QQ 富消息需要当前活动 OneBot 会话")
 				}
@@ -192,6 +185,30 @@ func SendMsgTool() Tool {
 			return core.ToolExecutionResult{Content: string(normalized), MessagePayload: string(normalized)}, nil
 		},
 	}
+}
+
+// Msg is shared with QQ extensions; keep the public basic input boundary narrow.
+func validateBasicMessageFields(raw string) error {
+	var input struct {
+		Messages      []map[string]json.RawMessage `json:"messages"`
+		TargetGroupID json.RawMessage              `json:"target_group_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		return err
+	}
+	if input.TargetGroupID != nil {
+		return fmt.Errorf("target_group_id 请通过 qq_extend_messages 指定")
+	}
+	for i, message := range input.Messages {
+		for field := range message {
+			switch field {
+			case "type", "text", "mention_user_id", "message_id", "path", "url", "is_sticker":
+			default:
+				return fmt.Errorf("send_message 不支持 messages[%d].%s；QQ 扩展字段请使用 qq_extend_messages", i, field)
+			}
+		}
+	}
+	return nil
 }
 
 func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
