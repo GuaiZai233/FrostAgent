@@ -115,3 +115,95 @@ func TestMessageGuidanceRefreshAndTrace(t *testing.T) {
 		t.Fatal("missing guidance without skills")
 	}
 }
+
+func TestMessageGuidancePreservesCustomSystemPrompts(t *testing.T) {
+	for _, source := range []string{"configured", "caller"} {
+		for _, tc := range []struct{ name, content string }{
+			{"same prefix", messageGuidancePrefix + "Custom instructions must be preserved."},
+			{"appended instructions", messageGuidance(3) + "\nAdditional custom instructions must be preserved."},
+		} {
+			t.Run(source+"/"+tc.name, func(t *testing.T) {
+				custom := tc.content
+				config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := config.Update("SYSTEM_PROMPT", custom, false); err != nil {
+					t.Fatal(err)
+				}
+				provider := &mockTraceProvider{}
+				engine := &Engine{Scope: runtimescope.New(config, nil, nil), Provider: provider, MaxIterations: 1}
+				defer func() { engine.Scope.Cancel(); engine.Scope.Wait() }()
+				for _, limit := range []string{"0", "3", "5", "1"} {
+					for _, enabled := range []bool{true, false} {
+						if err := config.Update(replyformat.EnvKey, fmt.Sprint(enabled), false); err != nil {
+							t.Fatal(err)
+						}
+						if err := config.Update(replyformat.LimitEnvKey, limit, false); err != nil {
+							t.Fatal(err)
+						}
+						messages := []ChatMessage{{Role: "user", Content: "hello"}}
+						if source == "caller" {
+							messages = append([]ChatMessage{{Role: "system", Content: custom}}, messages...)
+						}
+						result := engine.RunMessagesWithContext(messages, RunContext{})
+						if result.Error != nil {
+							t.Fatal(result.Error)
+						}
+						request := provider.lastRequest.Messages
+						if len(request) == 0 || request[0].Role != "system" || request[0].Content != custom {
+							t.Fatalf("enabled=%v limit=%s: custom prompt lost: %+v", enabled, limit, request)
+						}
+						wantCount := 2
+						if enabled && limit != "1" {
+							wantCount++
+							if request[1].Role != "system" || request[1].Content != messageGuidance(replyformat.ParseLimit(limit)) {
+								t.Fatalf("enabled=%v limit=%s: missing current guidance: %+v", enabled, limit, request)
+							}
+						}
+						if len(request) != wantCount {
+							t.Fatalf("enabled=%v limit=%s: message count=%d want=%d", enabled, limit, len(request), wantCount)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestMessageGuidanceReplacesAllGeneratedLimits(t *testing.T) {
+	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{Scope: runtimescope.New(config, nil, nil)}
+	defer func() { engine.Scope.Cancel(); engine.Scope.Wait() }()
+	for _, enabled := range []bool{true, false} {
+		if err := config.Update(replyformat.EnvKey, fmt.Sprint(enabled), false); err != nil {
+			t.Fatal(err)
+		}
+		if err := config.Update(replyformat.LimitEnvKey, "3", false); err != nil {
+			t.Fatal(err)
+		}
+		for oldLimit := 0; oldLimit <= replyformat.MaxSegmentLimit; oldLimit++ {
+			oldGuidance := messageGuidance(oldLimit)
+			messages := []ChatMessage{
+				{Role: "system", Content: "primary instructions"},
+				{Role: "system", Content: oldGuidance},
+				{Role: "system", Content: oldGuidance},
+				{Role: "user", Content: oldGuidance},
+			}
+			got := engine.messageGuidanceMessages(messages)
+			wantCount := 2
+			if enabled {
+				wantCount++
+			}
+			if len(got) != wantCount || got[0].Role != "system" || got[0].Content != messages[0].Content || got[len(got)-1].Role != "user" || got[len(got)-1].Content != oldGuidance {
+				t.Fatalf("enabled=%v old limit=%d: wrong replacement: %+v", enabled, oldLimit, got)
+			}
+			if enabled && (got[1].Role != "system" || got[1].Content != messageGuidance(3)) {
+				t.Fatalf("old limit=%d: missing current guidance: %+v", oldLimit, got)
+			}
+		}
+	}
+}

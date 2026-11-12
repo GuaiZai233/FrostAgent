@@ -21,13 +21,27 @@ func messageGuidance(limit int) string {
 		"</frostagent_msg_guidance>"
 }
 
+func isGeneratedMessageGuidance(content string) bool {
+	if !strings.HasPrefix(content, messageGuidancePrefix) {
+		return false
+	}
+	// Match the complete generated body for every supported limit so refreshing
+	// settings removes old guidance without discarding custom system prompts.
+	for limit := 0; limit <= replyformat.MaxSegmentLimit; limit++ {
+		if content == messageGuidance(limit) {
+			return true
+		}
+	}
+	return false
+}
+
 // messageGuidanceMessages rebuilds transient instructions on every iteration,
 // including callers supplying a system message and already-running sessions.
 func (e *Engine) messageGuidanceMessages(messages []ChatMessage) []ChatMessage {
 	result := make([]ChatMessage, 0, len(messages)+1)
 	for _, msg := range messages {
 		content, _ := msg.Content.(string)
-		if msg.Role == "system" && strings.HasPrefix(content, messageGuidancePrefix) {
+		if msg.Role == "system" && isGeneratedMessageGuidance(content) {
 			continue
 		}
 		result = append(result, msg)
