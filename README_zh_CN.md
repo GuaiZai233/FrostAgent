@@ -95,3 +95,7 @@ docker compose up -d --build
 ## 许可证
 
 MPL-2.0（见 [LICENCE](LICENCE)）
+
+## Telegram
+
+原生 Telegram Bot 接入、功能范围与部署步骤见 [Telegram 接入指南](docs/telegram.md)。

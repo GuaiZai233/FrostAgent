@@ -14,6 +14,9 @@ export type SettingField = {
 // Keep the interface labels here so internal configuration keys never become
 // the primary language of the settings page.
 export const settingFields: Record<string, SettingField> = {
+  TELEGRAM_ENABLED: { label: '启用 Telegram', group: '适配器', type: 'switch', hint: '通过官方 Bot API 接入；保存后重启实例生效' },
+  TELEGRAM_BOT_TOKEN: { label: 'Telegram Bot Token', group: '适配器', type: 'secret', hint: '由 BotFather 创建机器人后获取' },
+  TELEGRAM_PROXY_URL: { label: 'Telegram 代理地址', group: '适配器', type: 'secret', hint: '可选，支持 HTTP(S) 和 SOCKS5；留空使用系统代理' },
   LISTEN_ADDR: { label: '管理页面监听地址', group: '网络与连接', hot: true },
   WS_LISTEN_ADDR: { label: '适配器监听地址', group: '网络与连接' },
   HTTP_ALLOWED_ORIGINS: { label: '管理页面允许的跨域来源', group: '网络与连接', hot: true },

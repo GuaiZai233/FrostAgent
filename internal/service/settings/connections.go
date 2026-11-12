@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/telegram"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 )
 
@@ -35,6 +36,29 @@ func (s *Service) validateConnectionChanges(changes map[string]*string) error {
 		}
 		if _, err := wsclient.Load(get, adapter); err != nil {
 			return fmt.Errorf("%s 连接配置无效: %w", adapter, err)
+		}
+	}
+	telegramAffected := false
+	for _, key := range []string{"TELEGRAM_ENABLED", "TELEGRAM_BOT_TOKEN", "TELEGRAM_PROXY_URL"} {
+		if _, changed := changes[key]; changed {
+			telegramAffected = true
+		}
+	}
+	if telegramAffected {
+		get := func(key string) string {
+			if value, changed := changes[key]; changed {
+				if value == nil {
+					return ""
+				}
+				return *value
+			}
+			if s.config != nil {
+				return s.config.Get(key)
+			}
+			return os.Getenv(key)
+		}
+		if _, err := telegram.Load(get); err != nil {
+			return fmt.Errorf("Telegram 连接配置无效: %w", err)
 		}
 	}
 	return nil

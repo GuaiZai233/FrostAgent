@@ -25,6 +25,7 @@ var GlobalKeys = map[string]bool{
 	"SECURITY_CONTROL_MODE":     true,
 }
 var InstanceRestartKeys = map[string]bool{
+	"TELEGRAM_ENABLED": true, "TELEGRAM_BOT_TOKEN": true, "TELEGRAM_PROXY_URL": true,
 	"ONEBOT_WS_ENABLED": true, "ASTRBOT_WS_ENABLED": true,
 	"ONEBOT_WS_MODE": true, "ONEBOT_WS_URL": true, "ONEBOT_WS_TOKEN": true,
 	"ASTRBOT_WS_MODE": true, "ASTRBOT_WS_URL": true, "ASTRBOT_WS_TOKEN": true,

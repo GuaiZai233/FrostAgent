@@ -101,6 +101,12 @@ func directQuotedImageChain(event Event) []astrBotQuoteNode {
 }
 
 func (c *wsConn) lookupQuoteChain(event Event) ([]astrBotQuoteNode, bool) {
+	if c.nativeSend != nil {
+		if quotetrace.Depth(c.Scope.Getenv) == 0 {
+			return nil, false
+		}
+		return event.nativeQuotes, false
+	}
 	depth := quotetrace.Depth(c.Scope.Getenv)
 	if depth == 0 || event.Platform != astrBotQQPlatform || !quoteLookupSupported(event) {
 		return nil, true

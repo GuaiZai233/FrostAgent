@@ -21,9 +21,9 @@ func TestCreateScheduleUsesTrustedConversationDelivery(t *testing.T) {
 		drop                           bool
 	}{
 		{"onebot private", "onebot", "onebot", "", false},
-		{"astrbot group", "fixture-platform", "astrbot", "fixture-group", false},
+		{"astrbot group", "aiocqhttp", "astrbot", "fixture-group", false},
 		{"legacy nonchat", "", "", "", false},
-		{"older server", "fixture-platform", "astrbot", "fixture-group", true},
+		{"older server", "aiocqhttp", "astrbot", "fixture-group", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			captured := make(chan actionscat.CreateScheduleReq, 1)
@@ -81,6 +81,26 @@ func TestCreateScheduleUsesTrustedConversationDelivery(t *testing.T) {
 			}
 			if !tc.drop && strings.Contains(out, "未确认保存") {
 				t.Fatalf("unexpected compatibility warning: %s", out)
+			}
+		})
+	}
+}
+
+func TestActionsCatManagementQQGrantDoesNotAuthorizeTelegram(t *testing.T) {
+	scope := newTestScope(t, map[string]string{admincmd.AdminQQIDsEnv: "fixture-user"})
+	client := actionscat.New(func(string) string { return "" })
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{ActorUserID: "fixture-user", ActorPlatform: "telegram", AdapterID: "telegram"})
+	for _, tool := range []Tool{
+		ActionsCatCreateActionTool(client, scope), ActionsCatCreateVersionTool(client, scope),
+		ActionsCatBuildVersionTool(client, scope), ActionsCatActivateBuildTool(client, scope),
+		ActionsCatDeployActionTool(client, scope), ActionsCatCreateScheduleTool(client, scope),
+		ActionsCatDeleteScheduleTool(client, scope), ActionsCatCreateMatcherTool(client, scope),
+		ActionsCatDeleteMatcherTool(client, scope),
+	} {
+		t.Run(tool.Name(), func(t *testing.T) {
+			out, err := tool.ExecuteContext(ctx, `{}`)
+			if err != nil || !strings.Contains(out, "权限不足") {
+				t.Fatalf("QQ grant escaped into Telegram: %s %v", out, err)
 			}
 		})
 	}

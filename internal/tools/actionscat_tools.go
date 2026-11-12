@@ -355,7 +355,7 @@ func ActionsCatCreateActionTool(client *actionscat.Client, scopes ...*runtimesco
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 创建任务", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_create_action 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -645,7 +645,7 @@ func ActionsCatCreateVersionTool(client *actionscat.Client, scopes ...*runtimesc
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 创建版本", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_create_version 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -720,7 +720,7 @@ func ActionsCatBuildVersionTool(client *actionscat.Client, scopes ...*runtimesco
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 构建版本", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_build_version 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -947,7 +947,7 @@ func ActionsCatActivateBuildTool(client *actionscat.Client, scopes ...*runtimesc
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 激活构建", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_activate_build 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -1107,7 +1107,7 @@ func ActionsCatDeployActionTool(client *actionscat.Client, scopes ...*runtimesco
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 部署操作", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_deploy_action 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -1236,7 +1236,7 @@ func ActionsCatCreateScheduleTool(client *actionscat.Client, scopes ...*runtimes
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 创建定时触发器", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_create_schedule 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -1399,7 +1399,7 @@ func ActionsCatDeleteScheduleTool(client *actionscat.Client, scopes ...*runtimes
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 删除定时触发器", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_delete_schedule 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -1487,7 +1487,7 @@ func ActionsCatCreateMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 创建事件匹配器", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_create_matcher 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {
@@ -1663,7 +1663,7 @@ func ActionsCatDeleteMatcherTool(client *actionscat.Client, scopes ...*runtimesc
 			if runContext.Mock {
 				return "模拟会话模式下禁用 ActionsCat 删除事件匹配器", nil
 			}
-			if !admincmd.IsAdmin(runContext.ActorUserID, scopes...) {
+			if !admincmd.IsPlatformAdmin(runContext.ActorPlatform, runContext.ActorUserID, scopes...) {
 				return "权限不足: actionscat_delete_matcher 仅允许管理员 (ADMIN_QQ_IDS) 执行", nil
 			}
 			if client == nil || !client.IsConfigured() {

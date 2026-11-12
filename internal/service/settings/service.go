@@ -36,6 +36,9 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	"TELEGRAM_ENABLED":                         {"启用原生 Telegram Bot（默认 false，使用长轮询接入）", false, true, false},
+	"TELEGRAM_BOT_TOKEN":                       {"Telegram BotFather 提供的机器人 Token", true, true, false},
+	"TELEGRAM_PROXY_URL":                       {"Telegram 专用 HTTP(S) / SOCKS5 代理地址，留空使用系统代理", true, true, false},
 	qqextend.TargetGroupsKey:                   {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
 	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
 	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},

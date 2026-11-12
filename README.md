@@ -96,3 +96,7 @@ After connecting ActionsCat through an adapter, you can run both systems alongsi
 ## License
 
 MPL-2.0 (see [LICENCE](LICENCE)).
+
+## Telegram
+
+原生 Telegram Bot 接入、功能范围与部署步骤见 [Telegram 接入指南](docs/telegram.md)。

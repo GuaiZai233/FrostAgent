@@ -445,279 +445,297 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			continue
 		}
 
-		if c.mock && a.engine != nil && a.engine.SessionManager != nil {
-			// Mark at intake, before reservation, bot-loop tracking or any LLM run,
-			// so Direct Chat sessions are never observable as real sessions.
-			a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).MarkMock()
-		}
+		a.submitEvent(c, event)
+	}
+}
 
-		if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
-			normalized, accepted := a.normalizePoke(event, c.mock)
-			if !accepted {
-				_ = sendTerminalNoopWithSuppress(event, c)
-				continue
-			}
-			event = normalized
+// submitEvent is shared by the WebSocket and in-process transports. Keep
+// admission in intake order; only the admitted conversation work is asynchronous.
+func (a *Adapter) submitEvent(c *wsConn, event Event) <-chan struct{} {
+	done := make(chan struct{})
+	submitted := false
+	defer func() {
+		if !submitted {
+			close(done)
 		}
-		if handleRuntimeStatusCommand(c, event, a.engine) {
-			continue
-		}
-		if !c.mock && (event.Type == "" || event.Type == "event") &&
-			(event.EventType == "" || event.EventType == "message") &&
-			(event.MessageType == "group" || event.MessageType == "private") {
-			a.engine.RecordIncomingMessage()
-		}
-		sanitizeIngressMetadata(&event)
-		var warningNotice string
-		var botLoopObservation *llm.BotLoopObservation
-		var botLoopConfig botloop.Config
-		var botLoopMarked bool
-		var scope *runtimescope.Scope
-		if a.engine != nil {
-			scope = a.engine.Scope
-		}
-		pristineShouldReply := false
-		pristineInject := false
-		if event.MessageType == "group" || event.MessageType == "private" {
-			if event.Metadata == nil {
-				event.Metadata = make(map[string]any)
-			}
-			pristineShouldReply = shouldReply(&event, scope)
-			injectionEvent := event
-			injectionEvent.IsWake = false
-			pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
-			event.Metadata["_frostagent_should_reply"] = pristineShouldReply
-			if a.engine != nil && a.engine.SessionManager != nil &&
-				(event.Type == "" || event.Type == "event") &&
-				(event.EventType == "" || event.EventType == "message") {
-				botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
-				if botLoopConfig.Enabled() {
-					platform := event.Platform
-					if platform == "" {
-						platform = "astrbot"
-					}
-					botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
-					botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
-						event.UserID, botLoopMarked, botLoopConfig.Revision(), isBotLoopResetWake(event, scope),
-					)
-				}
-			}
-			if !c.mock && handleAdminCommand(c, event, a.engine) {
-				botLoopObservation.Finish(false, botLoopConfig.Limit())
-				continue
-			}
-		}
+	}()
+	if c.mock && a.engine != nil && a.engine.SessionManager != nil {
+		// Mark at intake, before reservation, bot-loop tracking or any LLM run,
+		// so Direct Chat sessions are never observable as real sessions.
+		a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).MarkMock()
+	}
 
-		canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
-			(event.Type == "" || event.Type == "event") &&
-			(event.EventType == "" || event.EventType == "message") &&
-			(event.MessageType == "group" || event.MessageType == "private")
-		if a.engine != nil && a.engine.Security != nil && (pristineShouldReply || canDispatch) {
-			platform := event.Platform
-			if platform == "" {
-				platform = "astrbot"
-			}
-			if c.mock {
-				platform = "mock"
-			}
-			principal, principalErr := security.NewPrincipal(platform, event.UserID)
-			if principalErr != nil {
-				botLoopObservation.Finish(false, botLoopConfig.Limit())
-				if isProactiveReply(&event) || event.pokeID != "" {
-					_ = sendTerminalNoopWithSuppress(event, c)
-				}
-				continue
-			}
-			var decision security.WatchdogDecision
-			if c.mock {
-				decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
-			} else {
-				decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
-			}
-			if security.Blocks(decision.Action) {
-				directReply := isExplicitWake(&event, scope)
-				if directReply {
-					if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
-						_ = sendTerminalNoopWithSuppress(event, c)
-						continue
-					}
-				} else {
-					botLoopObservation.Finish(false, botLoopConfig.Limit())
-				}
-				if decision.IsFailure {
-					if a.engine != nil && a.engine.Scope != nil {
-						a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
-					} else {
-						logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
-					}
-				} else {
-					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
-					if event.MessageType == "group" && decision.SanitizedContent != "" {
-						captureGroupCompactText(event, decision.SanitizedContent, a.engine)
-					}
-				}
-				if directReply {
-					summary := a.engine.Security.RejectMessage(principal, decision)
-					msg := security.ReportRejection(a.engine.Log(), summary, decision)
-					_ = sendDirectReply(event, c, msg)
-				} else if isProactiveReply(&event) || event.pokeID != "" {
-					_ = sendTerminalNoopWithSuppress(event, c)
-				}
-				continue
-			} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
-				logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
-				event.Content = decision.SanitizedContent
-				if len(event.Messages) > 0 {
-					event.Messages = []string{decision.SanitizedContent}
-				}
-			} else if decision.Action == security.WatchdogWarn {
-				warningNotice = decision.WarningNotice
-			}
-		}
-
-		var routeSnapshot *modelrouter.Snapshot
-		if a.engine != nil && a.engine.ModelRouter != nil &&
-			(event.MessageType == "group" || event.MessageType == "private") {
-			routeSnapshot = a.engine.ModelRouter.Snapshot()
-		}
-		botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
-			(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
-		var botLoopExceeded bool
-		if event.pokeID != "" {
-			var admitted bool
-			botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
-				botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
-					return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
-				},
-			)
-			if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
-				if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
-					a.engine.PauseOnStorageError(routeSnapshot.LoadError())
-				}
-				_ = sendTerminalNoopWithSuppress(event, c)
-				continue
-			}
-		} else {
-			botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
-		}
-		if botLoopExceeded && !botLoopConfig.Hard() {
-			event.botLoopSoft = true
-		}
-
-		if canDispatch && !c.isClosed() {
-			incoming := ToIncomingMessage(event)
-			incoming.SessionID = sessionKey(event)
-			if err := a.incomingDispatcher.DispatchIncoming(c.Context(), incoming); err != nil {
-				if a.engine != nil {
-					a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
-				}
-			}
-		}
-
-		if botLoopExceeded && botLoopConfig.Hard() {
+	if event.EventType == "notice" && event.NoticeType == "notify" && event.SubType == "poke" {
+		normalized, accepted := a.normalizePoke(event, c.mock)
+		if !accepted {
 			_ = sendTerminalNoopWithSuppress(event, c)
-			continue
+			return done
 		}
-
-		if routeSnapshot != nil {
-			if err := routeSnapshot.LoadError(); err != nil {
-				a.engine.PauseOnStorageError(err)
-				if event.pokeID != "" {
-					_ = sendTerminalNoopWithSuppress(event, c)
-				}
-				continue
-			}
-			if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
-				if isProactiveReply(&event) || event.pokeID != "" {
-					_ = sendTerminalNoopWithSuppress(event, c)
-				}
-				continue
-			}
+		event = normalized
+	}
+	if handleRuntimeStatusCommand(c, event, a.engine) {
+		return done
+	}
+	if !c.mock && (event.Type == "" || event.Type == "event") &&
+		(event.EventType == "" || event.EventType == "message") &&
+		(event.MessageType == "group" || event.MessageType == "private") {
+		a.engine.RecordIncomingMessage()
+	}
+	sanitizeIngressMetadata(&event)
+	var warningNotice string
+	var botLoopObservation *llm.BotLoopObservation
+	var botLoopConfig botloop.Config
+	var botLoopMarked bool
+	var scope *runtimescope.Scope
+	if a.engine != nil {
+		scope = a.engine.Scope
+	}
+	pristineShouldReply := false
+	pristineInject := false
+	if event.MessageType == "group" || event.MessageType == "private" {
+		if event.Metadata == nil {
+			event.Metadata = make(map[string]any)
 		}
-
-		if c.isClosed() {
-			continue
-		}
-		c.rememberReplyTarget(event)
-		var turn *llm.SessionTurn
+		pristineShouldReply = shouldReply(&event, scope)
+		injectionEvent := event
+		injectionEvent.IsWake = false
+		pristineInject = isProactiveReply(&event) || (event.pokeID == "" && isExplicitWake(&injectionEvent, scope))
+		event.Metadata["_frostagent_should_reply"] = pristineShouldReply
 		if a.engine != nil && a.engine.SessionManager != nil &&
-			(event.MessageType == "group" || event.MessageType == "private") {
-			if shouldReply(&event, a.engine.Scope) {
-				lane := "sender:" + event.Platform + ":" + event.UserID
-				proactiveTurn := isProactiveReply(&event)
-				if proactiveTurn {
-					lane = "proactive:" + event.Platform
-				}
-				turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
-			}
-		}
-
-		if event.MessageType == "group" && !c.mock {
-			if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
-				gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
-				if err == nil && gStore != nil {
-					role := memory.GroupRoleUnknown
-					if r, ok := event.Metadata["role"].(string); ok {
-						role = memory.NormalizeGroupRole(r)
-					}
-					_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
-					if err == nil && event.GroupName != "" {
-						err = gStore.UpdateGroupName(event.GroupName)
-					}
-					if err == nil {
-						routeScope := astrBotRouteScope(event)
-						gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
-						gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
-					}
-				}
-				if err != nil {
-					a.engine.PauseOnStorageError(err)
-					if turn != nil {
-						turn.Done()
-					}
-					continue
-				}
-			}
-			if isExplicitlyWoken(event, scope) {
-				guard := stageGroupCompactMessage(event, a.engine)
-				if turn != nil {
-					turn.AttachStagedGuard(guard)
-				}
-			} else {
-				captureGroupCompactMessage(event, a.engine)
-			}
-		}
-
-		if !c.mock {
-			if a.engine != nil && a.engine.Awareness != nil && (event.MessageType == "group" || event.MessageType == "private") {
-				id := event.UserID
-				if event.MessageType == "group" {
-					id = event.GroupID
-				}
+			(event.Type == "" || event.Type == "event") &&
+			(event.EventType == "" || event.EventType == "message") {
+			botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
+			if botLoopConfig.Enabled() {
 				platform := event.Platform
 				if platform == "" {
 					platform = "astrbot"
 				}
-				target := llm.AwarenessTargetFor(platform, event.MessageType, id)
-				target.AdapterID = "astrbot"
-				a.engine.Awareness.Observe(target)
+				botLoopMarked = botLoopConfig.IsMarked(platform, event.UserID)
+				botLoopObservation = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).BeginBotLoop(
+					event.UserID, botLoopMarked, botLoopConfig.Revision(), isBotLoopResetWake(event, scope),
+				)
 			}
-			a.observeStickers(event)
 		}
-		c.inFlight.Add(1)
-		if !a.engine.Go(func() {
-			defer c.inFlight.Done()
-			processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice)
-		}) {
-			c.inFlight.Done()
-			if turn != nil {
-				turn.Done()
-			}
+		if !c.mock && c.nativeSend == nil && handleAdminCommand(c, event, a.engine) {
+			botLoopObservation.Finish(false, botLoopConfig.Limit())
+			return done
+		}
+	}
+
+	canDispatch := !c.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
+		(event.Type == "" || event.Type == "event") &&
+		(event.EventType == "" || event.EventType == "message") &&
+		(event.MessageType == "group" || event.MessageType == "private")
+	if a.engine != nil && a.engine.Security != nil && (pristineShouldReply || canDispatch) {
+		platform := event.Platform
+		if platform == "" {
+			platform = "astrbot"
+		}
+		if c.mock {
+			platform = "mock"
+		}
+		principal, principalErr := security.NewPrincipal(platform, event.UserID)
+		if principalErr != nil {
+			botLoopObservation.Finish(false, botLoopConfig.Limit())
 			if isProactiveReply(&event) || event.pokeID != "" {
 				_ = sendTerminalNoopWithSuppress(event, c)
 			}
+			return done
+		}
+		var decision security.WatchdogDecision
+		if c.mock {
+			decision = a.engine.Security.GateIngressDryRun(principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+		} else {
+			decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, event.Content, security.AuditEvent{Instance: a.engine.InstanceID, Session: c.sessionKey(event)})
+		}
+		if security.Blocks(decision.Action) {
+			directReply := isExplicitWake(&event, scope)
+			if directReply {
+				if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
+					_ = sendTerminalNoopWithSuppress(event, c)
+					return done
+				}
+			} else {
+				botLoopObservation.Finish(false, botLoopConfig.Limit())
+			}
+			if decision.IsFailure {
+				if a.engine != nil && a.engine.Scope != nil {
+					a.engine.Scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+				} else {
+					logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 请求因安全审查服务异常被拒绝: user=%s eval_id=%s", event.UserID, decision.EvaluationID))
+				}
+			} else {
+				logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制拦截: user=%s action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
+				if event.MessageType == "group" && decision.SanitizedContent != "" {
+					captureGroupCompactText(event, decision.SanitizedContent, a.engine)
+				}
+			}
+			if directReply {
+				summary := a.engine.Security.RejectMessage(principal, decision)
+				msg := security.ReportRejection(a.engine.Log(), summary, decision)
+				_ = sendDirectReply(event, c, msg)
+			} else if isProactiveReply(&event) || event.pokeID != "" {
+				_ = sendTerminalNoopWithSuppress(event, c)
+			}
+			return done
+		} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
+			logs.Warn(logs.SYSTEM, fmt.Sprintf("AstrBot 消息被安全控制脱敏: user=%s category=%s eval_id=%s", event.UserID, decision.Classification.Category, decision.EvaluationID))
+			event.Content = decision.SanitizedContent
+			if len(event.Messages) > 0 {
+				event.Messages = []string{decision.SanitizedContent}
+			}
+		} else if decision.Action == security.WatchdogWarn {
+			warningNotice = decision.WarningNotice
 		}
 	}
+
+	var routeSnapshot *modelrouter.Snapshot
+	if a.engine != nil && a.engine.ModelRouter != nil &&
+		(event.MessageType == "group" || event.MessageType == "private") {
+		routeSnapshot = a.engine.ModelRouter.Snapshot()
+	}
+	botLoopEligible := pristineShouldReply && (routeSnapshot == nil ||
+		(routeSnapshot.LoadError() == nil && !routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event))))
+	var botLoopExceeded bool
+	if event.pokeID != "" {
+		var admitted bool
+		botLoopExceeded, admitted = botLoopObservation.FinishWithAdmission(
+			botLoopEligible, botLoopConfig.Limit(), func(exceeded bool) bool {
+				return !botLoopEligible || (exceeded && botLoopConfig.Hard()) || a.admitPoke(event)
+			},
+		)
+		if !botLoopEligible || !admitted || (botLoopExceeded && botLoopConfig.Hard()) {
+			if routeSnapshot != nil && routeSnapshot.LoadError() != nil {
+				a.engine.PauseOnStorageError(routeSnapshot.LoadError())
+			}
+			_ = sendTerminalNoopWithSuppress(event, c)
+			return done
+		}
+	} else {
+		botLoopExceeded = botLoopObservation.Finish(botLoopEligible, botLoopConfig.Limit())
+	}
+	if botLoopExceeded && !botLoopConfig.Hard() {
+		event.botLoopSoft = true
+	}
+
+	if canDispatch && !c.isClosed() {
+		incoming := ToIncomingMessage(event)
+		incoming.AdapterID = c.adapterID()
+		incoming.SessionID = sessionKey(event)
+		if err := a.incomingDispatcher.DispatchIncoming(c.Context(), incoming); err != nil {
+			if a.engine != nil {
+				a.engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("ActionsCat 入站分发失败: %v", err))
+			}
+		}
+	}
+
+	if botLoopExceeded && botLoopConfig.Hard() {
+		_ = sendTerminalNoopWithSuppress(event, c)
+		return done
+	}
+
+	if routeSnapshot != nil {
+		if err := routeSnapshot.LoadError(); err != nil {
+			a.engine.PauseOnStorageError(err)
+			if event.pokeID != "" {
+				_ = sendTerminalNoopWithSuppress(event, c)
+			}
+			return done
+		}
+		if routeSnapshot.IsDisabled(modelrouter.WorkloadDialogue, astrBotRouteScope(event)) {
+			if isProactiveReply(&event) || event.pokeID != "" {
+				_ = sendTerminalNoopWithSuppress(event, c)
+			}
+			return done
+		}
+	}
+
+	if c.isClosed() {
+		return done
+	}
+	c.rememberReplyTarget(event)
+	var turn *llm.SessionTurn
+	if a.engine != nil && a.engine.SessionManager != nil &&
+		(event.MessageType == "group" || event.MessageType == "private") {
+		if shouldReply(&event, a.engine.Scope) {
+			lane := "sender:" + event.Platform + ":" + event.UserID
+			proactiveTurn := isProactiveReply(&event)
+			if proactiveTurn {
+				lane = "proactive:" + event.Platform
+			}
+			turn = a.engine.SessionManager.GetOrCreate(c.sessionKey(event)).ReserveSequenceTurn(lane, pristineInject, proactiveTurn)
+		}
+	}
+
+	if event.MessageType == "group" && !c.mock {
+		if a.engine != nil && a.engine.GroupManager != nil && event.GroupID != "" && event.UserID != "" {
+			gStore, err := a.engine.GroupManager.GetGroupStoreForPlatform(astrBotRouteScope(event).Platform, event.GroupID)
+			if err == nil && gStore != nil {
+				role := memory.GroupRoleUnknown
+				if r, ok := event.Metadata["role"].(string); ok {
+					role = memory.NormalizeGroupRole(r)
+				}
+				_, err = gStore.ObserveMember(event.UserID, event.SenderName, event.SenderCard, string(role), "astrbot")
+				if err == nil && event.GroupName != "" {
+					err = gStore.UpdateGroupName(event.GroupName)
+				}
+				if err == nil {
+					routeScope := astrBotRouteScope(event)
+					gStore.RememberRoute(memory.GroupOwnerExplicit, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+					gStore.RememberRoute(event.GroupID, core.RouteContext{Platform: routeScope.Platform, GroupID: event.GroupID})
+				}
+			}
+			if err != nil {
+				a.engine.PauseOnStorageError(err)
+				if turn != nil {
+					turn.Done()
+				}
+				return done
+			}
+		}
+		if isExplicitlyWoken(event, scope) {
+			guard := stageGroupCompactMessage(event, a.engine)
+			if turn != nil {
+				turn.AttachStagedGuard(guard)
+			}
+		} else {
+			captureGroupCompactMessage(event, a.engine)
+		}
+	}
+
+	if !c.mock {
+		if a.engine != nil && a.engine.Awareness != nil && (event.MessageType == "group" || event.MessageType == "private") {
+			id := event.UserID
+			if event.MessageType == "group" {
+				id = event.GroupID
+			}
+			platform := event.Platform
+			if platform == "" {
+				platform = "astrbot"
+			}
+			target := llm.AwarenessTargetFor(platform, event.MessageType, id)
+			target.AdapterID = c.adapterID()
+			a.engine.Awareness.Observe(target)
+		}
+		a.observeStickers(event)
+	}
+	c.inFlight.Add(1)
+	if !a.engine.Go(func() {
+		defer c.inFlight.Done()
+		defer close(done)
+		processEvent(c, event, a.engine, turn, routeSnapshot, warningNotice)
+	}) {
+		c.inFlight.Done()
+		if turn != nil {
+			turn.Done()
+		}
+		if isProactiveReply(&event) || event.pokeID != "" {
+			_ = sendTerminalNoopWithSuppress(event, c)
+		}
+	} else {
+		submitted = true
+	}
+	return done
 }
 
 func (a *Adapter) CloseConnections() {
