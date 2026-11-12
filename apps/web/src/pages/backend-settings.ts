@@ -114,7 +114,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
               <label for="multi-segment-reply-cb" class="text-xs font-semibold text-foreground">允许多段回复</label>
             </div>
             <label class="flex flex-col gap-1.5">
-              <span class="text-xs font-medium">分段消息上限（0 或留空为不限制；超出时随机保留上限数量的分段，其余丢弃）</span>
+              <span class="text-xs font-medium">分段消息上限（2～20 段；0 或留空为不限制；超出时随机保留上限数量的分段，其余丢弃）</span>
               <input id="multi-segment-max-segments" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="0" max="20" step="1" placeholder="0" />
             </label>
           </div>
@@ -416,6 +416,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
   }
   const numericControls: Record<string, HTMLInputElement> = {
+    MULTI_SEGMENT_REPLY_MAX_SEGMENTS: element<HTMLInputElement>('multi-segment-max-segments'),
     POKE_COOLDOWN_SECONDS: pokeCooldown,
     PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
     QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
@@ -783,6 +784,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     }
     for (const { key, value } of draft.pending()) {
       if (value === null) continue;
+      if (key === 'MULTI_SEGMENT_REPLY_MAX_SEGMENTS' && Number(value) === 1) {
+        toast.error('分段消息上限不能为 1；如需单条回复，请关闭“允许多段回复”');
+        return;
+      }
       const input = numericControls[key] ?? container.querySelector<HTMLInputElement>(`input[type="number"][data-setting-input="${key}"]`);
       if (!input) continue;
       const disabled = input.disabled;

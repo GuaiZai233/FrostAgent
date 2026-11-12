@@ -39,10 +39,33 @@ func TestParseLimit(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		want  int
-	}{{"", 0}, {"0", 0}, {"-1", 0}, {"abc", 0}, {"2", 2}, {" 3 ", 3}, {"21", 0}} {
+	}{{"", 0}, {"0", 0}, {"1", 1}, {"-1", 0}, {"abc", 0}, {"2", 2}, {" 3 ", 3}, {"21", 0}} {
 		if got := ParseLimit(tc.value); got != tc.want {
 			t.Fatalf("ParseLimit(%q)=%d want %d", tc.value, got, tc.want)
 		}
+	}
+}
+
+func TestEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		enabled, limit string
+		want           bool
+	}{
+		{"true", "", true}, {"true", "0", true}, {"true", "1", false},
+		{"true", "2", true}, {"true", "20", true}, {"true", "invalid", true},
+		{"false", "0", false}, {"false", "3", false}, {"", "3", false},
+	} {
+		values := map[string]string{EnvKey: tc.enabled, LimitEnvKey: tc.limit}
+		if got := Enabled(func(key string) string { return values[key] }); got != tc.want {
+			t.Fatalf("enabled=%q limit=%q: got %v want %v", tc.enabled, tc.limit, got, tc.want)
+		}
+	}
+}
+
+func TestSingleSegmentLimitDisablesSplitting(t *testing.T) {
+	text := "first" + SegmentMark + "second\n\n`" + SegmentMark + "`"
+	if got := SplitLimited(text, true, 1); !reflect.DeepEqual(got, []string{"firstsecond\n\n`" + SegmentMark + "`"}) {
+		t.Fatalf("limit one must preserve all text and paragraphs without splitting: %q", got)
 	}
 }
 

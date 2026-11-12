@@ -131,7 +131,7 @@ func SendMsgTool() Tool {
 				}
 				switch msg.Type {
 				case "plain":
-					if runtimescope.FromContext(ctx).Getenv(replyformat.EnvKey) != "true" {
+					if !replyformat.Enabled(runtimescope.FromContext(ctx).Getenv) {
 						msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
 						payload.Messages[i].Text = msg.Text
 					}

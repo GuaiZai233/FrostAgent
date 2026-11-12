@@ -56,14 +56,19 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 		name, output         string
 		enabled, group, fail bool
 		want                 []string
+		limit                string
 	}{
-		{"private", "first" + replyformat.SegmentMark + "second\n\nthird", true, false, false, []string{"first", "second", "third"}},
-		{"group", "first" + replyformat.SegmentMark + "second", true, true, false, []string{"first", "second"}},
-		{"disabled", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", false, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}},
-		{"partial failure", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, false, true, []string{"first", "second"}},
+		{"private", "first" + replyformat.SegmentMark + "second\n\nthird", true, false, false, []string{"first", "second", "third"}, "0"},
+		{"group", "first" + replyformat.SegmentMark + "second", true, true, false, []string{"first", "second"}, "0"},
+		{"disabled", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", false, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "0"},
+		{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", true, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "1"},
+		{"partial failure", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, false, true, []string{"first", "second"}, "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := segmentTestEngine(t, tc.output, tc.enabled)
+			if err := engine.Scope.Config.Update(replyformat.LimitEnvKey, tc.limit, false); err != nil {
+				t.Fatal(err)
+			}
 			srv, url := startReplyWSTestServer(t, engine)
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {

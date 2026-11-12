@@ -63,10 +63,25 @@ func TestMultiSegmentReplySetting(t *testing.T) {
 	if err := validateUpdate(replyformat.EnvKey, "yes"); err == nil {
 		t.Fatal("invalid boolean accepted")
 	}
+	if _, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: replyformat.EnvKey, Value: "true"})); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"1", "3", "0"} {
+		result, err := svc.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: replyformat.LimitEnvKey, Value: value}))
+		if err != nil || result == nil || !result.Msg.Success {
+			t.Fatalf("limit update %q: %v / %v", value, result, err)
+		}
+		if got := replyformat.Enabled(first.Get); got != (value != "1") {
+			t.Fatalf("API limit %q: enabled=%v", value, got)
+		}
+		if first.Get(replyformat.EnvKey) != "true" || second.Get(replyformat.LimitEnvKey) != "0" {
+			t.Fatal("limit update changed the switch or another instance")
+		}
+	}
 }
 
 func TestMultiSegmentReplyLimitValidation(t *testing.T) {
-	for _, value := range []string{"", "0", "2", "20"} {
+	for _, value := range []string{"", "0", "1", "2", "20"} {
 		if err := validateUpdate(replyformat.LimitEnvKey, value); err != nil {
 			t.Fatalf("value %q rejected: %v", value, err)
 		}

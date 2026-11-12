@@ -1032,14 +1032,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		})
 		stopThinking()
 		replyText = runResult.Content
-		if engine.Getenv(replyformat.EnvKey) != "true" {
+		multiSegment := replyformat.Enabled(engine.Getenv)
+		if !multiSegment {
 			replyText = filterStructuredSegmentMarks(replyText)
 		}
 		if wakeSignals.Proactive {
 			replyText = filterProactiveStickerCQ(replyText)
 		}
 		if structured, _ := parseFinalMessages(replyText); len(structured) == 0 {
-			replyParts = replyformat.SplitLimited(replyText, engine.Getenv(replyformat.EnvKey) == "true", replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey)))
+			replyParts = replyformat.SplitLimited(replyText, multiSegment, replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey)))
 			replyText = strings.Join(replyParts, "\n\n")
 		}
 		if turn.Interrupted() {
