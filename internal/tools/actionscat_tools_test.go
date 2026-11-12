@@ -51,7 +51,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	})
 	noCtx := context.Background()
 
-	listTool := ActionsCatListActionsTool(client)
+	listTool := routedActionsCatTestTool(client, "list_actions")
 	out, err := listTool.ExecuteContext(noCtx, "{}")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -60,7 +60,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 		t.Fatalf("expected unconfigured message, got: %s", out)
 	}
 
-	runTool := ActionsCatRunActionTool(client)
+	runTool := routedActionsCatTestTool(client, "run_action")
 	out, err = runTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -69,7 +69,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 		t.Fatalf("expected unconfigured message, got: %s", out)
 	}
 
-	getRunTool := ActionsCatGetRunTool(client)
+	getRunTool := routedActionsCatTestTool(client, "get_run")
 	out, err = getRunTool.ExecuteContext(noCtx, `{"action_id": "act_1", "run_id": "run_1"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,7 +78,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 		t.Fatalf("expected unconfigured message, got: %s", out)
 	}
 
-	listBuildsTool := ActionsCatListBuildsTool(client)
+	listBuildsTool := routedActionsCatTestTool(client, "list_builds")
 	out, err = listBuildsTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -87,7 +87,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 		t.Fatalf("expected unconfigured message, got: %s", out)
 	}
 
-	createTool := ActionsCatCreateActionTool(client, scope)
+	createTool := routedActionsCatTestTool(client, "create_action", scope)
 	// Missing RunContext -> should fail permission check
 	out, err = createTool.ExecuteContext(noCtx, `{"name": "New Action"}`)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// create_version
-	createVerTool := ActionsCatCreateVersionTool(client, scope)
+	createVerTool := routedActionsCatTestTool(client, "create_version", scope)
 	out, _ = createVerTool.ExecuteContext(noCtx, `{"action_id": "act_1", "files": {"main.go": "pkg"}}`)
 	if !strings.Contains(out, "无法获取调用者会话上下文") {
 		t.Fatalf("expected context missing, got: %s", out)
@@ -131,7 +131,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// build_version
-	buildVerTool := ActionsCatBuildVersionTool(client, scope)
+	buildVerTool := routedActionsCatTestTool(client, "build_version", scope)
 	out, _ = buildVerTool.ExecuteContext(normalCtx, `{"action_id": "act_1", "version_id": "ver_1"}`)
 	if !strings.Contains(out, "权限不足") {
 		t.Fatalf("expected permission denied, got: %s", out)
@@ -142,14 +142,14 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// get_build
-	getBuildTool := ActionsCatGetBuildTool(client)
+	getBuildTool := routedActionsCatTestTool(client, "get_build")
 	out, _ = getBuildTool.ExecuteContext(noCtx, `{"action_id": "act_1", "build_id": "bld_1"}`)
 	if !strings.Contains(out, "尚未配置") {
 		t.Fatalf("expected unconfigured, got: %s", out)
 	}
 
 	// activate_build
-	activateTool := ActionsCatActivateBuildTool(client, scope)
+	activateTool := routedActionsCatTestTool(client, "activate_build", scope)
 	out, _ = activateTool.ExecuteContext(normalCtx, `{"action_id": "act_1", "version_id": "ver_1", "build_id": "bld_1"}`)
 	if !strings.Contains(out, "权限不足") {
 		t.Fatalf("expected permission denied, got: %s", out)
@@ -160,7 +160,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// deploy_action
-	deployTool := ActionsCatDeployActionTool(client, scope)
+	deployTool := routedActionsCatTestTool(client, "deploy_action", scope)
 	out, _ = deployTool.ExecuteContext(normalCtx, `{"action_id": "act_1", "files": {"main.go": "pkg"}}`)
 	if !strings.Contains(out, "权限不足") {
 		t.Fatalf("expected permission denied, got: %s", out)
@@ -171,7 +171,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// create_schedule
-	createSchedTool := ActionsCatCreateScheduleTool(client, scope)
+	createSchedTool := routedActionsCatTestTool(client, "create_schedule", scope)
 	out, _ = createSchedTool.ExecuteContext(noCtx, `{"action_id": "act_1", "cron_expr": "0 8 * * *"}`)
 	if !strings.Contains(out, "无法获取调用者会话上下文") {
 		t.Fatalf("expected context missing, got: %s", out)
@@ -186,14 +186,14 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// list_schedules
-	listSchedTool := ActionsCatListSchedulesTool(client)
+	listSchedTool := routedActionsCatTestTool(client, "list_schedules")
 	out, _ = listSchedTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
 	if !strings.Contains(out, "尚未配置") {
 		t.Fatalf("expected unconfigured, got: %s", out)
 	}
 
 	// delete_schedule
-	deleteSchedTool := ActionsCatDeleteScheduleTool(client, scope)
+	deleteSchedTool := routedActionsCatTestTool(client, "delete_schedule", scope)
 	out, _ = deleteSchedTool.ExecuteContext(noCtx, `{"schedule_id": "sched_1"}`)
 	if !strings.Contains(out, "无法获取调用者会话上下文") {
 		t.Fatalf("expected context missing, got: %s", out)
@@ -208,7 +208,7 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// create_matcher
-	createMatcherTool := ActionsCatCreateMatcherTool(client, scope)
+	createMatcherTool := routedActionsCatTestTool(client, "create_matcher", scope)
 	out, _ = createMatcherTool.ExecuteContext(noCtx, `{"action_id": "act_1", "name": "m1", "match_type": "exact", "pattern": "p"}`)
 	if !strings.Contains(out, "无法获取调用者会话上下文") {
 		t.Fatalf("expected context missing, got: %s", out)
@@ -223,14 +223,14 @@ func TestActionsCatTools_Unconfigured(t *testing.T) {
 	}
 
 	// list_matchers
-	listMatcherTool := ActionsCatListMatchersTool(client)
+	listMatcherTool := routedActionsCatTestTool(client, "list_matchers")
 	out, _ = listMatcherTool.ExecuteContext(noCtx, `{"action_id": "act_1"}`)
 	if !strings.Contains(out, "尚未配置") {
 		t.Fatalf("expected unconfigured, got: %s", out)
 	}
 
 	// delete_matcher
-	deleteMatcherTool := ActionsCatDeleteMatcherTool(client, scope)
+	deleteMatcherTool := routedActionsCatTestTool(client, "delete_matcher", scope)
 	out, _ = deleteMatcherTool.ExecuteContext(noCtx, `{"matcher_id": "m_1"}`)
 	if !strings.Contains(out, "无法获取调用者会话上下文") {
 		t.Fatalf("expected context missing, got: %s", out)
@@ -430,7 +430,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Test ListActionsTool (all actions)
-	listTool := ActionsCatListActionsTool(client)
+	listTool := routedActionsCatTestTool(client, "list_actions")
 	out, err := listTool.ExecuteContext(ctx, "{}")
 	if err != nil {
 		t.Fatalf("ListActionsTool failed: %v", err)
@@ -461,7 +461,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 4. Test RunActionTool
-	runTool := ActionsCatRunActionTool(client)
+	runTool := routedActionsCatTestTool(client, "run_action")
 	// Missing action_id
 	badOut, _ := runTool.ExecuteContext(ctx, `{}`)
 	if !strings.Contains(badOut, "缺少必填参数") {
@@ -494,7 +494,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 5. Test GetRunTool
-	getRunTool := ActionsCatGetRunTool(client)
+	getRunTool := routedActionsCatTestTool(client, "get_run")
 	getOut, err := getRunTool.ExecuteContext(ctx, `{"action_id": "act_test_1", "run_id": "run_123"}`)
 	if err != nil {
 		t.Fatalf("GetRunTool failed: %v", err)
@@ -516,7 +516,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 6. Test CreateActionTool (admin context)
-	createTool := ActionsCatCreateActionTool(client, scope)
+	createTool := routedActionsCatTestTool(client, "create_action", scope)
 	badCreateOut, _ := createTool.ExecuteContext(adminCtx, `{}`)
 	if !strings.Contains(badCreateOut, "缺少必填参数 'name'") {
 		t.Fatalf("expected missing name error, got: %s", badCreateOut)
@@ -534,7 +534,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 7. Test CreateVersionTool
-	createVerTool := ActionsCatCreateVersionTool(client, scope)
+	createVerTool := routedActionsCatTestTool(client, "create_version", scope)
 	// Missing action_id
 	badVerOut, _ := createVerTool.ExecuteContext(adminCtx, `{"files": {"main.go": "pkg"}}`)
 	if !strings.Contains(badVerOut, "缺少必填参数 'action_id'") {
@@ -555,7 +555,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 8. Test BuildVersionTool
-	buildVerTool := ActionsCatBuildVersionTool(client, scope)
+	buildVerTool := routedActionsCatTestTool(client, "build_version", scope)
 	// Missing params
 	badBuildOut, _ := buildVerTool.ExecuteContext(adminCtx, `{"action_id": "act_test_3"}`)
 	if !strings.Contains(badBuildOut, "缺少必填参数") {
@@ -574,12 +574,12 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildVersionTool failed: %v", err)
 	}
-	if !strings.Contains(buildOut, "bld_101") || !strings.Contains(buildOut, "succeeded") || !strings.Contains(buildOut, "actionscat_activate_build") {
+	if !strings.Contains(buildOut, "bld_101") || !strings.Contains(buildOut, "succeeded") || !strings.Contains(buildOut, "actionscat action=activate_build") {
 		t.Fatalf("unexpected build output: %s", buildOut)
 	}
 
 	// 9. Test GetBuildTool
-	getBuildTool := ActionsCatGetBuildTool(client)
+	getBuildTool := routedActionsCatTestTool(client, "get_build")
 	getBuildOut, err := getBuildTool.ExecuteContext(ctx, `{"action_id": "act_test_3", "build_id": "bld_101"}`)
 	if err != nil {
 		t.Fatalf("GetBuildTool failed: %v", err)
@@ -597,7 +597,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 10. Test ActivateBuildTool
-	activateTool := ActionsCatActivateBuildTool(client, scope)
+	activateTool := routedActionsCatTestTool(client, "activate_build", scope)
 	// Refuse activation of failed build
 	badActOut, _ := activateTool.ExecuteContext(adminCtx, `{"action_id": "act_test_3", "version_id": "ver_fail", "build_id": "bld_fail"}`)
 	if !strings.Contains(badActOut, "拒绝激活构建") || !strings.Contains(badActOut, "非 succeeded") {
@@ -613,7 +613,7 @@ func TestActionsCatTools_Execution(t *testing.T) {
 	}
 
 	// 11. Test DeployActionTool
-	deployTool := ActionsCatDeployActionTool(client, scope)
+	deployTool := routedActionsCatTestTool(client, "deploy_action", scope)
 	// Deploy with failing code -> halts at build step with logs, does not activate
 	failDeployOut, err := deployTool.ExecuteContext(adminCtx, `{"action_id": "act_test_3", "files": {"fail.go": "bad code"}}`)
 	if err != nil {
@@ -668,7 +668,7 @@ func TestActionsCatRunActionTool_MockSessionRefusal(t *testing.T) {
 		}
 	})
 
-	runTool := ActionsCatRunActionTool(client)
+	runTool := routedActionsCatTestTool(client, "run_action")
 
 	// 1. When running in a mock session (?mock=true / RunContext.Mock = true),
 	// execution MUST be refused without calling the backend TriggerRun API.
@@ -731,7 +731,7 @@ func TestActionsCatCreateActionTool_AuthorizationMatrix(t *testing.T) {
 	scope := newTestScope(t, map[string]string{
 		admincmd.AdminQQIDsEnv: "10001, 10002",
 	})
-	createTool := ActionsCatCreateActionTool(client, scope)
+	createTool := routedActionsCatTestTool(client, "create_action", scope)
 
 	// 1. Missing RunContext -> Refuse immediately with 0 backend calls
 	noCtx := context.Background()
@@ -884,49 +884,49 @@ func TestActionsCatTools_FullMutationAuthorizationMatrix(t *testing.T) {
 	}{
 		{
 			name:       "actionscat_create_version",
-			tool:       ActionsCatCreateVersionTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "create_version", scope),
 			args:       `{"action_id": "act_1", "files": {"main.go": "pkg"}}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 创建版本",
 		},
 		{
 			name:       "actionscat_build_version",
-			tool:       ActionsCatBuildVersionTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "build_version", scope),
 			args:       `{"action_id": "act_1", "version_id": "ver_1"}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 构建版本",
 		},
 		{
 			name:       "actionscat_activate_build",
-			tool:       ActionsCatActivateBuildTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "activate_build", scope),
 			args:       `{"action_id": "act_1", "version_id": "ver_1", "build_id": "bld_1"}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 激活构建",
 		},
 		{
 			name:       "actionscat_deploy_action",
-			tool:       ActionsCatDeployActionTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "deploy_action", scope),
 			args:       `{"action_id": "act_1", "files": {"main.go": "pkg"}}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 部署操作",
 		},
 		{
 			name:       "actionscat_create_schedule",
-			tool:       ActionsCatCreateScheduleTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "create_schedule", scope),
 			args:       `{"action_id": "act_1", "cron_expr": "0 8 * * *"}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 创建定时触发器",
 		},
 		{
 			name:       "actionscat_delete_schedule",
-			tool:       ActionsCatDeleteScheduleTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "delete_schedule", scope),
 			args:       `{"schedule_id": "sched_1"}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 删除定时触发器",
 		},
 		{
 			name:       "actionscat_create_matcher",
-			tool:       ActionsCatCreateMatcherTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "create_matcher", scope),
 			args:       `{"action_id": "act_1", "name": "m1", "match_type": "exact", "pattern": "p"}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 创建事件匹配器",
 		},
 		{
 			name:       "actionscat_delete_matcher",
-			tool:       ActionsCatDeleteMatcherTool(client, scope),
+			tool:       routedActionsCatTestTool(client, "delete_matcher", scope),
 			args:       `{"matcher_id": "m_1"}`,
 			mockErrMsg: "模拟会话模式下禁用 ActionsCat 删除事件匹配器",
 		},
@@ -1023,7 +1023,7 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	})
 
 	// 1. BuildVersionTool timeout
-	buildTool := ActionsCatBuildVersionTool(client, scope)
+	buildTool := routedActionsCatTestTool(client, "build_version", scope)
 	timeoutCtx, cancel := context.WithTimeout(adminCtx, 30*time.Millisecond)
 	defer cancel()
 
@@ -1031,12 +1031,12 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildVersionTool returned unexpected err: %v", err)
 	}
-	if !strings.Contains(out, "构建结果未知") || !strings.Contains(out, "actionscat_list_builds") || !strings.Contains(out, "严禁立即重复触发构建") || !strings.Contains(out, "若第一次查询暂时为空") {
+	if !strings.Contains(out, "构建结果未知") || !strings.Contains(out, "actionscat action=list_builds") || !strings.Contains(out, "严禁立即重复触发构建") || !strings.Contains(out, "若第一次查询暂时为空") {
 		t.Fatalf("expected build timeout indeterminate guidance with retry wait note, got: %s", out)
 	}
 
 	// 2. DeployActionTool timeout
-	deployTool := ActionsCatDeployActionTool(client, scope)
+	deployTool := routedActionsCatTestTool(client, "deploy_action", scope)
 	timeoutCtx2, cancel2 := context.WithTimeout(adminCtx, 30*time.Millisecond)
 	defer cancel2()
 
@@ -1044,7 +1044,7 @@ func TestActionsCatTools_BuildTimeoutHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeployActionTool returned unexpected err: %v", err)
 	}
-	if !strings.Contains(deployOut, "构建结果未知") || !strings.Contains(deployOut, "actionscat_list_builds") || !strings.Contains(deployOut, "严禁立即重新部署或重复提交构建") || !strings.Contains(deployOut, "若第一次查询暂时为空") {
+	if !strings.Contains(deployOut, "构建结果未知") || !strings.Contains(deployOut, "actionscat action=list_builds") || !strings.Contains(deployOut, "严禁立即重新部署或重复提交构建") || !strings.Contains(deployOut, "若第一次查询暂时为空") {
 		t.Fatalf("expected deploy timeout indeterminate guidance with retry wait note, got: %s", deployOut)
 	}
 }
@@ -1104,8 +1104,8 @@ func TestActionsCatTools_BuildUnknownResult_Server500AndMalformedJSON(t *testing
 		Mock:        false,
 	})
 
-	buildTool := ActionsCatBuildVersionTool(client, scope)
-	deployTool := ActionsCatDeployActionTool(client, scope)
+	buildTool := routedActionsCatTestTool(client, "build_version", scope)
+	deployTool := routedActionsCatTestTool(client, "deploy_action", scope)
 
 	// Scenario 1: Server 500 error after side-effect -> MUST guide list_builds and NOT say "构建版本失败"
 	mu.Lock()
@@ -1119,7 +1119,7 @@ func TestActionsCatTools_BuildUnknownResult_Server500AndMalformedJSON(t *testing
 	if strings.Contains(out500, "构建版本失败") || strings.Contains(out500, "构建失败:") {
 		t.Fatalf("server 500 must NOT be classified as definite failure, got: %s", out500)
 	}
-	if !strings.Contains(out500, "构建结果未知") || !strings.Contains(out500, "actionscat_list_builds") || !strings.Contains(out500, "严禁立即重复触发构建") {
+	if !strings.Contains(out500, "构建结果未知") || !strings.Contains(out500, "actionscat action=list_builds") || !strings.Contains(out500, "严禁立即重复触发构建") {
 		t.Fatalf("expected indeterminate unknown-result guidance on server 500, got: %s", out500)
 	}
 
@@ -1130,7 +1130,7 @@ func TestActionsCatTools_BuildUnknownResult_Server500AndMalformedJSON(t *testing
 	if strings.Contains(deployOut500, "部署失败 (编译构建阶段)") {
 		t.Fatalf("server 500 must NOT be classified as definite build failure in deploy tool, got: %s", deployOut500)
 	}
-	if !strings.Contains(deployOut500, "构建结果未知") || !strings.Contains(deployOut500, "actionscat_list_builds") || !strings.Contains(deployOut500, "严禁立即重新部署或重复提交构建") {
+	if !strings.Contains(deployOut500, "构建结果未知") || !strings.Contains(deployOut500, "actionscat action=list_builds") || !strings.Contains(deployOut500, "严禁立即重新部署或重复提交构建") {
 		t.Fatalf("expected indeterminate unknown-result guidance on deploy server 500, got: %s", deployOut500)
 	}
 
@@ -1146,11 +1146,10 @@ func TestActionsCatTools_BuildUnknownResult_Server500AndMalformedJSON(t *testing
 	if strings.Contains(outMalformed, "构建版本失败") || strings.Contains(outMalformed, "构建失败:") {
 		t.Fatalf("malformed 200 JSON must NOT be classified as definite failure, got: %s", outMalformed)
 	}
-	if !strings.Contains(outMalformed, "构建结果未知") || !strings.Contains(outMalformed, "actionscat_list_builds") {
+	if !strings.Contains(outMalformed, "构建结果未知") || !strings.Contains(outMalformed, "actionscat action=list_builds") {
 		t.Fatalf("expected indeterminate unknown-result guidance on malformed JSON, got: %s", outMalformed)
 	}
 }
-
 
 func TestActionsCatTools_EntrypointAndNetworkValidation(t *testing.T) {
 	// 1. Files empty
@@ -1435,7 +1434,7 @@ func TestActionsCatTools_ListBuildsTool(t *testing.T) {
 		}
 	})
 
-	tool := ActionsCatListBuildsTool(client)
+	tool := routedActionsCatTestTool(client, "list_builds")
 	ctx := context.Background()
 
 	// 1. Missing action_id
@@ -1603,7 +1602,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. ActionsCatCreateScheduleTool
-	createSchedTool := ActionsCatCreateScheduleTool(client, scope)
+	createSchedTool := routedActionsCatTestTool(client, "create_schedule", scope)
 	// Missing action_id
 	badOut1, _ := createSchedTool.ExecuteContext(adminCtx, `{"cron_expr": "0 8 * * *"}`)
 	if !strings.Contains(badOut1, "缺少必填参数 'action_id'") {
@@ -1636,7 +1635,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	}
 
 	// 2. ActionsCatListSchedulesTool
-	listSchedTool := ActionsCatListSchedulesTool(client)
+	listSchedTool := routedActionsCatTestTool(client, "list_schedules")
 	// Missing action_id
 	badListOut, _ := listSchedTool.ExecuteContext(ctx, `{}`)
 	if !strings.Contains(badListOut, "缺少必填参数 'action_id'") {
@@ -1652,7 +1651,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	}
 
 	// 3. ActionsCatDeleteScheduleTool
-	deleteSchedTool := ActionsCatDeleteScheduleTool(client, scope)
+	deleteSchedTool := routedActionsCatTestTool(client, "delete_schedule", scope)
 	// Missing schedule_id
 	badDelOut, _ := deleteSchedTool.ExecuteContext(adminCtx, `{}`)
 	if !strings.Contains(badDelOut, "缺少必填参数 'schedule_id'") {
@@ -1671,7 +1670,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	}
 
 	// 4. ActionsCatCreateMatcherTool
-	createMatcherTool := ActionsCatCreateMatcherTool(client, scope)
+	createMatcherTool := routedActionsCatTestTool(client, "create_matcher", scope)
 	// Missing action_id
 	mBad1, _ := createMatcherTool.ExecuteContext(adminCtx, `{"name": "m", "match_type": "exact", "pattern": "p"}`)
 	if !strings.Contains(mBad1, "缺少必填参数 'action_id'") {
@@ -1732,7 +1731,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	}
 
 	// 5. ActionsCatListMatchersTool
-	listMatcherTool := ActionsCatListMatchersTool(client)
+	listMatcherTool := routedActionsCatTestTool(client, "list_matchers")
 	// Missing action_id
 	badMList, _ := listMatcherTool.ExecuteContext(ctx, `{}`)
 	if !strings.Contains(badMList, "缺少必填参数 'action_id'") {
@@ -1748,7 +1747,7 @@ func TestActionsCatTools_SchedulesAndMatchers(t *testing.T) {
 	}
 
 	// 6. ActionsCatDeleteMatcherTool
-	deleteMatcherTool := ActionsCatDeleteMatcherTool(client, scope)
+	deleteMatcherTool := routedActionsCatTestTool(client, "delete_matcher", scope)
 	// Missing matcher_id
 	badMDel, _ := deleteMatcherTool.ExecuteContext(adminCtx, `{}`)
 	if !strings.Contains(badMDel, "缺少必填参数 'matcher_id'") {

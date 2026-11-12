@@ -3,12 +3,16 @@ package botstatus
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
@@ -114,5 +118,137 @@ func TestSetToolEnabledConcurrentUpdates(t *testing.T) {
 		if engine.ToolEnabled(name) {
 			t.Errorf("concurrent update lost switch for %s", name)
 		}
+	}
+}
+
+func TestActionsCatLegacyDisableCanBeClearedFromOverview(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/actions" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	configPath := filepath.Join(t.TempDir(), "instance.env")
+	config, err := instanceconfig.Open(configPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		"ACTIONSCAT_ENDPOINT": server.URL,
+		llm.DisabledToolsKey:  `["actionscat_list_actions","actionscat_list_actions","actionscat_run_action","stay_silent","actionscat_unknown"]`,
+	} {
+		if err := config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherConfig, err := instanceconfig.Open(filepath.Join(t.TempDir(), "other.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := otherConfig.Update(llm.DisabledToolsKey, `["actionscat_list_actions"]`, false); err != nil {
+		t.Fatal(err)
+	}
+	scope := runtimescope.New(config, nil, nil)
+	defer scope.Cancel()
+	router := tools.ActionsCatTool(actionscat.New(scope.Getenv), scope)
+	engine := &llm.Engine{Scope: scope, ToolRegistry: map[string]llm.ToolExecutor{router.Name(): router}}
+	service := New(engine, "test", "")
+	ctx := context.Background()
+	if _, err := router.Execute(`{"action":"list_actions"}`); err == nil {
+		t.Fatal("legacy disabled capability executed")
+	}
+	assertOverview := func(wantLegacy bool) {
+		t.Helper()
+		response, err := service.GetOverview(ctx, connect.NewRequest(&v1.GetOverviewRequest{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make(map[string]bool)
+		for _, tool := range response.Msg.Tools {
+			if names[tool.Name] {
+				t.Fatalf("duplicate overview entry: %s", tool.Name)
+			}
+			names[tool.Name] = true
+			if tool.Name != "actionscat" && (tool.Enabled || !tool.Available || tool.Description == "") {
+				t.Fatalf("legacy recovery control unusable: %+v", tool)
+			}
+		}
+		if names["actionscat_list_actions"] != wantLegacy || !names["actionscat_run_action"] || !names["actionscat"] || names["actionscat_unknown"] || names["stay_silent"] {
+			t.Fatalf("overview entries: %v", names)
+		}
+		if model := engine.ModelTools(); len(model) != 1 || model[0].Name != "actionscat" {
+			t.Fatalf("legacy setting exposed to model: %+v", model)
+		}
+		if _, registered := engine.ToolRegistry["actionscat_list_actions"]; registered {
+			t.Fatal("legacy execution entry registered")
+		}
+	}
+	assertOverview(true)
+	for range 2 {
+		if _, err := service.SetToolEnabled(ctx, connect.NewRequest(&v1.SetToolEnabledRequest{Name: "actionscat_list_actions", Enabled: true})); err != nil {
+			t.Fatalf("console could not re-enable capability: %v", err)
+		}
+	}
+	assertOverview(false)
+	if got := config.Get(llm.DisabledToolsKey); got != `["actionscat_run_action","actionscat_unknown","stay_silent"]` {
+		t.Fatalf("clearing legacy switch changed unrelated settings: %s", got)
+	}
+	if got := otherConfig.Get(llm.DisabledToolsKey); got != `["actionscat_list_actions"]` {
+		t.Fatalf("clearing legacy switch changed another instance: %s", got)
+	}
+	out, err := router.Execute(`{"action":"discover"}`)
+	if err != nil || !strings.Contains(out, `"list_actions"`) || strings.Contains(out, `"run_action"`) {
+		t.Fatalf("capabilities after recovery: %s, %v", out, err)
+	}
+	if _, err := router.Execute(`{"action":"list_actions"}`); err != nil {
+		t.Fatalf("re-enabled capability refused: %v", err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("requests = %d, want only the recovered list call", requests.Load())
+	}
+	reopened, err := instanceconfig.Open(configPath, false)
+	if err != nil || reopened.Get(llm.DisabledToolsKey) != config.Get(llm.DisabledToolsKey) {
+		t.Fatalf("recovery did not persist: %v", err)
+	}
+	for _, request := range []*v1.SetToolEnabledRequest{
+		{Name: "actionscat_list_actions", Enabled: false},
+		{Name: "actionscat_unknown", Enabled: true},
+		{Name: "unregistered", Enabled: true},
+	} {
+		if _, err := service.SetToolEnabled(ctx, connect.NewRequest(request)); connect.CodeOf(err) != connect.CodeNotFound {
+			t.Fatalf("unsupported legacy update %+v returned %v", request, err)
+		}
+	}
+	// Cleanup remains available while the router is disabled or unconfigured.
+	if _, err := service.SetToolEnabled(ctx, connect.NewRequest(&v1.SetToolEnabledRequest{Name: "actionscat", Enabled: false})); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update("ACTIONSCAT_ENABLED", "false", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Update("ACTIONSCAT_ENDPOINT", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetToolEnabled(ctx, connect.NewRequest(&v1.SetToolEnabledRequest{Name: "actionscat_run_action", Enabled: true})); err != nil {
+		t.Fatal(err)
+	}
+	if router.IsEnabled() || engine.ToolEnabled("actionscat") || requests.Load() != 1 {
+		t.Fatal("clearing a legacy switch enabled the integration or called its backend")
+	}
+	if err := config.Update(llm.DisabledToolsKey, `invalid-json`, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetToolEnabled(ctx, connect.NewRequest(&v1.SetToolEnabledRequest{Name: "actionscat_list_actions", Enabled: true})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("malformed settings were silently replaced: %v", err)
+	}
+	if config.Get(llm.DisabledToolsKey) != `invalid-json` {
+		t.Fatal("malformed settings overwritten")
+	}
+	delete(engine.ToolRegistry, router.Name())
+	if _, err := service.SetToolEnabled(ctx, connect.NewRequest(&v1.SetToolEnabledRequest{Name: "actionscat_list_actions", Enabled: true})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("absent router accepted legacy switch: %v", err)
 	}
 }

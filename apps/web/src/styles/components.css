@@ -576,6 +576,35 @@ dialog.dialog-modal::backdrop {
   background-color: var(--muted);
 }
 
+/* Keep the log footer visible while the body scrolls, including at UI zoom. */
+dialog.log-summary-dialog[open] {
+  width: calc(100vw / var(--ui-zoom) - 2rem);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh / var(--ui-zoom) - 2rem);
+}
+
+.log-summary-dialog .dialog-header,
+.log-summary-dialog .dialog-footer {
+  flex: none;
+}
+
+.log-summary-dialog .dialog-header > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-summary-dialog .dialog-body {
+  min-height: 0;
+}
+
+.log-summary-content {
+  display: block;
+  flex: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ==================== TOAST NOTIFICATIONS ==================== */
 #toast-container {
   position: fixed;

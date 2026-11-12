@@ -77,6 +77,24 @@ func (s *Service) GetOverview(
 			Configurable: t.Name() == balancequery.ToolName || t.Name() == qqextend.ToolName,
 		})
 	}
+	// Show existing retired switches so the console can clear them. These are
+	// recovery controls only and never enter the engine's model tool catalog.
+	if s.engine.Scope != nil && s.engine.Config != nil {
+		var disabled []string
+		if json.Unmarshal([]byte(s.engine.Config.Get(llm.DisabledToolsKey)), &disabled) == nil {
+			legacy := s.legacyToolSettings()
+			for _, name := range disabled {
+				if description, ok := legacy[name]; ok {
+					toolInfos = append(toolInfos, &v1.ToolInfo{
+						Name:        name,
+						Description: "历史禁用项：启用可解除此限制，此卡片随后消失。实际调用仍通过合并后的路由入口。 " + description,
+						Enabled:     false, Available: true,
+					})
+					delete(legacy, name)
+				}
+			}
+		}
+	}
 
 	// Sort by name to ensure deterministic order, with a stable tiebreaker for robustness.
 	sort.SliceStable(toolInfos, func(i, j int) bool {

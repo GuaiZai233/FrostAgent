@@ -245,3 +245,28 @@ export function formatConsoleLog(entry: LogEntry): string {
 
   return `[${timeStr}](${entry.instanceId ? 'Instance: ' + entry.instanceName : 'Control Plane'})[${levelStr}][${sourceStr}] ${contentStr}`;
 }
+
+export function formatFullLog(entry: LogEntry): string {
+  const metadata = [
+    '时间: ' + (entry.timestamp || '未知'),
+    '日志 ID: ' + (entry.id || '-'),
+    '实例: ' +
+      (entry.instanceId
+        ? (entry.instanceName || entry.instanceId) + ' (' + entry.instanceId + ')'
+        : 'Control Plane'),
+    '级别: ' + formatLogLevel(entry.level),
+    '来源: ' + (entry.source || 'SYSTEM'),
+  ];
+  if (entry.traceId) metadata.push('Trace ID: ' + entry.traceId);
+  if (entry.errorUuid) metadata.push('错误 UUID: ' + entry.errorUuid);
+
+  const content = entry.summary || entry.responseBody || entry.requestBody || '';
+  const sections = [metadata.join('\n'), content];
+  if (entry.requestBody && entry.requestBody !== content) {
+    sections.push('请求体 (Request Body):\n' + entry.requestBody);
+  }
+  if (entry.responseBody && entry.responseBody !== content) {
+    sections.push('响应体 (Response Body):\n' + entry.responseBody);
+  }
+  return sections.join('\n\n');
+}

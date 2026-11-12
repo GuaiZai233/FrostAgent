@@ -252,38 +252,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	// Initialize ActionsCat client & tools
 	actionsCatClient := actionscat.New(scope.Getenv)
-	actionsCatListTool := tools.ActionsCatListActionsTool(actionsCatClient)
-	registry[actionsCatListTool.Name()] = actionsCatListTool
-	actionsCatRunTool := tools.ActionsCatRunActionTool(actionsCatClient)
-	registry[actionsCatRunTool.Name()] = actionsCatRunTool
-	actionsCatGetRunTool := tools.ActionsCatGetRunTool(actionsCatClient)
-	registry[actionsCatGetRunTool.Name()] = actionsCatGetRunTool
-	actionsCatCreateTool := tools.ActionsCatCreateActionTool(actionsCatClient, scope)
-	registry[actionsCatCreateTool.Name()] = actionsCatCreateTool
-	actionsCatCreateVersionTool := tools.ActionsCatCreateVersionTool(actionsCatClient, scope)
-	registry[actionsCatCreateVersionTool.Name()] = actionsCatCreateVersionTool
-	actionsCatBuildVersionTool := tools.ActionsCatBuildVersionTool(actionsCatClient, scope)
-	registry[actionsCatBuildVersionTool.Name()] = actionsCatBuildVersionTool
-	actionsCatGetBuildTool := tools.ActionsCatGetBuildTool(actionsCatClient)
-	registry[actionsCatGetBuildTool.Name()] = actionsCatGetBuildTool
-	actionsCatListBuildsTool := tools.ActionsCatListBuildsTool(actionsCatClient)
-	registry[actionsCatListBuildsTool.Name()] = actionsCatListBuildsTool
-	actionsCatActivateBuildTool := tools.ActionsCatActivateBuildTool(actionsCatClient, scope)
-	registry[actionsCatActivateBuildTool.Name()] = actionsCatActivateBuildTool
-	actionsCatDeployActionTool := tools.ActionsCatDeployActionTool(actionsCatClient, scope)
-	registry[actionsCatDeployActionTool.Name()] = actionsCatDeployActionTool
-	actionsCatCreateScheduleTool := tools.ActionsCatCreateScheduleTool(actionsCatClient, scope)
-	registry[actionsCatCreateScheduleTool.Name()] = actionsCatCreateScheduleTool
-	actionsCatListSchedulesTool := tools.ActionsCatListSchedulesTool(actionsCatClient)
-	registry[actionsCatListSchedulesTool.Name()] = actionsCatListSchedulesTool
-	actionsCatDeleteScheduleTool := tools.ActionsCatDeleteScheduleTool(actionsCatClient, scope)
-	registry[actionsCatDeleteScheduleTool.Name()] = actionsCatDeleteScheduleTool
-	actionsCatCreateMatcherTool := tools.ActionsCatCreateMatcherTool(actionsCatClient, scope)
-	registry[actionsCatCreateMatcherTool.Name()] = actionsCatCreateMatcherTool
-	actionsCatListMatchersTool := tools.ActionsCatListMatchersTool(actionsCatClient)
-	registry[actionsCatListMatchersTool.Name()] = actionsCatListMatchersTool
-	actionsCatDeleteMatcherTool := tools.ActionsCatDeleteMatcherTool(actionsCatClient, scope)
-	registry[actionsCatDeleteMatcherTool.Name()] = actionsCatDeleteMatcherTool
+	actionsCatTool := tools.ActionsCatTool(actionsCatClient, scope)
+	registry[actionsCatTool.Name()] = actionsCatTool
 
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,

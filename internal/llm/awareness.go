@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 )
 
 type AwarenessTarget struct{ SessionID, Platform, Kind, ID, AdapterID string }
@@ -293,9 +294,12 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	if deliveries.Text() != "" {
 		return
 	}
-	if err := sendMessages([]proactive.AwarenessMessage{{Type: "plain", Text: result.Content}}); err != nil {
-		e.Log().Warn(logs.SYSTEM, "主动感知发送失败: "+err.Error())
-	} else {
+	parts := replyformat.SplitLimited(result.Content, e.Getenv(replyformat.EnvKey) == "true", replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)))
+	for _, part := range parts {
+		if err := sendMessages([]proactive.AwarenessMessage{{Type: "plain", Text: part}}); err != nil {
+			e.Log().Warn(logs.SYSTEM, "主动感知发送失败: "+err.Error())
+			return
+		}
 		e.RecordBotMessage(false)
 	}
 }

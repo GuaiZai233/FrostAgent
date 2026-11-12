@@ -15,7 +15,11 @@ import (
 
 func (s *Service) SetToolEnabled(ctx context.Context, req *connect.Request[v1.SetToolEnabledRequest]) (*connect.Response[v1.SetToolEnabledResponse], error) {
 	if _, ok := s.engine.ToolRegistry[req.Msg.Name]; !ok {
-		return nil, connect.NewError(connect.CodeNotFound, errors.New("工具未注册"))
+		// Retired names only support clearing an old disable; they cannot create
+		// new switches or become callable tool registrations.
+		if _, legacy := s.legacyToolSettings()[req.Msg.Name]; !legacy || !req.Msg.Enabled {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("工具未注册"))
+		}
 	}
 	if s.engine.Scope == nil || s.engine.Config == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("实例配置不可用"))
@@ -48,4 +52,21 @@ func (s *Service) SetToolEnabled(ctx context.Context, req *connect.Request[v1.Se
 		return nil, connect.NewError(connect.CodeInternal, errors.New("保存工具开关失败"))
 	}
 	return connect.NewResponse(&v1.SetToolEnabledResponse{}), nil
+}
+
+// legacyToolSettings only accepts retired names advertised by registered tools.
+func (s *Service) legacyToolSettings() map[string]string {
+	legacy := make(map[string]string)
+	for _, tool := range s.engine.ToolRegistry {
+		provider, ok := tool.(interface{ LegacyToolSettings() map[string]string })
+		if !ok {
+			continue
+		}
+		for name, description := range provider.LegacyToolSettings() {
+			if _, registered := s.engine.ToolRegistry[name]; !registered {
+				legacy[name] = description
+			}
+		}
+	}
+	return legacy
 }

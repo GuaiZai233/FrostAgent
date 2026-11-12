@@ -56,7 +56,7 @@ func TestCreateScheduleUsesTrustedConversationDelivery(t *testing.T) {
 				return ""
 			})
 			ctx := llm.WithRunContext(context.Background(), llm.RunContext{ActorUserID: "fixture-user", ActorPlatform: tc.platform, AdapterID: tc.adapter, SessionID: "fixture-session", RouteScope: modelrouter.Scope{GroupID: tc.group}})
-			out, err := ActionsCatCreateScheduleTool(client, scope).ExecuteContext(ctx, `{"action_id":"fixture-action","cron_expr":"* * * * *","delivery_context":{"platform":"attacker-platform","target_id":"attacker-target"}}`)
+			out, err := routedActionsCatTestTool(client, "create_schedule", scope).ExecuteContext(ctx, `{"action_id":"fixture-action","cron_expr":"* * * * *","delivery_context":{"platform":"attacker-platform","target_id":"attacker-target"}}`)
 			if err != nil {
 				t.Fatal(err)
 			}

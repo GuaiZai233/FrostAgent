@@ -35,7 +35,7 @@ func TestMatcherToolPreservesPatternWhitespace(t *testing.T) {
 			const pattern = " cat \n"
 			args, _ := json.Marshal(map[string]string{"action_id": "fixture-action", "name": "fixture matcher", "match_type": matchType, "pattern": pattern})
 			ctx := llm.WithRunContext(context.Background(), llm.RunContext{ActorUserID: "fixture-admin"})
-			out, err := ActionsCatCreateMatcherTool(client, scope).ExecuteContext(ctx, string(args))
+			out, err := routedActionsCatTestTool(client, "create_matcher", scope).ExecuteContext(ctx, string(args))
 			if err != nil {
 				t.Fatal(err)
 			}
