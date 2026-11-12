@@ -50,6 +50,13 @@ func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time
 }
 
 func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn) (oneBotAPIResponse, error) {
+	return c.sendActionAndWaitContext(action, timeout, turn, turn.Context())
+}
+
+func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn, ctx context.Context) (oneBotAPIResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return oneBotAPIResponse{}, err
+	}
 	if c == nil || c.conn == nil {
 		return oneBotAPIResponse{}, fmt.Errorf("websocket connection is nil")
 	}
@@ -74,7 +81,7 @@ func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	defer c.clearMessageRequest(echo, responseChannel)
-	response, err := waitActionResponse(turn.Context(), c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
+	response, err := waitActionResponse(ctx, c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
 	if err != nil {
 		if err == context.DeadlineExceeded {
 			err = fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)

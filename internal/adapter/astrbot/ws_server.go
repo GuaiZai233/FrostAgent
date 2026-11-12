@@ -1427,6 +1427,8 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		if conn != nil && conn.mock {
 			runCtx = conn.Context()
 		}
+		stopThinking := conn.startThinkingStatus(event, engine, turn)
+		defer stopThinking()
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Turn:        turn,
 			Context:     runCtx,
@@ -1456,6 +1458,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			Proactive:            isProactiveReply(&event),
 			ProactiveStickerOnly: event.proactiveStickerOnly,
 		})
+		stopThinking()
 		replyText = runResult.Content
 		if turn.Interrupted() {
 			return

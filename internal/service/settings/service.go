@@ -35,6 +35,7 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	"ENABLE_THINKING_STATUS":               {"当Bot开始思考轮次时，展示正在输入的标识。（QQ：对方正在输入……; Telegram：Typing…）", false, false, false},
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
@@ -746,6 +747,9 @@ func validateUpdate(key, value string) error {
 		}
 	}
 
+	if key == "ENABLE_THINKING_STATUS" && value != "" && value != "true" && value != "false" {
+		return errors.New("展示思考状态必须为 true 或 false")
+	}
 	if key == "ENABLE_POKE" && value != "" && value != "true" && value != "false" {
 		return errors.New("允许发送戳一戳行为必须为 true 或 false")
 	}
