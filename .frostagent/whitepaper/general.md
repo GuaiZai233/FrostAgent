@@ -149,6 +149,8 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **非安全上下文兼容的客户端 ID 生成**：浏览器仅在安全上下文（HTTPS 或 localhost）中暴露 `crypto.randomUUID()`，控制台若经局域网 HTTP 地址访问，该函数为 `undefined`。模型路由页面的草稿 owner 与模型名称 ID 统一经 `apps/web/src/utils/random-id.ts` 的 `randomUUID()` 生成：优先使用原生 `randomUUID`，不可用时基于 `crypto.getRandomValues`（所有上下文均可用）按 RFC 4122 v4 格式拼装。此前该缺陷会导致模型路由页面在 HTTP 访问时显示「页面加载失败」，且因 `sessionStorage` 未写入而刷新无效。
 - **只读自描述工具 (`get_frostagent_info`)**：Bot 可通过单一工具的 `section` 参数查询自身运行信息，参数由 Schema 严格限定为 `overview` / `model` / `features` 三者之一，拒绝其它键与额外参数。`overview` 返回 Bot 名称（`BOT_NAME`）、别名（`BOT_ALIASES`，逗号分隔并去除空白）、FrostAgent 版本、运行时长与当前已建立连接的接入平台（OneBot、AstrBot，依据适配器的活动 WebSocket 连接数判定）；`model` 仅返回当前请求路由解析出的主对话上游模型名称：按请求的 `RouteScope` 与 `RouteSnapshot` 解析，因此群组专属绑定生效；无请求上下文时回退全局路由。端点、密钥与解析错误细节一律不回显；`features` 按固定顺序报告记忆、向量检索（`ENABLE_EMBEDDING` 生效）、Sandbox（已启用且后端存在）、MCP（至少一个服务处于已连接状态）、ActionsCat（已启用且已配置端点）与表情包子系统的可用性。所有值在每次调用时实时读取，不做缓存；工具不接受模型提供的配置输入，且不允许在主动回复轮次中调用。
 
+- **管理员配置追加工具 (`override_frostagent_config`)**：当前真实 QQ 管理员可在明确自然语言请求下修改当前实例的提示词追加区、防循环、主动感知、ActionsCat 开关和表情包积极度；提示词和 BotID 只追加，禁止模拟/主动轮次修改。沙箱与安全控制档位不在范围内。参数、边界识别与权限规则见 [管理员自然语言配置工具](config-override.md)。
+
 ### 群聊滚动总结与容错压缩系统 (Group Running Compactor)
 
 为了在群聊高频消息场景下保持长期对话连贯性且避免 Prompt 上下文迅速膨胀爆表，FrostAgent 实现了高容错的群聊滚动压缩器（`GroupCompactor`）：
@@ -238,7 +240,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 
 ### Bot 连续对话防循环
 
-- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可输入用户 ID，点击「添加」或按回车逐个加入 Bot 标记列表，并逐项移除。列表编辑加入页面统一草稿；点击顶部草稿栏的「保存」时，与其他设置批量提交，包含输入框中尚未添加的 ID；「还原」可撤销列表和待添加输入。列表为空即关闭。配置仍使用实例级 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
+- 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可输入用户 ID，点击「添加」或按回车逐个加入 Bot 标记列表，并逐项移除。列表编辑加入页面统一草稿；点击顶部草稿栏的「保存」时，与其他设置批量提交，包含输入框中尚未添加的 ID；「还原」可撤销列表和待添加输入。列表为空时不限制；实例级 `BOT_LOOP_ENABLED=false` 可关闭防循环并保留 BotID（未配置时保留旧行为）。配置使用 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
 - OneBot 与 AstrBot 按入站顺序、按会话为每个标记 Bot 独立累计对话请求。切换 Bot、普通群聊消息和主动回复均不恢复额度；只有未标记用户有效地明确唤醒（@、名称/别名或已启用的戳一戳）才恢复当前会话内所有 Bot 的额度。戳一戳未通过冷却准入时不会计数或恢复额度；被安全或路由规则静默拒绝的消息也不会计数或恢复额度，安全规则直接发出的拒绝回复仍按有效对话计数。清空会话、重启或变更 Bot 防循环配置仍会重置额度。
 - AstrBot 旧插件携带的 `bot_loop_interrupted` 仅保留协议兼容，新后端不据此恢复额度，因此过滤消息、插件重启或发送者切换不会绕过上限。无需为此增加过滤消息上报；关闭全量群消息转发时，名称/别名只有在消息原本会被转发的情况下才能被后端识别。
 - 超过上限后，`hard` 在后端丢弃请求及安全直接回复；AstrBot 发送 `suppress_llm: true` 的终态 `noop` 避免原生 LLM 兜底。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。

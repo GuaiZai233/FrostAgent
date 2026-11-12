@@ -82,7 +82,7 @@ type Manager struct {
 	templateDialogue   string
 	billing            atomic.Pointer[billing.Client]
 	globalApplyMu      sync.Mutex
-	settingsWriteMu    sync.Mutex
+	settingsWriteMu    settingsWriteLock
 	appliedGlobal      map[string]string
 	globalApplyHook    func() error
 	mcpGetenv          func(string) string
@@ -134,7 +134,7 @@ func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, c
 	} else if wsListenAddr == "" {
 		wsListenAddr = instanceconfig.DefaultWSListenAddr
 	}
-	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db)
+	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db, &m.settingsWriteMu)
 }
 
 func newManager(root string, global *instanceconfig.Store, dialoguePath string, db *storage.DB, builder runtimeBuilder) (*Manager, error) {

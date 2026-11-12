@@ -60,7 +60,7 @@ type Runtime struct {
 	astrbotClient  bool
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB) (*Runtime, error) {
+func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB, settingsWriteMu tools.ConfigWriteLock) (*Runtime, error) {
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -407,6 +407,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Register memory tool (must be after engine assignment)
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
+	overrideConfigTool := tools.OverrideFrostAgentConfigTool(engine, settingsWriteMu)
+	engine.ToolRegistry[overrideConfigTool.Name()] = overrideConfigTool
 	// Register the context-image inspection tool after the engine so it can use
 	// the routed vision/dialogue providers and the shared security controller.
 	inspectImageTool := tools.InspectMessageImageTool(engine)

@@ -11,6 +11,7 @@ var hotInstanceSettings = map[string]bool{
 	"ENABLE_REPLY_IN_GROUP_MSG": true, "MAX_CONTEXT_MESSAGES": true,
 	"ENABLE_QUOTE_TRACE": true, "QUOTE_TRACE_DEPTH": true,
 	"BOT_LOOP_USER_IDS": true, "BOT_LOOP_MAX_TURNS": true, "BOT_LOOP_MODE": true,
+	"BOT_LOOP_ENABLED":            true,
 	"GROUP_RAW_CONTEXT_MAX_CHARS": true,
 	"MEMORY_EXTRACT_BATCH_MIN":    true, "MEMORY_EXTRACT_BATCH_MAX": true,
 	"PROACTIVE_REPLY_PROBABILITY": true, "ENABLE_PROACTIVE_REPLY": true,
