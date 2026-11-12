@@ -3,7 +3,7 @@ import { createInstanceAPI } from '../api/client';
 import { LogEntry, LogLevel } from '@frostagent/proto';
 import {
   escapeHtml,
-  formatConsoleLog,
+  formatFullLog,
   formatDateTime,
   formatLogLevel,
   logLevelBadgeClass,
@@ -487,7 +487,7 @@ export function mountLogsPage(
       description: `${formatLogLevel(entry.level)} · ${formatDateTime(entry.timestamp)}${traceInfo}${errorInfo}`,
       maxWidth: '38rem',
       bodyHtml: `
-        <div class="card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" style="max-height: 24rem; overflow-y: auto;">${renderLoggedImagesInText(entry.summary || '无摘要内容')}</div>
+        <div class="log-summary-content card p-3.5 bg-muted text-xs leading-relaxed font-mono whitespace-pre-wrap select-text text-foreground" tabindex="0" aria-label="日志正文">${renderLoggedImagesInText(entry.summary || '无摘要内容')}</div>
       `,
       footerHtml: `
         ${
@@ -502,10 +502,11 @@ export function mountLogsPage(
         }
         <button class="btn btn-outline btn-sm" id="log-summary-copy-btn">
           ${icon('copy', 'w-3.5 h-3.5')}
-          <span>复制</span>
+          <span>复制完整日志</span>
         </button>
       `,
       onMount: (dialogEl) => {
+        dialogEl.classList.add('log-summary-dialog');
         const inspectBtn = dialogEl.querySelector<HTMLButtonElement>(
           '#log-summary-inspect-btn',
         );
@@ -523,7 +524,7 @@ export function mountLogsPage(
           '#log-summary-copy-btn',
         );
         copyBtn?.addEventListener('click', async () => {
-          const logText = formatConsoleLog(entry);
+          const logText = formatFullLog(entry);
           const success = await copyToClipboard(logText);
           if (success) {
             toast.success('已复制完整日志');
