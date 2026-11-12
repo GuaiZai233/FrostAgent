@@ -67,7 +67,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 			engine := newTestEngine(provider)
 			engine.ToolRegistry["qq_extend_messages"] = tools.QQTool()
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-			srv, address := startWSTestServer(engine)
+			srv, address := startReplyWSTestServer(t, engine)
 			defer srv.Close()
 			ws, _, err := websocket.DefaultDialer.Dial(address, nil)
 			if err != nil {
@@ -133,7 +133,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 
 func TestQQFinalStructuredMediaUsesNativeUpload(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: `{"messages":[{"type":"file","url":"https://example.invalid/fixture","name":"shown.txt"}]}`}}}})
-	srv, address := startWSTestServer(engine)
+	srv, address := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	ws, _, err := websocket.DefaultDialer.Dial(address, nil)
 	if err != nil {
@@ -167,7 +167,7 @@ func TestQQCrossSessionToolKeepsSourceAndTargetRepliesSeparate(t *testing.T) {
 	engine.Scope = newTestScopeWithEnv(t, map[string]string{qqextend.TargetGroupsKey: "42", "ENABLE_AT_IN_GROUP_MSG": "true", "ENABLE_REPLY_IN_GROUP_MSG": "true"})
 	defer engine.Scope.Cancel()
 	engine.ToolRegistry[qqextend.ToolName] = tools.QQTool()
-	server, address := startWSTestServer(engine)
+	server, address := startReplyWSTestServer(t, engine)
 	defer server.Close()
 	ws, _, err := websocket.DefaultDialer.Dial(address, nil)
 	if err != nil {

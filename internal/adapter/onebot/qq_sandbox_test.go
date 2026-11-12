@@ -152,7 +152,7 @@ func TestQQURLToSandboxArtifactsThroughTools(t *testing.T) {
 	engine.SandboxBackend = client
 	engine.ToolRegistry["execute_command"] = tools.ExecuteCommandTool(client)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-	server, address := startWSTestServer(engine)
+	server, address := startReplyWSTestServer(t, engine)
 	defer server.Close()
 	ws, _, err := websocket.DefaultDialer.Dial(address, nil)
 	if err != nil {
