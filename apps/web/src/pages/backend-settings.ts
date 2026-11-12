@@ -31,6 +31,7 @@ import {
   isWhitelistEnabled,
 } from './proactive-whitelist';
 import { mountGroupCompactWhitelist } from './group-compact-whitelist';
+import { mountAwarenessSettings } from './awareness-settings';
 import {
   groupProbabilitiesKey,
   groupProbabilityIdentity,
@@ -48,6 +49,8 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   let draft: SettingsDraft | null = null;
   const controller = new AbortController();
   const sessionGroupMap = new Map<string, string>();
+  let sessionPrivateIDs: string[] = [];
+  let flushAwarenessInputs: (() => boolean) | undefined;
   let closeGroupProbabilityDialog: (() => void) | null = null;
 
   container.innerHTML = `
@@ -421,7 +424,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function invalidNumbers(): HTMLInputElement[] {
     return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
   }
-  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || !!settingsRoot.querySelector<HTMLInputElement>('#compact-whitelist-input')?.value || invalidNumbers().length > 0; }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || !!settingsRoot.querySelector<HTMLInputElement>('#compact-whitelist-input')?.value || [...settingsRoot.querySelectorAll<HTMLInputElement>('[data-awareness-input]')].some((input) => !!input.value) || invalidNumbers().length > 0; }
   function updateBanner(): void {
     banner.hidden = !dirty();
     saveBtn.disabled = saving || loading || !draft;
@@ -442,6 +445,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       return;
     }
     renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change);
+    const awarenessRoot = document.createElement('div');
+    settingsRoot.prepend(awarenessRoot);
+    flushAwarenessInputs = mountAwarenessSettings(awarenessRoot, { get: (key) => draft?.get(key), change,
+      canEdit: () => !!draft && !saving && !loading, groups: sessionGroupMap, privateIDs: sessionPrivateIDs, dirty: updateBanner });
     mountCompactWhitelistCard();
   }
 
@@ -742,9 +749,15 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       storageBackend = memorySettings.storageBackend;
       draft = new SettingsDraft(memorySettings.envVars, extra);
       sessionGroupMap.clear();
+      sessionPrivateIDs = [];
       for (const session of sessions.sessions ?? []) {
         const id = groupIdFromSessionId(session.sessionId);
         if (id) sessionGroupMap.set(id, session.groupName || '');
+        const privateID = session.sessionId.replace(/(^|:)private:/, '$1group:');
+        if (privateID !== session.sessionId) {
+          const id = groupIdFromSessionId(privateID);
+          if (id) sessionPrivateIDs.push(id);
+        }
       }
       groupSelect.innerHTML = '<option value="">-- 从最近会话选择群聊 --</option>' +
         [...sessionGroupMap].map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(formatGroupOption(id, name))}</option>`).join('');
@@ -757,6 +770,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
 
   async function saveDraft(): Promise<void> {
     if (!draft || saving || loading) return;
+    if (flushAwarenessInputs && !flushAwarenessInputs()) return;
     if (botUserInput.value && !addBotUser()) return;
     if (groupInput.value) addGroup();
     if ((extraKey.value || extraValue.value) && !addExtra()) return;

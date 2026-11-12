@@ -33,7 +33,7 @@ func TestPostgresMigrationSchemaCompatibilityRewriteRules(t *testing.T) {
 			seedCompatibilityEmbeddingCaches(t, db, false)
 			// Isolate rewrite rules from the existing cross-schema FK guard.
 			compatibilityExec(t, db, `DROP TABLE memory_embeddings`)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -123,7 +123,11 @@ func TestPostgresMigrationSchemaCompatibilityRewriteRules(t *testing.T) {
 					t.Fatalf("unrelated rule or ordinary view was rejected: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				tx, err := opened.SQL.Begin()
 				if err != nil {
 					opened.Close()

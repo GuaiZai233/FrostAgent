@@ -1,0 +1,44 @@
+name: Cross-version Data Roundtrip
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'internal/storage/**'
+      - 'internal/modelrouter/**'
+      - 'internal/backup/**'
+      - 'internal/instance/**'
+      - 'internal/versioncompat/**'
+      - 'scripts/test_schema_roundtrip.py'
+      - '.github/workflows/version-roundtrip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  roundtrip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out pinned v15 compatibility build
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 409e50b5262ea3324f092560ee0cdcf206f93a1f
+          path: .compat-v15
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.3'
+      - name: Install protobuf tooling
+        run: |
+          go install github.com/bufbuild/buf/cmd/buf@v1.75.0
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
+      - name: Compile actual v15 and v16 probes
+        run: |
+          buf generate --template buf.gen.yaml
+          go test -c -o "$RUNNER_TEMP/schema16-roundtrip.test" ./internal/versioncompat
+          cd .compat-v15
+          buf generate --template buf.gen.yaml
+          go test -c -o "$RUNNER_TEMP/schema15-roundtrip.test" ./internal/versioncompat
+      - name: Round-trip old edits and both ZIP formats
+        run: python3 scripts/test_schema_roundtrip.py --v15-binary "$RUNNER_TEMP/schema15-roundtrip.test" --v16-binary "$RUNNER_TEMP/schema16-roundtrip.test"

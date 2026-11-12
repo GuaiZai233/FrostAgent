@@ -131,6 +131,7 @@ type Engine struct {
 	VisionProvider         core.LLMProvider
 	SessionManager         *SessionManager // 会话上下文管理器
 	Dispatcher             core.MessageDispatcher
+	Awareness              *AwarenessService
 	StartedAt              time.Time // 引擎启动时间
 	Version                string    // 版本号
 	TotalMessagesProcessed atomic.Int64
@@ -335,7 +336,7 @@ func (e *Engine) RunMessagesWithContext(
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
 
-	if len(messages) == 0 || messages[0].Role != "system" {
+	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
 		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
@@ -915,8 +916,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			for _, t := range modelTools {
 				if e.isToolAllowedForProactive(t.Name) {
 					if t.Name == "send_message" {
-						t.Description = proactive.SpecificReplyDescription
-						t.Parameters = proactive.SpecificReplyParameters()
+						if runCtx.Awareness {
+							t.Description = "Send text and native mentions to the current conversation. No triggering message exists. Only known current-group member IDs may be mentioned; session changes, quotes, media and files are unavailable."
+							t.Parameters = proactive.AwarenessParameters()
+						} else {
+							t.Description = proactive.SpecificReplyDescription
+							t.Parameters = proactive.SpecificReplyParameters()
+						}
 					}
 					proactiveTools = append(proactiveTools, t)
 				}
@@ -1142,8 +1148,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// Map back to internal message for now to maintain compatibility
 		responseMsg := &ChatMessage{
-			Role:    string(resp.Message.Role),
-			Content: resp.Message.Content,
+			Role:          string(resp.Message.Role),
+			Content:       resp.Message.Content,
+			ProviderState: resp.Message.ProviderState,
 		}
 		if len(resp.Message.ToolCalls) > 0 {
 			responseMsg.ToolCalls = make([]ToolCall, len(resp.Message.ToolCalls))
@@ -1266,7 +1273,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					specificReplyCalls++
 				}
 				if !e.isToolAllowedForProactive(tc.Function.Name) ||
-					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactive.IsSpecificReply(tc.Function.Arguments))) {
+					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactiveSendAllowed(runCtx, tc.Function.Arguments))) {
 					e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复批次包含禁止的工具调用 [%s]，整批静默终止", tc.Function.Name), "主动回复禁止副作用工具")
 					// After a confirmed send, finish as a tool-only answer so the
 					// adapters retain public history without sending anything else.
@@ -1537,11 +1544,24 @@ func effectiveMaxHistory(fallback int, scopes ...*runtimescope.Scope) int {
 
 // TrimSession 将会话持久化的历史裁剪到配置的消息上限
 // （MAX_CONTEXT_MESSAGES env，未配置时回退 SessionManager.MaxHistory）。
-func (e *Engine) TrimSession(session *SessionContext) {
+func (e *Engine) TrimSession(session *SessionContext, routes ...modelrouter.Scope) {
 	if session == nil {
 		return
 	}
-	session.TrimHistory(effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope))
+	limit := effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope)
+	if e.GroupCompactor != nil && isPrivateConversation(session.ConversationID) && !session.IsMock() {
+		route := modelrouter.Scope{Platform: "onebot"}
+		if len(routes) > 0 {
+			route = routes[0]
+		}
+		threshold := max(1, min(e.GroupCompactor.BufferSize(), limit-2))
+		e.triggerPrivateCompact(session, route, threshold)
+		// Keep the configured dialogue budget even when compaction is slow,
+		// unavailable or disabled. A captured snapshot owns its own copy.
+		session.trimPrivateHistory(limit)
+		return
+	}
+	session.TrimHistory(limit)
 }
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
@@ -1650,9 +1670,10 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	res := make([]core.ChatMessage, len(msgs))
 	for i, m := range msgs {
 		coreMsg := core.ChatMessage{
-			Role:       core.MessageRole(m.Role),
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
+			Role:          core.MessageRole(m.Role),
+			Content:       m.Content,
+			ToolCallID:    m.ToolCallID,
+			ProviderState: m.ProviderState,
 		}
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))

@@ -689,6 +689,19 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 
 		if !c.mock {
+			if a.engine != nil && a.engine.Awareness != nil && (event.MessageType == "group" || event.MessageType == "private") {
+				id := event.UserID
+				if event.MessageType == "group" {
+					id = event.GroupID
+				}
+				platform := event.Platform
+				if platform == "" {
+					platform = "astrbot"
+				}
+				target := llm.AwarenessTargetFor(platform, event.MessageType, id)
+				target.AdapterID = "astrbot"
+				a.engine.Awareness.Observe(target)
+			}
 			a.observeStickers(event)
 		}
 		c.inFlight.Add(1)

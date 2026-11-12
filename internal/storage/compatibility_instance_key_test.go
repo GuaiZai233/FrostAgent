@@ -46,7 +46,7 @@ func testCompatibilityInstanceKeys(t *testing.T, backend Backend) {
 		t.Run(test.name, func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
 			compatibilitySeedComputerUse(t, db)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -89,7 +89,11 @@ func testCompatibilityInstanceKeys(t *testing.T, backend Backend) {
 				if err != nil {
 					t.Fatalf("safe instance reference was rejected: %v", err)
 				}
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				proveCompatibilityInstanceRename(t, opened, child, test.action, true)
 				compatibilityClose(t, opened)
 			} else {

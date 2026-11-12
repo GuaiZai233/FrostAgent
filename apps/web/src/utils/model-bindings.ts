@@ -14,7 +14,7 @@ export const workloads = [
   { value: ModelWorkload.VISION, label: '多模态（图片）' },
   { value: ModelWorkload.REFLECTION, label: '反思' },
   { value: ModelWorkload.MEMORY_EXTRACT, label: '记忆提取' },
-  { value: ModelWorkload.GROUP_COMPACT, label: '群聊压缩' },
+  { value: ModelWorkload.GROUP_COMPACT, label: '上下文压缩' },
   { value: ModelWorkload.EMBEDDING, label: 'Embedding' },
 ] as const;
 

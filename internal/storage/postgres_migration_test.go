@@ -55,7 +55,7 @@ func TestPostgresMigrationEmbeddingDiscoveryDoesNotCreateStorage(t *testing.T) {
 		if startup == 0 {
 			// The second open also checks a declared future layout without
 			// caches. CI runs this before enabling the vector extension.
-			if _, updateErr := db.SQL.Exec(`UPDATE schema_meta SET version = 16, min_compatible_version = 14 WHERE id = 1`); updateErr != nil {
+			if _, updateErr := db.SQL.Exec(`UPDATE schema_meta SET version = 17, min_compatible_version = 14 WHERE id = 1`); updateErr != nil {
 				db.Close()
 				t.Fatal(updateErr)
 			}

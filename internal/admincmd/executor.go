@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -14,21 +13,6 @@ import (
 	"strings"
 	"time"
 )
-
-const privateCompactPrompt = `你是当前私聊上下文压缩器，而不是聊天历史记录器。
-
-你的输出是一份短暂的工作记忆，只用于帮助模型理解接下来几轮对话。它不是对话档案，不需要保留完整历史，信息允许被遗忘。
-你会收到对话历史记录。请根据对话记录重新生成一份新的当前总结。
-
-核心原则：
-- 优先保留当前仍在进行、尚未结束、很可能在接下来几轮继续被引用的内容。
-- 已经结束、解决、过时或明显离开当前话题的信息应主动删除。
-- 对话的连续性最重要。话题已经转移时，积极遗忘旧话题。
-- 控制在约 300～600 个中文字符。
-- 只输出新的对话总结正文，不要 Markdown 标题或额外解释。
-
-[对话记录]
-{conversation}`
 
 // CommandContext carries caller and session context for command execution.
 type CommandContext struct {
@@ -282,7 +266,7 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		e.runPrivateCompact(session, snapshot, cmdCtx)
 	}) {
 		close(startSent)
-		session.CancelPrivateCompact()
+		session.CancelPrivateCompact(snapshot)
 		return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, "私聊上下文压缩失败：实例未就绪", nil, cmdCtx.SessionID), false)
 	}
 	replyErr := cmdCtx.Reply(ctx, "已开始私聊上下文压缩总结...", true)
@@ -291,60 +275,8 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 }
 
 func (e *Executor) runPrivateCompact(session *llm.SessionContext, snapshot llm.PrivateCompactSnapshot, cmdCtx CommandContext) {
-	bgCtx := e.Engine.Context()
-	provider := e.Engine.Provider
-	model := e.Engine.ModelName
-	if e.Engine.GroupCompactor != nil && e.Engine.GroupCompactor.Provider() != nil {
-		provider = e.Engine.GroupCompactor.Provider()
-		if m := e.Engine.GroupCompactor.Model(); m != "" {
-			model = m
-		}
-	} else if e.Engine.ModelRouter != nil {
-		provider = e.Engine.ModelRouter.Provider(modelrouter.WorkloadGroupCompact, false, 120*time.Second)
-	}
-	if e.Engine.ModelRouter != nil {
-		if target, err := e.Engine.ModelRouter.Snapshot().Resolve(modelrouter.WorkloadGroupCompact, cmdCtx.RouteScope); err == nil {
-			model = target.UpstreamModel
-		}
-	}
-	if provider == nil {
-		session.CancelPrivateCompact()
-		_ = cmdCtx.Reply(context.Background(), e.Engine.Log().ReportError(logs.SYSTEM, "私聊上下文压缩总结失败：未配置可用的压缩模型 Provider", nil, cmdCtx.SessionID), false)
-		return
-	}
-	var b strings.Builder
-	for _, msg := range snapshot.Messages {
-		fmt.Fprintf(&b, "[%s]: %v\n", msg.Role, msg.Content)
-	}
-	conversation := b.String()
-	request := core.ChatRequest{
-		Model: model,
-		Messages: []core.ChatMessage{{
-			Role:    core.RoleUser,
-			Content: strings.Replace(privateCompactPrompt, "{conversation}", conversation, 1),
-		}},
-		MaxTokens:   1024,
-		Temperature: 0.2,
-		Route: core.RouteContext{
-			Platform: cmdCtx.RouteScope.Platform,
-			GroupID:  cmdCtx.RouteScope.GroupID,
-		},
-	}
-	response, err := provider.Chat(bgCtx, request)
-	if err != nil {
-		session.CancelPrivateCompact()
+	if err := e.Engine.CompactPrivateSnapshot(session, snapshot, cmdCtx.RouteScope); err != nil {
 		_ = cmdCtx.Reply(context.Background(), e.Engine.Log().ReportError(logs.SYSTEM, "私聊上下文压缩总结失败", err, cmdCtx.SessionID), false)
-		return
-	}
-	summary, ok := response.Message.Content.(string)
-	summary = strings.TrimSpace(summary)
-	if !ok || summary == "" {
-		session.CancelPrivateCompact()
-		_ = cmdCtx.Reply(context.Background(), e.Engine.Log().ReportError(logs.SYSTEM, "私聊上下文压缩总结失败：模型返回了空总结", nil, cmdCtx.SessionID), false)
-		return
-	}
-	if !session.CommitPrivateCompact(snapshot, summary) {
-		_ = cmdCtx.Reply(context.Background(), "已丢弃失效的私聊上下文压缩总结（会话已被重置或变更）。", false)
 		return
 	}
 	_ = cmdCtx.Reply(context.Background(), "私聊上下文压缩总结完成。", false)

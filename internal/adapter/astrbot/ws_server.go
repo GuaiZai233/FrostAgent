@@ -1506,7 +1506,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 
 		if isProactiveReply(&event) && (runResult.Error != nil || runResult.OutputBlocked) {
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("AstrBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.sessionKey(event), runResult.Error, runResult.OutputBlocked))
 			_ = sendTerminalNoopWithSuppress(event, conn)
 			return
@@ -1519,7 +1519,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			if deliveries.Text() != "" {
 				deliveries.CommitDelivered()
 			}
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			if event.MessageType == "group" && !runResult.Banned {
 				if session != nil {
 					if turn != nil && turn.StagedGuard() != nil {
@@ -1671,7 +1671,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					Wording:  sendErr.Error(),
 				})
 				if engine != nil {
-					engine.TrimSession(session)
+					engine.TrimSession(session, routeScope)
 				}
 			}
 			return
@@ -1698,7 +1698,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 					}
 				}
 			}
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 
 			if runResult.MemoryWritten {
 				engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计", "AstrBot: 本轮已通过 memory.write 处理记忆，跳过自动提取累计")

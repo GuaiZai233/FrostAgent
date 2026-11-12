@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"io"
 	"net/http"
@@ -13,10 +14,11 @@ import (
 // openai 兼容协议结构体
 
 type ChatMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role          string              `json:"role"`
+	Content       any                 `json:"content"`
+	ToolCalls     []ToolCall          `json:"tool_calls,omitempty"`
+	ToolCallID    string              `json:"tool_call_id,omitempty"`
+	ProviderState *core.ProviderState `json:"provider_state,omitempty"`
 }
 
 type ToolCallFunction struct {

@@ -45,11 +45,12 @@ class Element {
       return button;
     });
     this.closeButtons = [...html.matchAll(/<button\b[^>]*class="[^"]*dialog-close-btn[^"]*"[^>]*>/g)].map(() => new Element());
-    for (const match of html.matchAll(/<([a-z]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
+    for (const match of html.matchAll(/<([a-z]+)\b([^>]*)>/g)) {
       const child = new Element();
       child.tag = match[1];
       const attrs = match[2];
       const attr = (name: string) => attrs.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1] ?? '';
+      if (!attr('id') && !attrs.includes('data-awareness-')) continue;
       child.type = attr('type');
       child.value = attr('value');
       if (child.tag === 'select') {
@@ -66,7 +67,10 @@ class Element {
       child.dataset.settingInput = attr('data-setting-input');
       child.dataset.settingSwitch = attr('data-setting-switch');
       child.dataset.default = attr('data-default');
-      this.children.set(match[3], child);
+      for (const entry of attrs.matchAll(/data-awareness-([a-z]+)="([^"]*)"/g)) {
+        child.dataset[`awareness${entry[1][0].toUpperCase()}${entry[1].slice(1)}`] = entry[2];
+      }
+      this.children.set(attr('id') || `awareness-${this.children.size}`, child);
     }
     const rows = [...html.matchAll(/data-setting-row="([^"]+)"/g)];
     rows.forEach((match, index) => {
@@ -79,15 +83,22 @@ class Element {
     });
   }
   get innerHTML() { return this.html; }
+  prepend(child: Element) { this.children.set(`prepended-${this.children.size}`, child); }
   querySelector(selector: string): Element | null {
     if (selector.startsWith('#')) return this.children.get(selector.slice(1)) ?? [...this.children.values()].map((child) => child.querySelector(selector)).find(Boolean) ?? null;
     if (selector === '[data-setting-input]') return this.all().find((child) => child.dataset.settingInput) ?? null;
     if (selector === '[data-setting-switch]') return this.all().find((child) => child.dataset.settingSwitch) ?? null;
+    if (selector.startsWith('[data-awareness-')) return this.querySelectorAll(selector)[0] ?? null;
     const key = selector.match(/data-setting-input="([^"]+)"/)?.[1];
     return key ? this.all().find((input) => input.type === 'number' && input.dataset.settingInput === key) ?? null : null;
   }
   private all(): Element[] { return [...this.children.values()].flatMap((child) => [child, ...child.all()]).concat(this.groupButtons); }
   querySelectorAll(selector: string): Element[] {
+    const awareness = selector.match(/^\[data-awareness-([a-z]+)(?:="([^"]*)")?\]$/);
+    if (awareness) {
+      const key = `awareness${awareness[1][0].toUpperCase()}${awareness[1].slice(1)}`;
+      return this.all().filter((child) => child.dataset[key] !== undefined && (awareness[2] === undefined || child.dataset[key] === awareness[2]));
+    }
     if (selector === '[data-group-probability]') return this.groupButtons.filter((button) => button.dataset.groupProbability);
     if (selector === '[data-group-id]') return this.groupButtons.filter((button) => button.dataset.groupId);
     if (selector === '.dialog-close-btn') return this.closeButtons;
@@ -97,7 +108,8 @@ class Element {
     return [];
   }
   addEventListener(name: string, listener: (event: unknown) => void) { this.listeners.set(name, listener); }
-  emit(name: string, extra = {}) { if (!this.disabled) this.listeners.get(name)?.({ currentTarget: this, preventDefault() {}, ...extra }); }
+  emit(name: string, extra = {}) { if (!this.disabled) this.listeners.get(name)?.({ currentTarget: this, target: this, preventDefault() {}, ...extra }); }
+  setCustomValidity(message: string) { this.validity.badInput = !!message; }
   click() { this.emit('click'); }
   focus() {}
   select() {}

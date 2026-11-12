@@ -36,7 +36,7 @@ func testSchemaCompatibilityDefaults(t *testing.T, backend Backend) {
 		t.Run(test.name, func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
 			compatibilitySeedComputerUse(t, db)
-			version := 16
+			version := 17
 			if test.legacy {
 				version = 15
 			}
@@ -90,7 +90,11 @@ func testSchemaCompatibilityDefaults(t *testing.T, backend Backend) {
 					t.Fatalf("safe default layout was rejected: %v", err)
 				}
 				defer opened.Close()
-				assertCompatibilityVersions(t, opened, version, 14)
+				expectedVersion, expectedFloor := version, 14
+				if test.legacy {
+					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
+				}
+				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
 				if after := compatibilityDefaultsSnapshot(t, opened.SQL, backend); !reflect.DeepEqual(before, after) {
 					t.Fatal("compatible startup changed data, defaults or metadata")
 				}
