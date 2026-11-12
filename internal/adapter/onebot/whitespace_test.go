@@ -85,7 +85,7 @@ func TestOneBotOutboundPreservesText(t *testing.T) {
 						engine := newTestEngine(provider)
 						engine.Scope = scope
 						engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-						srv, wsURL = startWSTestServer(engine)
+						srv, wsURL = startReplyWSTestServer(t, engine)
 					}
 					defer srv.Close()
 					conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

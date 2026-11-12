@@ -64,7 +64,7 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := segmentTestEngine(t, tc.output, tc.enabled)
-			srv, url := startWSTestServer(engine)
+			srv, url := startReplyWSTestServer(t, engine)
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {
 				srv.Close()
@@ -175,7 +175,7 @@ func TestSegmentedReplyStopsAfterInterruption(t *testing.T) {
 	for _, reset := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reset=%v", reset), func(t *testing.T) {
 			engine := segmentTestEngine(t, "first"+replyformat.SegmentMark+"second"+replyformat.SegmentMark+"third", true)
-			server, url := startWSTestServer(engine)
+			server, url := startReplyWSTestServer(t, engine)
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {
 				server.Close()

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/thinking"
 	"github.com/GuaiZai233/FrostAgent/internal/admincmd"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
@@ -104,7 +106,33 @@ func newTestEngine(provider core.LLMProvider) *llm.Engine {
 	}
 }
 
-// startWSTestServer 启动一个带 WebSocket handler 的测试服务器
+// startReplyWSTestServer disables typing notifications so reply/ACK tests can
+// assert the exact outbound action sequence. Typing tests use startWSTestServer.
+func startReplyWSTestServer(t *testing.T, engine *llm.Engine) (*httptest.Server, string) {
+	t.Helper()
+	disableTestThinkingStatus(t, engine)
+	return startWSTestServer(engine)
+}
+
+func disableTestThinkingStatus(t *testing.T, engine *llm.Engine) {
+	t.Helper()
+	if engine.Scope == nil {
+		t.Setenv(thinking.EnvKey, "false")
+	} else {
+		if engine.Scope.Config == nil {
+			cfg, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine.Scope.Config = cfg
+		}
+		if err := engine.Scope.Config.Update(thinking.EnvKey, "false", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// startWSTestServer starts the adapter with its configured production behavior.
 func startWSTestServer(engine *llm.Engine) (*httptest.Server, string) {
 	mux := http.NewServeMux()
 	adapter := NewAdapter(engine)
@@ -119,7 +147,7 @@ func startWSTestServer(engine *llm.Engine) (*httptest.Server, string) {
 
 func TestHandleWSPrivateMessage(t *testing.T) {
 	engine := newTestEngine(&mockLLMProvider{})
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	// 连接 WebSocket
@@ -228,7 +256,7 @@ func TestReplySilentTurnKeepsConsecutiveUserHistory(t *testing.T) {
 		}
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -763,7 +791,7 @@ func TestHandleWSEmptyFinalWarningUsesInstanceLogger(t *testing.T) {
 	engine := newTestEngine(provider)
 	instanceLog := logs.New("instance-log-test", "日志测试实例", 100)
 	engine.Scope = runtimescope.New(nil, nil, instanceLog)
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -833,7 +861,7 @@ func TestOneBotFinalStickerRespectsActivityAndResetsQuota(t *testing.T) {
 					engine.RecordBotTurn()
 				}
 			}
-			srv, wsURL := startWSTestServer(engine)
+			srv, wsURL := startReplyWSTestServer(t, engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 			if err != nil {
@@ -1022,7 +1050,7 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	engine := newTestEngine(provider)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 	engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1232,7 +1260,7 @@ func TestHandleWSSendMessageToolHook(t *testing.T) {
 	// 注册 send_message 工具
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1476,7 +1504,7 @@ func TestWSBilling_WelcomeBonus(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1619,7 +1647,7 @@ func TestWSBilling_WelcomeBonus_WithToolCall(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1729,7 +1757,7 @@ func TestWSBilling_StandardConsumption(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1821,7 +1849,7 @@ func TestWSBilling_InsufficientFunds_EarlyAbort(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1890,7 +1918,7 @@ func TestWSBilling_FailClosedOnServiceUnavailable(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1961,7 +1989,7 @@ func TestWSBilling_ModelFailureReleasesReservation(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -2086,7 +2114,7 @@ func TestWSBilling_ToolLoop_MultiTurnAccumulation(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -2214,7 +2242,7 @@ func TestWSBilling_ToolLoop_InsufficientFundsOnSecondTurn(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -2318,7 +2346,7 @@ func TestWSBilling_ToolCall_CommitFailureStopsTool(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -2395,7 +2423,7 @@ func TestWSBilling_Vision_InsufficientBalance_EarlyAbort(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -2463,7 +2491,7 @@ func TestWSBilling_OversizedInput_EarlyAbort(t *testing.T) {
 		ModelName:        "deepseek-chat",
 	}
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -3319,7 +3347,7 @@ func TestWS_SendMessage_ACKSuccess(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -3446,7 +3474,7 @@ func TestWS_SendMessage_ACKFailure_Muted(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -3566,7 +3594,7 @@ func TestWS_SendMessage_ACKTimeout(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -3670,7 +3698,7 @@ func TestWS_SendMessage_WebsocketWriteFailure(t *testing.T) {
 	}
 	engine := newTestEngine(mockLLM)
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -3738,7 +3766,7 @@ func TestWS_DeliveryFailure_SessionTrimUnderContinuousFailures(t *testing.T) {
 
 	mockLLM := &mockLLMProvider{responses: responses}
 	engine := newTestEngine(mockLLM)
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -3955,7 +3983,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 		},
 	}
 	engine.Security.SetClassifier(mockCls)
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	dialWS := func(t *testing.T) *websocket.Conn {
@@ -4217,7 +4245,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 		failEngine := newTestEngine(mockLLM)
 		failEngine.Security = security.NewController(t.TempDir()) // No classifier configured
 		failEngine.Security.SetMode(security.ControlModeAggressive)
-		failSrv, failWSURL := startWSTestServer(failEngine)
+		failSrv, failWSURL := startReplyWSTestServer(t, failEngine)
 		defer failSrv.Close()
 
 		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
@@ -4262,7 +4290,7 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 				return security.ClassificationResult{}, errors.New("upstream gateway timeout / network failure")
 			},
 		})
-		failSrv, failWSURL := startWSTestServer(failEngine)
+		failSrv, failWSURL := startReplyWSTestServer(t, failEngine)
 		defer failSrv.Close()
 
 		failConn, _, err := websocket.DefaultDialer.Dial(failWSURL, nil)
@@ -4340,7 +4368,7 @@ func TestOneBotTerminalModelOutputSingleClassification(t *testing.T) {
 	}
 	engine.Security.SetClassifier(cls)
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -4407,7 +4435,7 @@ func TestOneBotSecurityClassifierFailureLogTieringAndDeduplication(t *testing.T)
 		},
 	})
 
-	failSrv, failWSURL := startWSTestServer(failEngine)
+	failSrv, failWSURL := startReplyWSTestServer(t, failEngine)
 	defer failSrv.Close()
 
 	// Subscribe to logs to capture emitted entries

@@ -51,7 +51,7 @@ func TestOneBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 		"BOT_LOOP_USER_IDS": "onebot:11", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "soft",
 	})
 	engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -269,7 +269,7 @@ func TestOneBotBotLoopHardDropSuppressesSecurityRejection(t *testing.T) {
 		return security.ClassificationResult{Category: security.RiskCategoryNone,
 			RiskLevel: security.RiskLevelNone, Reason: "clean"}, nil
 	}})
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -323,7 +323,7 @@ func TestOneBotBotLoopDisableAndRestoreSameSettingsResetsStreak(t *testing.T) {
 		"BOT_LOOP_USER_IDS": "onebot:11", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "hard",
 	})
 	engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
