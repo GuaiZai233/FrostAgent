@@ -18,7 +18,7 @@ func hasStickerImage(content string) bool {
 		return false
 	}
 	for _, message := range payload.Messages {
-		if message.Type == "image" && message.IsSticker {
+		if message.Type == "image" && message.IsSticker || sticker.IsMessageType(message.Type) {
 			return true
 		}
 	}

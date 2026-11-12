@@ -8,6 +8,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"maps"
@@ -35,6 +36,7 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	qqextend.TargetGroupsKey:                   {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
 	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
 	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},
 	proactive.AwarenessPrivateWhitelistEnabled: {"主动感知是否仅对私聊白名单生效", false, false, false},
@@ -712,6 +714,10 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 func validateUpdate(key, value string) error {
+	if key == qqextend.TargetGroupsKey {
+		_, err := qqextend.ParseTargetGroups(value)
+		return err
+	}
 	if key == proactive.AwarenessInterval {
 		if _, _, err := proactive.ParseAwarenessInterval(value); err != nil {
 			return err

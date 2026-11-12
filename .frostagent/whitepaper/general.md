@@ -198,8 +198,8 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），保留已成功取得的引用节点并停止后续追溯，绝不中断或阻断核心对话事件分发；
     - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。直接引用节点优先提供插件已转发的图片字节，并保留回查中可读取的其他图片；视觉请求按解码后的图片内容去重，避免不完整 Reply.chain、缓存标识或失效 URL 造成丢图或重复。OneBot 使用已有 `get_msg` 通道；AstrBot 的 aiocqhttp 插件声明支持回查后，仅在后端通过入站安全门禁并确认需要回复时，按后端请求回查，后端验证消息 ID 和会话归属。其他 AstrBot 平台若没有对应历史查询能力，则不扩展引用链。
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
-    - 通用前置强校验 (O(1) 内存)：出站所有本地媒体类型（`image`、`record`、`video`、`file`）在消息链组装阶段（`buildOneBotMediaFile`）一律执行前置强校验（Fail-Fast）。通过文件元数据检查（`os.Stat`）与 1 字节探针读取（`os.Open` + probe read）验证存在性、可读性与非空，杜绝将大体积音视频全量读入内存造成 OOM；全量内存缓冲严格仅用于需要 Base64 编码的贴纸图片；
-    - 跨容器文件系统边界说明：前置校验验证的是 FrostAgent 本地视角下的文件可读性。由于非贴纸媒体通过 `file://<local path>` 穿越 OneBot 协议边界，若 OneBot 上游独立容器化部署，必须与 FrostAgent 共享存储卷（Shared Volume）以解析本地路径；跨隔离容器或远程文件系统的路径穿透明确不在归一化保证范围内；
+    - 宿主路径预检 (O(1) 内存)：出站本地媒体（`image`、`record`、`video`、`file`）通过文件元数据与 1 字节探针验证存在性、可读性与非空。原生 QQ 发送器对贴纸、显式 inline 和明确路径拒绝后的回落使用有界 Base64 缓冲；整次发送的分段、沙箱产物与封面共用 30 MiB 预算；
+    - 跨容器文件系统边界说明：共享路径需要 OneBot 网关能访问相同文件，`auto` 仅在明确路径拒绝后尝试有界内联，`shared` 禁止该回落。公开 HTTP(S) 媒体交由网关拉取。原生 OneBot 的 `/sandbox/...` 或 `sandbox:/sandbox/...` 则在发送前通过当前来源会话的沙箱后端读取并内联，无需共享卷；沙箱读取失败不转向宿主路径。详见 [QQ 富消息发送](../../docs/qq-rich-send.md)；
     - 上游 ACK 门禁：通过 `SendActionAndWait` 监听平台响应。若上游返回错误码（如 LuckyLillia 在媒体转换抛错时整体报错，或群禁言/风控），FrostAgent 坚决不向持久历史提交该 assistant 消息，记录瞬态 `DeliveryFailure` 并向工具调用返回错误；若上游返回成功（如 NapCat 部分元素转换异常时局部过滤但整体返回成功），FrostAgent 尊重平台 ACK 并正常提交历史；
   - **入站媒体异常可观测性 (Inbound Media Resolution Observability)**：
     - 针对 NapCat“局部容错丢弃媒体但仍上报文本”与 LuckyLillia“媒体异常导致整条事件无法分发”的上游行为差异，适配器在收到媒体段但数据缺失或下载失败时输出明确的诊断日志，杜绝未记录的静默语义漂移。
@@ -644,6 +644,7 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
   - 通过固定命名空间与 `SANDBOX_SESSION_NAMESPACE` 对 FrostAgent `SessionID` 进行确定性 RFC4122 v5 UUID 映射，作为 Gateway `user_uuid`；
   - 同一 FrostAgent 会话内的多次命令执行保持文件系统状态（如创建文件、编译中间产物），但每次调用均为干净独立的 Shell 进程；
   - 不同会话严格对应不同的 Worker/用户隔离空间，互不可见且杜绝跨会话状态穿透；禁止在单次命令调用后自动释放沙箱。
+  - 原生 OneBot 的 `send_message` 与 `qq_extend_messages` 可发送 `/sandbox/` 下的图片、PDF、Python/技能产物。`internal/sandbox.ReadFile` 复用 `Backend.Exec`，以隔离模式 Python 读取固定大小分块；逐级目录描述符和 `O_NOFOLLOW` 拒绝符号链接，以 stat 指纹检测读取期间的文件变化，并检查超时、取消和截断。文件内容仅进入协议传输，不进入模型工具结果。白名单跨群仍从来源会话读取，目标授权逐写检查；`shared` 不适用于沙箱产物。
 - **凭据隔离与有界输出保护 (Credential Isolation & Bounded Output)**：
   - 沙箱网关的 `X-Auth-Token` 仅存在于控制面 HTTP 请求头，绝不作为环境变量或参数传递给沙箱容器，日志中对令牌自动脱敏；
   - `SANDBOX_BASE_URL`、`SANDBOX_AUTH_TOKEN` 与 `SANDBOX_SESSION_NAMESPACE` 作为同一 Control Plane 配置快照加载，修改后仅在重启 FrostAgent 时整体生效；运行期只允许热切换 `SANDBOX_ENABLED`，防止网关迁移或密钥轮换期间产生混合端点与凭据泄露窗口；

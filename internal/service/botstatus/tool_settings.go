@@ -10,6 +10,7 @@ import (
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 )
 
 func (s *Service) SetToolEnabled(ctx context.Context, req *connect.Request[v1.SetToolEnabledRequest]) (*connect.Response[v1.SetToolEnabledResponse], error) {
@@ -34,7 +35,7 @@ func (s *Service) SetToolEnabled(ctx context.Context, req *connect.Request[v1.Se
 	}
 	next := make([]string, 0, len(disabled)+1)
 	for _, name := range disabled {
-		if name != req.Msg.Name {
+		if name != req.Msg.Name && !(req.Msg.Name == qqextend.ToolName && name == "qq") {
 			next = append(next, name)
 		}
 	}

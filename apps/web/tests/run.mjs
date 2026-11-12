@@ -14,6 +14,7 @@ for (const testFile of [
   'token-usage.test.ts',
   'overview-page.test.ts',
   'balance-query-page.test.ts',
+  'qq-extend-config.test.ts',
   'empty-instance-pages.test.ts',
   'stickers-page.test.ts',
   'frontend-editors.test.ts',

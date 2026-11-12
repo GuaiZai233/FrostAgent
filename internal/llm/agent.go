@@ -314,6 +314,9 @@ func (e *Engine) RunMessagesWithContext(
 		defer cancel()
 		stop := context.AfterFunc(runContext.Context, cancel)
 		defer stop()
+		if runContext.Context.Err() != nil {
+			cancel()
+		}
 	}
 	if runContext.Turn != nil {
 		var cancel context.CancelFunc
@@ -1428,6 +1431,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if execution.MessagePayload != "" && execution.MessagePayload != toolResult && len(execution.MessagePayload) <= MaxToolOutputBytes {
 				securityContent += "\n" + execution.MessagePayload
 			}
+			if execution.PlatformActionPayload != "" && execution.PlatformActionPayload != toolResult && len(execution.PlatformActionPayload) <= MaxToolOutputBytes {
+				securityContent += "\n" + execution.PlatformActionPayload
+			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, securityContent, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
 					toolResult = security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，外部工具结果已隔离", decision, runCtx.SessionID)
@@ -1447,8 +1453,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if toolSucceeded {
-				deliverySticker := hasStickerImage(execution.MessagePayload)
-				if enforceStickerActivity() && execution.MessagePayload != "" && !deliverySticker {
+				stickerPayload := execution.MessagePayload
+				if execution.PlatformActionPayload != "" {
+					stickerPayload = platformActionMessagePayload(execution.PlatformActionPayload)
+				}
+				deliverySticker := hasStickerImage(stickerPayload)
+				if enforceStickerActivity() && stickerPayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
 						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
 						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})

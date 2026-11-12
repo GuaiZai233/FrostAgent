@@ -54,6 +54,34 @@ func TestSendMsgToolAdvertisesNativeMentionContract(t *testing.T) {
 	}
 }
 
+func TestSendMsgToolKeepsBasicSchemaAndCurrentSession(t *testing.T) {
+	tool := SendMsgTool()
+	properties := tool.Parameters()["properties"].(map[string]any)
+	if _, exists := properties["session"]; exists {
+		t.Fatal("basic schema must not advertise a session override")
+	}
+	items := properties["messages"].(map[string]any)["items"].(map[string]any)
+	messageProperties := items["properties"].(map[string]any)
+	wantTypes := []string{"plain", "image", "record", "video", "file", "mention_user", "quote", "mention_specific"}
+	if got := messageProperties["type"].(map[string]any)["enum"].([]string); !slices.Equal(got, wantTypes) {
+		t.Fatalf("basic types = %v", got)
+	}
+	for _, field := range []string{"name", "folder_id", "thumb", "summary", "transfer", "data", "sticker_index", "target_group_id"} {
+		if _, exists := messageProperties[field]; exists {
+			t.Fatalf("QQ field %q leaked into the basic schema", field)
+		}
+	}
+	for _, args := range []string{
+		`{"session":"group:42","messages":[{"type":"plain","text":"fixture"}]}`,
+		`{"target_group_id":"42","messages":[{"type":"plain","text":"fixture"}]}`,
+	} {
+		result, err := tool.ExecuteResult(context.Background(), args)
+		if err == nil || !strings.Contains(err.Error(), "qq_extend_messages") || result.MessagePayload != "" || result.PlatformActionPayload != "" {
+			t.Fatalf("target override accepted: %+v %v", result, err)
+		}
+	}
+}
+
 func TestSendMsgToolExecuteNormalizesValidPayload(t *testing.T) {
 	tool := SendMsgTool()
 	got, err := tool.Execute(`{"messages":[{"type":"plain","text":"hello"},{"type":"image","url":"https://example.com/a.png"}]}`)

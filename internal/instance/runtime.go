@@ -226,6 +226,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	registry[balanceTool.Name()] = balanceTool
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
+	qqTool := tools.QQTool()
+	registry[qqTool.Name()] = qqTool
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool
 	if securityController != nil {

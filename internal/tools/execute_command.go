@@ -44,7 +44,8 @@ func ExecuteCommandTool(backend sandbox.Backend) Tool {
 	return Tool{
 		name: "execute_command",
 		description: "在隔离的 sandbox runtime 中执行 shell 命令。文件系统在当前 FrostAgent 会话内保持状态，" +
-			"但每次调用都是新的 shell 进程。命令不会在 FrostAgent 宿主机上执行。",
+			"但每次调用都是新的 shell 进程。命令不会在 FrostAgent 宿主机上执行。" +
+			"待发送的产物保存在 /sandbox/ 下；原生 OneBot 可用 send_message 的 image/file path 发送，返回路径即可，不要打印 base64。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

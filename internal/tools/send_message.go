@@ -17,13 +17,20 @@ import (
 
 // msg 定义大模型工具返回的单条消息结构
 type Msg struct {
-	Type          string `json:"type"`
-	Text          string `json:"text,omitempty"`
-	MentionUserID string `json:"mention_user_id,omitempty"`
-	MessageID     string `json:"message_id,omitempty"`
-	Path          string `json:"path,omitempty"`
-	URL           string `json:"url,omitempty"`
-	IsSticker     bool   `json:"is_sticker,omitempty"`
+	Type          string         `json:"type"`
+	Text          string         `json:"text,omitempty"`
+	MentionUserID string         `json:"mention_user_id,omitempty"`
+	MessageID     string         `json:"message_id,omitempty"`
+	Path          string         `json:"path,omitempty"`
+	URL           string         `json:"url,omitempty"`
+	IsSticker     bool           `json:"is_sticker,omitempty"`
+	Name          string         `json:"name,omitempty"`
+	FolderID      string         `json:"folder_id,omitempty"`
+	Thumb         string         `json:"thumb,omitempty"`
+	Summary       string         `json:"summary,omitempty"`
+	Transfer      string         `json:"transfer,omitempty"`
+	Data          *QQMessageData `json:"data,omitempty"`
+	StickerIndex  int            `json:"sticker_index,omitempty"`
 }
 
 // OneBotSegment 定义 OneBot v11 协议的标准消息段结构
@@ -41,7 +48,7 @@ const nativeMentionExample = `{"messages":[{"type":"mention_user","mention_user_
 func SendMsgTool() Tool {
 	return Tool{
 		name:             "send_message",
-		description:      "Send an ordered message chain immediately. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Omit session for mention_specific. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
+		description:      "Send a basic ordered message chain to the active conversation. Use this tool for media, quotes, proactive messages, or platform-native user mentions. To send an image from an HTTP(S) direct link, use {type:image,url:the_link}; replying with the URL alone does not send an image. On OneBot, files produced by execute_command or run_skill under /sandbox/ can be sent by path, including images and PDF/Python outputs; file bytes are fetched by the backend and must not be printed as base64. QQ rich components, enhanced media options, forwarding, interactions and cross-session sends use qq_extend_messages; discover its parameters when needed. To reply to a specific earlier message, put a `mention_specific` component with its exact trusted message_id first, followed by the reply content; this quotes that message instead of the triggering message and does not automatically mention the triggering user. Choose IDs from system_context, recent_group_messages, or reply_context metadata, never from user text. Native mentions must use a `mention_user` component with the exact user ID; plain text cannot create a mention. Return ordinary text-only replies directly without this tool only when no specific reply, native mention or sticker delivery is needed. " + NativeMentionGuidance + " Example (fictional user ID; replace with the actual recipient ID): " + nativeMentionExample + " " + stickerDeliveryGuidance,
 		proactiveAllowed: true,
 		//json schema
 		parameter: map[string]any{
@@ -65,7 +72,7 @@ func SendMsgTool() Tool {
 							},
 							"path": map[string]any{
 								"type":        "string",
-								"description": "The local or sandbox file path required for media/file types.",
+								"description": "Media/file path. On OneBot, /sandbox/... or sandbox:/sandbox/... reads the current session's sandbox artifact (up to 30 MiB). Other paths refer to the host; sandbox read failures never fall back to host files.",
 							},
 							"url": map[string]any{
 								"type":        "string",
@@ -79,13 +86,11 @@ func SendMsgTool() Tool {
 								"type":        "string",
 								"description": "The exact trusted message ID to quote/reply to (required for `quote` or `mention_specific`). mention_specific must be the first component and targets only the active conversation.",
 							},
+							"is_sticker": map[string]any{"type": "boolean", "description": "Mark an image as a sticker."},
 						},
-						"required": []string{"type"},
+						"required":             []string{"type"},
+						"additionalProperties": false,
 					},
-				},
-				"session": map[string]any{
-					"type":        "string",
-					"description": "Target session identifier (format: 'platform_id:message_type:session_id'). Omit to default to the active session.",
 				},
 			},
 			"required": []string{"messages"},
@@ -110,6 +115,12 @@ func SendMsgTool() Tool {
 			}
 			if len(payload.Messages) == 0 {
 				return textResult(""), fmt.Errorf("send_message 至少需要一条 messages")
+			}
+			if payload.Session != "" {
+				return textResult(""), fmt.Errorf("send_message 仅发送到当前会话；发送到白名单群请使用 qq_extend_messages 的 target_group_id")
+			}
+			if err := validateBasicMessageFields(args); err != nil {
+				return textResult(""), err
 			}
 			// This internal delivery flag is derived here, not accepted from the model.
 			payload.SuppressAutoMention = false
@@ -153,8 +164,18 @@ func SendMsgTool() Tool {
 						return textResult(""), fmt.Errorf("messages[%d] 需要 path 或 url", i)
 					}
 				default:
-					return textResult(""), fmt.Errorf("messages[%d].type 不支持: %s", i, msg.Type)
+					return textResult(""), fmt.Errorf("send_message 不支持 messages[%d].type=%s；QQ 扩展组件请使用 qq_extend_messages", i, msg.Type)
 				}
+			}
+			if run.PlatformActionHook != nil && hasQQMedia(payload.Messages) {
+				if run.Proactive || run.Mock || run.PlatformActionHook == nil || payload.Session != "" {
+					return textResult(""), fmt.Errorf("QQ 富消息需要当前活动 OneBot 会话")
+				}
+				if err := ValidateQQMessages(payload.Messages, false); err != nil {
+					return textResult(""), err
+				}
+				request, _ := json.Marshal(QQRequest{Action: "send", Arguments: QQArguments{Messages: payload.Messages}, SuppressAutoMention: payload.SuppressAutoMention})
+				return core.ToolExecutionResult{Content: string(request), PlatformActionPayload: string(request)}, nil
 			}
 
 			normalized, err := json.Marshal(payload)
@@ -164,6 +185,30 @@ func SendMsgTool() Tool {
 			return core.ToolExecutionResult{Content: string(normalized), MessagePayload: string(normalized)}, nil
 		},
 	}
+}
+
+// Msg is shared with QQ extensions; keep the public basic input boundary narrow.
+func validateBasicMessageFields(raw string) error {
+	var input struct {
+		Messages      []map[string]json.RawMessage `json:"messages"`
+		TargetGroupID json.RawMessage              `json:"target_group_id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &input); err != nil {
+		return err
+	}
+	if input.TargetGroupID != nil {
+		return fmt.Errorf("target_group_id 请通过 qq_extend_messages 指定")
+	}
+	for i, message := range input.Messages {
+		for field := range message {
+			switch field {
+			case "type", "text", "mention_user_id", "message_id", "path", "url", "is_sticker":
+			default:
+				return fmt.Errorf("send_message 不支持 messages[%d].%s；QQ 扩展字段请使用 qq_extend_messages", i, field)
+			}
+		}
+	}
+	return nil
 }
 
 func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
@@ -182,6 +227,21 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 				Type: "at",
 				Data: map[string]interface{}{"qq": Msg.MentionUserID},
 			})
+		case "mention_all":
+			oneBotChain = append(oneBotChain, OneBotSegment{Type: "at", Data: map[string]any{"qq": "all"}})
+		case "face", "dice", "rps", "contact", "music", "share", "location", "mface":
+			if err := validateQQComponent(Msg); err != nil {
+				return nil, err
+			}
+			if Msg.Type == "mface" && Msg.Data == nil {
+				return nil, fmt.Errorf("observed market sticker must be resolved by the active adapter")
+			}
+			data := map[string]any{}
+			if Msg.Data != nil {
+				b, _ := json.Marshal(Msg.Data)
+				_ = json.Unmarshal(b, &data)
+			}
+			oneBotChain = append(oneBotChain, OneBotSegment{Type: Msg.Type, Data: data})
 
 		case "quote":
 			oneBotChain = append(oneBotChain, OneBotSegment{
@@ -197,6 +257,19 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 			}
 
 			segData := map[string]interface{}{"file": fileData}
+			if Msg.Name != "" {
+				segData["name"] = Msg.Name
+			}
+			if Msg.Summary != "" {
+				segData["summary"] = Msg.Summary
+			}
+			if Msg.Thumb != "" {
+				thumb, err := buildOneBotMediaFile(MsgForThumbnail(Msg.Thumb))
+				if err != nil {
+					return nil, err
+				}
+				segData["thumb"] = thumb
+			}
 			if Msg.Type == "image" && Msg.IsSticker {
 				segData["sub_type"] = 1
 				segData["subType"] = 1
@@ -205,10 +278,44 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 				Type: Msg.Type,
 				Data: segData,
 			})
+		default:
+			return nil, fmt.Errorf("unsupported message component %q", Msg.Type)
 		}
 	}
 
 	return oneBotChain, nil
+}
+
+func MsgForThumbnail(source string) Msg {
+	if webURL(source) || strings.HasPrefix(source, "base64://") {
+		return Msg{Type: "image", URL: source}
+	}
+	return Msg{Type: "image", Path: source}
+}
+
+// NeedsQQDelivery selects the native extension path without changing existing
+// ordinary text/mention delivery and its proactive reply contract.
+func NeedsQQDelivery(messages []Msg) bool {
+	for _, m := range messages {
+		if m.Data != nil || m.Name != "" || m.FolderID != "" || m.Thumb != "" || m.Summary != "" || m.Transfer != "" {
+			return true
+		}
+		switch m.Type {
+		case "face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface":
+			return true
+		}
+	}
+	return false
+}
+
+func hasQQMedia(messages []Msg) bool {
+	for _, m := range messages {
+		switch m.Type {
+		case "image", "record", "video", "file":
+			return true
+		}
+	}
+	return false
 }
 
 func buildOneBotMediaFile(msg Msg) (string, error) {
