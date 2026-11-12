@@ -26,7 +26,7 @@ func TestQuoteTraceIncludesAncestorImage(t *testing.T) {
 	}}}
 	engine := newTestEngine(dialogue)
 	engine.VisionProvider = vision
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -114,7 +114,7 @@ func TestQuoteTraceVetsAncestorText(t *testing.T) {
 	engine.Security = security.NewController(t.TempDir())
 	engine.Security.SetMode(security.ControlModeAggressive)
 	engine.Security.SetClassifier(&stubSecurityClassifier{})
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {

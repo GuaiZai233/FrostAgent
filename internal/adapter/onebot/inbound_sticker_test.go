@@ -79,7 +79,7 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 				engine.MemoryWriter = memory.NewWriter(nil)
 			}
 			engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_PROACTIVE_REPLY": "true", "PROACTIVE_REPLY_PROBABILITY": "1", "ENABLE_PROACTIVE_REPLY_WHITELIST": "false", "BOT_NAME": "synthetic-bot", "BOT_ALIASES": "", "ENABLE_AT_IN_GROUP_MSG": "false", "ENABLE_REPLY_IN_GROUP_MSG": "false", "MEMORY_EXTRACT_BATCH_MIN": "100", "MEMORY_EXTRACT_BATCH_MAX": "100"})
-			srv, url := startWSTestServer(engine)
+			srv, url := startReplyWSTestServer(t, engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {

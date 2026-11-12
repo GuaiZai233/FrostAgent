@@ -139,6 +139,7 @@ instanceState.select({ id: 'a1b2c3d4', name: 'test', enabled: false, created_at:
 let values = [
   { key: 'MAX_CONTEXT_MESSAGES', value: '20', resetHint: '50', isSecret: false },
   { key: 'ENABLE_AT_IN_GROUP_MSG', value: 'false', isSecret: false },
+  { key: 'ENABLE_THINKING_STATUS', value: 'true', isSecret: false },
   { key: 'GROUP_COMPACT_MAX_BUFFER_SIZE', value: '', resetHint: '200', isSecret: false },
   { key: 'SECURITY_GATEWAY_TIMEOUT', value: '50s', resetHint: '50s（全局继承 · 网关超时）', isInherited: true, isSecret: false },
   { key: 'BILLING_PROMPT_PRICE_PER_MILLION', value: '', isSecret: false },
@@ -593,8 +594,9 @@ assert.equal(dialogs.length, dialogsBeforeMalformed, 'malformed stored config mu
 assert.match(errors.at(-1)!, /无法编辑群聊概率/);
 cleanup();
 
-values = values.filter((item) => item.key !== probabilitiesKey);
+values = values.filter((item) => item.key !== probabilitiesKey && item.key !== 'ENABLE_THINKING_STATUS');
 values.push({ key: 'ENABLE_MULTI_SEGMENT_REPLY', value: '', isSecret: false });
+values.push({ key: 'ENABLE_THINKING_STATUS', value: '', isSecret: false });
 cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
 await settle();
 const multiSegment = el('multi-segment-reply-cb');
@@ -625,6 +627,26 @@ maxSegments.emit('input');
 el('settings-draft-save').click();
 await settle();
 assert.equal(writes.at(-1)?.find((item) => item.key === 'MULTI_SEGMENT_REPLY_MAX_SEGMENTS')?.value, '2');
+assert.match(root.innerHTML, /当Bot开始思考轮次时，展示正在输入的标识。（QQ：对方正在输入……; Telegram：Typing…）/u);
+const thinkingToggle = el('thinking-status-cb');
+assert.equal(thinkingToggle.checked, true, 'unset thinking status defaults on');
+thinkingToggle.checked = false;
+thinkingToggle.emit('change');
+assert.equal(el('settings-draft-banner').hidden, false);
+el('settings-draft-restore').click();
+assert.equal(thinkingToggle.checked, true, 'discard restores default-on thinking status');
+thinkingToggle.checked = false;
+thinkingToggle.emit('change');
+el('settings-draft-save').click();
+await settle();
+assert.ok(writes.at(-1)?.some(({ key, value }) => key === 'ENABLE_THINKING_STATUS' && value === 'false'));
+assert.equal(el('thinking-status-cb').checked, false, 'explicit opt-out remains off');
+thinkingToggle.checked = true;
+thinkingToggle.emit('change');
+el('settings-draft-save').click();
+await settle();
+assert.ok(writes.at(-1)?.some(({ key, value }) => key === 'ENABLE_THINKING_STATUS' && value === 'true'));
+assert.equal(el('thinking-status-cb').checked, true, 'saved opt-in reloads');
 cleanup();
 
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);

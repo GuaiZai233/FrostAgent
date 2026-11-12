@@ -182,6 +182,7 @@ func TestWSExplicitHistoricalStickerUsesGetMsg(t *testing.T) {
 	stealer := sticker.NewStealer(store, nil)
 	stealer.Observe("private:10001", "42", 0, nil, false)
 	engine.ToolRegistry["steal_sticker"] = tools.StealStickerTool(stealer)
+	disableTestThinkingStatus(t, engine)
 
 	mux := http.NewServeMux()
 	adapter := NewAdapter(engine)
@@ -288,7 +289,7 @@ func TestWSQuotedImageUsesVisionDescriptionInReplyContext(t *testing.T) {
 	engine := newTestEngine(dialogueProvider)
 	engine.VisionProvider = visionProvider
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -447,7 +448,7 @@ func TestWSDangerousReplyContextVettedOut(t *testing.T) {
 	engine.Security.SetMode(security.ControlModeAggressive)
 	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -576,7 +577,7 @@ func TestWSDangerousImageDescriptionVettedOut(t *testing.T) {
 	engine.Security.SetMode(security.ControlModeAggressive)
 	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -669,7 +670,7 @@ func TestWSDangerousSenderMetadataVettedOut(t *testing.T) {
 	engine.Security.SetMode(security.ControlModeAggressive)
 	engine.Security.SetClassifier(&stubSecurityClassifier{})
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

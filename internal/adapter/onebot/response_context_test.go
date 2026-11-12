@@ -29,7 +29,7 @@ func TestPrivateResponseGuidanceTime(t *testing.T) {
 	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
 	t.Cleanup(engine.Cancel)
-	server, url := startWSTestServer(engine)
+	server, url := startReplyWSTestServer(t, engine)
 	defer server.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {

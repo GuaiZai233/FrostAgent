@@ -993,6 +993,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if conn != nil && conn.mock {
 			runCtx = conn.Context()
 		}
+		stopThinking := conn.startThinkingStatus(event, engine, turn)
+		defer stopThinking()
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Turn:        turn,
 			Context:     runCtx,
@@ -1028,6 +1030,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Proactive:            wakeSignals.Proactive,
 			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
+		stopThinking()
 		replyText = runResult.Content
 		if engine.Getenv(replyformat.EnvKey) != "true" {
 			replyText = filterStructuredSegmentMarks(replyText)

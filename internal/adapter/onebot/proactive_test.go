@@ -1860,7 +1860,7 @@ func runOneBotProactiveTriggerLogging(t *testing.T, testCase string) {
 			t.Fatal(err)
 		}
 	}
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {

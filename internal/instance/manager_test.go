@@ -973,16 +973,24 @@ func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = c1.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, raw, err := c1.ReadMessage()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), "mock reply") {
-		t.Fatal(string(raw))
-	}
 	var action map[string]any
-	if err = json.Unmarshal(raw, &action); err != nil {
-		t.Fatal(err)
+	for {
+		_, raw, err := c1.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = json.Unmarshal(raw, &action); err != nil {
+			t.Fatal(err)
+		}
+		if action["action"] != "set_input_status" {
+			if action["action"] != "send_private_msg" || !strings.Contains(string(raw), "mock reply") {
+				t.Fatal(string(raw))
+			}
+			break
+		}
+		if err = c1.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action["echo"], "data": nil}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_ = c1.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action["echo"], "data": map[string]int{"message_id": 2}})
 	_ = c2.SetReadDeadline(time.Now().Add(100 * time.Millisecond))

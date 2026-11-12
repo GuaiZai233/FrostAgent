@@ -158,7 +158,7 @@ func testWSInspectMessageImage(t *testing.T, dedicatedVision bool) {
 	}
 	engine.ToolRegistry[tools.InspectMessageImageToolName] = tools.InspectMessageImageTool(engine)
 
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

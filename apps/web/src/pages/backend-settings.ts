@@ -101,6 +101,14 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
           </div>
 
           <div class="mb-4 pb-4 border-b border-border">
+            <div class="flex items-center gap-2.5 mb-2">
+              <label class="toggle-switch"><input type="checkbox" id="thinking-status-cb" role="switch" aria-label="展示思考状态" aria-describedby="thinking-status-description" /><span aria-hidden="true"></span></label>
+              <label for="thinking-status-cb" class="text-xs font-semibold text-foreground">展示思考状态</label>
+            </div>
+            <p id="thinking-status-description" class="text-[11px] text-muted">当Bot开始思考轮次时，展示正在输入的标识。（QQ：对方正在输入……; Telegram：Typing…）</p>
+          </div>
+
+          <div class="mb-4 pb-4 border-b border-border">
             <div class="flex items-center gap-2.5 mb-3">
               <label class="toggle-switch"><input type="checkbox" id="multi-segment-reply-cb" role="switch" aria-label="允许多段回复" /><span aria-hidden="true"></span></label>
               <label for="multi-segment-reply-cb" class="text-xs font-semibold text-foreground">允许多段回复</label>
@@ -642,9 +650,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG',
       'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
       'multi-segment-reply-cb': 'ENABLE_MULTI_SEGMENT_REPLY',
+      'thinking-status-cb': 'ENABLE_THINKING_STATUS',
     };
     for (const [id, key] of Object.entries(toggles)) {
-      element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
+      element<HTMLInputElement>(id).checked = (key === 'GROUP_REPLY_ON_MENTION' || key === 'ENABLE_THINKING_STATUS') ? value(key) !== 'false' : value(key) === 'true';
     }
     quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
     quoteDepth.value = value('QUOTE_TRACE_DEPTH');
@@ -830,6 +839,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
     'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
     'multi-segment-reply-cb': 'ENABLE_MULTI_SEGMENT_REPLY',
+    'thinking-status-cb': 'ENABLE_THINKING_STATUS',
   };
   for (const [id, key] of Object.entries(binds)) {
     const input = element<HTMLInputElement>(id);
