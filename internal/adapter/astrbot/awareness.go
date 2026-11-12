@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 )
 
@@ -31,7 +32,13 @@ func (a *Adapter) SendAwareness(ctx context.Context, target llm.AwarenessTarget,
 	if conn == nil || ctx.Err() != nil {
 		return fmt.Errorf("主动感知没有唯一可用的 AstrBot 连接")
 	}
-	action := Action{Type: "action", Action: "send_message", Platform: target.Platform, MessageType: target.Kind,
+	// Durable QQ identities and whitelist aliases are canonical. AstrBot's QQ
+	// transport uses aiocqhttp even before an inbound event establishes a route.
+	platform := target.Platform
+	if memory.IsQQPlatform(platform) {
+		platform = astrBotQQPlatform
+	}
+	action := Action{Type: "action", Action: "send_message", Platform: platform, MessageType: target.Kind,
 		SessionID: target.SessionID, TargetID: target.ID, suppressAutoMention: true, suppressAutoReply: true}
 	if target.Kind == "group" {
 		action.GroupID = target.ID

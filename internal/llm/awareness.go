@@ -92,7 +92,9 @@ func (s *AwarenessService) candidates() map[string]AwarenessTarget {
 			if p, rest, ok := strings.Cut(entry, ":"); ok {
 				platform, id = p, rest
 			}
-			target := AwarenessTargetFor(platform, kind, id)
+			// Whitelist aliases select the same conversation, not a transport.
+			// Only an observed inbound route carries an exact adapter preference.
+			target := AwarenessTargetFor(proactive.NormalizePlatform(platform), kind, id)
 			if _, exists := result[target.SessionID]; !exists {
 				result[target.SessionID] = target
 			}
@@ -210,7 +212,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 		// System-originated group work never inherits a bystander's identity.
 		actor, actorPlatform = target.SessionID, "system"
 		prompt = proactive.AwarenessGroupPrompt
-		snapshot := session.SnapshotGroupContext(100, positiveIntEnv("GROUP_RAW_CONTEXT_MAX_CHARS", 12000, e.Scope), "")
+		snapshot := session.SnapshotGroupContext(e.GroupRawLimit(), e.GroupRawMaxChars(), "")
 		if !GroupCompactAllowed(e.Getenv, target.SessionID) {
 			snapshot = WithoutCompactSummary(snapshot)
 		}
