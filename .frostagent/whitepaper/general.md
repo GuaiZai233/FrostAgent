@@ -671,12 +671,12 @@ FrostAgent 为智能体赋予执行 Shell 命令的能力，同时严格维持�
 - **智能体工具集与严格安全边界 (Agent Tools & Guardrails)**：
   - 向大模型暴露完整自动化部署与运行工具集，包括动作管理、版本快照、编译构建、构建激活与执行追踪；
   - **敏感注入状态脱敏隔离 (Agent-Facing DTO Redaction)**：定义专用的 `AgentRunDTO`，显式采用字段白名单，彻底剔除 ActionsCat 内部用于持久状态注入的 `planned_env`（包含敏感凭据、数据库连接、Token 等），防止敏感信息泄漏至大模型上下文；
-  - **受保护环境变量前缀拦截**：`actionscat_run_action` 严格拒绝任何以 `ACTIONSCAT_` 为前缀的自定义环境变量键，防止模型输出伪造沙箱运行上下文与受信标识；
+  - **受保护环境变量前缀拦截**：`actionscat action=run_action` 严格拒绝任何以 `ACTIONSCAT_` 为前缀的自定义环境变量键，防止模型输出伪造沙箱运行上下文与受信标识；
   - **管理写权限严格门禁 (Administrative Mutation Gate)**：状态变更类工具（创建动作、版本、构建、激活及部署）属于控制面持久化修改操作，工具层严格校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员允许触发；普通会话或无上下文调用直接拒绝，绝不向后端发送写请求（0 次 POST）；
   - **Mock 模拟会话零持久化副作用 (Zero Durable Mutation Invariant)**：在带有 `?mock=true` 的在线模拟会话中，所有变更及执行工具被强制前置拦截并返回提示，坚决不在模拟测试中产生真实任务执行或持久化状态改变。
 - **可运行状态与空壳元数据显式解耦 (Runnable vs. Enabled Decoupling)**：
   - 对齐 ActionsCat 制品模型规范，Action 必须同时满足 `Enabled == true`、`ActiveVersionID != ""` 与 `ActiveBuildID != ""` 才具备可执行条件；
-  - `actionscat_list_actions` 支持 `runnable_only` 过滤并在 DTO 中输出 `runnable: bool`，避免大模型误调用尚未构建容器镜像的空壳动作；
+  - `actionscat action=list_actions` 支持 `runnable_only` 过滤并在 DTO 中输出 `runnable: bool`，避免大模型误调用尚未构建容器镜像的空壳动作；
   - 当模型尝试运行未构建动作时，工具层自动捕捉 `no active build` 并反馈清晰诊断指引。
 - **动态循环深度与运行时配置 (Configurable Agent Loop & Settings Integration)**：
   - 为适配“列出动作 -> 检查详情 -> 执行动作 -> 轮询结果”等多步自动化调用编排，将默认最大循环迭代轮数（`MaxIterations`）设置为 35，并支持通过实例级环境变量 `AGENT_MAX_ITERATIONS` 独立配置（不同实例分开隔离生效）；

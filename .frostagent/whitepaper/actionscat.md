@@ -22,18 +22,18 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
    - 区分“动作执行（Run）”与“管理面修改（Create/Version/Build/Activate/Deploy）”。
    - 注册 Action、创建版本、触发构建、激活构建以及端到端部署均属于持久化管理面操作，Agent 工具端必须校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员可用；非管理员与无上下文请求严格 Fail-Closed，产生 0 次后端网络调用。
 3. **Mock 会话零持久化副作用 (Zero Durable Mutation Invariant)**：
-   - 交互式模拟对话模式（`?mock=true`）下，任何具有外部持久化副作用的操作（`actionscat_run_action`、`actionscat_create_action`、`actionscat_create_version`、`actionscat_build_version`、`actionscat_activate_build`、`actionscat_deploy_action`）必须被前置阻断并返回说明，绝不向 ActionsCat 发起真实执行或写入，确保断电全丢不变量。
+   - 交互式模拟对话模式（`?mock=true`）下，任何具有外部持久化副作用的操作（`actionscat action=run_action`、`actionscat action=create_action`、`actionscat action=create_version`、`actionscat action=build_version`、`actionscat action=activate_build`、`actionscat action=deploy_action`）必须被前置阻断并返回说明，绝不向 ActionsCat 发起真实执行或写入，确保断电全丢不变量。
 4. **构建未决结果与幂等恢复机制 (Build Indeterminate Result & Idempotent Recovery)**：
    - 区分普通 API 查询（`15s` 超时）与同步构建编译流程（`180s` 超时，`defaultBuildTimeout`）。底层 HTTP Client 显式禁用 transport 层自动重试与全局 client 级超时（`http.Client.Timeout = 0`），使用 context 传递 deadline。
-   - 当同步构建请求发生 context 超时、传输中断、HTTP 5xx 服务端错误（因 ActionsCat Core 先落盘持久化 Build 记录后执行沙箱编译）或 2xx 响应不可解析时，严格禁止将其判定为“构建失败”，而是映射为 `ErrBuildUnknownResult`（“构建结果未知”，对应 HTTP 504 Gateway Timeout），提示 Agent 使用 `actionscat_list_builds` 查询实际状态（包含初次为空时的短暂重试建议），防止状态机分歧与重复并发构建。
+   - 当同步构建请求发生 context 超时、传输中断、HTTP 5xx 服务端错误（因 ActionsCat Core 先落盘持久化 Build 记录后执行沙箱编译）或 2xx 响应不可解析时，严格禁止将其判定为“构建失败”，而是映射为 `ErrBuildUnknownResult`（“构建结果未知”，对应 HTTP 504 Gateway Timeout），提示 Agent 使用 `actionscat action=list_builds` 查询实际状态（包含初次为空时的短暂重试建议），防止状态机分歧与重复并发构建。
 5. **构建状态门禁与版本不可变性 (Build Status Gating & Version Immutability)**：
-   - 激活构建（`actionscat_activate_build`）严格前置校验构建状态，仅允许激活 `succeeded` 状态的制品构建，阻断未完成或失败构建的激活。
-   - 严格遵循 ActionsCat 架构的“版本不可变（Version Immutability）”约束。若编译失败，工具提取截断的编译日志（`stderr`/`stdout`）供 Agent 排查，并明确指导 Agent 通过 `actionscat_create_version` 创建新版本，禁止对失败版本发起重复覆盖修改。
+   - 激活构建（`actionscat action=activate_build`）严格前置校验构建状态，仅允许激活 `succeeded` 状态的制品构建，阻断未完成或失败构建的激活。
+   - 严格遵循 ActionsCat 架构的“版本不可变（Version Immutability）”约束。若编译失败，工具提取截断的编译日志（`stderr`/`stdout`）供 Agent 排查，并明确指导 Agent 通过 `actionscat action=create_version` 创建新版本，禁止对失败版本发起重复覆盖修改。
 6. **敏感注入状态脱敏隔离 (Agent-Facing DTO Redaction)**：
    - ActionsCat 的执行上下文包含持久状态注入（`PlannedEnv`，可能携带 API Key、私有状态或运行时 Token）。
    - 向 LLM 暴露的 Agent DTO 明确采用白名单字段映射，彻底剔除 `planned_env` 等内部凭据，防止上下文污染与凭据泄漏。
 7. **受保护运行时环境变量防御 (Protected Env Defense)**：
-   - `actionscat_run_action` 严格禁止传入 `ACTIONSCAT_*` 前缀的环境变量，杜绝模型输出伪造 Action 运行身份或覆写受信任运行时标识。
+   - `actionscat action=run_action` 严格禁止传入 `ACTIONSCAT_*` 前缀的环境变量，杜绝模型输出伪造 Action 运行身份或覆写受信任运行时标识。
 8. **显式区分已启用 (Enabled) 与可运行 (Runnable)**：
    - 对齐 ActionsCat PR #3 制品模型（`Action -> ActionVersion -> ArtifactBuild -> SetActiveBuild -> Run`）。
    - 仅当 `Enabled == true && ActiveVersionID != "" && ActiveBuildID != ""` 时，Action 才判定为 `Runnable`。未关联激活构建的元数据壳在 Agent 工具中默认不可作为运行候选，执行失败时给出明确指引。
@@ -64,24 +64,24 @@ mock 会话、已处理的管理命令、心跳和非消息事件不分发。已
 │ FrostAgent Core Engine & Runtime                                                  │
 │                                                                                   │
 │  ┌──────────────────────┐    Tool Call    ┌────────────────────────────────────┐  │
-│  │   LLM Agent Loop     │ ──────────────▶ │ internal/tools/actionscat_tools    │  │
+│  │   LLM Agent Loop     │ ──────────────▶ │ internal/tools/actionscat          │  │
 │  │ (MaxIterations = 35) │                 │                                    │  │
-│  └──────────────────────┘                 │ - actionscat_list_actions (DTO)    │  │
-│                                           │ - actionscat_create_action (Admin) │  │
-│                                           │ - actionscat_create_version(Admin) │  │
-│                                           │ - actionscat_build_version (Admin) │  │
-│                                           │ - actionscat_get_build             │  │
-│                                           │ - actionscat_list_builds           │  │
-│                                           │ - actionscat_activate_build(Admin) │  │
-│                                           │ - actionscat_deploy_action (Admin) │  │
-│                                           │ - actionscat_run_action (Mock/Env) │  │
-│                                           │ - actionscat_get_run (Redacted)    │  │
-│                                           │ - actionscat_create_schedule(Admin)│  │
-│                                           │ - actionscat_list_schedules        │  │
-│                                           │ - actionscat_delete_schedule(Admin)│  │
-│                                           │ - actionscat_create_matcher (Admin)│  │
-│                                           │ - actionscat_list_matchers         │  │
-│                                           │ - actionscat_delete_matcher (Admin)│  │
+│  └──────────────────────┘                 │ - action=list_actions (DTO)        │  │
+│                                           │ - action=create_action (Admin)     │  │
+│                                           │ - action=create_version(Admin)     │  │
+│                                           │ - action=build_version (Admin)     │  │
+│                                           │ - action=get_build                 │  │
+│                                           │ - action=list_builds               │  │
+│                                           │ - action=activate_build(Admin)     │  │
+│                                           │ - action=deploy_action (Admin)     │  │
+│                                           │ - action=run_action (Mock/Env)     │  │
+│                                           │ - action=get_run (Redacted)        │  │
+│                                           │ - action=create_schedule(Admin)    │  │
+│                                           │ - action=list_schedules            │  │
+│                                           │ - action=delete_schedule(Admin)    │  │
+│                                           │ - action=create_matcher (Admin)    │  │
+│                                           │ - action=list_matchers             │  │
+│                                           │ - action=delete_matcher (Admin)    │  │
 │                                           └─────────────────┬──────────────────┘  │
 │                                                             │ Client Call         │
 │                                                             ▼                     │
@@ -200,27 +200,35 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - 采用 `http.MaxBytesReader` 限制请求体最大 10 MiB（创建版本源码包）/ 1 MiB（调度与规则元数据），抵御恶意大包；
   - 严格 JSON 解码（`dec.Decode(&trailing) == io.EOF` 严格防尾随多余 Token 校验），拒绝截断或格式错误的恶意请求，防止无效请求触发后端 Action。
 
-### 3.3 智能体工具集（`internal/tools/actionscat_tools.go`）
+### 3.3 智能体路由工具（`internal/tools/actionscat.go`）
 
-向大模型 Agent Loop 暴露 16 个标准化工具，涵盖完整生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行 -> 定时调度 -> 事件匹配）：
+向大模型 Agent Loop 仅暴露一个 `actionscat` 路由工具，16 项能力涵盖完整生命周期（元数据声明 -> 版本快照 -> 编译构建 -> 构建激活 -> 触发运行 -> 定时调度 -> 事件匹配）。采用与 QQ 扩展工具相同的发现方式：
 
-实例设置 `ACTIONSCAT_ENABLED` 默认开启；关闭后立即从 `EffectiveTools` / `ModelTools` 和后续模型请求中移除全部 16 个 ActionsCat 工具。工具执行入口仍保留，以拒绝旧模型响应或直接调用：`Execute`、`ExecuteContext`、`ExecuteResult` 均返回错误 `ActionsCat已被FrostAgent管理员禁用。`，错误优先于参数解析、管理员和模拟会话检查，且不会产生后端请求。重新开启后工具立即恢复，不需要重启实例，也不影响其他实例。
+1. `{"action":"discover"}`：列出能力名称，不请求 ActionsCat 后端；
+2. `{"action":"discover","capability":"run_action"}`：按需返回该能力的说明和完整 JSON 参数定义；
+3. `{"action":"run_action","arguments":{"action_id":"example-action","wait":false}}`：将 `arguments` 转交原有执行器；无参操作可省略 `arguments`，等价于 `{}`。
+
+顶层仅接受 `action`、`capability` 和 `arguments`；`capability` 仅用于发现，`arguments` 仅用于执行且必须是 JSON 对象。初始工具列表不包含各子操作的完整参数定义。下列能力仍由 `internal/tools/actionscat_tools.go` 执行，保留原有管理员门禁、模拟会话拦截、DTO 脱敏与未知构建结果处理。
+
+`DISABLED_TOOLS` 可禁用整个 `actionscat` 入口；已有配置中的旧名称（例如 `actionscat_list_actions`）仍限制对应能力的发现与执行，清除旧名称后恢复该能力。旧的独立工具名称不再注册为可调用入口。
+
+实例设置 `ACTIONSCAT_ENABLED` 默认开启；关闭后立即从 `EffectiveTools` / `ModelTools` 和后续模型请求中移除 `actionscat` 路由工具及其全部能力。工具执行入口仍保留，以拒绝旧模型响应或直接调用：`Execute`、`ExecuteContext`、`ExecuteResult` 均返回错误 `ActionsCat已被FrostAgent管理员禁用。`，错误优先于参数解析、管理员和模拟会话检查，且不会产生后端请求。重新开启后工具立即恢复，不需要重启实例，也不影响其他实例。
 
 客户端在每次出站请求前再次读取开关，阻断后续管理、构建、执行和事件分发；自动消息事件分发直接跳过。控制台代理在原有认证后返回 HTTP 403 和同样的错误，状态接口仍可查询并返回 `disabled: true`，不会发起健康检查。禁用开关仅控制本实例的 FrostAgent 集成，不撤销已提交到 ActionsCat 的任务、远端调度计划或已在执行中的请求，也不改变通用消息回传接口的授权规则。
 
-#### 1. `actionscat_list_actions`
+#### 1. `actionscat action=list_actions`
 - **功能**：列出已注册的 Action 列表；
 - **参数**：
   - `enabled_only: bool`（仅返回已启用动作）
   - `runnable_only: bool`（仅返回已关联有效构建、可立即执行的动作）
 - **DTO 脱敏**：返回 `AgentActionDTO`，包含 `id`, `name`, `description`, `enabled`, `runnable`, `active_version_id`, `active_build_id`, `max_concurrency`。
 
-#### 2. `actionscat_create_action` (Admin)
+#### 2. `actionscat action=create_action` (Admin)
 - **功能**：在 ActionsCat 中注册新的 Action 动作元数据壳；
 - **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端网络调用）；
 - **参数**：`name: string` (必填), `description: string`, `max_concurrency: int`。
 
-#### 3. `actionscat_create_version` (Admin)
+#### 3. `actionscat action=create_version` (Admin)
 - **功能**：为指定 Action 创建不可变源码版本快照；
 - **权限门禁**：管理员权限门禁，`Mock==true` 拦截；
 - **规约映射与防御**：
@@ -229,35 +237,35 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - 健全默认值与契约防御：默认构建命令 `go build -o /sandbox/out/entrypoint .`、标准入口 `entrypoint`（锁定 canonical 入口，兼容 `/sandbox/entrypoint` 等路径别名，阻断自定义相对路径）、开发语言限定为 `go`、沙箱网络 `none`、超时 30 秒；
   - 完整规约支持：`build_spec` (language: go, toolchain, command, network), `runtime_spec` (entrypoint: entrypoint, network policy: none/public/allowlist/isolated, timeout, memory, cpu), `state_injections`, `runtime_capabilities`。
 
-#### 4. `actionscat_build_version` (Admin)
+#### 4. `actionscat action=build_version` (Admin)
 - **功能**：触发版本沙箱编译打包，生成制品构建（ArtifactBuild）；
-- **未知结果与超时处理**：采用 `180s` 独立构建超时；若超时或传输中断返回保守的“构建结果未知”诊断说明，并指示 Agent 使用 `actionscat_list_builds` 查询后台是否已生成构建，严禁盲目重试；
+- **未知结果与超时处理**：采用 `180s` 独立构建超时；若超时或传输中断返回保守的“构建结果未知”诊断说明，并指示 Agent 使用 `actionscat action=list_builds` 查询后台是否已生成构建，严禁盲目重试；
 - **状态门禁与版本不可变性**：
   - 校验 `build.Status == "succeeded"`；
   - 若构建失败（`failed` / `timed_out`），自动提取并截断输出（4000 字符以内）编译日志（`stderr`/`stdout`）辅助 Agent 诊断；
-  - 明确遵循**版本不可变（Version Immutability）**原则：提示 Agent 不可在原版本重试或修改，必须调用 `actionscat_create_version` 修复代码并创建新版本。
+  - 明确遵循**版本不可变（Version Immutability）**原则：提示 Agent 不可在原版本重试或修改，必须调用 `actionscat action=create_version` 修复代码并创建新版本。
 
-#### 5. `actionscat_get_build`
+#### 5. `actionscat action=get_build`
 - **功能**：查询特定构建的任务状态、制品哈希、退出码及详细编译日志；
 - **使用场景**：在已知 `build_id` 时提取完整编译日志或确认构建终态。
 
-#### 6. `actionscat_list_builds`
+#### 6. `actionscat action=list_builds`
 - **功能**：列出 Action 的历史构建记录（按创建时间倒序），支持通过 `version_id` 过滤；
-- **使用场景**：当 `actionscat_build_version` 或 `actionscat_deploy_action` 遭遇超时或传输中断时，客户端无 `build_id`。调用本工具可发现该版本是否在后端成功生成构建，避免重复触发构建。
+- **使用场景**：当 `actionscat action=build_version` 或 `actionscat action=deploy_action` 遭遇超时或传输中断时，客户端无 `build_id`。调用本工具可发现该版本是否在后端成功生成构建，避免重复触发构建。
 
-#### 7. `actionscat_activate_build` (Admin)
+#### 7. `actionscat action=activate_build` (Admin)
 - **功能**：将成功构建（`succeeded`）激活为 Action 的生效版本，使其跃迁为 `runnable` 状态；
 - **权限与状态门禁**：
   - 管理员权限门禁，`Mock==true` 拦截；
   - 激活前主动验证构建状态，拒绝激活非 `succeeded` 状态的构建。
 
-#### 8. `actionscat_deploy_action` (Admin, All-in-One)
+#### 8. `actionscat action=deploy_action` (Admin, All-in-One)
 - **功能**：一站式复合部署工具，自动串联完整生命周期：
   `create_version -> build_version -> inspect status == succeeded -> activate_build`；
-  执行成功后，Action 立即进入 `runnable` 状态，可直接通过 `actionscat_run_action` 执行；
+  执行成功后，Action 立即进入 `runnable` 状态，可直接通过 `actionscat action=run_action` 执行；
 - **权限门禁**：管理员权限门禁，`Mock==true` 拦截。
 
-#### 9. `actionscat_run_action`
+#### 9. `actionscat action=run_action`
 - **功能**：触发指定 Action 执行并支持同步等待结果（提交成功后的轮询窗口最长 25 秒，提交请求仍使用普通 API 超时）；每次轮询共享该窗口的 context deadline，窗口到期返回已创建的 Run 和最后已知状态，不重新提交任务；调用者取消仍向上传递；
 - **参数**：`action_id: string`（必填）, `extra_env: map[string]string`, `trigger_metadata: map[string]string`, `wait: bool`；
 - **安全检查**：
@@ -265,11 +273,11 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - 前缀黑名单：任何以 `ACTIONSCAT_` 开头的 `extra_env` 键直接拒绝；
   - 友好报错诊断：检测到后端返回 `no active build` 时，向模型反馈清晰解释并指引部署流程。
 
-#### 10. `actionscat_get_run`
+#### 10. `actionscat action=get_run`
 - **功能**：查询指定运行任务的状态、耗时、退出码及 stdout/stderr 日志；
 - **脱敏策略**：返回 `AgentRunDTO`，完全剔除 `PlannedEnv`。
 
-#### 11. `actionscat_create_schedule` (Admin)
+#### 11. `actionscat action=create_schedule` (Admin)
 - **功能**：为指定 Action 注册基于 Cron 表达式的后台定时触发器；
 - **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端调用）；
 - **参数**：
@@ -282,17 +290,17 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 - **定时回复**：ActionsCat 将上下文保存到 Schedule，触发时注入 `ACTIONSCAT_EVENT_PLATFORM / ADAPTER_ID / MESSAGE_TYPE / TARGET_ID / SESSION_ID / USER_ID / GROUP_ID`。Action 使用现有 `actionscat.Reply` 和 `frostagent.sendmsg` 能力回复，无需将收件人写入源码。`metadata.adapter_id` 选择本实例注册的传输适配器，原平台名保留给 AstrBot 主动发送。
 - **兼容与部署**：旧任务缺少上下文仍可执行，SDK 继续使用原有事件字段；没有收件信息时 `Reply` 返回 `ErrNoSession`。需要先部署支持此契约的 ActionsCat，并重新构建使用新版内置 SDK 的 Action。旧服务未回传相同上下文时，工具明确提示收件信息未确认保存，避免把已创建任务误报为自动回复就绪。
 
-#### 12. `actionscat_list_schedules`
+#### 12. `actionscat action=list_schedules`
 - **功能**：查询指定 Action 绑定的所有定时调度规则；
 - **参数**：`action_id: string`（必填）；
 - **输出**：返回调度列表，包含调度 ID、Cron 表达式、时区、下次计算执行时间（`next_run_at`）、上次执行时间及启用状态。
 
-#### 13. `actionscat_delete_schedule` (Admin)
+#### 13. `actionscat action=delete_schedule` (Admin)
 - **功能**：永久注销指定的定时调度规则；
 - **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端调用）；
 - **参数**：`schedule_id: string`（必填，待注销的调度 ID）。
 
-#### 14. `actionscat_create_matcher` (Admin)
+#### 14. `actionscat action=create_matcher` (Admin)
 - **功能**：为指定 Action 注册基于消息/事件模式匹配的触发规则；
 - **权限门禁**：管理员权限门禁，`Mock==true` 拦截；
 - **参数**：
@@ -309,12 +317,12 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - 前置校验 `match_type == "regex"` 时必须通过 Go 标准库 `regexp.Compile` 预编译语法校验，非法正则 Fail-Closed 并拒绝变更；
   - 前置校验 `capture_env_map` 中映射的目标环境变量名称，严禁使用 `ACTIONSCAT_` 前缀，防止覆盖运行时安全凭据与身份标识。
 
-#### 15. `actionscat_list_matchers`
+#### 15. `actionscat action=list_matchers`
 - **功能**：查询指定 Action 绑定的所有事件模式规则；
 - **参数**：`action_id: string`（必填）；
 - **输出**：返回规则列表，包含规则 ID、名称、匹配类型、表达式、目标字段、捕获映射、优先级及启用状态。
 
-#### 16. `actionscat_delete_matcher` (Admin)
+#### 16. `actionscat action=delete_matcher` (Admin)
 - **功能**：永久注销指定的事件模式匹配规则；
 - **权限门禁**：依赖 `llm.RunContext`，非管理员与 `Mock==true` 会话严格 Fail-Closed（0 次后端调用）；
 - **参数**：`matcher_id: string`（必填，待注销的规则 ID）。
@@ -364,7 +372,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 所有 ActionsCat 相关配置项统一纳入 FrostAgent Settings 体系管理：
 
-仅当 `ACTIONSCAT_ENDPOINT` 已配置且 `ACTIONSCAT_ENABLED` 开启时，16 个 ActionsCat 工具才会向 LLM 暴露。未设置、全空白或移除端点时隐藏全部工具；配置端点、清空端点与切换开关均在下一次模型请求时生效，无需重建实例运行时。此处沿用客户端的端点配置判定，不额外探测健康状态或要求管理 Token 非空；旧工具调用仍保留既有的未配置、权限或禁用反馈。
+仅当 `ACTIONSCAT_ENDPOINT` 已配置且 `ACTIONSCAT_ENABLED` 开启时，`actionscat` 路由工具才会向 LLM 暴露。未设置、全空白或移除端点时隐藏该入口；配置端点、清空端点与切换开关均在下一次模型请求时生效，无需重建实例运行时。此处沿用客户端的端点配置判定，不额外探测健康状态或要求管理 Token 非空；路由调用保留既有的未配置、权限或禁用反馈。
 
 | 环境变量配置名 | 说明 | 默认值 | 作用域 | 敏感度 |
 | :--- | :--- | :--- | :--- | :--- |
