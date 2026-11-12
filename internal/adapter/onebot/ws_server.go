@@ -105,6 +105,7 @@ type wsConnection struct {
 	nextMessageEcho     uint64
 	messageSessionMu    sync.Mutex
 	messageSessions     map[int64]string
+	ownMessageSessions  map[int64]string
 	messageSessionOrder []int64
 	groupMu             sync.Mutex
 	groupCache          map[int64]cachedGroupInfo
@@ -132,6 +133,7 @@ func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsCon
 		cancel:             cancel,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		messageSessions:    make(map[int64]string),
+		ownMessageSessions: make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
 		pendingGroupByEcho: make(map[string]pendingGroupInfo),
 		pendingGroupByID:   make(map[int64]string),
@@ -795,6 +797,29 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			deliveries.Finish(turn.Interrupted())
 		}()
+		recordDelivery := func(messages []tools.Msg) {
+			deliveries.NoteConfirmed()
+			if deliveredReply := qqDeliveredText(messages); strings.TrimSpace(deliveredReply) != "" {
+				deliveries.Record(deliveredReply, func(live bool) {
+					if event.MessageType == "group" {
+						botName := engine.Getenv("BOT_NAME")
+						if botName == "" {
+							botName = defaultBotName
+						}
+						var maxBufferSize int
+						if engine.GroupCompactor != nil {
+							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+						}
+						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
+						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
+							turn.StagedGuard().AddSequence(seq)
+						} else {
+							session.PromoteGroupCompactSlot(seq, "")
+						}
+					}
+				})
+			}
+		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
 				Messages            []tools.Msg `json:"messages"`
@@ -852,27 +877,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("%s", reason)
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
-			deliveries.NoteConfirmed()
-			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
-				deliveries.Record(deliveredReply, func(live bool) {
-					if event.MessageType == "group" {
-						botName := engine.Getenv("BOT_NAME")
-						if botName == "" {
-							botName = defaultBotName
-						}
-						var maxBufferSize int
-						if engine.GroupCompactor != nil {
-							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-						}
-						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
-						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
-							turn.StagedGuard().AddSequence(seq)
-						} else {
-							session.PromoteGroupCompactSlot(seq, "")
-						}
-					}
-				})
-			}
+			recordDelivery(toolOutput.Messages)
 			return nil
 		}
 
@@ -998,11 +1003,12 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ActorUserID: strconv.FormatInt(event.UserID, 10),
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
-			ActorPlatform:  securityPlatform,
-			AdapterID:      "onebot",
-			InstanceID:     engine.InstanceID,
-			SendHook:       sendHook,
-			FinalReplyText: plainFinalReplyText,
+			ActorPlatform:      securityPlatform,
+			AdapterID:          "onebot",
+			InstanceID:         engine.InstanceID,
+			SendHook:           sendHook,
+			PlatformActionHook: conn.qqActionHook(event, turn, recordDelivery),
+			FinalReplyText:     plainFinalReplyText,
 			CanReplyToMessage: func(messageID string) bool {
 				mid, ok := numericMessageID(messageID)
 				return ok && conn.messageSessionMatches(mid, conn.historyKey(event))
@@ -1240,15 +1246,62 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	finalMessages, parseErr := parseFinalMessages(replyText)
 	if parseErr == nil {
 		for _, message := range finalMessages {
-			if message.IsSticker && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
+			if (message.IsSticker || message.Type == "mface") && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
 				replyText = "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"
 				finalMessages = nil
 				break
 			}
-			if message.Type == "image" && message.IsSticker {
+			if message.Type == "image" && message.IsSticker || message.Type == "mface" {
 				finalSticker = true
 			}
 		}
+	}
+	if !conn.mock && !wakeSignals.Proactive && nativeQQFinal(finalMessages) {
+		if receiptText != "" {
+			finalMessages = append(finalMessages, tools.Msg{Type: "plain", Text: receiptText})
+		}
+		request, _ := json.Marshal(tools.QQRequest{Action: "send", Arguments: tools.QQArguments{Messages: finalMessages}})
+		turn.AwaitDelivery(func() {
+			var acknowledged []tools.Msg
+			result, err := conn.qqActionHook(event, turn, func(messages []tools.Msg) {
+				stickerSent := false
+				for _, m := range messages {
+					stickerSent = stickerSent || m.IsSticker || m.Type == "mface"
+					if receiptText != "" && m.Type == "plain" && m.Text == receiptText {
+						billingReported.Store(true)
+						continue
+					}
+					acknowledged = append(acknowledged, m)
+				}
+				engine.RecordBotMessage(stickerSent)
+				deliveries.RecordFinalProgress(qqDeliveredText(acknowledged), turn)
+			})(turn.Context(), string(request))
+			var status struct {
+				OK bool `json:"ok"`
+			}
+			_ = json.Unmarshal([]byte(result.Content), &status)
+			if err == nil && status.OK {
+				commitAssistantHistory(replyText, false)
+				return
+			}
+			if err != nil && len(acknowledged) == 0 {
+				errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", err, conn.historyKey(event))
+				sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
+				return
+			}
+			if len(acknowledged) > 0 {
+				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged))
+			}
+			if session != nil {
+				reason := result.Content
+				if err != nil {
+					reason = err.Error()
+				}
+				session.SetDeliveryFailure(llm.DeliveryFailure{Platform: "onebot", Action: "qq.send", Wording: reason})
+				engine.TrimSession(session)
+			}
+		})
+		return
 	}
 
 	if len(finalMessages) > 0 {

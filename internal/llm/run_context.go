@@ -43,6 +43,7 @@ type RunContext struct {
 	AdapterID           string              // Trusted transport adapter used for later delivery.
 	InstanceID          string              // Runtime instance used for audit/evaluation attribution.
 	SendHook            func(toolResultJSON string) error
+	PlatformActionHook  func(context.Context, string) (core.PlatformActionResult, error)
 	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
 	// LoadObservedImage resolves a trusted image attachment from a message that
 	// the adapter observed in the current session. The adapter enforces message

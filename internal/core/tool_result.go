@@ -9,6 +9,15 @@ type ToolExecutionResult struct {
 	Content        string
 	MemoryWritten  bool
 	MessagePayload string
+	// PlatformActionPayload is prepared by a native tool and dispatched only
+	// after the same security checks as message delivery.
+	PlatformActionPayload string
+}
+
+type PlatformActionResult struct {
+	Content      string
+	MessagesSent int
+	StickerSent  bool
 }
 
 // StructuredToolExecutor is optional; existing string-returning tools remain valid.

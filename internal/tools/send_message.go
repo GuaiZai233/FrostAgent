@@ -17,13 +17,20 @@ import (
 
 // msg 定义大模型工具返回的单条消息结构
 type Msg struct {
-	Type          string `json:"type"`
-	Text          string `json:"text,omitempty"`
-	MentionUserID string `json:"mention_user_id,omitempty"`
-	MessageID     string `json:"message_id,omitempty"`
-	Path          string `json:"path,omitempty"`
-	URL           string `json:"url,omitempty"`
-	IsSticker     bool   `json:"is_sticker,omitempty"`
+	Type          string         `json:"type"`
+	Text          string         `json:"text,omitempty"`
+	MentionUserID string         `json:"mention_user_id,omitempty"`
+	MessageID     string         `json:"message_id,omitempty"`
+	Path          string         `json:"path,omitempty"`
+	URL           string         `json:"url,omitempty"`
+	IsSticker     bool           `json:"is_sticker,omitempty"`
+	Name          string         `json:"name,omitempty"`
+	FolderID      string         `json:"folder_id,omitempty"`
+	Thumb         string         `json:"thumb,omitempty"`
+	Summary       string         `json:"summary,omitempty"`
+	Transfer      string         `json:"transfer,omitempty"`
+	Data          *QQMessageData `json:"data,omitempty"`
+	StickerIndex  int            `json:"sticker_index,omitempty"`
 }
 
 // OneBotSegment 定义 OneBot v11 协议的标准消息段结构
@@ -56,7 +63,7 @@ func SendMsgTool() Tool {
 						"properties": map[string]any{
 							"type": map[string]any{
 								"type":        "string",
-								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote", "mention_specific"},
+								"enum":        []string{"plain", "image", "record", "video", "file", "mention_user", "quote", "mention_specific", "face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface"},
 								"description": "The component type. Use `mention_user` for a platform-native user mention.",
 							},
 							"text": map[string]any{
@@ -79,6 +86,13 @@ func SendMsgTool() Tool {
 								"type":        "string",
 								"description": "The exact trusted message ID to quote/reply to (required for `quote` or `mention_specific`). mention_specific must be the first component and targets only the active conversation.",
 							},
+							"data":          map[string]any{"type": "object", "description": "Native QQ component fields. Inspect qq(action=discover, capability=send) for fields and rich media options."},
+							"name":          map[string]any{"type": "string", "description": "Displayed media filename."},
+							"folder_id":     map[string]any{"type": "string", "description": "Destination group-file folder."},
+							"thumb":         map[string]any{"type": "string", "description": "Video thumbnail path or URL."},
+							"summary":       map[string]any{"type": "string", "description": "Image preview description."},
+							"transfer":      map[string]any{"type": "string", "enum": []string{"auto", "shared", "inline"}},
+							"sticker_index": map[string]any{"type": "integer", "minimum": 0, "description": "Zero-based market sticker index in a trusted source message for type=mface."},
 						},
 						"required": []string{"type"},
 					},
@@ -112,7 +126,7 @@ func SendMsgTool() Tool {
 			payload.SuppressAutoMention = false
 
 			for i, msg := range payload.Messages {
-				if msg.IsSticker && sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
+				if (msg.IsSticker || msg.Type == "mface") && sticker.ActivityLevel(runtimescope.FromContext(ctx).Getenv(sticker.ActivityEnvKey)) == 0 {
 					return textResult(`{"error":"表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"}`), nil
 				}
 				switch msg.Type {
@@ -149,9 +163,23 @@ func SendMsgTool() Tool {
 					if strings.TrimSpace(msg.Path) == "" && strings.TrimSpace(msg.URL) == "" {
 						return textResult(""), fmt.Errorf("messages[%d] 需要 path 或 url", i)
 					}
+				case "face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface":
+					if err := validateQQComponent(msg); err != nil {
+						return textResult(""), err
+					}
 				default:
 					return textResult(""), fmt.Errorf("messages[%d].type 不支持: %s", i, msg.Type)
 				}
+			}
+			if NeedsQQDelivery(payload.Messages) || run.PlatformActionHook != nil && hasQQMedia(payload.Messages) {
+				if run.Proactive || run.Mock || run.PlatformActionHook == nil || payload.Session != "" {
+					return textResult(""), fmt.Errorf("QQ 富消息需要当前活动 OneBot 会话")
+				}
+				if err := ValidateQQMessages(payload.Messages, false); err != nil {
+					return textResult(""), err
+				}
+				request, _ := json.Marshal(QQRequest{Action: "send", Arguments: QQArguments{Messages: payload.Messages}, SuppressAutoMention: payload.SuppressAutoMention})
+				return core.ToolExecutionResult{Content: string(request), PlatformActionPayload: string(request)}, nil
 			}
 
 			normalized, err := json.Marshal(payload)
@@ -179,6 +207,21 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 				Type: "at",
 				Data: map[string]interface{}{"qq": Msg.MentionUserID},
 			})
+		case "mention_all":
+			oneBotChain = append(oneBotChain, OneBotSegment{Type: "at", Data: map[string]any{"qq": "all"}})
+		case "face", "dice", "rps", "contact", "music", "share", "location", "mface":
+			if err := validateQQComponent(Msg); err != nil {
+				return nil, err
+			}
+			if Msg.Type == "mface" && Msg.Data == nil {
+				return nil, fmt.Errorf("observed market sticker must be resolved by the active adapter")
+			}
+			data := map[string]any{}
+			if Msg.Data != nil {
+				b, _ := json.Marshal(Msg.Data)
+				_ = json.Unmarshal(b, &data)
+			}
+			oneBotChain = append(oneBotChain, OneBotSegment{Type: Msg.Type, Data: data})
 
 		case "quote":
 			oneBotChain = append(oneBotChain, OneBotSegment{
@@ -194,6 +237,19 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 			}
 
 			segData := map[string]interface{}{"file": fileData}
+			if Msg.Name != "" {
+				segData["name"] = Msg.Name
+			}
+			if Msg.Summary != "" {
+				segData["summary"] = Msg.Summary
+			}
+			if Msg.Thumb != "" {
+				thumb, err := buildOneBotMediaFile(MsgForThumbnail(Msg.Thumb))
+				if err != nil {
+					return nil, err
+				}
+				segData["thumb"] = thumb
+			}
 			if Msg.Type == "image" && Msg.IsSticker {
 				segData["sub_type"] = 1
 				segData["subType"] = 1
@@ -202,10 +258,44 @@ func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 				Type: Msg.Type,
 				Data: segData,
 			})
+		default:
+			return nil, fmt.Errorf("unsupported message component %q", Msg.Type)
 		}
 	}
 
 	return oneBotChain, nil
+}
+
+func MsgForThumbnail(source string) Msg {
+	if webURL(source) || strings.HasPrefix(source, "base64://") {
+		return Msg{Type: "image", URL: source}
+	}
+	return Msg{Type: "image", Path: source}
+}
+
+// NeedsQQDelivery selects the native extension path without changing existing
+// ordinary text/mention delivery and its proactive reply contract.
+func NeedsQQDelivery(messages []Msg) bool {
+	for _, m := range messages {
+		if m.Data != nil || m.Name != "" || m.FolderID != "" || m.Thumb != "" || m.Summary != "" || m.Transfer != "" {
+			return true
+		}
+		switch m.Type {
+		case "face", "dice", "rps", "contact", "music", "share", "location", "mention_all", "mface":
+			return true
+		}
+	}
+	return false
+}
+
+func hasQQMedia(messages []Msg) bool {
+	for _, m := range messages {
+		switch m.Type {
+		case "image", "record", "video", "file":
+			return true
+		}
+	}
+	return false
 }
 
 func buildOneBotMediaFile(msg Msg) (string, error) {

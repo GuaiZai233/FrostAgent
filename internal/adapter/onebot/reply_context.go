@@ -418,6 +418,7 @@ func (c *wsConnection) rememberMessageSession(messageID int64, sessionID string)
 		oldest := c.messageSessionOrder[0]
 		c.messageSessionOrder = c.messageSessionOrder[1:]
 		delete(c.messageSessions, oldest)
+		delete(c.ownMessageSessions, oldest)
 	}
 }
 
@@ -437,7 +438,24 @@ func (c *wsConnection) rememberActionMessageSession(response oneBotAPIResponse, 
 	}
 	if messageID, ok := numericMessageID(data["message_id"]); ok {
 		c.rememberMessageSession(messageID, sessionID)
+		c.messageSessionMu.Lock()
+		if c.messageSessions[messageID] == sessionID {
+			if c.ownMessageSessions == nil {
+				c.ownMessageSessions = make(map[int64]string)
+			}
+			c.ownMessageSessions[messageID] = sessionID
+		}
+		c.messageSessionMu.Unlock()
 	}
+}
+
+func (c *wsConnection) ownMessageSessionMatches(messageID int64, sessionID string) bool {
+	if c == nil || messageID == 0 || sessionID == "" {
+		return false
+	}
+	c.messageSessionMu.Lock()
+	defer c.messageSessionMu.Unlock()
+	return c.messageSessions[messageID] == sessionID && c.ownMessageSessions[messageID] == sessionID
 }
 
 func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resolvedReplyContext) {
