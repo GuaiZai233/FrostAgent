@@ -440,6 +440,10 @@ func (c *GroupCompactor) Close() {
 }
 func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner string, routeScope modelrouter.Scope, delay time.Duration) {
 	key := session.ConversationID
+	c.scheduleCompactLocked(key, delay, func() { c.TriggerWithScope(session, owner, routeScope) })
+}
+
+func (c *GroupCompactor) scheduleCompactLocked(key string, delay time.Duration, trigger func()) {
 	if c.Context().Err() != nil || c.scheduled[key] != nil {
 		return
 	}
@@ -460,7 +464,7 @@ func (c *GroupCompactor) scheduleTriggerLocked(session *SessionContext, owner st
 		delete(c.scheduled, key)
 		delete(c.scheduledToken, key)
 		c.mu.Unlock()
-		c.TriggerWithScope(session, owner, routeScope)
+		trigger()
 	})
 }
 

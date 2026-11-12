@@ -83,6 +83,10 @@ You can connect to FrostAgent using the [astrbot_plugin_frostagent_adapter](http
 
 ## Additional Features
 
+### Automatic Context Compaction
+
+Group and private conversations support background compaction. Private chats retain the latest turn alongside a rolling summary. See [context compaction](docs/context-compact.md) for configuration and session lifetime details (Chinese).
+
 ### Integration with ActionsCat
 
 [ActionsCat](https://github.com/actionscat/actionscat) supports statically orchestrated automated workflows.
