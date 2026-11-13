@@ -1,4 +1,4 @@
-package modelrouter
+package modelrouter_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 )
@@ -31,11 +32,12 @@ func TestRoutedWorkloadsRecordUsageOnce(t *testing.T) {
 		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"synthetic"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":4}}}`)
 	}))
 	defer server.Close()
-	m := New(filepath.Join(t.TempDir(), "model_router.json"))
-	cfg := lifecycleConfiguration()
-	cfg.Endpoints[0].BaseURL = server.URL
-	for _, workload := range Workloads {
-		cfg.GlobalBindings[workload] = Binding{Mode: BindingModel, ModelID: "model_test"}
+	m := modelrouter.New(filepath.Join(t.TempDir(), "model_router.json"))
+	cfg := m.Draft()
+	cfg.Endpoints = []modelrouter.Endpoint{{ID: "endpoint_test", DisplayName: "Test endpoint", BaseURL: server.URL, APIKeySource: modelrouter.APIKeyStorageManual, Enabled: true}}
+	cfg.Models = []modelrouter.Model{{ID: "model_test", DisplayName: "Test model", EndpointID: "endpoint_test", UpstreamModel: "model-1", Enabled: true}}
+	for _, workload := range modelrouter.Workloads {
+		cfg.GlobalBindings[workload] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "model_test"}
 	}
 	if err := m.SaveDraft(cfg); err != nil {
 		t.Fatal(err)
@@ -45,8 +47,8 @@ func TestRoutedWorkloadsRecordUsageOnce(t *testing.T) {
 	}
 	usage, _ := tokenusage.New(nil, "", "")
 	m.SetUsageStore(usage)
-	for _, workload := range Workloads {
-		if workload == WorkloadEmbedding {
+	for _, workload := range modelrouter.Workloads {
+		if workload == modelrouter.WorkloadEmbedding {
 			continue
 		}
 		provider := m.Provider(workload, false, time.Second)
@@ -55,14 +57,14 @@ func TestRoutedWorkloadsRecordUsageOnce(t *testing.T) {
 		}
 	}
 	// The sticker parser rejects this text, but its model request still consumed tokens.
-	v := sticker.LLMVisionCaller{Provider: m.Provider(WorkloadVision, false, time.Second), ModelName: "synthetic"}
+	v := sticker.LLMVisionCaller{Provider: m.Provider(modelrouter.WorkloadVision, false, time.Second), ModelName: "synthetic"}
 	if _, _, _, err := v.Describe("c3ludGhldGlj", "image/png"); err == nil {
 		t.Fatal("invalid sticker response unexpectedly accepted")
 	}
-	if _, err := m.Provider(WorkloadDialogue, false, time.Second).Chat(context.Background(), core.ChatRequest{UsageModule: "security"}); err != nil {
+	if _, err := m.Provider(modelrouter.WorkloadDialogue, false, time.Second).Chat(context.Background(), core.ChatRequest{UsageModule: "security"}); err != nil {
 		t.Fatal(err)
 	}
-	_, embedding, err := m.EmbeddingSession(context.Background(), Scope{})
+	_, embedding, err := m.EmbeddingSession(context.Background(), modelrouter.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}

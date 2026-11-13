@@ -2,10 +2,17 @@ package sticker
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
 
 type mockVisionCaller struct {
@@ -210,4 +217,69 @@ func TestSummarizer_ProcessAndRetry(t *testing.T) {
 		}
 	}
 	t.Fatal("retry did not succeed in time")
+}
+
+func TestSummarizerVisionErrorAndRetry(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantError bool
+	}{
+		{name: "disabled", err: modelrouter.ErrDisabled},
+		{name: "wrapped disabled", err: fmt.Errorf("vision call: %w", modelrouter.ErrDisabled)},
+		{name: "provider failure", err: errors.New("network error"), wantError: true},
+		{name: "same message without sentinel", err: errors.New(modelrouter.ErrDisabled.Error()), wantError: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data := []byte("synthetic sticker")
+			id := HashBytes(data)
+			if err := store.Add(id, id+".png", data); err != nil {
+				t.Fatal(err)
+			}
+			before, _ := store.Get(id)
+			logger := logs.New("", "Test", 20)
+			scope := runtimescope.New(nil, nil, logger)
+			defer scope.Cancel()
+			vision := &mockVisionCaller{err: tt.err}
+			summarizer := &Summarizer{Scope: scope, store: store, vision: vision}
+
+			summarizer.process(id)
+
+			if vision.getCalled() != 1 {
+				t.Fatalf("vision calls = %d, want 1", vision.getCalled())
+			}
+			after, ok := store.Get(id)
+			if !ok || !reflect.DeepEqual(before, after) {
+				t.Fatalf("failed vision call changed sticker: before=%+v after=%+v", before, after)
+			}
+			entries := logger.Snapshot()
+			if tt.wantError {
+				if len(entries) != 1 || entries[0].Level != logs.ERROR ||
+					entries[0].Category != logs.SYSTEM ||
+					!strings.Contains(entries[0].Content, "vision call failed for "+id[:12]) ||
+					!strings.Contains(entries[0].Content, tt.err.Error()) {
+					t.Fatalf("expected vision failure log, got %+v", entries)
+				}
+			} else if len(entries) != 0 {
+				t.Fatalf("disabled vision emitted logs: %+v", entries)
+			}
+
+			vision.setResponse("a curious cat", []string{"curious", "cat"}, false, nil)
+			summarizer.process(id)
+
+			entry, ok := store.Get(id)
+			if !ok || entry.Status != StatusReady || entry.Description != "a curious cat" ||
+				!reflect.DeepEqual(entry.Keywords, []string{"curious", "cat"}) {
+				t.Fatalf("retry did not summarize sticker: %+v", entry)
+			}
+			if vision.getCalled() != 2 {
+				t.Fatalf("vision calls after retry = %d, want 2", vision.getCalled())
+			}
+		})
+	}
 }
