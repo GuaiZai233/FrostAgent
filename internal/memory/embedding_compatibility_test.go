@@ -48,7 +48,7 @@ func TestPostgresEmbeddingCompatibilityCacheWrites(t *testing.T) {
 					}
 				}
 			}
-			if _, err := db.SQL.Exec(`UPDATE schema_meta SET version = 17, min_compatible_version = 14 WHERE id = 1`); err != nil {
+			if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = 14 WHERE id = 1`), storage.SchemaVersion+1); err != nil {
 				t.Fatal(err)
 			}
 			before := embeddingCompatibilitySnapshot(t, db.SQL)

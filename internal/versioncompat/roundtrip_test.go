@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/backup"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
@@ -43,8 +44,8 @@ func TestReleaseProbe(t *testing.T) {
 	if (op == "edit-old" || op == "seed-legacy") && storage.SchemaVersion != 15 {
 		t.Fatal("old-version probe must be built from the v15 compatibility branch")
 	}
-	if (op == "seed" || op == "upgrade") && storage.SchemaVersion != 16 {
-		t.Fatal("new-version probe must be built from v16")
+	if (op == "seed" || op == "upgrade") && storage.SchemaVersion < 16 {
+		t.Fatal("new-version probe must support at least v16")
 	}
 	root := os.Getenv("FROSTAGENT_COMPAT_ROOT")
 	if root == "" {
@@ -182,8 +183,17 @@ func TestReleaseProbe(t *testing.T) {
 		}
 		var version int
 		checked(t, db.SQL.QueryRow(`SELECT version FROM schema_meta WHERE id=1`).Scan(&version))
-		if version != 16 {
+		if version != storage.SchemaVersion {
 			t.Fatalf("database was downgraded: %d", version)
+		}
+	case "seed-history":
+		checked(t, chathistory.NewStore(db, id).Save(ctx, roundtripHistoryRecord()))
+	case "verify-history":
+		want := roundtripHistoryRecord()
+		rows, err := chathistory.NewStore(db, id).Search(ctx, want.Scope, chathistory.Query{Keywords: []string{"原文", "100%"}})
+		checked(t, err)
+		if len(rows) != 1 || rows[0] != want {
+			t.Fatalf("chat original changed across releases/backup: %#v", rows)
 		}
 	case "backup":
 		archive, err := backup.BuildInstanceZIP(db, id, filepath.Join(root, "unused-sticker-files"))
@@ -202,5 +212,14 @@ func TestReleaseProbe(t *testing.T) {
 		checked(t, os.WriteFile(os.Getenv("FROSTAGENT_COMPAT_RESULT"), raw, 0600))
 	default:
 		t.Fatalf("unknown probe operation %q", op)
+	}
+}
+
+func roundtripHistoryRecord() chathistory.Record {
+	return chathistory.Record{
+		Scope: chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "synthetic-chat-user"},
+		ID:    "synthetic-chat-record", MessageID: "synthetic-chat-message", SenderID: "synthetic-chat-user",
+		SenderName: "Synthetic", Role: "user", Content: "原文 100% literal\nunchanged", ReplyTo: "synthetic-chat-reply",
+		OccurredAt: time.UnixMilli(123456).UTC(), DeliveryStatus: "received",
 	}
 }
