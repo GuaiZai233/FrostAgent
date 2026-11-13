@@ -28,7 +28,7 @@ func TestLogCommandWithoutMentionSendsDetailsPrivately(t *testing.T) {
 	previousID := scope.Logger.Error(logs.SYSTEM, "unrelated preceding error")
 	text, _ := json.Marshal("/log " + id)
 	event := model.OneBotEvent{SelfID: 101, UserID: callerID, GroupID: 303, MessageType: "group", Message: text}
-	if !handleAdminCommand(conn, event, engine, previousID) {
+	if !handleAdminCommand(conn, event, engine, completedPreviousError(previousID)) {
 		t.Fatal("bare log command not handled")
 	}
 	for i := 0; i < 2; i++ {
@@ -51,7 +51,7 @@ func TestLogCommandWithoutMentionSendsDetailsPrivately(t *testing.T) {
 		}
 	}
 	event.UserID = 404
-	if !handleAdminCommand(conn, event, engine, "") {
+	if !handleAdminCommand(conn, event, engine, nil) {
 		t.Fatal("nonadmin command not consumed")
 	}
 	select {

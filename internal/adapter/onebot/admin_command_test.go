@@ -286,7 +286,7 @@ func TestHandleAdminCommand_AdminFlow(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(wsConn, event, engine, "")
+	handled := handleAdminCommand(wsConn, event, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for admin /reset")
 	}
@@ -313,7 +313,7 @@ func TestHandleAdminCommand_AdminFlow(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled = handleAdminCommand(wsConn, eventSyntaxErr, engine, "")
+	handled = handleAdminCommand(wsConn, eventSyntaxErr, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for syntax error")
 	}
@@ -371,7 +371,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(wsConn, event, engine, "")
+	handled := handleAdminCommand(wsConn, event, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for locked admin")
 	}
@@ -403,7 +403,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 		Message:     msgBytesUnban,
 	}
 
-	handled = handleAdminCommand(wsConn, eventUnban, engine, "")
+	handled = handleAdminCommand(wsConn, eventUnban, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for locked admin unban attempt")
 	}
@@ -454,7 +454,7 @@ func TestHandleAdminCommand_NonAdminSilentDrop(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(wsConn, event, engine, "")
+	handled := handleAdminCommand(wsConn, event, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true to drop non-admin candidate")
 	}
@@ -493,7 +493,7 @@ func TestHandleAdminCommand_NonCandidatePassthrough(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(nil, event, engine, "")
+	handled := handleAdminCommand(nil, event, engine, nil)
 	if handled {
 		t.Fatalf("expected handleAdminCommand to return false for non-candidate chat message")
 	}
@@ -799,7 +799,7 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 			MessageType: "group",
 			Message:     msgBytes,
 		}
-		handled := handleAdminCommand(wsConn, event, engine, "")
+		handled := handleAdminCommand(wsConn, event, engine, nil)
 		if !handled {
 			t.Fatalf("expected handleAdminCommand to return true")
 		}

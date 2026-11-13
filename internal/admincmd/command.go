@@ -66,6 +66,7 @@ func FormatUsage(prefix string) string {
 	p := NormalizePrefix(prefix)
 	sep := PrefixSeparator(p)
 	return fmt.Sprintf("管理员指令使用指南：\n"+
+		"私聊直接输入指令，无需 @；群聊除 log 外需 @ Bot。\n"+
 		"%s%sreset - 重置当前会话与上下文\n"+
 		"%s%sban <userID> - 全局安全封禁用户\n"+
 		"%s%sunban <userID> - 解除用户全局安全封禁\n"+

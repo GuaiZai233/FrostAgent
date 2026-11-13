@@ -101,7 +101,7 @@ type wsConnection struct {
 	cancel              context.CancelFunc
 	writeMu             sync.Mutex
 	previousErrorMu     sync.Mutex
-	previousErrors      map[string]string // Protected by previousErrorMu; no message text is retained.
+	previousErrors      map[string]*previousErrorReply // Protected by previousErrorMu; no message text is retained.
 	messageMu           sync.Mutex
 	pendingMessage      map[string]chan oneBotAPIResponse
 	nextMessageEcho     uint64
@@ -171,11 +171,10 @@ func (c *wsConnection) writeTurnMessage(messageType int, data []byte, turn *llm.
 			return err
 		}
 		defer c.conn.SetWriteDeadline(time.Time{})
-		if err := c.conn.WriteMessage(messageType, data); err != nil {
-			return err
-		}
-		c.rememberOutgoingError(data)
-		return nil
+		key, reply := c.beginOutgoingError(data)
+		err := c.conn.WriteMessage(messageType, data)
+		c.finishOutgoingError(key, reply, err)
+		return err
 	})
 }
 

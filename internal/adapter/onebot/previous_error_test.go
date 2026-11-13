@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,28 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
 )
+
+func completedPreviousError(id string) *previousErrorReply {
+	reply := &previousErrorReply{uuid: id, done: make(chan struct{}), sent: true}
+	close(reply.done)
+	return reply
+}
+
+func previousErrorID(t *testing.T, reply *previousErrorReply) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	id, active := reply.resolve(ctx, ctx)
+	if !active {
+		t.Fatal("previous error did not resolve")
+	}
+	return id
+}
+
+func recordSentPreviousError(conn *wsConnection, data []byte) {
+	key, reply := conn.beginOutgoingError(data)
+	conn.finishOutgoingError(key, reply, nil)
+}
 
 func readLogAction(t *testing.T, conn *websocket.Conn) (model.OneBotAction, string) {
 	t.Helper()
@@ -60,6 +83,9 @@ func TestBareLogAfterErrorOverWebSocket(t *testing.T) {
 			event := model.OneBotEvent{PostType: "message", SelfID: 101, UserID: callerID,
 				GroupID: 303, MessageType: kind, MessageID: 1,
 				Message: json.RawMessage(`[{"type":"at","data":{"qq":"101"}},{"type":"text","data":{"text":"/reflect"}}]`),
+			}
+			if kind == "private" {
+				event.Message = json.RawMessage(`"/reflect"`)
 			}
 			if err := client.WriteJSON(event); err != nil {
 				t.Fatal(err)
@@ -169,7 +195,7 @@ func TestPreviousErrorRequiresAdjacentBotMessage(t *testing.T) {
 					message = "ordinary message from another bot client"
 				}
 				echo.Message, _ = json.Marshal(message)
-				if id := conn.takePreviousError(echo); id != "" {
+				if id := previousErrorID(t, conn.takePreviousError(echo)); id != "" {
 					t.Fatalf("message_sent became a command input: %q", id)
 				}
 			case "bot":
@@ -181,11 +207,11 @@ func TestPreviousErrorRequiresAdjacentBotMessage(t *testing.T) {
 			case "API-request":
 				write("get_group_info", map[string]any{"group_id": event.GroupID})
 			}
-			id := conn.takePreviousError(event)
+			id := previousErrorID(t, conn.takePreviousError(event))
 			if tc.wantError != (id != "") || (id != "" && !strings.Contains(failure, id)) {
 				t.Fatalf("wrong preceding error: %q", id)
 			}
-			if next := conn.takePreviousError(event); next != "" {
+			if next := previousErrorID(t, conn.takePreviousError(event)); next != "" {
 				t.Fatalf("stale error survived next incoming message: %q", next)
 			}
 		})
@@ -208,7 +234,7 @@ func TestBareLogUsageAndPermissions(t *testing.T) {
 			command := prefix + admincmd.PrefixSeparator(prefix) + "log"
 			raw, _ := json.Marshal(command)
 			event := model.OneBotEvent{SelfID: 101, UserID: 202, MessageType: "private", Message: raw}
-			if !handleAdminCommand(conn, event, engine, "") {
+			if !handleAdminCommand(conn, event, engine, nil) {
 				t.Fatal("bare log was not handled")
 			}
 			select {
@@ -222,7 +248,7 @@ func TestBareLogUsageAndPermissions(t *testing.T) {
 			}
 			event.UserID = 404
 			id := scope.Logger.Error(logs.SYSTEM, "private diagnostic")
-			if !handleAdminCommand(conn, event, engine, id) {
+			if !handleAdminCommand(conn, event, engine, completedPreviousError(id)) {
 				t.Fatal("nonadmin command not consumed")
 			}
 			select {
@@ -240,7 +266,7 @@ func TestPreviousErrorPrivateMessageSent(t *testing.T) {
 			conn := newWSConnection(nil)
 			failure := logs.New("test", "test", 20).ReportError(logs.SYSTEM, "synthetic failure", nil)
 			data, _ := json.Marshal(model.OneBotAction{Action: "send_private_msg", Params: map[string]any{"user_id": 202, "message": failure}})
-			conn.rememberOutgoingError(data)
+			recordSentPreviousError(conn, data)
 			event := model.OneBotEvent{PostType: "message", MessageType: "private", SelfID: 101, UserID: 202}
 			if mode == "late-error-echo" {
 				conn.takePreviousError(event)
@@ -251,10 +277,10 @@ func TestPreviousErrorPrivateMessageSent(t *testing.T) {
 			}
 			raw, _ := json.Marshal(message)
 			echo := model.OneBotEvent{PostType: "message_sent", MessageType: "private", SelfID: 101, UserID: 101, TargetID: 202, Message: raw}
-			if id := conn.takePreviousError(echo); id != "" {
+			if id := previousErrorID(t, conn.takePreviousError(echo)); id != "" {
 				t.Fatalf("message_sent became a command input: %q", id)
 			}
-			id := conn.takePreviousError(event)
+			id := previousErrorID(t, conn.takePreviousError(event))
 			if (id != "") != (mode == "current-error-echo") {
 				t.Fatalf("wrong preceding error after %s: %q", mode, id)
 			}
@@ -275,7 +301,7 @@ func TestPreviousErrorIgnoresFailedWritesAndBoundsState(t *testing.T) {
 	}
 	for target := 1; target <= maxTrustedMessageSessions+1; target++ {
 		data := []byte(fmt.Sprintf(`{"action":"send_private_msg","params":{"user_id":%d,"message":%q}}`, target, failure))
-		conn.rememberOutgoingError(data)
+		recordSentPreviousError(conn, data)
 	}
 	if len(conn.previousErrors) != maxTrustedMessageSessions {
 		t.Fatalf("unbounded preceding errors: %d", len(conn.previousErrors))

@@ -18,7 +18,8 @@ import (
 )
 
 // extractOneBotAdminCommand parses a OneBot event to see if it is an administrator command candidate.
-// Commands require a real @ targeting event.SelfID, except the log lookup command.
+// Private commands need no mention. Group commands require a real @ targeting
+// event.SelfID, except the log lookup command.
 func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *runtimescope.Scope) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
 	_ = scope
 	selfIDStr := strconv.FormatInt(event.SelfID, 10)
@@ -90,7 +91,7 @@ func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *ru
 	}
 	text := strings.TrimSpace(b.String())
 	cmd, isCandidate, err = admincmd.ParseCandidate(text, prefix)
-	if !hasRealAt && cmd.Type != admincmd.CmdLog {
+	if event.MessageType != "private" && !hasRealAt && cmd.Type != admincmd.CmdLog {
 		return admincmd.ParsedCommand{}, false, nil
 	}
 	return cmd, isCandidate, err
@@ -111,7 +112,7 @@ func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
 	sendDirectReply(action, type1, id, "echo_admin_cmd", event, conn, text)
 }
 
-func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, previousError string) bool {
+func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, previousError *previousErrorReply) bool {
 	if conn != nil && conn.mock {
 		return false
 	}
@@ -147,13 +148,6 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 		sendOneBotReply(event, conn, fmt.Sprintf("%v\n\n%s", parseErr, admincmd.FormatUsage(prefix)))
 		return true
 	}
-	if cmd.Type == admincmd.CmdLog && len(cmd.Args) == 0 {
-		if previousError == "" {
-			sendOneBotReply(event, conn, admincmd.FormatUsage(prefix))
-			return true
-		}
-		cmd.Args = []string{previousError}
-	}
 
 	owner := ""
 	if event.MessageType == "group" {
@@ -166,6 +160,17 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 	routeScope := oneBotRouteScope(event)
 
 	if !engine.Go(func() {
+		if cmd.Type == admincmd.CmdLog && len(cmd.Args) == 0 {
+			id, active := previousError.resolve(engine.Context(), conn.Context())
+			if !active {
+				return
+			}
+			if id == "" {
+				sendOneBotReply(event, conn, admincmd.FormatUsage(prefix))
+				return
+			}
+			cmd.Args = []string{id}
+		}
 		exec := admincmd.NewExecutor(engine)
 		cmdCtx := admincmd.CommandContext{
 			SessionID:    sessionID,
