@@ -37,7 +37,7 @@ OpenAI 兼容响应中的 `reasoning_content` 通过现有 `ProviderState` 保�
 
 进程启动时从 `https://models.dev/models.json?type=all` 拉取一次模型列表，之后每 48 小时刷新一次。成功的结果写入 `data/models_dev_cache.json`；拉取失败时沿用内存中的上一份数据，若本进程也没有缓存则不提供任何元数据。拉取在后台进行，不阻塞启动。
 
-模型路由器编辑 Model 时，输入或选择上游模型名称后，前端调用 `InferModelCapabilities` RPC 从该快照推断能力标签（text、tools、vision）。推断只读快照，从不请求上游 Endpoint。匹配规则保守：带 `/` 的名称必须与 models.dev 的完整 id 精确匹配（不区分大小写）；不带 `/` 的名称匹配所有提供商下同名的模型，且只有所有匹配项都支持某能力时才勾选它。找不到或快照不可用时保持现有勾选不变，并隐藏提示行。推断结果仅是默认勾选，提示行明确说明可能存在偏差，以实际表现为准。
+模型路由器编辑 Model 时，输入或选择 Endpoint 模型名称后，前端调用 `InferModelCapabilities` RPC 从该快照推断能力标签（text、tools、vision）。推断只读快照，从不请求 Endpoint。匹配规则保守：带 `/` 的名称必须与 models.dev 的完整 id 精确匹配（不区分大小写）；不带 `/` 的名称匹配所有提供商下同名的模型，且只有所有匹配项都支持某能力时才勾选它。找不到或快照不可用时保持现有勾选不变，并隐藏提示行。推断结果仅是默认勾选，提示行明确说明可能存在偏差，以实际表现为准。
 
 ## FrostAgent 的组成
 
@@ -151,7 +151,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **升级兼容性边界与无隐式迁移（Breaking Migration Boundary）**：系统提示词下沉为实例级配置属于显式的破坏性迁移。系统坚决不执行隐式数据回填或跨层穿透读取：Control Plane 不再暴露全局 `SYSTEM_PROMPT`，存量实例目录中的 `.env` 若未定义 `SYSTEM_PROMPT`，在升级后将解析为空，绝不会隐式继承或持久化根级旧配置，避免造成隐蔽的状态污染；用户需在 Web 设置面板中显式为其赋予独立提示词。新建实例则由模板自动赋予默认助手设定。
 - **Web UI 管理与响应式排版**：前端控制台提供「人设对话」管理页面与「后端设置」页面，严格绑定当前选中的实例，支持可视化卡片增删改查、排序、实时提示词片段预览、直接编辑原始 YAML 以及实例专属环境变量热修改。在「后端设置」中针对环境变量表（特别是超长提示词 `SYSTEM_PROMPT` 等长文本字段）引入固定表格布局（Fixed Table Layout）、层叠顶端对齐（`.table.env-table td { vertical-align: top; }` 优先于基础表格居中规则）与自适应断字换行规范（`table-layout: fixed`、`overflow-wrap: anywhere`、`word-break: break-all`、`whitespace-pre-wrap`），确保超宽文本无论在何种视口下均自动折行，杜绝横向滚动挤占，并使编辑与删除操作按键始终常驻于可视屏幕顶端范围内。
 - **非安全上下文兼容的客户端 ID 生成**：浏览器仅在安全上下文（HTTPS 或 localhost）中暴露 `crypto.randomUUID()`，控制台若经局域网 HTTP 地址访问，该函数为 `undefined`。模型路由页面的草稿 owner 与模型名称 ID 统一经 `apps/web/src/utils/random-id.ts` 的 `randomUUID()` 生成：优先使用原生 `randomUUID`，不可用时基于 `crypto.getRandomValues`（所有上下文均可用）按 RFC 4122 v4 格式拼装。此前该缺陷会导致模型路由页面在 HTTP 访问时显示「页面加载失败」，且因 `sessionStorage` 未写入而刷新无效。
-- **只读自描述工具 (`get_frostagent_info`)**：Bot 可通过单一工具的 `section` 参数查询自身运行信息，参数由 Schema 严格限定为 `overview` / `model` / `features` 三者之一，拒绝其它键与额外参数。`overview` 返回 Bot 名称（`BOT_NAME`）、别名（`BOT_ALIASES`，逗号分隔并去除空白）、FrostAgent 版本、运行时长与当前已建立连接的接入平台（OneBot，依据适配器的活动 WebSocket 连接数判定）；`model` 仅返回当前请求路由解析出的主对话上游模型名称：按请求的 `RouteScope` 与 `RouteSnapshot` 解析，因此群组专属绑定生效；无请求上下文时回退全局路由。端点、密钥与解析错误细节一律不回显；`features` 按固定顺序报告记忆、向量检索（`ENABLE_EMBEDDING` 生效）、Sandbox（已启用且后端存在）、MCP（至少一个服务处于已连接状态）、ActionsCat（已启用且已配置端点）与表情包子系统的可用性。所有值在每次调用时实时读取，不做缓存；工具不接受模型提供的配置输入，且不允许在主动回复轮次中调用。
+- **只读自描述工具 (`get_frostagent_info`)**：Bot 可通过单一工具的 `section` 参数查询自身运行信息，参数由 Schema 严格限定为 `overview` / `model` / `features` 三者之一，拒绝其它键与额外参数。`overview` 返回 Bot 名称（`BOT_NAME`）、别名（`BOT_ALIASES`，逗号分隔并去除空白）、FrostAgent 版本、运行时长与当前已建立连接的接入平台（OneBot，依据适配器的活动 WebSocket 连接数判定）；`model` 仅返回当前请求路由解析出的主对话 Endpoint 模型名称：按请求的 `RouteScope` 与 `RouteSnapshot` 解析，因此群组专属绑定生效；无请求上下文时回退全局路由。端点、密钥与解析错误细节一律不回显；`features` 按固定顺序报告记忆、向量检索（`ENABLE_EMBEDDING` 生效）、Sandbox（已启用且后端存在）、MCP（至少一个服务处于已连接状态）、ActionsCat（已启用且已配置端点）与表情包子系统的可用性。所有值在每次调用时实时读取，不做缓存；工具不接受模型提供的配置输入，且不允许在主动回复轮次中调用。
 
 - **管理员配置追加工具 (`override_frostagent_config`)**：当前真实 QQ 管理员可在明确自然语言请求下修改当前实例的提示词追加区、防循环、主动感知、ActionsCat 开关和表情包积极度；提示词和 BotID 只追加，禁止模拟/主动轮次修改。沙箱与安全控制档位不在范围内。参数、边界识别与权限规则见 [管理员自然语言配置工具](config-override.md)。
 
@@ -213,7 +213,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - `PlanGroupDecoration` 统一处理群聊自动引用、@ 提及、去重和表情包装饰跳过策略，消息顺序为 `[Quote, Mention, Content]`。
   - `IsMentionOnlyOneBotSegments` 依据原始消息段检查纯 @Bot 交互，包含其他用户提及、引用、图片或非文本组件时不判定为纯提及。
   - 会话、记忆、摘要、模型路由和计费继续统一 `onebot` 与 `qq` 身份；未知平台保持独立命名空间。
-- **连接控制**：实例的连接页面管理 `ONEBOT_WS_ENABLED`、正向/反向模式、上游地址及独立入站/出站令牌。
+- **连接控制**：实例的连接页面管理 `ONEBOT_WS_ENABLED`、正向/反向模式、Endpoint 地址及独立入站/出站令牌。
 
 AstrBot 运行支持及历史别名兼容已移除，升级影响见[移除说明](../../docs/astrbot-removal.md)。
 
@@ -396,7 +396,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
   - 概览分别展示实例管理名称与实例 `BOT_NAME`；侧边栏概览下方的「连接」页使用 Control Plane 下发的本次启动实际采用的 `WS_LISTEN_ADDR` 生成实例专属适配器地址并提供复制入口。设置页修改后的待重启值不会提前污染地址。
-  - OneBot 使用 `ONEBOT_WS_ENABLED` 控制真实上游连接，缺省为 `true`，停用时保留配置并拒绝普通反向连接、停止正向拨号，浏览器 mock 直接对话保留。启用后使用实例设置 `ONEBOT_WS_MODE` 选择连接方向：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
+  - OneBot 使用 `ONEBOT_WS_ENABLED` 控制真实 Endpoint 连接，缺省为 `true`，停用时保留配置并拒绝普通反向连接、停止正向拨号，浏览器 mock 直接对话保留。启用后使用实例设置 `ONEBOT_WS_MODE` 选择连接方向：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
   - 设置批量保存前校验最终的模式／URL／Token 组合，保存后重建该实例连接，停用及换库会取消拨号、重连等待和已建立连接。客户端在 runtime 发布后才启动，带有界握手超时、退避重试和原有 Ping/Pong 心跳；不关闭 TLS 证书校验，不在连接日志中输出凭证。
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。

@@ -21,8 +21,8 @@ func TestDialogueErrorsExposeOnlyTypeAndLookupUUID(t *testing.T) {
 		kind string
 	}{
 		{&url.Error{Op: "Post", URL: "https://endpoint.invalid/secret", Err: errors.New("synthetic-secret")}, "网络请求失败"},
-		{&openai.HTTPError{StatusCode: 401, Body: "https://endpoint.invalid/secret synthetic-secret"}, "上游 HTTP 401"},
-		{&openai.HTTPError{StatusCode: 400, Body: "https://endpoint.invalid/secret synthetic-secret"}, "上游 HTTP 400"},
+		{&openai.HTTPError{StatusCode: 401, Body: "https://endpoint.invalid/secret synthetic-secret"}, "Endpoint HTTP 401"},
+		{&openai.HTTPError{StatusCode: 400, Body: "https://endpoint.invalid/secret synthetic-secret"}, "Endpoint HTTP 400"},
 		{context.DeadlineExceeded, "请求超时"},
 		{context.Canceled, "请求已取消"},
 		{errors.New("synthetic-secret"), "模型调用错误"},

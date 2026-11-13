@@ -70,8 +70,8 @@ docker compose up -d --build
 
 创建实例后，在「连接」页配置。
 
-- **反向 WebSocket（FrostAgent 作为服务端）**：上游主动连接 FrostAgent。在消息平台上游实现中启用反向 WebSocket 客户端，将复制的 OneBot 地址填入，例如 `ws://127.0.0.1:11023/instances/<实例ID>/ws/onebot`。
-- **正向 WebSocket（FrostAgent 作为客户端）**：上游提供 WebSocket 服务端。在 FrostAgent「连接」页填写上游的 `ws://` 或 `wss://` 地址及可选访问令牌。
+- **反向 WebSocket（FrostAgent 作为服务端）**：Endpoint 主动连接 FrostAgent。在消息平台 Endpoint 实现中启用反向 WebSocket 客户端，将复制的 OneBot 地址填入，例如 `ws://127.0.0.1:11023/instances/<实例ID>/ws/onebot`。
+- **正向 WebSocket（FrostAgent 作为客户端）**：Endpoint 提供 WebSocket 服务端。在 FrostAgent「连接」页填写 Endpoint 的 `ws://` 或 `wss://` 地址及可选访问令牌。
 
 ## 附加功能
 
