@@ -39,7 +39,7 @@ Stable 对比构建版本与 Release tag（忽略开头 `v`），Latest 对比�
 
 ## 本地构建
 
-`make build`、`make dev`、`make serve-api` 和 `make serve-agent` 会通过
+`make build`、`make dev` 和 `make serve-api` 会通过
 `git rev-parse HEAD` 注入完整提交。直接 `go build ./cmd/app` 可使用 Go 自动嵌入的
 `vcs.revision`；`-buildvcs=false` 或无 Git 源码包不保证有此信息。
 
