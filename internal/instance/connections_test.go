@@ -16,7 +16,7 @@ import (
 )
 
 func TestSQLConnectionModesFollowInstanceLifecycle(t *testing.T) {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		t.Run(adapter, func(t *testing.T) {
 			connected, disconnected := make(chan string, 16), make(chan struct{}, 16)
 			var dials atomic.Int32
@@ -82,16 +82,7 @@ func TestSQLConnectionModesFollowInstanceLifecycle(t *testing.T) {
 					t.Fatalf("disabled adapter blocked direct chat: %v", err)
 				}
 				conn.Close()
-				otherAdapter := "onebot"
-				if adapter == "ONEBOT" {
-					otherAdapter = "astrbot"
-				}
-				otherEndpoint := "ws" + strings.TrimPrefix(local.URL, "http") + "/instances/" + info.ID + "/ws/" + otherAdapter
-				conn, _, err = websocket.DefaultDialer.Dial(otherEndpoint, nil)
-				if err != nil {
-					t.Fatalf("disabling one adapter blocked the other adapter: %v", err)
-				}
-				conn.Close()
+
 			}
 			draft := func(updates map[string]string) string {
 				t.Helper()
@@ -244,17 +235,17 @@ func TestSQLConnectionModesFollowInstanceLifecycle(t *testing.T) {
 	}
 }
 
-func TestBothAdaptersDisabledKeepDirectChat(t *testing.T) {
+func TestOneBotDisabledKeepsDirectChat(t *testing.T) {
 	m, err := NewDatabase(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	info, err := m.Create("Both Adapters Disabled")
+	info, err := m.Create("OneBot Disabled")
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := applySettingsDraft(m, info.ID, `{"updates":[{"key":"ONEBOT_WS_ENABLED","value":"false"},{"key":"ASTRBOT_WS_ENABLED","value":"false"}]}`)
+	response := applySettingsDraft(m, info.ID, `{"updates":[{"key":"ONEBOT_WS_ENABLED","value":"false"}]}`)
 	if !strings.Contains(response.Body.String(), `"success":true`) {
 		t.Fatal(response.Body.String())
 	}
@@ -263,7 +254,7 @@ func TestBothAdaptersDisabledKeepDirectChat(t *testing.T) {
 	}
 	server := httptest.NewServer(m)
 	defer server.Close()
-	for _, adapter := range []string{"onebot", "astrbot"} {
+	for _, adapter := range []string{"onebot"} {
 		endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/instances/" + info.ID + "/ws/" + adapter
 		conn, response, err := websocket.DefaultDialer.Dial(endpoint, nil)
 		if err == nil {

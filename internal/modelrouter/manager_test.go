@@ -79,13 +79,13 @@ func TestGroupOverridePlatformParity(t *testing.T) {
 		Bindings: map[Workload]Binding{WorkloadDialogue: {Mode: BindingModel, ModelID: "group_custom"}},
 	}}
 
-	// Resolving under AstrBot's "aiocqhttp"
-	targetAstrBot, err := resolveConfiguration(cfg, WorkloadDialogue, Scope{Platform: "aiocqhttp", GroupID: "test_grp_42"})
+	// Resolving under the canonical QQ platform
+	targetQQ, err := resolveConfiguration(cfg, WorkloadDialogue, Scope{Platform: "qq", GroupID: "test_grp_42"})
 	if err != nil {
-		t.Fatalf("resolve astrbot scope: %v", err)
+		t.Fatalf("resolve QQ scope: %v", err)
 	}
-	if targetAstrBot.ModelID != "group_custom" {
-		t.Fatalf("astrbot target model = %q, want group_custom", targetAstrBot.ModelID)
+	if targetQQ.ModelID != "group_custom" {
+		t.Fatalf("QQ target model = %q, want group_custom", targetQQ.ModelID)
 	}
 
 	// Resolving under native OneBot's "onebot"
@@ -95,6 +95,18 @@ func TestGroupOverridePlatformParity(t *testing.T) {
 	}
 	if targetOneBot.ModelID != "group_custom" {
 		t.Fatalf("onebot target model = %q, want group_custom", targetOneBot.ModelID)
+	}
+	for _, platform := range []string{"aiocqhttp", "astrbot"} {
+		target, err := resolveConfiguration(cfg, WorkloadDialogue, Scope{Platform: platform, GroupID: "test_grp_42"})
+		if err != nil || target.ModelID != "global" {
+			t.Fatalf("retired platform %q inherited the QQ override: %+v, %v", platform, target, err)
+		}
+		cfg.GroupOverrides[0].Platform = platform
+		target, err = resolveConfiguration(cfg, WorkloadDialogue, Scope{Platform: "onebot", GroupID: "test_grp_42"})
+		if err != nil || target.ModelID != "global" {
+			t.Fatalf("OneBot inherited the retired %q override: %+v, %v", platform, target, err)
+		}
+		cfg.GroupOverrides[0].Platform = "qq"
 	}
 }
 
@@ -126,7 +138,7 @@ func TestGroupOverrideDuplicateQQPlatformConflict(t *testing.T) {
 			Bindings: map[Workload]Binding{WorkloadDialogue: {Mode: BindingModel, ModelID: "m1"}},
 		},
 		{
-			Platform: "aiocqhttp",
+			Platform: "qq",
 			GroupID:  "group_999",
 			Bindings: map[Workload]Binding{WorkloadDialogue: {Mode: BindingModel, ModelID: "m2"}},
 		},

@@ -15,7 +15,7 @@ import (
 )
 
 func TestInboundCredentialsRotatePersistAndStayInstanceScoped(t *testing.T) {
-	for _, adapter := range []string{"onebot", "astrbot"} {
+	for _, adapter := range []string{"onebot"} {
 		t.Run(adapter, func(t *testing.T) {
 			root := t.TempDir()
 			m, err := NewDatabase(root)

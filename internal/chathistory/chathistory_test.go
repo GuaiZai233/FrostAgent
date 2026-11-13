@@ -86,7 +86,7 @@ func TestRecordingPolicy(t *testing.T) {
 			t.Fatalf("not allowed: %#v", scope)
 		}
 	}
-	for _, scope := range []Scope{{"telegram", "group", "fixture-group"}, {"qq", "group", "fixture-other"}, {"qq", "group", ""}, {"qq", "notice", "fixture-group"}} {
+	for _, scope := range []Scope{{"telegram", "group", "fixture-group"}, {"aiocqhttp", "group", "fixture-group"}, {"astrbot", "group", "fixture-group"}, {"qq", "group", "fixture-other"}, {"qq", "group", ""}, {"qq", "notice", "fixture-group"}} {
 		if RecordingAllowed(get, scope) {
 			t.Fatalf("incorrectly allowed: %#v", scope)
 		}
@@ -121,11 +121,17 @@ func TestStoreKeywordIsolationAndRestart(t *testing.T) {
 			if err := store.Save(ctx, changed); err != nil {
 				t.Fatal(err)
 			}
-			for i, scope := range []Scope{{"telegram", "private", "fixture-user"}, {"qq", "group", "fixture-user"}, {"qq", "private", "fixture-foreign"}} {
+			for i, scope := range []Scope{{"telegram", "private", "fixture-user"}, {"qq", "group", "fixture-user"}, {"qq", "private", "fixture-foreign"}, {"aiocqhttp", "private", "fixture-user"}, {"astrbot", "private", "fixture-user"}} {
 				r := fixtureRecord(fmt.Sprintf("foreign-%d", i), first.Content)
 				r.Scope = scope
 				if err := store.Save(ctx, r); err != nil {
 					t.Fatal(err)
+				}
+			}
+			for _, platform := range []string{"aiocqhttp", "astrbot"} {
+				got, err := store.Search(ctx, Scope{platform, "private", "fixture-user"}, Query{Keywords: []string{"你好"}})
+				if err != nil || len(got) != 1 || got[0].Platform != platform {
+					t.Fatalf("retired namespace %q shared QQ history: %+v, err=%v", platform, got, err)
 				}
 			}
 			if err := NewStore(db, "fixture-other").Save(ctx, first); err != nil {
@@ -133,7 +139,7 @@ func TestStoreKeywordIsolationAndRestart(t *testing.T) {
 			}
 			assert := func(q Query, ids ...string) {
 				t.Helper()
-				got, err := store.Search(ctx, Scope{"aiocqhttp", "private", "fixture-user"}, q)
+				got, err := store.Search(ctx, Scope{"onebot", "private", "fixture-user"}, q)
 				if err != nil || len(got) != len(ids) {
 					t.Fatalf("query %#v: got %#v, %v; want %v", q, got, err, ids)
 				}

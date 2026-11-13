@@ -250,8 +250,8 @@ func TestAwarenessKeepsConfiguredCompactBufferAndIsolatesSkills(t *testing.T) {
 func TestAwarenessCandidatesAndReloadPreserveObservedRoutes(t *testing.T) {
 	e, service, config, _ := awarenessFixture(t)
 	service.Observe(AwarenessTargetFor("qq", "private", "fixture-observed"))
-	observed := AwarenessTargetFor("aiocqhttp", "group", "fixture-group")
-	observed.AdapterID = "astrbot"
+	observed := AwarenessTargetFor("qq", "group", "fixture-group")
+	observed.AdapterID = "fixture"
 	service.Observe(observed)
 	service.Observe(AwarenessTargetFor("qq", "group", "fixture-group"))
 	service.Observe(AwarenessTarget{})
@@ -279,12 +279,12 @@ func TestAwarenessCandidatesAndReloadPreserveObservedRoutes(t *testing.T) {
 	if _, ok := candidates["mock:private:fixture-mock"]; ok {
 		t.Fatal("included browser mock")
 	}
-	if candidates["group:fixture-group"].AdapterID != "astrbot" {
+	if candidates["group:fixture-group"].AdapterID != "fixture" {
 		t.Fatal("lost observed adapter preference")
 	}
 	reloaded := &AwarenessService{Engine: e}
 	reloaded.CarryFrom(service)
-	if reloaded.candidates()["group:fixture-group"].AdapterID != "astrbot" {
+	if reloaded.candidates()["group:fixture-group"].AdapterID != "fixture" {
 		t.Fatal("reload lost route")
 	}
 	reloaded.CarryFrom(nil)
@@ -294,7 +294,7 @@ func TestAwarenessCandidatesAndReloadPreserveObservedRoutes(t *testing.T) {
 func TestAwarenessWhitelistQQAliasesSelectCanonicalCandidates(t *testing.T) {
 	_, service, config, _ := awarenessFixture(t)
 	for _, kind := range []string{"PRIVATE", "GROUP"} {
-		for _, entries := range []string{"AIOCQHTTP:fixture-target", "qq:fixture-target,aiocqhttp:fixture-target,onebot:fixture-target"} {
+		for _, entries := range []string{"QQ:fixture-target", "qq:fixture-target,qq:fixture-target,onebot:fixture-target"} {
 			if err := config.Update("PROACTIVE_AWARENESS_"+kind+"_WHITELIST", entries, false); err != nil {
 				t.Fatal(err)
 			}

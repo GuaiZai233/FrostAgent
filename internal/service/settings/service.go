@@ -60,15 +60,10 @@ var knownEnvVars = map[string]envEntry{
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
 	"ONEBOT_WS_ENABLED":                    {"启用 OneBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
-	"ASTRBOT_WS_ENABLED":                   {"启用 AstrBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
 	"ONEBOT_WS_MODE":                       {"OneBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
 	"ONEBOT_WS_URL":                        {"OneBot 正向 WebSocket 上游地址", false, true, false},
 	"ONEBOT_WS_TOKEN":                      {"OneBot 正向 WebSocket 访问令牌", true, true, false},
 	"ONEBOT_WS_INBOUND_TOKEN":              {"OneBot 反向 WebSocket 入站令牌", true, true, false},
-	"ASTRBOT_WS_MODE":                      {"AstrBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
-	"ASTRBOT_WS_URL":                       {"AstrBot 正向 WebSocket 插件服务端地址", false, true, false},
-	"ASTRBOT_WS_TOKEN":                     {"AstrBot 正向 WebSocket 访问令牌", true, true, false},
-	"ASTRBOT_WS_INBOUND_TOKEN":             {"AstrBot 反向 WebSocket 入站令牌", true, true, false},
 	"HTTP_ALLOWED_ORIGINS":                 {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true, false},
 	"WS_ALLOWED_ORIGINS":                   {"允许的 WebSocket Origin", false, true, false},
 	"SECURITY_CONTROL_MODE":                {"全局安全控制模式", false, false, false},
@@ -147,7 +142,7 @@ func ExportableValueKeys() map[string]bool {
 	keys := make(map[string]bool)
 	for key, entry := range knownEnvVars {
 		if !entry.IsSecret && key != "DIALOGUE_PATH" && key != "BRAIN_PATH" &&
-			key != "ONEBOT_WS_PATH" && key != "ASTRBOT_WS_PATH" {
+			key != "ONEBOT_WS_PATH" {
 			keys[key] = true
 		}
 	}
@@ -294,7 +289,7 @@ func (s *Service) ListEnvVars(
 		val := os.Getenv(key)
 		inherited := false
 		if s.config != nil {
-			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" || key == "ASTRBOT_WS_PATH" {
+			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" {
 				continue
 			}
 			targetStore := s.store(key)

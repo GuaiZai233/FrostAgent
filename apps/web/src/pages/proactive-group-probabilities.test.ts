@@ -15,10 +15,12 @@ test('group probability clamps only negative, invalid and above-one values', () 
 
 test('probability identities preserve platform boundaries and round-trip safely', () => {
   const values = parseGroupProbabilities('{"synthetic":0.25,"Telegram:synthetic":0.38,"discord:room:synthetic":0.7,"qq:zero":0,"qq:bad":"bad","__proto__":0.8}');
-  for (const alias of ['qq:synthetic', 'onebot:synthetic', 'aiocqhttp:synthetic', 'synthetic']) {
+  for (const alias of ['qq:synthetic', 'onebot:synthetic', 'synthetic']) {
     assert.equal(values.get(groupProbabilityIdentity(alias)), 0.25);
   }
   assert.equal(values.get(groupProbabilityIdentity('telegram:synthetic')), 0.38);
+  assert.equal(values.get(groupProbabilityIdentity('aiocqhttp:synthetic')), undefined);
+  assert.equal(values.get(groupProbabilityIdentity('astrbot:synthetic')), undefined);
   assert.equal(values.get(groupProbabilityIdentity('discord:synthetic')), undefined);
   assert.equal(values.get(groupProbabilityIdentity('discord:room:synthetic')), 0.7);
   assert.equal(values.get('qq:zero'), 0);

@@ -21,10 +21,8 @@ import (
 func CanonicalGroupID(raw string) string {
 	s := strings.TrimSpace(raw)
 	for _, prefix := range []string{
-		"aiocqhttp:group:",
 		"onebot:group:",
 		"qq:group:",
-		"astrbot:group:",
 		"group:",
 	} {
 		if cut, ok := strings.CutPrefix(s, prefix); ok {

@@ -13,7 +13,7 @@ import (
 func TestManagementMockAuthenticationBoundary(t *testing.T) {
 	const token = "synthetic-management-token"
 	protocol := "frostagent.direct-chat, frostagent.control-token." + base64.RawURLEncoding.EncodeToString([]byte(token))
-	for _, adapter := range []string{"onebot", "astrbot"} {
+	for _, adapter := range []string{"onebot"} {
 		for _, mockFlag := range []string{"query", "header"} {
 			for _, tc := range []struct {
 				name, remote, host, origin, authorization, protocols string
@@ -100,7 +100,7 @@ func TestManagementMockTokenRotationAndAdminFallback(t *testing.T) {
 	handler := managementAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}), func(key string) string { return values[key] })
-	request := httptest.NewRequest(http.MethodGet, "/instances/synthetic-instance/ws/astrbot?mock=true", nil)
+	request := httptest.NewRequest(http.MethodGet, "/instances/synthetic-instance/ws/onebot?mock=true", nil)
 	request.RemoteAddr = "198.51.100.10:12345"
 	setProtocol := func(token string) {
 		request.Header.Set("Sec-WebSocket-Protocol", "frostagent.direct-chat, frostagent.control-token."+base64.RawURLEncoding.EncodeToString([]byte(token)))
@@ -135,7 +135,7 @@ func TestDirectChatCredentialParsingIsLimitedToMockWebSockets(t *testing.T) {
 		want int
 	}{
 		{"/instances/synthetic-instance/ws/onebot", 204},
-		{"/instances/synthetic-instance/ws/astrbot", 204},
+		{"/instances/synthetic-instance/ws/astrbot", 401},
 		{"/instances/synthetic-instance/api/v1/messages/send?mock=true", 204},
 		{"/api/v1/messages/send?mock=true", 204},
 		{"/api/instances?mock=true", 401},

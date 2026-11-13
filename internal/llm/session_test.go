@@ -16,8 +16,8 @@ import (
 func TestSessionManagerSingleCanonicalEntry(t *testing.T) {
 	sm := NewSessionManager()
 
-	// 1. GetOrCreate via legacy AstrBot alias
-	s1 := sm.GetOrCreate("aiocqhttp:group:10001")
+	// 1. GetOrCreate via QQ alias
+	s1 := sm.GetOrCreate("qq:group:10001")
 	if s1 == nil {
 		t.Fatalf("expected s1 to not be nil")
 	}
@@ -67,7 +67,7 @@ func TestSessionManagerSingleCanonicalEntry(t *testing.T) {
 	}
 
 	// 6. Get via any alias must succeed
-	for _, key := range []string{"aiocqhttp:group:10001", "group:10001", "qq:group:10001", "onebot:group:10001"} {
+	for _, key := range []string{"group:10001", "qq:group:10001", "onebot:group:10001"} {
 		got, ok := sm.Get(key)
 		if !ok || got == nil {
 			t.Errorf("Get(%q) failed: ok=%v got=%v", key, ok, got)
@@ -82,7 +82,7 @@ func TestSessionManagerSingleCanonicalEntry(t *testing.T) {
 	if len(sm.ListSessions(0, 0)) != 0 {
 		t.Fatalf("expected 0 sessions in ListSessions after Delete, got %d", len(sm.ListSessions(0, 0)))
 	}
-	for _, key := range []string{"aiocqhttp:group:10001", "group:10001", "qq:group:10001", "onebot:group:10001"} {
+	for _, key := range []string{"group:10001", "qq:group:10001", "onebot:group:10001"} {
 		if _, ok := sm.Get(key); ok {
 			t.Errorf("Get(%q) succeeded after Delete, expected not found", key)
 		}
@@ -104,7 +104,7 @@ func TestPendingExtractionThresholdFollowsHotSettings(t *testing.T) {
 func TestSessionManagerCrossAliasResetCompact(t *testing.T) {
 	sm := NewSessionManager()
 
-	sess := sm.GetOrCreate("aiocqhttp:group:20001")
+	sess := sm.GetOrCreate("qq:group:20001")
 	sess.SetGroupRunningSummary("initial summary")
 
 	if sess.GroupRunningSummary() != "initial summary" {
@@ -124,7 +124,7 @@ func TestSessionManagerCrossAliasResetCompact(t *testing.T) {
 func TestSessionManagerPrivateSessionAliases(t *testing.T) {
 	sm := NewSessionManager()
 
-	s1 := sm.GetOrCreate("aiocqhttp:private:30001")
+	s1 := sm.GetOrCreate("qq:private:30001")
 	if s1 == nil {
 		t.Fatalf("s1 is nil")
 	}
@@ -148,7 +148,7 @@ func TestSessionManagerMultipleDistinctSessions(t *testing.T) {
 	sm := NewSessionManager()
 
 	for i := 1; i <= 5; i++ {
-		sm.GetOrCreate(fmt.Sprintf("aiocqhttp:group:%d", 40000+i))
+		sm.GetOrCreate(fmt.Sprintf("qq:group:%d", 40000+i))
 	}
 
 	if sm.Count() != 5 {
@@ -821,7 +821,7 @@ func TestExtractionLifecycle_MultiRouteBatchPersistsAllGroupsWithoutReset(t *tes
 			if idx == 1 {
 				content = `[{"content": "onebot extracted memory", "tags": ["onebot"], "visibility": "private"}]`
 			} else {
-				content = `[{"content": "aiocqhttp extracted memory", "tags": ["aiocqhttp"], "visibility": "private"}]`
+				content = `[{"content": "qq extracted memory", "tags": ["qq"], "visibility": "private"}]`
 			}
 			return &core.ChatResponse{
 				Message: core.ChatMessage{
@@ -854,8 +854,8 @@ func TestExtractionLifecycle_MultiRouteBatchPersistsAllGroupsWithoutReset(t *tes
 		{
 			Owner:     "test_multi_user_01",
 			OwnerType: memory.OwnerUser,
-			Route:     core.RouteContext{Platform: "aiocqhttp", GroupID: "group_b"},
-			Message:   core.ChatMessage{Role: core.RoleUser, Content: "aiocqhttp message"},
+			Route:     core.RouteContext{Platform: "qq", GroupID: "group_b"},
+			Message:   core.ChatMessage{Role: core.RoleUser, Content: "qq message"},
 		},
 	}, 1, 1)
 	if !ready {
@@ -880,17 +880,17 @@ func TestExtractionLifecycle_MultiRouteBatchPersistsAllGroupsWithoutReset(t *tes
 	}
 
 	foundOnebot := false
-	foundAiocqhttp := false
+	foundQQ := false
 	for _, e := range entries {
 		if e.Content == "onebot extracted memory" {
 			foundOnebot = true
 		}
-		if e.Content == "aiocqhttp extracted memory" {
-			foundAiocqhttp = true
+		if e.Content == "qq extracted memory" {
+			foundQQ = true
 		}
 	}
-	if !foundOnebot || !foundAiocqhttp {
-		t.Fatalf("expected both onebot and aiocqhttp memories, got: %+v", entries)
+	if !foundOnebot || !foundQQ {
+		t.Fatalf("expected both onebot and qq memories, got: %+v", entries)
 	}
 }
 
@@ -953,7 +953,7 @@ func TestExtractionLifecycle_MultiRouteBatchAbortsRemainingGroupsOnReset(t *test
 		{
 			Owner:     "test_multi_abort_user",
 			OwnerType: memory.OwnerUser,
-			Route:     core.RouteContext{Platform: "aiocqhttp", GroupID: "group_2"},
+			Route:     core.RouteContext{Platform: "qq", GroupID: "group_2"},
 			Message:   core.ChatMessage{Role: core.RoleUser, Content: "g2 msg"},
 		},
 	}, 1, 1)

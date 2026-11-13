@@ -13,20 +13,20 @@ func TestServiceExplicitAdapterPreservesUpstreamPlatform(t *testing.T) {
 	for _, messageType := range []string{"private", "group"} {
 		t.Run(messageType, func(t *testing.T) {
 			dispatcher := core.NewDefaultDispatcher()
-			onebot, astrbot := &mockAdapter{id: "onebot"}, &mockAdapter{id: "astrbot"}
+			onebot, fixture := &mockAdapter{id: "onebot"}, &mockAdapter{id: "fixture"}
 			dispatcher.RegisterAdapter(onebot)
-			dispatcher.RegisterAdapter(astrbot)
+			dispatcher.RegisterAdapter(fixture)
 			service := messages.New(dispatcher, "fixture-instance", authedGetenv)
-			body := fmt.Sprintf(`{"platform":"fixture-platform","message_type":%q,"target_id":"fixture-target","session":"fixture-session","metadata":{"adapter_id":"astrbot"},"messages":[{"type":"plain","text":"scheduled result"}]}`, messageType)
+			body := fmt.Sprintf(`{"platform":"fixture-platform","message_type":%q,"target_id":"fixture-target","session":"fixture-session","metadata":{"adapter_id":"fixture"},"messages":[{"type":"plain","text":"scheduled result"}]}`, messageType)
 			w := httptest.NewRecorder()
 			service.ServeHTTP(w, newAuthedRequest(http.MethodPost, "/api/v1/messages/send", body))
 			if w.Code != http.StatusOK {
 				t.Fatalf("status %d: %s", w.Code, w.Body.String())
 			}
-			if len(onebot.messages) != 0 || len(astrbot.messages) != 1 {
-				t.Fatalf("wrong adapter: onebot=%d astrbot=%d", len(onebot.messages), len(astrbot.messages))
+			if len(onebot.messages) != 0 || len(fixture.messages) != 1 {
+				t.Fatalf("wrong adapter: onebot=%d fixture=%d", len(onebot.messages), len(fixture.messages))
 			}
-			msg := astrbot.messages[0]
+			msg := fixture.messages[0]
 			if msg.Platform != "fixture-platform" || msg.MessageType != messageType || msg.TargetID != "fixture-target" || msg.Content != "scheduled result" {
 				t.Fatalf("wrong outbound routing: %+v", msg)
 			}

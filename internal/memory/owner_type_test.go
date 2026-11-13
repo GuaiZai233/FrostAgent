@@ -12,8 +12,8 @@ func TestNormalizeOwnerType(t *testing.T) {
 	}{
 		{OwnerUser, OwnerUser},
 		{OwnerGroup, OwnerGroup},
-		{"", OwnerUser},                       // 零值兼容
-		{"unknown", OwnerUser},                // 未知值兜底
+		{"", OwnerUser},        // 零值兼容
+		{"unknown", OwnerUser}, // 未知值兜底
 	}
 	for _, c := range cases {
 		if got := NormalizeOwnerType(c.in); got != c.want {
@@ -67,25 +67,25 @@ func TestMemoryEntryZeroValueOwnerType(t *testing.T) {
 }
 
 func TestOwnerForPlatform(t *testing.T) {
-	// OneBot / QQ / AstrBot aiocqhttp 平台默认
+	// OneBot / QQ 平台默认
 	o1, t1 := OwnerForPlatformPrivate("onebot", "test_user_1")
 	if o1 != "test_user_1" || t1 != OwnerUser {
 		t.Errorf("got (%q, %q), want (\"test_user_1\", user)", o1, t1)
 	}
 
-	o2, t2 := OwnerForPlatformGroup("qq", "test_grp_1")
+	o2, t2 := OwnerForPlatformGroup("onebot", "test_grp_1")
 	if o2 != "group:test_grp_1" || t2 != OwnerGroup {
 		t.Errorf("got (%q, %q), want (\"group:test_grp_1\", group)", o2, t2)
 	}
 
-	o2aiocqhttp, t2aiocqhttp := OwnerForPlatformGroup("aiocqhttp", "test_grp_1")
-	if o2aiocqhttp != "group:test_grp_1" || t2aiocqhttp != OwnerGroup {
-		t.Errorf("aiocqhttp group: got (%q, %q), want (\"group:test_grp_1\", group)", o2aiocqhttp, t2aiocqhttp)
+	o2qq, t2qq := OwnerForPlatformGroup("qq", "test_grp_1")
+	if o2qq != "group:test_grp_1" || t2qq != OwnerGroup {
+		t.Errorf("qq group: got (%q, %q), want (\"group:test_grp_1\", group)", o2qq, t2qq)
 	}
 
-	o2aiocqhttpPriv, t2aiocqhttpPriv := OwnerForPlatformPrivate("aiocqhttp", "test_user_1")
-	if o2aiocqhttpPriv != "test_user_1" || t2aiocqhttpPriv != OwnerUser {
-		t.Errorf("aiocqhttp private: got (%q, %q), want (\"test_user_1\", user)", o2aiocqhttpPriv, t2aiocqhttpPriv)
+	o2qqPriv, t2qqPriv := OwnerForPlatformPrivate("qq", "test_user_1")
+	if o2qqPriv != "test_user_1" || t2qqPriv != OwnerUser {
+		t.Errorf("qq private: got (%q, %q), want (\"test_user_1\", user)", o2qqPriv, t2qqPriv)
 	}
 
 	// 其他外部多平台前缀
@@ -101,14 +101,14 @@ func TestOwnerForPlatform(t *testing.T) {
 }
 
 func TestCanonicalAndAliases(t *testing.T) {
-	if !IsQQPlatform("aiocqhttp") || !IsQQPlatform("onebot") || !IsQQPlatform("qq") || !IsQQPlatform("") {
+	if !IsQQPlatform("qq") || !IsQQPlatform("onebot") || !IsQQPlatform("") {
 		t.Errorf("expected QQ platform checks to be true")
 	}
 	if IsQQPlatform("telegram") {
 		t.Errorf("expected non-QQ platform to be false")
 	}
 
-	if CanonicalPlatform("aiocqhttp") != "qq" || CanonicalPlatform("onebot") != "qq" || CanonicalPlatform("qq") != "qq" {
+	if CanonicalPlatform("qq") != "qq" || CanonicalPlatform("onebot") != "qq" {
 		t.Errorf("expected QQ platform normalized to qq")
 	}
 	if CanonicalPlatform("telegram") != "telegram" {
@@ -116,44 +116,44 @@ func TestCanonicalAndAliases(t *testing.T) {
 	}
 
 	// CanonicalOwner
-	if CanonicalOwner("aiocqhttp:user:test_user_a") != "test_user_a" {
-		t.Errorf("got %q", CanonicalOwner("aiocqhttp:user:test_user_a"))
+	if CanonicalOwner("qq:user:test_user_a") != "test_user_a" {
+		t.Errorf("got %q", CanonicalOwner("qq:user:test_user_a"))
 	}
-	if CanonicalOwner("aiocqhttp:group:test_grp_a") != "group:test_grp_a" {
-		t.Errorf("got %q", CanonicalOwner("aiocqhttp:group:test_grp_a"))
+	if CanonicalOwner("qq:group:test_grp_a") != "group:test_grp_a" {
+		t.Errorf("got %q", CanonicalOwner("qq:group:test_grp_a"))
 	}
 	if CanonicalOwner("onebot:user:test_user_a") != "test_user_a" {
 		t.Errorf("got %q", CanonicalOwner("onebot:user:test_user_a"))
 	}
 
 	// OwnersMatch
-	if !OwnersMatch("test_user_a", "aiocqhttp:user:test_user_a") {
-		t.Errorf("expected OwnersMatch to be true across aiocqhttp and canonical")
+	if !OwnersMatch("test_user_a", "qq:user:test_user_a") {
+		t.Errorf("expected OwnersMatch to be true across qq and canonical")
 	}
-	if !OwnersMatch("group:test_grp_a", "aiocqhttp:group:test_grp_a") {
-		t.Errorf("expected OwnersMatch to be true for group across aiocqhttp and canonical")
+	if !OwnersMatch("group:test_grp_a", "qq:group:test_grp_a") {
+		t.Errorf("expected OwnersMatch to be true for group across qq and canonical")
 	}
 	if !OwnersMatch("group:test_grp_a", "onebot:group:test_grp_a") {
 		t.Errorf("expected OwnersMatch to be true for group across onebot and canonical")
 	}
 
 	// CanonicalSessionKey & SessionKeyAliases
-	if CanonicalSessionKey("aiocqhttp:group:test_grp_a") != "group:test_grp_a" {
-		t.Errorf("got %q", CanonicalSessionKey("aiocqhttp:group:test_grp_a"))
+	if CanonicalSessionKey("qq:group:test_grp_a") != "group:test_grp_a" {
+		t.Errorf("got %q", CanonicalSessionKey("qq:group:test_grp_a"))
 	}
-	if CanonicalSessionKey("aiocqhttp:private:test_user_a") != "private:test_user_a" {
-		t.Errorf("got %q", CanonicalSessionKey("aiocqhttp:private:test_user_a"))
+	if CanonicalSessionKey("qq:private:test_user_a") != "private:test_user_a" {
+		t.Errorf("got %q", CanonicalSessionKey("qq:private:test_user_a"))
 	}
 
 	aliases := SessionKeyAliases("group:test_grp_a")
-	if !slices.Contains(aliases, "aiocqhttp:group:test_grp_a") {
-		t.Errorf("expected aliases to contain aiocqhttp alias: %v", aliases)
+	if !slices.Contains(aliases, "qq:group:test_grp_a") {
+		t.Errorf("expected aliases to contain qq alias: %v", aliases)
 	}
 
-	if CanonicalSessionID("aiocqhttp", "group", "test_grp_a") != "group:test_grp_a" {
-		t.Errorf("got %q", CanonicalSessionID("aiocqhttp", "group", "test_grp_a"))
+	if CanonicalSessionID("qq", "group", "test_grp_a") != "group:test_grp_a" {
+		t.Errorf("got %q", CanonicalSessionID("qq", "group", "test_grp_a"))
 	}
-	if CanonicalSessionID("aiocqhttp", "private", "test_user_a") != "private:test_user_a" {
-		t.Errorf("got %q", CanonicalSessionID("aiocqhttp", "private", "test_user_a"))
+	if CanonicalSessionID("qq", "private", "test_user_a") != "private:test_user_a" {
+		t.Errorf("got %q", CanonicalSessionID("qq", "private", "test_user_a"))
 	}
 }

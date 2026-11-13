@@ -85,12 +85,12 @@ func IsMentionOnlyOneBot(isGroup bool, selfID int64, mentionedBot bool, userText
 
 // IsMentionOnlyOneBotSegments checks whether raw OneBot message segments constitute
 // a pure @Bot mention-only interaction:
-// 1. isGroup is true.
-// 2. hasImages is false.
-// 3. hasReply is false.
-// 4. At least one "at" segment explicitly targets the bot's self_id.
-// 5. All other segments in the message chain are whitespace-only "text" segments
-//    (no non-empty text, no media, no face, no replies, and no mentions of other users).
+//  1. isGroup is true.
+//  2. hasImages is false.
+//  3. hasReply is false.
+//  4. At least one "at" segment explicitly targets the bot's self_id.
+//  5. All other segments in the message chain are whitespace-only "text" segments
+//     (no non-empty text, no media, no face, no replies, and no mentions of other users).
 func IsMentionOnlyOneBotSegments(isGroup bool, selfID int64, segments []tools.OneBotSegment, hasImages bool, hasReply bool) bool {
 	if !isGroup || hasImages || hasReply || len(segments) == 0 {
 		return false
@@ -142,30 +142,5 @@ func IsMentionOnlyOneBotSegments(isGroup bool, selfID int64, segments []tools.On
 		HasImages:       hasImages,
 		HasOtherContent: hasOtherContent,
 		UserText:        textBuilder.String(),
-	})
-}
-
-// IsMentionOnlyAstrBot reports whether an AstrBot event is a mention-only interaction:
-// group message, at bot, empty text, no attachments or media structures, no reply context,
-// no other mentions, and no non-text components.
-// When hasReply is true (e.g. metadata carries reply_message_id), mention-only is false
-// to maintain semantic parity with OneBot's reply segment detection.
-func IsMentionOnlyAstrBot(
-	isGroup bool,
-	isAt bool,
-	content string,
-	hasImages bool,
-	hasReply bool,
-	hasOtherMention bool,
-	hasOtherContent bool,
-) bool {
-	return IsMentionOnly(MentionInteraction{
-		IsGroup:         isGroup,
-		IsMentionedBot:  isAt,
-		HasOtherMention: hasOtherMention,
-		HasReply:        hasReply,
-		HasImages:       hasImages,
-		HasOtherContent: hasOtherContent,
-		UserText:        content,
 	})
 }

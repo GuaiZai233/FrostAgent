@@ -29,7 +29,7 @@ func ValidateConnectionSettingsImport(db *storage.DB, instanceID string, data Se
 		}
 		return data.Values[key]
 	}
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		if _, err := wsclient.Load(get, adapter); err != nil {
 			return fmt.Errorf("invalid imported connection settings: %w", err)
 		}

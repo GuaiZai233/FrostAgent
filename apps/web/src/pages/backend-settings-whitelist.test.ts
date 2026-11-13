@@ -53,16 +53,17 @@ test('groupIdFromSessionId extracts bare IDs for QQ/OneBot and platform-qualifie
   assert.equal(groupIdFromSessionId('GROUP:12345'), '12345');
   assert.equal(groupIdFromSessionId('onebot:group:67890'), '67890');
   assert.equal(groupIdFromSessionId('qq:group:112233'), '112233');
-  assert.equal(groupIdFromSessionId('aiocqhttp:group:998877'), '998877');
+  assert.equal(groupIdFromSessionId('aiocqhttp:group:synthetic-group'), 'aiocqhttp:synthetic-group');
+  assert.equal(groupIdFromSessionId('astrbot:group:synthetic-group'), 'astrbot:synthetic-group');
 
   // Non-QQ platforms -> platform-qualified
   assert.equal(groupIdFromSessionId('telegram:group:555'), 'telegram:555');
   assert.equal(groupIdFromSessionId('discord:group:777'), 'discord:777');
-  assert.equal(groupIdFromSessionId('astrbot:group:888'), 'astrbot:888');
+  assert.equal(groupIdFromSessionId('fixture:group:888'), 'fixture:888');
 
   // Non-group sessions or invalid formats
   assert.equal(groupIdFromSessionId('private:12345'), '');
-  assert.equal(groupIdFromSessionId('astrbot:private:12345'), '');
+  assert.equal(groupIdFromSessionId('fixture:private:12345'), '');
   assert.equal(groupIdFromSessionId('unknown_session'), '');
   assert.equal(groupIdFromSessionId(''), '');
 });

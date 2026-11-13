@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// CanonicalBillingPlatform maps external adapter platforms (e.g. aiocqhttp, onebot, qq)
+// CanonicalBillingPlatform maps external adapter platforms (e.g. onebot, qq)
 // to the unified billing platform identity ("qq" for QQ ecosystem).
 func CanonicalBillingPlatform(platform string) string {
 	return memory.CanonicalPlatform(platform)

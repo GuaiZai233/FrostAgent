@@ -375,7 +375,7 @@ func TestService_ImageUrlCompatibility(t *testing.T) {
 	dispatcher.RegisterAdapter(adapter)
 	svc := messages.New(dispatcher, "", authedGetenv)
 
-	// 1. AstrBot image_url segment inside messages array
+	// 1. Fixture image_url segment inside messages array
 	bodyArr := `{
 		"session": "mock_platform:group:grp_888",
 		"messages": [
@@ -850,4 +850,3 @@ func TestService_SchemeAllowlist_RejectInsecureURLs(t *testing.T) {
 		})
 	}
 }
-
