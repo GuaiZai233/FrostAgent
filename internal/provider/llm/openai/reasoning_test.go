@@ -6,10 +6,28 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/state"
 )
+
+func TestChatRejectsMalformedReasoningBeforeRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("sent an upstream request with malformed reasoning state")
+		http.Error(w, "unexpected call", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "")
+	msg := core.ChatMessage{Role: core.RoleAssistant, Content: "visible answer"}
+	// Simulate a corrupt persisted payload whose message/route binding is intact.
+	state.Remember(&msg, reasoningStateFormat, "test-model", map[string]any{"invalid": true}, state.Origin{URL: server.URL + "/chat/completions"})
+	_, err := client.Chat(context.Background(), core.ChatRequest{Model: "test-model", Messages: []core.ChatMessage{msg}})
+	if err == nil || !strings.Contains(err.Error(), "decode Chat Completions reasoning state") {
+		t.Fatalf("expected local reasoning decode error, got %v", err)
+	}
+}
 
 func TestChatReplaysReasoningAcrossToolAndFinalTurns(t *testing.T) {
 	for _, reasoning := range []string{"synthetic reasoning\nwith exact whitespace ", ""} {
