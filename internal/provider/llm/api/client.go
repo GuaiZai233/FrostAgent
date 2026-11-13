@@ -34,6 +34,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	if c.Format == Legacy || c.Format == ChatCompletions || c.Format == Custom {
 		client := *c.Client
 		client.RequestURL = endpoint
+		client.EndpointID = c.EndpointID
 		return client.Chat(ctx, req)
 	}
 	// Bind opaque state to the same configured endpoint and effective URL.

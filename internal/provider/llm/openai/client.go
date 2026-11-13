@@ -12,6 +12,7 @@ import (
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/state"
 )
 
 // OpenAI-compatible structures for API communication.
@@ -22,10 +23,11 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"`
+	Content          any        `json:"content"`
+	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	ReasoningContent *string    `json:"reasoning_content,omitempty"`
 }
 
 type toolCall struct {
@@ -51,6 +53,7 @@ type chatResponse struct {
 type Client struct {
 	Logger       *logs.Store
 	RequestURL   string
+	EndpointID   string
 	EmbeddingURL string
 	BaseURL      string
 	APIKey       string
@@ -79,6 +82,8 @@ func (e *HTTPError) Error() string {
 
 const defaultHTTPTimeout = 120 * time.Second
 
+const reasoningStateFormat = "openai_chat_completions"
+
 const (
 	staySilentFallbackToolName   = "stay_silent"
 	staySilentFallbackToolCallID = "fallback_stay_silent"
@@ -106,6 +111,15 @@ func NewClientWithTimeout(baseURL, apiKey string, timeout time.Duration) *Client
 
 // Chat sends a request to the LLM and returns the response message.
 func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	fullURL := c.RequestURL
+	if fullURL == "" {
+		var err error
+		fullURL, err = url.JoinPath(c.BaseURL, "chat/completions")
+		if err != nil {
+			return nil, fmt.Errorf("failed to join url path: %w", err)
+		}
+	}
+	origin := state.Origin{EndpointID: c.EndpointID, URL: fullURL}
 	// Convert core request to OpenAI format
 	openAIReq := chatRequest{
 		Model: req.Model,
@@ -128,6 +142,11 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 			Role:       string(msg.Role),
 			Content:    msg.Content,
 			ToolCallID: msg.ToolCallID,
+		}
+		if msg.Role == core.RoleAssistant && state.Matches(msg, reasoningStateFormat, req.Model, origin) {
+			if err := json.Unmarshal(msg.ProviderState.Content, &cm.ReasoningContent); err != nil {
+				return nil, fmt.Errorf("decode Chat Completions reasoning state: %w", err)
+			}
 		}
 		for _, tc := range msg.ToolCalls {
 			cm.ToolCalls = append(cm.ToolCalls, toolCall{
@@ -157,13 +176,6 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		c.log().LLMRequest(string(jsonData), req.TraceID)
 	}
 
-	fullURL := c.RequestURL
-	if fullURL == "" {
-		fullURL, err = url.JoinPath(c.BaseURL, "chat/completions")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to join url path: %w", err)
-	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -251,6 +263,9 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 				Arguments: tc.Function.Arguments,
 			},
 		})
+	}
+	if coreMsg.Role == core.RoleAssistant && choice.ReasoningContent != nil {
+		state.Remember(&coreMsg, reasoningStateFormat, req.Model, *choice.ReasoningContent, origin)
 	}
 	return &core.ChatResponse{
 		Message: coreMsg,

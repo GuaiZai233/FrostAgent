@@ -29,6 +29,10 @@
 
 当历史缺少可复用的 Responses 原生状态（例如从 Chat Completions 切换，或端点身份变化）时，assistant 可见文本以 easy-input 消息的字符串 `content` 重建；结构化纯文本按原顺序拼接。assistant 图片等无法表示为文本的内容在发送前明确报错，避免静默丢失历史。system / user 文本与用户图片仍使用 `input_text` / `input_image`，工具调用与结果分别编码为 `function_call` / `function_call_output`。有效且匹配当前端点的原生状态继续原样回放。
 
+### Chat Completions 思考数据回传
+
+OpenAI 兼容响应中的 `reasoning_content` 通过现有 `ProviderState` 保存，不混入 assistant 可见正文；后续请求只在端点身份、实际请求 URL、模型以及正文和工具调用均未变化时，将其恢复为 assistant 消息的 `reasoning_content`。空字符串与缺失字段分别保留。DeepSeek 思考模式带工具的请求需要回传此前所有 assistant 消息的思考数据，因此工具调用回复和普通最终回复都保留此状态，并随内部会话消息转换和历史序列化传递。切换端点或模型、修改消息后不回放旧状态；已有缺少思考数据的历史不会被伪造补全。
+
 ### 模型能力元数据 (models.dev 提示)
 
 进程启动时从 `https://models.dev/models.json?type=all` 拉取一次模型列表，之后每 48 小时刷新一次。成功的结果写入 `data/models_dev_cache.json`；拉取失败时沿用内存中的上一份数据，若本进程也没有缓存则不提供任何元数据。拉取在后台进行，不阻塞启动。

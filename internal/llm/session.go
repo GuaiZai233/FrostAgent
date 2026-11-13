@@ -2627,8 +2627,10 @@ func (s *SessionContext) AddMessageAtEpoch(msg core.ChatMessage, epoch uint64) u
 func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
 	// 转换 core.ChatMessage -> llm.ChatMessage
 	llmMsg := ChatMessage{
-		Role:    string(msg.Role),
-		Content: msg.Content,
+		Role:          string(msg.Role),
+		Content:       msg.Content,
+		ToolCallID:    msg.ToolCallID,
+		ProviderState: msg.ProviderState,
 	}
 	if len(msg.ToolCalls) > 0 {
 		llmMsg.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
