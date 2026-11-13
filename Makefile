@@ -78,6 +78,7 @@ test-api: build-web proto-generate-go
 	$(GO) test -coverprofile=coverage.out ./...
 
 test-web: check-web build-web
+	$(PNPM) --filter @frostagent/web test
 
 vet: build-web proto-generate-go
 	$(GO) vet ./...

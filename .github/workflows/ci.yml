@@ -158,9 +158,6 @@ jobs:
           version: '1.75.0'
           setup_only: true
 
-      - name: Run frontend instance isolation regression
-        run: pnpm --filter @frostagent/web test
-
       - name: Run checks
         run: make ci
 
