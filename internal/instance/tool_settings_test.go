@@ -1,12 +1,70 @@
 package instance
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 )
+
+func TestTimeSleepRegistrationAndInstanceSettings(t *testing.T) {
+	m := testManager(t)
+	a, b := create(t, m, "sleep-a"), create(t, m, "sleep-b")
+	engine := m.instances[a.ID].runtime.Engine
+	tool, ok := engine.ToolRegistry[timesleep.ToolName]
+	if !ok {
+		t.Fatal("time_sleep not registered")
+	}
+	response := rpc(t, m, a.ID, "BotStatusService/GetOverview", "{}", false)
+	var overview struct {
+		Tools []struct {
+			Name         string
+			Configurable bool
+		}
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &overview); err != nil {
+		t.Fatal(err)
+	}
+	configurable := false
+	for _, item := range overview.Tools {
+		if item.Name == timesleep.ToolName {
+			configurable = item.Configurable
+		}
+	}
+	if !configurable {
+		t.Fatal("time_sleep has no configuration card")
+	}
+	response = rpc(t, m, a.ID, "SettingsService/UpdateEnvVar", `{"key":"TIME_SLEEP_TIMEOUT_SECONDS","value":"0.001"}`, false)
+	if response.Code != http.StatusOK {
+		t.Fatalf("save timeout: %d %s", response.Code, response.Body.String())
+	}
+	if engine != m.instances[a.ID].runtime.Engine {
+		t.Fatal("timeout setting restarted runtime")
+	}
+	_, err := tool.(core.StructuredToolExecutor).ExecuteResult(context.Background(), `{"seconds":1}`)
+	if !errors.Is(err, timesleep.ErrTimeout) {
+		t.Fatalf("runtime ignored live timeout: %v", err)
+	}
+	if m.instances[b.ID].runtime.Engine.Config.Get(timesleep.TimeoutKey) != "" {
+		t.Fatal("timeout leaked across instances")
+	}
+	response = rpc(t, m, a.ID, "BotStatusService/SetToolEnabled", `{"name":"time_sleep","enabled":false}`, false)
+	if response.Code != http.StatusOK || engine.ToolEnabled(timesleep.ToolName) {
+		t.Fatal("sleep switch failed")
+	}
+	if err := m.Enable(a.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := m.instances[a.ID].runtime.Engine
+	if rebuilt.Config.Get(timesleep.TimeoutKey) != "0.001" || rebuilt.ToolEnabled(timesleep.ToolName) {
+		t.Fatal("runtime rebuild lost sleep configuration")
+	}
+}
 
 func TestToolSwitchPersistsAndKeepsRegisteredCard(t *testing.T) {
 	m := testManager(t)

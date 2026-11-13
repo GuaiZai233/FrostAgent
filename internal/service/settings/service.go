@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"maps"
 	"math"
 	"os"
@@ -51,6 +52,7 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
+	timesleep.TimeoutKey:                   {"time_sleep 单次挂起超时秒数，默认 60，达到上限时报 Timeout", false, false, false},
 	"MULTI_SEGMENT_REPLY_MAX_SEGMENTS":     {"多段回复分段上限（0 或留空为不限制；1 视为关闭多段回复；超出时随机保留上限数量的分段，其余丢弃）", false, false, false},
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
@@ -763,6 +765,11 @@ func validateUpdate(key, value string) error {
 		var disabled []string
 		if json.Unmarshal([]byte(value), &disabled) != nil || strings.TrimSpace(value) == "null" {
 			return errors.New("工具开关必须是工具名称的 JSON 数组")
+		}
+	}
+	if key == timesleep.TimeoutKey {
+		if _, err := timesleep.Timeout(value); err != nil {
+			return err
 		}
 	}
 	if key == balancequery.ConfigKey && value != "" {

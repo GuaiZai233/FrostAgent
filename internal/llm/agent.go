@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strconv"
@@ -1420,7 +1421,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							Usage:         totalUsage,
 						}
 					}
-					if errors.Is(err, actionscat.ErrDisabled) {
+					if errors.Is(err, timesleep.ErrTimeout) {
+						toolResult = e.Log().ReportError(logs.TOOL, "Timeout", err, runCtx.SessionID)
+					} else if errors.Is(err, actionscat.ErrDisabled) {
 						toolResult = e.Log().ReportError(logs.TOOL, "工具调用失败：ActionsCat 已被管理员禁用", err, runCtx.SessionID)
 					} else {
 						toolResult = e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", tc.Function.Name, err), runCtx.SessionID)

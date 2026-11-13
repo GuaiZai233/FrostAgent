@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strings"
@@ -74,7 +75,7 @@ func (s *Service) GetOverview(
 			Description:  t.Description(),
 			Enabled:      s.engine.ToolEnabled(t.Name()),
 			Available:    available,
-			Configurable: t.Name() == balancequery.ToolName || t.Name() == qqextend.ToolName,
+			Configurable: t.Name() == balancequery.ToolName || t.Name() == qqextend.ToolName || t.Name() == timesleep.ToolName,
 		})
 	}
 	// Show existing retired switches so the console can clear them. These are
