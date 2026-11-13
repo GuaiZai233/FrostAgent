@@ -16,7 +16,6 @@
     "proto:generate:go": "make proto-generate-go",
     "proto:generate:web": "make proto-generate-web",
     "serve:api": "make serve-api",
-    "serve:agent": "make serve-agent",
     "serve:web": "make serve-web"
   },
   "prettier": {
