@@ -123,8 +123,8 @@ func TestSQLObservedMemberNamePreservesAliasesAndRejectsStaleEdit(t *testing.T) 
 		t.Fatal(err)
 	}
 	current = "Fresh"
-	if changed, err := group.SetObservedMemberPreferredName("user-one", "WrongOwner", &current, entries[0]); err != nil || changed {
-		t.Fatalf("changed evidence owner did not block name: changed=%t err=%v", changed, err)
+	if changed, err := group.SetObservedMemberPreferredName("user-one", "Fresh", &current, entries[0]); err != nil || !changed {
+		t.Fatalf("retired member owner affected group evidence: changed=%t err=%v", changed, err)
 	}
 	if _, err := db.SQL.Exec(`UPDATE memory_entries SET owner = 'user-one'
 		WHERE instance_id = 'test-instance' AND scope_type = 'group' AND platform = 'qq'

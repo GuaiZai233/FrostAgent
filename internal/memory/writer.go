@@ -78,15 +78,14 @@ func (w *Writer) WriteByOwner(
 	tags []string,
 ) error {
 	entry := MemoryEntry{
-		ID:         generateID(),
-		Owner:      owner,
-		OwnerType:  NormalizeOwnerType(ownerType),
-		Content:    content,
-		Tags:       tags,
-		Source:     SourceManual,
-		Visibility: VisibilityPrivate,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:        generateID(),
+		Owner:     owner,
+		OwnerType: NormalizeOwnerType(ownerType),
+		Content:   content,
+		Tags:      tags,
+		Source:    SourceManual,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	return w.store.Save(entry)
 }
@@ -218,9 +217,8 @@ func (w *Writer) ExtractByOwnerWithRouteContext(
 
 // extractedEntry represents one item from the LLM extraction response.
 type extractedEntry struct {
-	Content    string   `json:"content"`
-	Tags       []string `json:"tags"`
-	Visibility string   `json:"visibility"`
+	Content string   `json:"content"`
+	Tags    []string `json:"tags"`
 }
 
 // parseAndSave parses the LLM JSON response and saves entries to the store.
@@ -271,20 +269,15 @@ func (w *Writer) parseAndSave(
 		if e.Content == "" {
 			continue
 		}
-		vis := VisibilityPrivate
-		if e.Visibility == "public" {
-			vis = VisibilityPublic
-		}
 		entry := MemoryEntry{
-			ID:         generateID(),
-			Owner:      owner,
-			OwnerType:  ownerType,
-			Content:    e.Content,
-			Tags:       e.Tags,
-			Source:     SourceExtract,
-			Visibility: vis,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
+			ID:        generateID(),
+			Owner:     owner,
+			OwnerType: ownerType,
+			Content:   e.Content,
+			Tags:      e.Tags,
+			Source:    SourceExtract,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		}
 		toSave = append(toSave, entry)
 	}
@@ -343,7 +336,6 @@ type groupExtractedCandidate struct {
 	Summary        string   `json:"summary,omitempty"`
 	Tags           []string `json:"tags"`
 	SourceMsgIndex *int     `json:"source_msg_index,omitempty"`
-	IsSelf         bool     `json:"is_self"`
 }
 
 type groupExtractedEntry = groupExtractedCandidate
@@ -543,16 +535,6 @@ func (w *Writer) parseAndSaveGroupCandidates(
 		}
 		srcMsg := &candidateMsg
 
-		// 2. Attribution:
-		// Conservatively group-own ambiguous cases. Personal ownership (Owner = srcMsg.SenderID)
-		// is granted only when cand.IsSelf is true, SenderID is non-empty, and the quoted evidence
-		// contains a direct first-person self-reference (HasSelfReference).
-		// Otherwise, Owner defaults to GroupOwnerExplicit ("group").
-		ownerKey := GroupOwnerExplicit
-		if sourceMedia == "" && cand.IsSelf && srcMsg.SenderID != "" && HasSelfReference(validEvidence) {
-			ownerKey = srcMsg.SenderID
-		}
-
 		// 3. Option A Data Contract:
 		// Authoritative Content is strictly the verbatim source quote (validEvidence).
 		// Summary is the optional display description (cand.Summary or cand.Content if different).
@@ -568,7 +550,7 @@ func (w *Writer) parseAndSaveGroupCandidates(
 
 		toSave = append(toSave, MemoryEntry{
 			ID:              generateID(),
-			Owner:           ownerKey,
+			Owner:           GroupOwnerExplicit,
 			OwnerType:       OwnerGroup,
 			ScopeType:       ScopeGroup,
 			GroupID:         groupID,

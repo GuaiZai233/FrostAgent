@@ -423,7 +423,7 @@ func TestSettingsMemoryLogsAndMediaIsolation(t *testing.T) {
 	if m.instances[a.ID].config.Get("BOT_NAME") != "only-a" || m.instances[b.ID].config.Get("BOT_NAME") == "only-a" {
 		t.Fatal("settings leaked")
 	}
-	w = rpc(t, m, a.ID, "MemoryService/AddMemory", `{"owner":"test_owner","content":"instance-a-only","visibility":"private"}`, false)
+	w = rpc(t, m, a.ID, "MemoryService/AddMemory", `{"owner":"test_owner","content":"instance-a-only"}`, false)
 	if w.Code != 200 || strings.Contains(w.Body.String(), `"success":false`) {
 		t.Fatal(w.Code, w.Body.String())
 	}

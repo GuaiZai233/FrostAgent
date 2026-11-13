@@ -30,7 +30,8 @@ message MemoryEntry {
   string content = 3;
   repeated string tags = 4;
   string source = 5;
-  string visibility = 6;      // deprecated
+  reserved 6;
+  reserved "visibility";
   string created_at = 7;
   string updated_at = 8;
   int32 access_count = 9;
@@ -73,7 +74,8 @@ message AddMemoryRequest {
   string owner = 1;
   string content = 2;
   repeated string tags = 3;
-  string visibility = 4;      // deprecated
+  reserved 4;
+  reserved "visibility";
   string scope = 5;           // "private" or "group"
   string group_id = 6;        // required when scope == "group"
   string platform = 7;
@@ -88,7 +90,8 @@ message UpdateMemoryRequest {
   string id = 1;
   string content = 2;
   repeated string tags = 3;
-  string visibility = 4;      // deprecated
+  reserved 4;
+  reserved "visibility";
   string scope = 5;           // "private" or "group"
   string group_id = 6;        // required when scope == "group"
   string platform = 7;
@@ -119,8 +122,8 @@ message GetMemoryStatsRequest {
 
 message GetMemoryStatsResponse {
   int32 total = 1;
-  int32 public_count = 2;     // deprecated, always 0
-  int32 private_count = 3;    // deprecated, always 0
+  reserved 2, 3;
+  reserved "public_count", "private_count";
   map<string, int32> by_owner = 4;
   int32 private_chat_count = 5;
   int32 group_chat_count = 6;

@@ -56,7 +56,7 @@ func TestSQLPrivateImageSourceSurvivesEditAndBackup(t *testing.T) {
 	store := memory.NewSQLStore(db, instanceID)
 	entry := memory.MemoryEntry{ID: "image-memory", Owner: "synthetic-user", OwnerType: memory.OwnerUser,
 		Content: "image evidence", Summary: "image summary", Evidence: "image evidence",
-		Source: memory.SourceManual, SourceMedia: memory.SourceMediaImage, Visibility: memory.VisibilityPrivate,
+		Source: memory.SourceManual, SourceMedia: memory.SourceMediaImage,
 		SourceMessageID: "synthetic-message", SourceSenderID: "synthetic-sender", CreatedAt: time.Now()}
 	if err := store.Save(entry); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestSQLPrivateImageSourceSurvivesEditAndBackup(t *testing.T) {
 		if got.Content != content || len(got.Tags) != 1 || got.Tags[0] != "edited-tag" ||
 			got.SourceMedia != entry.SourceMedia || got.Summary != entry.Summary || got.Evidence != entry.Evidence ||
 			got.SourceMessageID != entry.SourceMessageID || got.SourceSenderID != entry.SourceSenderID ||
-			got.OwnerType != entry.OwnerType || got.Visibility != entry.Visibility {
+			got.OwnerType != entry.OwnerType {
 			t.Fatalf("edit lost private image provenance: %+v", got)
 		}
 	}

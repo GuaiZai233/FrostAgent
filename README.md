@@ -79,6 +79,8 @@ After creating an instance, configure the connection on the "Connections" page.
 
 Group and private conversations support background compaction. Private chats retain the latest turn alongside a rolling summary. See [context compaction](docs/context-compact.md) for configuration and session lifetime details (Chinese).
 
+Memory is isolated by user and group scope. Group turns may recall the current sender's user memories, while all group writes belong to the current group. See [memory scopes](docs/memory-scopes.md) for access and existing-data behavior (Chinese).
+
 ### Integration with ActionsCat
 
 [ActionsCat](https://github.com/actionscat/actionscat) supports statically orchestrated automated workflows.

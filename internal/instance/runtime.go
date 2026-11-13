@@ -186,7 +186,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 		groupCompactor.SetMaxBufferSize(groupCompactMaxBufferSize)
 	}
-	// Gateway: owner + visibility filtering
+	// Gateway: conversation scope filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation
 	var catalog *memory.CatalogStore
