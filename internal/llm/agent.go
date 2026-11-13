@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
@@ -118,8 +119,9 @@ func (e *Engine) isToolAllowedForProactive(name string) bool {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
-	TokenUsage *tokenusage.Store
-	PokeGate   poke.Gate
+	ChatHistory *chathistory.Recorder
+	TokenUsage  *tokenusage.Store
+	PokeGate    poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor

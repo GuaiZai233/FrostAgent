@@ -16,6 +16,7 @@ func prepareEmbeddingV12(t *testing.T, db *DB, modelColumn, memoryColumn bool) {
 	}
 	populateMigrationFixture(t, db)
 	for _, statement := range []string{
+		`DROP TABLE chat_history`,
 		`INSERT INTO provider_endpoints(id,display_name,base_url,api_key_source,enabled,position) VALUES ('synthetic-provider','Synthetic','https://model.invalid/v1','manual',1,0)`,
 		`INSERT INTO provider_models(id,display_name,endpoint_id,upstream_model,enabled,capabilities,position) VALUES ('synthetic-model','Synthetic','synthetic-provider','synthetic-model',1,'[]',0)`,
 		`DROP TABLE skills`,

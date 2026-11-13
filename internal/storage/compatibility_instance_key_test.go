@@ -46,7 +46,7 @@ func testCompatibilityInstanceKeys(t *testing.T, backend Backend) {
 		t.Run(test.name, func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
 			compatibilitySeedComputerUse(t, db)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}

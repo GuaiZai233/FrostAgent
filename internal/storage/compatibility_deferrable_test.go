@@ -29,7 +29,7 @@ func TestPostgresMigrationSchemaCompatibilityDeferrableConstraints(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, Postgres)
 			compatibilitySeedComputerUse(t, db)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}

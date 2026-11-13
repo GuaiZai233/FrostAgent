@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestCompleteInstanceBackupRejectsCompatibleFutureSchema(t *testing.T) {
 	for _, statement := range []string{
 		`CREATE TABLE future_instance_data (instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE, payload TEXT NOT NULL)`,
 		`INSERT INTO future_instance_data VALUES ('synthetic-instance', '{"unknown_module":"retain exactly"}')`,
-		`UPDATE schema_meta SET version = 17, min_compatible_version = 14 WHERE id = 1`,
+		fmt.Sprintf("UPDATE schema_meta SET version = %d, min_compatible_version = 14 WHERE id = 1", storage.SchemaVersion+1),
 	} {
 		if _, err := db.SQL.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -45,7 +46,7 @@ func TestCompleteInstanceBackupRejectsCompatibleFutureSchema(t *testing.T) {
 		t.Fatalf("partial settings export was blocked: %v", err)
 	}
 	var version, floor int
-	if err := db.SQL.QueryRow(`SELECT version, min_compatible_version FROM schema_meta WHERE id = 1`).Scan(&version, &floor); err != nil || version != 17 || floor != 14 {
+	if err := db.SQL.QueryRow(`SELECT version, min_compatible_version FROM schema_meta WHERE id = 1`).Scan(&version, &floor); err != nil || version != storage.SchemaVersion+1 || floor != 14 {
 		t.Fatalf("backup changed compatibility metadata: version=%d floor=%d err=%v", version, floor, err)
 	}
 	var payload string

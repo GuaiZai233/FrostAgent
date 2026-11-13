@@ -42,7 +42,7 @@ func TestPostgresMigrationSchemaCompatibilityCacheLayout(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, Postgres)
 			compatibilitySeedComputerUse(t, db)
 			seedCompatibilityEmbeddingCaches(t, db, false)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}

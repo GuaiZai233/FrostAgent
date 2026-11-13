@@ -33,7 +33,7 @@ func TestPostgresMigrationSchemaCompatibilityRewriteRules(t *testing.T) {
 			seedCompatibilityEmbeddingCaches(t, db, false)
 			// Isolate rewrite rules from the existing cross-schema FK guard.
 			compatibilityExec(t, db, `DROP TABLE memory_embeddings`)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}

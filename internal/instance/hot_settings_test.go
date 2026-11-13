@@ -42,6 +42,11 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 		}
 	}
 	update("BOT_NAME", "HotBot")
+	update("CHAT_HISTORY_PRIVATE_ENABLED", "false")
+	update("CHAT_HISTORY_GROUP_WHITELIST", "qq:group:fixture-group")
+	if before.Scope.Getenv("CHAT_HISTORY_PRIVATE_ENABLED") != "false" || before.Scope.Getenv("CHAT_HISTORY_GROUP_WHITELIST") != "qq:group:fixture-group" {
+		t.Fatal("chat history collection settings were not applied live")
+	}
 	if got := before.Scope.Getenv("BOT_NAME"); got != "HotBot" {
 		t.Fatalf("runtime still sees old name %q", got)
 	}

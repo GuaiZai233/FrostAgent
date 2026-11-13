@@ -98,6 +98,7 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 		}
 		return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
 	}
+	c.recordHistoryAction(action, response, "delivered")
 	return response, nil
 }
 

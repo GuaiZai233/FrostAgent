@@ -17,7 +17,7 @@ func TestEndpointFormatMigration(t *testing.T) {
 			compatibilityClose(t, db)
 			db = compatibilityReopen(t, root, config)
 			defer db.Close()
-			assertCompatibilityVersions(t, db, 16, 16)
+			assertCompatibilityVersions(t, db, SchemaVersion, SchemaVersion)
 			assertMigrationFixture(t, db)
 			var base, format string
 			if err := db.SQL.QueryRow(`SELECT base_url,api_format FROM provider_endpoints WHERE id='synthetic-endpoint'`).Scan(&base, &format); err != nil || base != "https://model.invalid/v1" || format != "" {
@@ -54,5 +54,5 @@ func TestPostgresMigrationEndpointFormat(t *testing.T) {
 	compatibilityClose(t, db)
 	db = compatibilityReopen(t, root, config)
 	defer db.Close()
-	assertCompatibilityVersions(t, db, 16, 16)
+	assertCompatibilityVersions(t, db, SchemaVersion, SchemaVersion)
 }
