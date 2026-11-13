@@ -319,9 +319,9 @@ func (m *MemberProfile) ResolveCallingName() string {
 ### 5.2 旧版本群聊记忆热迁移 (`MigrateLegacyGroupMemories`)
 - 实例启动时自动检查 `brain.json` 中是否残留 `owner: group:<id>`、`OwnerGroup` 或 `ScopeGroup` 的旧条目与合并归档。
 - 发现旧群数据时，先建立带时间戳的完整备份文件 `brain.json.bak.<timestamp>`。
-- 按群号自动分发导入到对应的 `GroupStore` 中，并实现条目 ID 去重以保证迁移的完全幂等性。
+- QQ 旧记录按群号自动分发导入到对应的 `GroupStore` 中，并实现条目 ID 去重以保证迁移的完全幂等性。带非 QQ 平台命名空间的条目，以及归档自身或任一来源包含该命名空间的合并归档，保留在 `brain.json`；不能用裸 `GroupID` 或来源回退跨平台迁入 QQ 群库。
 - **归档防丢失与启动 Fail-Fast**：全面捕获并向上传播 `GetGroupStore`、`ListMergeArchives` 与 `SaveMergeArchive` 的所有错误。若写入群归档失败，实例启动流程立即中止并报错，严禁静默吞掉错误，严禁提前裁剪 `brain.json`，确保数据完整性零损坏。
-- 仅在全部群条目与合并归档成功入库后，原子重写 `brain.json`，清理群聊条目，仅保留纯私聊用户记忆。
+- 仅在全部待迁移 QQ 群条目与合并归档成功入库后，原子重写 `brain.json`，保留私聊与所有未迁移的记录。
 
 ---
 
