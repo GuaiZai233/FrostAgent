@@ -117,6 +117,17 @@ func EstimateMessageTokens(msg core.ChatMessage) (int, error) {
 		total += EstimateTextTokens(tc.Function.Arguments)
 	}
 
+	// Chat Completions replays this JSON string as reasoning_content, separate
+	// from visible content. Estimation precedes routing, so conservatively count
+	// stored reasoning even if a later route change prevents its replay. Other
+	// protocols store structured items that can duplicate visible text/tool calls.
+	if s := msg.ProviderState; msg.Role == core.RoleAssistant && s != nil && s.Format == "openai_chat_completions" {
+		var reasoning string
+		if err := json.Unmarshal(s.Content, &reasoning); err == nil {
+			total += EstimateTextTokens(reasoning)
+		}
+	}
+
 	return total, nil
 }
 
