@@ -18,7 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func enableHistoryTest(t *testing.T, engine *llm.Engine) {
+func enableHistoryTest(t *testing.T, engine *llm.Engine) *storage.DB {
 	t.Helper()
 	db, err := storage.Open(context.Background(), t.TempDir())
 	if err != nil {
@@ -32,6 +32,7 @@ func enableHistoryTest(t *testing.T, engine *llm.Engine) {
 	done := make(chan struct{})
 	go func() { defer close(done); engine.ChatHistory.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done; db.Close() })
+	return db
 }
 
 func TestOneBotHistoryBeforeWakeAndWhitelist(t *testing.T) {
@@ -116,7 +117,7 @@ func TestOneBotHistoryACKAndFailure(t *testing.T) {
 						c.handleAPIResponse(data)
 					}
 				}()
-				_, err = c.SendActionAndWait(model.OneBotAction{Action: "send_private_msg", Params: map[string]any{"user_id": 42, "message": "sent original"}}, time.Second)
+				_, err = c.SendActionAndWait(model.OneBotAction{Action: "send_private_msg", Params: map[string]any{"user_id": 42, "message": "sent original[CQ:image,file=https://media.invalid/ack-image]"}}, time.Second)
 				<-readDone
 				result <- err
 			}))
@@ -153,7 +154,7 @@ func TestOneBotHistoryACKAndFailure(t *testing.T) {
 			if !accepted && len(records) != 0 {
 				t.Fatal("failed reply archived")
 			}
-			if accepted && (len(records) != 1 || records[0].DeliveryStatus != "delivered" || records[0].MessageID != "7" || records[0].Content != "sent original") {
+			if accepted && (len(records) != 1 || records[0].DeliveryStatus != "delivered" || records[0].MessageID != "7" || records[0].Content != "sent original[image]") {
 				t.Fatalf("ACK archive: %#v", records)
 			}
 		})

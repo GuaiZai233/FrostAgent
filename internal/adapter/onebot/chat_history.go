@@ -12,6 +12,10 @@ import (
 )
 
 func historyMessageText(raw json.RawMessage) (string, string) {
+	var message string
+	if json.Unmarshal(raw, &message) == nil {
+		return historyCQText(message)
+	}
 	var text strings.Builder
 	replyTo := ""
 	for _, part := range ParseMessageSegments(raw) {
@@ -76,11 +80,12 @@ func (c *wsConnection) recordHistoryAction(action model.OneBotAction, response o
 		return
 	}
 	var params struct {
-		GroupID   json.RawMessage `json:"group_id"`
-		UserID    json.RawMessage `json:"user_id"`
-		Message   json.RawMessage `json:"message"`
-		Messages  json.RawMessage `json:"messages"`
-		MessageID json.RawMessage `json:"message_id"`
+		GroupID    json.RawMessage `json:"group_id"`
+		UserID     json.RawMessage `json:"user_id"`
+		Message    json.RawMessage `json:"message"`
+		Messages   json.RawMessage `json:"messages"`
+		MessageID  json.RawMessage `json:"message_id"`
+		AutoEscape bool            `json:"auto_escape"`
 	}
 	if json.Unmarshal(data, &params) != nil {
 		return
@@ -89,7 +94,12 @@ func (c *wsConnection) recordHistoryAction(action model.OneBotAction, response o
 	if id := historyRawID(params.GroupID); id != "" && id != "0" {
 		kind, target = "group", id
 	}
-	text, replyTo := historyMessageText(params.Message)
+	var text, replyTo, literal string
+	if params.AutoEscape && json.Unmarshal(params.Message, &literal) == nil {
+		text = literal
+	} else {
+		text, replyTo = historyMessageText(params.Message)
+	}
 	if len(params.Messages) > 0 {
 		text += historyForwardText(params.Messages)
 	} else if id := historyRawID(params.MessageID); id != "" {
