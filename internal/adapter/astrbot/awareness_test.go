@@ -67,6 +67,7 @@ func TestAwarenessAstrBotColdStartUsesQQTransportPlatform(t *testing.T) {
 			engine := newTestEngine(&mockLLMProvider{})
 			values := map[string]string{
 				proactive.AwarenessEnabled: "true", proactive.AwarenessInterval: "0.001m - 0.001m",
+				proactive.AwarenessQuietHoursEnabled:       "false",
 				proactive.AwarenessPrivateWhitelistEnabled: "true", proactive.AwarenessGroupWhitelistEnabled: "false",
 			}
 			kind := "group"

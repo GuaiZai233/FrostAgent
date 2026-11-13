@@ -39,6 +39,9 @@ var knownEnvVars = map[string]envEntry{
 	qqextend.TargetGroupsKey:                   {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
 	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
 	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},
+	proactive.AwarenessQuietHoursEnabled:       {"主动感知免打扰开关，默认开启", false, false, false},
+	proactive.AwarenessQuietHoursStart:         {"主动感知免打扰开始时间（服务端本地时区），默认 23:00", false, false, false},
+	proactive.AwarenessQuietHoursEnd:           {"主动感知免打扰结束时间（服务端本地时区），默认 07:00", false, false, false},
 	proactive.AwarenessPrivateWhitelistEnabled: {"主动感知是否仅对私聊白名单生效", false, false, false},
 	proactive.AwarenessPrivateWhitelist:        {"主动感知私聊用户白名单", false, false, false},
 	proactive.AwarenessGroupWhitelistEnabled:   {"主动感知是否仅对群聊白名单生效", false, false, false},
@@ -724,7 +727,12 @@ func validateUpdate(key, value string) error {
 			return err
 		}
 	}
-	if (key == proactive.AwarenessEnabled || key == proactive.AwarenessPrivateWhitelistEnabled || key == proactive.AwarenessGroupWhitelistEnabled) && value != "" && value != "true" && value != "false" {
+	if (key == proactive.AwarenessQuietHoursStart || key == proactive.AwarenessQuietHoursEnd) && strings.TrimSpace(value) != "" {
+		if _, err := proactive.ParseAwarenessQuietTime(value); err != nil {
+			return err
+		}
+	}
+	if (key == proactive.AwarenessEnabled || key == proactive.AwarenessPrivateWhitelistEnabled || key == proactive.AwarenessGroupWhitelistEnabled || key == proactive.AwarenessQuietHoursEnabled) && value != "" && value != "true" && value != "false" {
 		return errors.New("主动感知开关必须为 true 或 false")
 	}
 	if key == "ENABLE_MULTI_SEGMENT_REPLY" && value != "" && value != "true" && value != "false" {
