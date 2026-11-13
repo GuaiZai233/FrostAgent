@@ -12,7 +12,7 @@ import (
 
 type previousErrorReply struct {
 	uuid     string
-	fallback string
+	previous *previousErrorReply
 	done     chan struct{}
 	sent     bool // Published by closing done.
 }
@@ -21,23 +21,42 @@ func (r *previousErrorReply) resolve(ctx, transportCtx context.Context) (string,
 	if ctx.Err() != nil || transportCtx.Err() != nil {
 		return "", false
 	}
-	if r == nil {
-		return "", true
+	for r != nil {
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-transportCtx.Done():
+			return "", false
+		case <-r.done:
+		}
+		if ctx.Err() != nil || transportCtx.Err() != nil {
+			return "", false
+		}
+		if r.sent {
+			return r.uuid, true
+		}
+		r = r.previous
 	}
-	select {
-	case <-ctx.Done():
-		return "", false
-	case <-transportCtx.Done():
-		return "", false
-	case <-r.done:
+	return "", true
+}
+
+// retainedPreviousError drops completed failures without waiting for pending ACKs.
+func retainedPreviousError(reply *previousErrorReply) *previousErrorReply {
+	for reply != nil {
+		select {
+		case <-reply.done:
+			if reply.sent {
+				if reply.uuid == "" {
+					return nil
+				}
+				return reply
+			}
+			reply = reply.previous
+		default:
+			return reply
+		}
 	}
-	if ctx.Err() != nil || transportCtx.Err() != nil {
-		return "", false
-	}
-	if r.sent {
-		return r.uuid, true
-	}
-	return r.fallback, true
+	return nil
 }
 
 // takePreviousError snapshots the preceding message before the current message
@@ -62,8 +81,16 @@ func (c *wsConnection) takePreviousError(event model.OneBotEvent) *previousError
 	defer c.previousErrorMu.Unlock()
 	key := historyKey(event)
 	reply := c.previousErrors[key]
-	if event.PostType == "message_sent" && reply != nil && reply.uuid != "" && outgoingErrorUUID(event.Message) == reply.uuid {
-		return nil // The platform is echoing the current error, not a new message.
+	if event.PostType == "message_sent" {
+		if uuid := outgoingErrorUUID(event.Message); uuid != "" {
+			// A delayed echo may refer to an earlier error while the latest send
+			// awaits its ACK. The same lock protects successful chain pruning.
+			for known := reply; known != nil; known = known.previous {
+				if known.uuid == uuid {
+					return nil
+				}
+			}
+		}
 	}
 	delete(c.previousErrors, key)
 	if event.PostType == "message_sent" {
@@ -106,7 +133,7 @@ func (c *wsConnection) beginOutgoingError(data []byte) (string, *previousErrorRe
 	defer c.previousErrorMu.Unlock()
 	key := kind + ":" + strconv.FormatInt(id, 10)
 	uuid := outgoingErrorUUID(action.Params.Message)
-	previous := c.previousErrors[key]
+	previous := retainedPreviousError(c.previousErrors[key])
 	if uuid == "" && previous == nil {
 		return "", nil
 	}
@@ -120,11 +147,9 @@ func (c *wsConnection) beginOutgoingError(data []byte) (string, *previousErrorRe
 			break
 		}
 	}
-	reply := &previousErrorReply{uuid: uuid, done: make(chan struct{})}
-	if previous != nil {
-		// writeMu serializes begin/finish, so the preceding entry has completed.
-		reply.fallback = previous.uuid
-	}
+	// Earlier sends may still be awaiting ACKs; preserve their result rather than
+	// copying a UUID that has not yet been confirmed by the platform.
+	reply := &previousErrorReply{uuid: uuid, previous: previous, done: make(chan struct{})}
 	c.previousErrors[key] = reply
 	return key, reply
 }
@@ -133,18 +158,19 @@ func (c *wsConnection) finishOutgoingError(key string, reply *previousErrorReply
 	if reply == nil {
 		return
 	}
-	reply.sent = err == nil
 	c.previousErrorMu.Lock()
+	reply.sent = err == nil
+	if reply.sent {
+		reply.previous = nil // A confirmed message supersedes all earlier sends.
+	}
+	close(reply.done)
 	if c.previousErrors[key] == reply {
-		if err != nil && reply.fallback != "" {
-			previous := &previousErrorReply{uuid: reply.fallback, sent: true, done: make(chan struct{})}
-			close(previous.done)
+		if previous := retainedPreviousError(reply); previous != nil {
 			c.previousErrors[key] = previous
-		} else if err != nil || reply.uuid == "" {
+		} else {
 			delete(c.previousErrors, key)
 		}
 	}
-	close(reply.done)
 	c.previousErrorMu.Unlock()
 }
 

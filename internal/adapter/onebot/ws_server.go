@@ -161,21 +161,28 @@ func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
 }
 
 func (c *wsConnection) writeTurnMessage(messageType int, data []byte, turn *llm.SessionTurn) error {
+	key, reply, err := c.writeTurnMessagePending(messageType, data, turn)
+	c.finishOutgoingError(key, reply, err)
+	return err
+}
+
+// writeTurnMessagePending leaves delivery completion to the caller, allowing
+// ACK-backed actions to publish their platform result instead of the socket write.
+func (c *wsConnection) writeTurnMessagePending(messageType int, data []byte, turn *llm.SessionTurn) (key string, reply *previousErrorReply, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.conn == nil || c.isClosed() {
-		return fmt.Errorf("websocket connection is closed")
+		return "", nil, fmt.Errorf("websocket connection is closed")
 	}
-	return turn.WithAuthority(func() error {
+	err = turn.WithAuthority(func() error {
 		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 			return err
 		}
 		defer c.conn.SetWriteDeadline(time.Time{})
-		key, reply := c.beginOutgoingError(data)
-		err := c.conn.WriteMessage(messageType, data)
-		c.finishOutgoingError(key, reply, err)
-		return err
+		key, reply = c.beginOutgoingError(data)
+		return c.conn.WriteMessage(messageType, data)
 	})
+	return key, reply, err
 }
 
 func (c *wsConnection) Close() error {

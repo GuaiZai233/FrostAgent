@@ -53,7 +53,7 @@ func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout 
 	return c.sendActionAndWaitContext(action, timeout, turn, turn.Context())
 }
 
-func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn, ctx context.Context) (oneBotAPIResponse, error) {
+func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn, ctx context.Context) (result oneBotAPIResponse, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return oneBotAPIResponse{}, err
 	}
@@ -73,9 +73,11 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 		return oneBotAPIResponse{}, fmt.Errorf("marshal action failed: %w", err)
 	}
 
-	if err := c.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
+	key, pending, writeErr := c.writeTurnMessagePending(websocket.TextMessage, actionBytes, turn)
+	defer func() { c.finishOutgoingError(key, pending, resultErr) }()
+	if writeErr != nil {
 		c.clearMessageRequest(echo, responseChannel)
-		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", err)
+		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", writeErr)
 	}
 
 	timer := time.NewTimer(timeout)
