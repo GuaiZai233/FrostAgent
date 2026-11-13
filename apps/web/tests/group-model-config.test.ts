@@ -114,7 +114,7 @@ async function flush() { for (let index = 0; index < 5; index++) await Promise.r
 
 {
   const f = fixture();
-  const { dialog, body, button } = f.open('aiocqhttp');
+  const { dialog, body, button } = f.open('onebot');
   await flush();
   const selects = body.querySelectorAll('.group-model-binding');
   assert.equal(selects.length, 7);

@@ -50,7 +50,7 @@ func TestCleanTargetID(t *testing.T) {
 		{
 			name:     "bare admin mock ID with underscore",
 			raw:      "admin_1.test",
-			platform: "astrbot",
+			platform: "fixture",
 			want:     "admin_1.test",
 		},
 		{

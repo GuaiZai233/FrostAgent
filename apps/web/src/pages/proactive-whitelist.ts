@@ -60,7 +60,6 @@ export function groupIdFromSessionId(sessionId: string): string {
   if (
     prefix === 'onebot' ||
     prefix === 'qq' ||
-    prefix === 'aiocqhttp' ||
     prefix === ''
   ) {
     return rawId;

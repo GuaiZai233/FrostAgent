@@ -28,10 +28,8 @@ func extractLegacyGroupID(entry MemoryEntry) string {
 		}
 	}
 	for _, prefix := range []string{
-		"aiocqhttp:group:",
 		"onebot:group:",
 		"qq:group:",
-		"astrbot:group:",
 		"group:",
 	} {
 		if cut, ok := strings.CutPrefix(entry.Owner, prefix); ok {
@@ -46,10 +44,8 @@ func extractLegacyGroupID(entry MemoryEntry) string {
 
 func extractLegacyArchiveGroupID(archive MemoryMergeArchive) string {
 	for _, prefix := range []string{
-		"aiocqhttp:group:",
 		"onebot:group:",
 		"qq:group:",
-		"astrbot:group:",
 		"group:",
 	} {
 		if cut, ok := strings.CutPrefix(archive.Owner, prefix); ok {
@@ -103,9 +99,7 @@ func MigrateLegacyGroupMemories(
 			migrated.OwnerType = OwnerGroup
 			if strings.HasPrefix(migrated.Owner, "group:") ||
 				strings.HasPrefix(migrated.Owner, "qq:group:") ||
-				strings.HasPrefix(migrated.Owner, "aiocqhttp:group:") ||
 				strings.HasPrefix(migrated.Owner, "onebot:group:") ||
-				strings.HasPrefix(migrated.Owner, "astrbot:group:") ||
 				migrated.Owner == groupID ||
 				migrated.Owner == "" {
 				migrated.Owner = GroupOwnerExplicit

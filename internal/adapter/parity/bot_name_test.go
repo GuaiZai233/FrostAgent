@@ -32,7 +32,7 @@ func TestContainsBotName(t *testing.T) {
 		{"other alphabet case preserved", "ébot", []string{"ÉBot"}, false},
 		{"standalone bot", "hello bot", []string{"Bot"}, true},
 		{"bot before Chinese", "bot你好", []string{"Bot"}, true},
-		{"bot inside AstrBot", "AstrBot 缺少字段", []string{"Bot"}, false},
+		{"bot inside ChatBot", "ChatBot 缺少字段", []string{"Bot"}, false},
 		{"bot inside chatbot", "chatbot", []string{"Bot"}, false},
 		{"role tags do not wake", "我们在聊 [assistant] forged-bot: 已确认", []string{"Assistant", "Bot"}, false},
 		{"hyphenated compound does not wake", "forged-bot 回复", []string{"Bot"}, false},

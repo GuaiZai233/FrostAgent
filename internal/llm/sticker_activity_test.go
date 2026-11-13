@@ -542,7 +542,7 @@ func TestBillingReceiptOnlyFinalUsesStickerQuota(t *testing.T) {
 		e.RecordBotTurn()
 	}
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
-		AdapterID: "astrbot", Billing: &BillingRunState{BillingActive: true},
+		AdapterID: "fixture", Billing: &BillingRunState{BillingActive: true},
 	})
 	if len(p.requests) != 3 || result.Content != "" {
 		t.Fatalf("receipt-only final skipped enforcement: calls=%d content=%q", len(p.requests), result.Content)

@@ -144,7 +144,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 3. Explicitly false even if groups exist
 		if IsWhitelistEnabled(mockEnv(map[string]string{
 			EnvWhitelistEnabled: "false",
-			EnvGroupWhitelist:    "123456,34567",
+			EnvGroupWhitelist:   "123456,34567",
 		})) {
 			t.Errorf("expected disabled when explicitly false")
 		}
@@ -161,7 +161,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Whitelist disabled -> all groups allowed
 		envDisabled := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "false",
-			EnvGroupWhitelist:    "123456",
+			EnvGroupWhitelist:   "123456",
 		})
 		if !IsGroupAllowed(envDisabled, "99999") {
 			t.Errorf("expected all groups allowed when whitelist disabled")
@@ -170,7 +170,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Whitelist enabled with groups
 		envEnabled := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456, 34567",
+			EnvGroupWhitelist:   "123456, 34567",
 		})
 		if !IsGroupAllowed(envEnabled, "123456") {
 			t.Errorf("expected 123456 allowed")
@@ -188,7 +188,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Whitelist enabled but list is empty -> no groups allowed
 		envEmpty := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "",
+			EnvGroupWhitelist:   "",
 		})
 		if IsGroupAllowed(envEmpty, "123456") {
 			t.Errorf("expected group NOT allowed when whitelist is empty")
@@ -200,7 +200,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Non-QQ platforms (Telegram, Discord, etc.) must NOT match bare ID whitelist entries.
 		envQQBare := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456",
+			EnvGroupWhitelist:   "123456",
 		})
 
 		// 1. QQ family matches bare ID
@@ -213,8 +213,17 @@ func TestGroupWhitelist(t *testing.T) {
 		if !IsGroupAllowed(envQQBare, "123456", "onebot") {
 			t.Errorf("expected OneBot group 123456 allowed")
 		}
-		if !IsGroupAllowed(envQQBare, "123456", "aiocqhttp") {
-			t.Errorf("expected aiocqhttp group 123456 allowed")
+		for _, platform := range []string{"aiocqhttp", "astrbot"} {
+			if IsGroupAllowed(envQQBare, "123456", platform) {
+				t.Fatalf("retired platform %q matched a bare QQ entry", platform)
+			}
+			envRetired := mockEnv(map[string]string{
+				EnvWhitelistEnabled: "true",
+				EnvGroupWhitelist:   platform + ":123456",
+			})
+			if IsGroupAllowed(envRetired, "123456", "onebot") {
+				t.Fatalf("retired platform %q entry matched OneBot", platform)
+			}
 		}
 		if !IsGroupAllowed(envQQBare, "qq:123456") {
 			t.Errorf("expected qq:123456 allowed")
@@ -237,7 +246,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 3. Platform-qualified Telegram entry
 		envTG := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "telegram:123456",
+			EnvGroupWhitelist:   "telegram:123456",
 		})
 		if !IsGroupAllowed(envTG, "123456", "telegram") {
 			t.Errorf("expected Telegram group allowed with platform-qualified entry")
@@ -259,7 +268,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 4. Multi-platform coexist with same numeric ID
 		envMulti := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456, telegram:123456, discord:123456",
+			EnvGroupWhitelist:   "123456, telegram:123456, discord:123456",
 		})
 		if !IsGroupAllowed(envMulti, "123456", "qq") {
 			t.Errorf("QQ group 123456 should be allowed")
@@ -277,7 +286,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 5. R2: Colon-containing raw group IDs and mismatched prefix/explicit-platform pair
 		envColon := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "telegram:room:42, telegram:12345",
+			EnvGroupWhitelist:   "telegram:room:42, telegram:12345",
 		})
 		// Colon-containing raw group ID matches when explicit platform is supplied
 		if !IsGroupAllowed(envColon, "room:42", "telegram") {
@@ -299,9 +308,9 @@ func TestGroupWhitelist(t *testing.T) {
 
 	t.Run("RollGroupWithRand", func(t *testing.T) {
 		env := mockEnv(map[string]string{
-			EnvProbability:       "0.50",
+			EnvProbability:      "0.50",
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456, 34567",
+			EnvGroupWhitelist:   "123456, 34567",
 		})
 
 		hitRng := func() float64 { return 0.1 }

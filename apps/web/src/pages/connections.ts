@@ -9,7 +9,6 @@ import { SettingsDraft } from './settings-draft';
 
 const adapters = [
   { id: 'onebot', name: 'OneBot', prefix: 'ONEBOT', upstream: '在 NapCat 等上游启用正向 WebSocket 服务端，并填写它的连接地址。' },
-  { id: 'astrbot', name: 'AstrBot', prefix: 'ASTRBOT', upstream: '需要更新配套 FrostAgent 插件，并在 AstrBot 插件中启用 WebSocket 服务端。' },
 ] as const;
 
 const fields = ['ENABLED', 'MODE', 'URL', 'TOKEN', 'INBOUND_TOKEN'] as const;
@@ -62,7 +61,7 @@ export function mountConnectionsPage(container: HTMLElement, api = createInstanc
               <option value="forward">正向 WebSocket（FrostAgent 作为客户端）</option>
             </select>
             <div id="${adapter.id}-reverse" class="flex flex-col gap-2">
-              <p class="text-xs text-muted">由 ${adapter.name === 'OneBot' ? '消息平台协议实现上游' : 'AstrBot 插件'}主动连接 FrostAgent。将下面的实例地址填入上游的反向 WebSocket 配置。</p>
+              <p class="text-xs text-muted">由消息平台上游主动连接 FrostAgent。将下面的实例地址填入上游的反向 WebSocket 配置。</p>
               <div class="flex items-center gap-2 flex-wrap">
                 <code id="${adapter.id}-address" class="text-xs font-mono break-all flex-1 min-w-0"></code>
                 <button type="button" id="${adapter.id}-copy" class="btn btn-outline btn-sm" aria-label="复制 ${adapter.name} 地址" disabled>${icon('copy', 'w-3.5 h-3.5')}复制</button>

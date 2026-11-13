@@ -27,7 +27,7 @@ type AgentService interface {
 // MessageAdapter defines the interface for platform-specific message sending.
 // 把消息真正发送到具体平台（QQ、微信、HTTP 回调、WebSocket 等）。
 type MessageAdapter interface {
-	ID() string                                          // 返回平台唯一标识（如 "onebot"、"astrbot"、"qq"),用于 Dispatcher 路由
+	ID() string                                          // 返回平台唯一标识（如 "onebot"、"qq"),用于 Dispatcher 路由
 	Send(ctx context.Context, msg OutgoingMessage) error // 执行发送动作
 }
 

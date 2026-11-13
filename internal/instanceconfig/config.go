@@ -25,10 +25,9 @@ var GlobalKeys = map[string]bool{
 	"SECURITY_CONTROL_MODE":     true,
 }
 var InstanceRestartKeys = map[string]bool{
-	"ONEBOT_WS_ENABLED": true, "ASTRBOT_WS_ENABLED": true,
-	"ONEBOT_WS_MODE": true, "ONEBOT_WS_URL": true, "ONEBOT_WS_TOKEN": true,
-	"ASTRBOT_WS_MODE": true, "ASTRBOT_WS_URL": true, "ASTRBOT_WS_TOKEN": true,
-	"ONEBOT_WS_INBOUND_TOKEN": true, "ASTRBOT_WS_INBOUND_TOKEN": true,
+	"ONEBOT_WS_ENABLED": true,
+	"ONEBOT_WS_MODE":    true, "ONEBOT_WS_URL": true, "ONEBOT_WS_TOKEN": true,
+	"ONEBOT_WS_INBOUND_TOKEN":   true,
 	"MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true,
 	"BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true,
 	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
@@ -191,7 +190,7 @@ func allowed(k string, global bool) bool {
 	if global {
 		return GlobalKeys[k]
 	}
-	return !GlobalKeys[k] && k != "BRAIN_PATH" && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH" && k != "ASTRBOT_WS_PATH"
+	return !GlobalKeys[k] && k != "BRAIN_PATH" && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH"
 }
 func (s *Store) Get(k string) string {
 	s.mu.RLock()

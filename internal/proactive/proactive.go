@@ -141,11 +141,11 @@ func IsWhitelistEnabledWith(getenv func(string) string, enabledKey, listKey stri
 }
 
 // NormalizePlatform canonicalizes messaging platform identifiers.
-// OneBot, aiocqhttp, and qq aliases are normalized to "qq".
+// OneBot and qq aliases are normalized to "qq".
 func NormalizePlatform(platform string) string {
 	p := strings.ToLower(strings.TrimSpace(platform))
 	switch p {
-	case "onebot", "aiocqhttp", "qq":
+	case "onebot", "qq":
 		return "qq"
 	default:
 		return p
@@ -155,7 +155,7 @@ func NormalizePlatform(platform string) string {
 // IsGroupAllowed checks if the given group ID (and optional platform) is permitted to trigger proactive reply.
 // When whitelist mode is disabled, all groups are allowed (returns true).
 // Once whitelist mode is enabled:
-// - QQ/OneBot groups match bare entries ("123") or "qq:123" / "onebot:123" / "aiocqhttp:123".
+// - QQ/OneBot groups match bare entries ("123") or "qq:123" / "onebot:123".
 // - Non-QQ platform groups (Telegram, Discord, etc.) strictly require platform-qualified entries ("platform:group_id").
 // - Bare IDs in the whitelist are strictly isolated to the QQ family (Option B).
 // - Empty whitelist under enabled mode rejects all groups.
@@ -196,12 +196,12 @@ func IsGroupAllowedWith(getenv func(string) string, enabledKey, listKey, groupID
 
 	// Option B platform matching:
 	// 1. QQ family (targetPlatform == "qq" or targetPlatform == ""):
-	//    Accept bare ID (targetGroupID), or "qq:" / "onebot:" / "aiocqhttp:" aliases.
+	//    Accept bare ID (targetGroupID), or "qq:" / "onebot:" aliases.
 	if targetPlatform == "qq" || targetPlatform == "" {
 		if _, ok := whitelist[targetGroupID]; ok {
 			return true
 		}
-		for _, alias := range []string{"qq", "onebot", "aiocqhttp"} {
+		for _, alias := range []string{"qq", "onebot"} {
 			if _, ok := whitelist[alias+":"+targetGroupID]; ok {
 				return true
 			}

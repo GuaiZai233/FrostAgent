@@ -26,8 +26,8 @@ func TestSafeGroupKey(t *testing.T) {
 	if SafeGroupKey("onebot:group:mock_grp_100") != baseKey {
 		t.Errorf("expected onebot:group: prefix to match canonical key")
 	}
-	if SafeGroupKey("astrbot:group:mock_grp_100") != baseKey {
-		t.Errorf("expected astrbot:group: prefix to match canonical key")
+	if SafeGroupKey("fixture:group:mock_grp_100") == baseKey {
+		t.Errorf("unexpected normalization of a non-OneBot platform prefix")
 	}
 
 	// Injective mapping: distinct IDs with delimiters must NEVER collide
@@ -571,7 +571,7 @@ func TestJSONGroupManagerRepeatedKnownPrefixes(t *testing.T) {
 	aliases := []string{
 		"group:group:review_test_group",
 		"qq:group:qq:group:review_test_group",
-		"group:onebot:group:aiocqhttp:group:review_test_group",
+		"group:onebot:group:qq:group:review_test_group",
 	}
 	for _, platform := range []string{"qq", "telegram"} {
 		for _, alias := range aliases {
@@ -674,7 +674,7 @@ func TestJSONGroupManagerLegacyQQAndPlatformAliases(t *testing.T) {
 		t.Fatal("legacy QQ path changed")
 	}
 	manager := NewGroupManager(baseDir, nil)
-	qq, err := manager.GetGroupStoreForPlatform(" AIOCQHTTP ", "onebot:group:legacy_group")
+	qq, err := manager.GetGroupStoreForPlatform(" QQ ", "onebot:group:legacy_group")
 	if err != nil {
 		t.Fatal(err)
 	}

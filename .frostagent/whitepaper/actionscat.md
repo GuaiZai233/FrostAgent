@@ -44,9 +44,9 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 
 ### 入站消息自动分发
 
-每个实例将 OneBot 与 AstrBot 的入站文本接入既有 `POST /api/v1/dispatch`，在对话唤醒和模型路由之前单次分发。未唤醒对话或关闭对话路由的普通消息也可匹配。OneBot 只提取当前消息的 text 段；AstrBot 使用当前 `content`，不把历史上下文、附件、原始协议或凭据加入事件。事件携带原始平台、可信传输适配器 `adapter_id`、会话、用户和群标识，发往实例配置的 `ACTIONSCAT_ENDPOINT`，使用现有 dispatch token。
+每个实例将 OneBot 的入站文本接入既有 `POST /api/v1/dispatch`，在对话唤醒和模型路由之前单次分发。未唤醒对话或关闭对话路由的普通消息也可匹配。OneBot 只提取当前消息的 text 段，不把历史上下文、附件、原始协议或凭据加入事件。事件携带原始平台、可信传输适配器 `adapter_id`、会话、用户和群标识，发往实例配置的 `ACTIONSCAT_ENDPOINT`，使用现有 dispatch token。
 
-`adapter_id` 由 OneBot/AstrBot 适配器填写，不读取上游消息的 metadata。支持此字段的 ActionsCat Core 将其注入 `ACTIONSCAT_EVENT_ADAPTER_ID`，SDK `Reply` 再经 `metadata.adapter_id` 选择 FrostAgent 的传输适配器，同时保留原平台供 AstrBot 主动发送。应先部署配套 Core，再部署 FrostAgent；使用旧 SDK 的 Action 需重新构建。旧事件不带该可选字段时保留既有平台路由，无需数据库迁移；旧 Core 会忽略该字段，因此单独更新 FrostAgent 不能修复 AstrBot Matcher 回复。
+`adapter_id` 由 OneBot 适配器填写，不读取上游消息的 metadata。支持此字段的 ActionsCat Core 将其注入 `ACTIONSCAT_EVENT_ADAPTER_ID`，SDK `Reply` 再经 `metadata.adapter_id` 选择 FrostAgent 的传输适配器。应先部署配套 Core，再部署 FrostAgent；使用旧 SDK 的 Action 需重新构建。旧事件不带该可选字段时保留既有平台路由，无需数据库迁移；旧 Core 会忽略该字段。
 
 mock 会话、已处理的管理命令、心跳和非消息事件不分发。已配置且启用 ActionsCat 时，待分发消息也经过现有安全入站门禁：锁定或被阻止的消息不分发，过滤后的消息使用脱敏正文。禁用集成后，不再因分发而额外审查未唤醒群消息；正常唤醒消息的安全门禁仍保留。安全控制模式仍由现有设置决定；simple 模式不运行分类模型，aggressive 模式沿用分类门禁。Bot 连续对话防循环的强制模式仅抑制超限轮次的对话，已通过安全门禁的入站消息仍按原有规则分发至 ActionsCat。每个收到的合格事件只尝试一次，不对未知结果重试；请求最多等待 3 秒，错误仅记录并继续聊天。此保证针对单次接收，不是跨上游重发、重连或进程重启的去重。
 
@@ -56,7 +56,7 @@ mock 会话、已处理的管理命令、心跳和非消息事件不分发。已
 
 ```
                 ┌──────────────────────────────────────────────────┐
-                │          OneBot / AstrBot / Direct Chat          │
+                │               OneBot / Direct Chat               │
                 └─────────────────────────┬────────────────────────┘
                                           │ 触发对话 / 协议事件
                                           ▼
@@ -287,7 +287,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
   - `enabled: bool`（可选，默认 true）
 - **契约保证**：注册成功后由 ActionsCat 后台常驻调度器自主调度，脱离 LLM 在后台周期运行。
 - **收件上下文**：从真实私聊/群聊创建时，工具从可信 `RunContext` 附带可选 `delivery_context`（平台、适配器、消息类型、目标、会话、发送者、群标识）。这些字段不作为模型参数，模型传入的同名对象不参与路由；管理员与 Mock 门禁保持不变。非聊天入口缺少平台或发送者时不附带上下文。
-- **定时回复**：ActionsCat 将上下文保存到 Schedule，触发时注入 `ACTIONSCAT_EVENT_PLATFORM / ADAPTER_ID / MESSAGE_TYPE / TARGET_ID / SESSION_ID / USER_ID / GROUP_ID`。Action 使用现有 `actionscat.Reply` 和 `frostagent.sendmsg` 能力回复，无需将收件人写入源码。`metadata.adapter_id` 选择本实例注册的传输适配器，原平台名保留给 AstrBot 主动发送。
+- **定时回复**：ActionsCat 将上下文保存到 Schedule，触发时注入 `ACTIONSCAT_EVENT_PLATFORM / ADAPTER_ID / MESSAGE_TYPE / TARGET_ID / SESSION_ID / USER_ID / GROUP_ID`。Action 使用现有 `actionscat.Reply` 和 `frostagent.sendmsg` 能力回复，无需将收件人写入源码。`metadata.adapter_id` 选择本实例注册的传输适配器。
 - **兼容与部署**：旧任务缺少上下文仍可执行，SDK 继续使用原有事件字段；没有收件信息时 `Reply` 返回 `ErrNoSession`。需要先部署支持此契约的 ActionsCat，并重新构建使用新版内置 SDK 的 Action。旧服务未回传相同上下文时，工具明确提示收件信息未确认保存，避免把已创建任务误报为自动回复就绪。
 
 #### 12. `actionscat action=list_schedules`

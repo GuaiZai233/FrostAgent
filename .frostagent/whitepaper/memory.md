@@ -49,7 +49,7 @@ SQLite 仅使用内存向量，开启时红字提示：“sqlite不支持向量�
 ```
                      ┌───────────────────────────────────┐
                      │          IM 消息事件入口          │
-                     │  (OneBot / AstrBot / Mock)        │
+                     │       (OneBot / Mock)               │
                      └─────────────────┬─────────────────┘
                                        │
                  ┌─────────────────────┴─────────────────────┐
@@ -107,7 +107,7 @@ instance_<id>/
 ### 3.1 安全群目录命名规则 (`SafeGroupKey`)
 
 采用**前缀规范化 + 确定性 SHA-256 单射哈希 + 路径边界约束**方案：
-- 剥离各适配器平台协议前缀（如 `group:`、`qq:group:`、`onebot:group:`、`astrbot:group:`）。
+- 剥离各适配器平台协议前缀（如 `group:`、`qq:group:`、`onebot:group:`）。
 - 计算规范化群号的 SHA-256 哈希取前 16 位十六进制字符。
 - 提取前 24 位安全字母数字构成前缀，组合为 `g_<safe_prefix>_<hashHex>`。
 - 保证任意不同的原始群号（如 `abc:def`、`abc/def`、`abc_def`）绝不会映射到同一物理目录；绝对杜绝 `..` 路径穿越；规避 Windows 设备保留名（`CON`、`PRN`、`NUL`、`AUX` 等）。
@@ -214,7 +214,7 @@ func (m *MemberProfile) ResolveCallingName() string {
      - **基于严格槽位序号绑定的暂存守卫与缺失/重复消息 ID 安全隔离（Sequence-Bound Slot Guard & Strict Sequence Isolation）**：
        - 为防御并发唤醒轮次在缺失平台消息 ID（`messageID == ""`）或重试导致重复平台消息 ID 时的误提交与误清理，系统将 `StagedGroupCompactGuard` 严格绑定到单调自增的内部缓冲槽位序号集合（`sequences []uint64`）；
        - **纯序号精确槽位隔离（Pure Slot-Sequence Isolation over ID Matching）**：当 `sequence > 0` 时，`PromoteGroupCompactSlot(sequence, messageID)` 与 `DropGroupCompactSlot(sequence, messageID, senderID)` **严格仅匹配 `item.sequence == sequence`**，完全忽略上游 `messageID` 字段。彻底防止上游平台在网络抖动或重复派发事件时提供相同的非空 `messageID`，导致某轮次的守卫误晋升或误删除另一轮次槽位的 cross-slot 污染；仅在 `sequence == 0 && msgID != ""` 的显式遗留调用路径下才退回按 `messageID` 匹配；直接调用 `PromoteGroupCompactMessage("")` 强制返回 `false` 并拒绝任何晋升，彻底杜绝未验证轮次被泛化晋升进入压缩快照或记忆提炼；
-       - **多槽位轮次生命周期绑定（Turn Multi-Sequence Tracking）**：`StagedGroupCompactGuard` 支持关联管理多个内部缓冲槽位。在支持工具调用并即时暂存中间助手回复的适配器中（如 AstrBot 执行 `send_message`），助手消息槽位序号通过 `guard.AddSequence(seq)` 绑定至当前轮次的统一守卫，在轮次完成或失败时原子联动提升或丢弃，杜绝残留孤儿槽位；
+       - **多槽位轮次生命周期绑定（Turn Multi-Sequence Tracking）**：`StagedGroupCompactGuard` 支持关联管理多个内部缓冲槽位。在支持工具调用并即时暂存中间助手回复的适配器中（如 OneBot 执行 `send_message`），助手消息槽位序号通过 `guard.AddSequence(seq)` 绑定至当前轮次的统一守卫，在轮次完成或失败时原子联动提升或丢弃，杜绝残留孤儿槽位；
        - **单槽位精确丢弃与彻底废除按发言人瞎猜的降级清理（Zero-ID/Zero-Sequence Safe Fallback without Sender Guessing）**：当无平台 ID 的唤醒轮次 B 失败或被封禁调用 `guardB.Drop()` 时，底层通过 `DropGroupCompactSlot(seq, "", senderID)` 仅移除该特定序号槽位。同发言人早前的正常被动水群闲聊（已提交条目）以及该发言人并发处于暂存队列的其他轮次获得 100% 完整保留；**彻底消除根据发言人瞎猜最新暂存项的降级丢弃**：当 `sequence == 0 && messageID == ""` 时，`DropGroupCompactSlot` 立即返回 `false`，不修改缓冲区、不递增代际、不回滚摘要、不登记撤销，直接跳过清理。这彻底解决了纯 `@mention` 无文本的未暂存轮次在发送失败时，因无守卫且无 ID 回退清理而误丢弃该用户另一合法并发在途轮次槽位的严重缺陷；
      - **避免无关消息误伤（Unrelated-Source False Cancellation Protection）**：
        - `DropGroupCompactMessage` 区分作用域，仅对快照包含该消息的在途屏障执行中止；
@@ -245,7 +245,7 @@ func (m *MemberProfile) ResolveCallingName() string {
 
 ### 图片来源与文字引述
 
-- OneBot 与 AstrBot 将适配器识图结果放入独立的 `image_description` 字段，用户文字保留在 `content`。实时提取、成功 `stay_silent`、暂存消息的滚动压缩提炼均保留该区分；图片结果只附加到当前暂存消息的精确序号槽位，已丢弃或已完成的槽位不能被晚到结果复活。
+- OneBot 将适配器识图结果放入独立的 `image_description` 字段，用户文字保留在 `content`。实时提取、成功 `stay_silent`、暂存消息的滚动压缩提炼均保留该区分；图片结果只附加到当前暂存消息的精确序号槽位，已丢弃或已完成的槽位不能被晚到结果复活。
 - 自动提取时，证据必须是该消息文字或识图结果的连续字面片段。仅在识图结果中命中的条目由服务端标记 `source_media: "image"`，始终归属 `"group"`，不能依据图片中的“我”将事实归到发图者。
 - `Content` 与 `Evidence` 可保留识图结果片段用于检索和审计，但它们不是群友亲口说出的权威引述。图片条目的详情引述区固定显示 **`（原source为图片形式）`**；召回使用 `<image_description>` 容器，并附加相同来源说明，避免将视觉模型结果输出为 `<quote>`。
 - 群聊 `memory.write` 同样接收当前轮的可信图片来源。`source_media` 与 `evidence` 是可选工具参数；当前轮存在识图结果时默认保守标记图片来源。图文混合消息若要写入文字摘要，须提供 `source_media: "text"` 及可匹配用户文字的 `evidence`（或直接写入用户字面片段）。模型不能凭空创建可信图片来源。
@@ -313,7 +313,7 @@ func (m *MemberProfile) ResolveCallingName() string {
 - 反思产生的记忆合并归档直接保存在群的 `memory.json` 中，主题目录写入专属的 `groups/<safe_key>/catalog.json`。
 - 绝不触碰或修改私聊的 `brain.json` 和 `memory_catalog.json`，确保物理隔离与安全边界。
 - **并发乐观锁保护（OCC Deletion Protection）**：在反思结束删除淘汰记忆时，使用反思开始时捕获的快照 `snapshotByID` 结合当前锁内状态通过 `sameMergeSource` 校验。若某条待淘汰记忆在反思执行期间被用户通过 Web UI 并发编辑修改过，则自动放弃删除并保留用户修改，防止并发竞争造成数据丢失。
-- **动态群模型路由（Route Propagation）**：`GroupStore.RememberRoute` 记录群专属模型路由（包括动态平台与群号），并在 `ReflectGroup` 执行时正确注入 `ChatRequest.Route`，确保群聊反思遵循特定的模型调度配置。在 AstrBot 适配器中，动态记录事件解析所得的底层适配平台 `astrBotRouteScope(event).Platform`（如 `"aiocqhttp"`）而非写死 `"astrbot"`，保证与 `modelrouter.isQQPlatform` 平台规范完全对齐，准确命中 QQ 群专属反思模型调度规则。
+- **动态群模型路由（Route Propagation）**：`GroupStore.RememberRoute` 记录群专属模型路由（包括动态平台与群号），并在 `ReflectGroup` 执行时正确注入 `ChatRequest.Route`，确保群聊反思遵循特定的模型调度配置。OneBot 记录规范 QQ 群作用域，群聊反思沿用该群的模型绑定。
 - **群聊专属主题索引注入 (`FormatForGroupPrompt`)**：`CatalogStore` 针对群聊提供 `FormatForGroupPrompt(groupID)`，清洗主题文本并限制最多 24 个索引标签，在群聊对话轮次中作为 `## 群聊记忆主题索引` 注入系统提示词，提示模型按需调用 memory 工具检索。
 
 ### 5.2 旧版本群聊记忆热迁移 (`MigrateLegacyGroupMemories`)
