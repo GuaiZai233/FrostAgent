@@ -33,7 +33,7 @@ func TestPostgresMigrationSchemaCompatibilitySearchPathTriggers(t *testing.T) {
 			// Remove the vector child so the separate cross-schema FK guard
 			// cannot mask a missing trigger check on the scope target.
 			compatibilityExec(t, db, `DROP TABLE memory_embeddings`)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}

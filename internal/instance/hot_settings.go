@@ -3,11 +3,14 @@ package instance
 // These settings are read from the synchronized runtime scope at the point of
 // use. They can change without stopping an instance or its open connections.
 var hotInstanceSettings = map[string]bool{
+	"CHAT_HISTORY_PRIVATE_ENABLED": true, "CHAT_HISTORY_GROUP_WHITELIST": true,
 	"QQ_EXTEND_MESSAGES_TARGET_GROUPS": true,
 	"SYSTEM_PROMPT":                    true, "BOT_NAME": true, "BOT_ALIASES": true,
 	"ADMIN_QQ_IDS": true, "ADMIN_COMMAND_PREFIX": true,
 	"ENABLE_RUNTIME_STATUS_COMMAND": true,
-	"ENABLE_AT_IN_GROUP_MSG":        true, "GROUP_REPLY_ON_MENTION": true,
+	"ENABLE_THINKING_STATUS":        true,
+	"ENABLE_POKE":                   true, "POKE_CUSTOM_TEXT": true, "POKE_COOLDOWN_SECONDS": true,
+	"ENABLE_AT_IN_GROUP_MSG": true, "GROUP_REPLY_ON_MENTION": true,
 	"ENABLE_REPLY_IN_GROUP_MSG": true, "MAX_CONTEXT_MESSAGES": true,
 	"ENABLE_QUOTE_TRACE": true, "QUOTE_TRACE_DEPTH": true,
 	"BOT_LOOP_USER_IDS": true, "BOT_LOOP_MAX_TURNS": true, "BOT_LOOP_MODE": true,

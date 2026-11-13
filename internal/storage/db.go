@@ -16,10 +16,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 16
+const SchemaVersion = 17
 
 // SupportedSchemaVersion includes the additive layout understood by this build.
-const SupportedSchemaVersion = 16
+const SupportedSchemaVersion = 17
 
 type Backend string
 

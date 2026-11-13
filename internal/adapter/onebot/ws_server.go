@@ -1531,6 +1531,8 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
+	} else {
+		conn.recordHistoryAction(botAction, oneBotAPIResponse{}, "sent")
 	}
 }
 

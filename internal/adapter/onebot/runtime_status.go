@@ -93,6 +93,9 @@ func handleRuntimeStatusCommand(conn *wsConnection, event model.OneBotEvent, eng
 	data, err := json.Marshal(action)
 	if err == nil && engine.Context().Err() == nil {
 		err = conn.WriteMessage(websocket.TextMessage, data)
+		if err == nil {
+			conn.recordHistoryAction(action, oneBotAPIResponse{}, "sent")
+		}
 	}
 	if err != nil {
 		engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("OneBot 运行信息发送失败: %v", err))

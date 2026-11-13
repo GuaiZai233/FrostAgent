@@ -198,6 +198,7 @@ var migrations = []migration{
 	// are preserved when upgrading to the endpoint-format schema.
 	{version: 15, preservesCompatibility: true},
 	{version: 16},
+	{version: 17, statements: chatHistorySchema},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
