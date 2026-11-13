@@ -11,6 +11,7 @@ import (
 // Input placeholders describe code defaults, including dependent defaults.
 var resetHints = map[string]string{
 	"ENABLE_THINKING_STATUS":               "开启",
+	"BOT_LOOP_ENABLED":                     "开启（有标记 BotID 时生效）",
 	"ENABLE_MULTI_SEGMENT_REPLY":           "关闭",
 	"MULTI_SEGMENT_REPLY_MAX_SEGMENTS":     "0（不限制）",
 	"ENABLE_POKE":                          "关闭",

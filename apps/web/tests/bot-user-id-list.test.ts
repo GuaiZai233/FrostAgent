@@ -102,6 +102,7 @@ toast.error = (message) => { errors.push(message); };
 toast.success = () => {};
 const values = new Map([
   ['BOT_LOOP_USER_IDS', 'bot-a; Telegram:CaseID\nbot-a,bot-b'],
+  ['BOT_LOOP_ENABLED', 'false'],
   ['BOT_LOOP_MAX_TURNS', '3'],
   ['BOT_LOOP_MODE', 'soft'],
   ['ENABLE_EMBEDDING', 'true'],
@@ -171,6 +172,13 @@ if (hasEmbeddingSettings) {
 }
 
 assert.equal(banner.hidden, true, 'rendering existing IDs must not create a draft');
+assert.equal(el('bot-loop-enabled').checked, false, 'show the stored explicit disable');
+el('bot-loop-enabled').checked = true;
+el('bot-loop-enabled').fire('change');
+assert.equal(banner.hidden, false, 'enabling must stage a settings draft');
+restore.click();
+assert.equal(el('bot-loop-enabled').checked, false);
+assert.equal(removeButtons().length, 3, 'switch changes must preserve existing IDs');
 type('bot-to-restore');
 add.click();
 assert.equal(banner.hidden, false);

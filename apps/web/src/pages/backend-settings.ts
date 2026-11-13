@@ -249,7 +249,13 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
 
           <!-- Bot loop guard -->
           <div class="mb-4 pb-4 border-b border-border">
-            <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
+            <div class="flex items-center justify-between mb-2.5">
+              <h3 class="text-xs font-semibold text-foreground">Bot 连续对话防循环</h3>
+              <label class="toggle-switch" title="启用 Bot 连续对话防循环">
+                <input type="checkbox" id="bot-loop-enabled" role="switch" aria-label="启用 Bot 连续对话防循环" />
+                <span aria-hidden="true"></span>
+              </label>
+            </div>
             <p class="text-[11px] text-muted mb-3">按会话分别累计各标记 Bot 的轮数；仅未标记用户明确唤醒（@、名称/别名或戳一戳）后恢复额度，普通闲聊不会重置。</p>
             <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
               <div class="flex flex-col gap-1.5 min-w-0">
@@ -274,7 +280,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             </div>
             <div id="bot-loop-user-tags" class="flex flex-wrap gap-1.5 mt-2" aria-live="polite"></div>
             <div class="flex items-center justify-between gap-2 mt-2">
-              <span class="text-[11px] text-muted">列表为空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+                <span class="text-[11px] text-muted">关闭开关后保留 BotID；列表为空时不限制。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
             </div>
           </div>
 
@@ -661,6 +667,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     quoteDepth.disabled = !quote.checked;
     renderBotUsers();
     element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
+    element<HTMLInputElement>('bot-loop-enabled').checked = value('BOT_LOOP_ENABLED') !== 'false';
     element<HTMLInputElement>('multi-segment-max-segments').value = value('MULTI_SEGMENT_REPLY_MAX_SEGMENTS');
     const loopMode = element<HTMLSelectElement>('bot-loop-mode');
     loopMode.value = value('BOT_LOOP_MODE');
@@ -837,6 +844,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   const binds: Record<string, string> = {
+    'bot-loop-enabled': 'BOT_LOOP_ENABLED',
     'poke-enabled': 'ENABLE_POKE',
     'embedding-enabled': 'ENABLE_EMBEDDING',
     'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',

@@ -178,7 +178,7 @@ func (s *Store) BotLoopRevision() uint64 {
 }
 
 func botLoopSetting(key string) bool {
-	return key == "BOT_LOOP_USER_IDS" || key == "BOT_LOOP_MAX_TURNS" || key == "BOT_LOOP_MODE"
+	return key == "BOT_LOOP_ENABLED" || key == "BOT_LOOP_USER_IDS" || key == "BOT_LOOP_MAX_TURNS" || key == "BOT_LOOP_MODE"
 }
 
 func allowed(k string, global bool) bool {
@@ -236,6 +236,31 @@ func (s *Store) Update(k, v string, remove bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.updateLocked(k, v, remove)
+}
+
+// Transform serializes a read-modify-write with all other writes to this store.
+// The callback must not call back into the store.
+func (s *Store) Transform(ctx context.Context, key string, transform func(string) (string, error)) error {
+	if !allowed(key, s.global) {
+		return fmt.Errorf("字段 %s 不属于此配置", key)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, overridden := s.overrides[key]; overridden {
+		return fmt.Errorf("字段 %s 已由进程环境覆盖", key)
+	}
+	value, err := transform(s.values[key])
+	if err != nil {
+		return err
+	}
+	return s.updateLocked(key, value, false)
+}
+
+func (s *Store) updateLocked(k, v string, remove bool) error {
 	if s.db != nil {
 		if strings.ContainsRune(v, 0) {
 			return fmt.Errorf("setting %s contains NUL", k)
@@ -371,7 +396,7 @@ func (s *Store) Replace(raw string) error {
 	if err := WriteAtomic(s.path, []byte(raw), 0600); err != nil {
 		return err
 	}
-	for _, key := range []string{"BOT_LOOP_USER_IDS", "BOT_LOOP_MAX_TURNS", "BOT_LOOP_MODE"} {
+	for _, key := range []string{"BOT_LOOP_ENABLED", "BOT_LOOP_USER_IDS", "BOT_LOOP_MAX_TURNS", "BOT_LOOP_MODE"} {
 		if s.values[key] != next[key] {
 			s.botLoopRevision++
 			break
@@ -449,6 +474,7 @@ MULTI_SEGMENT_REPLY_MAX_SEGMENTS=0
 ENABLE_QUOTE_TRACE=true
 QUOTE_TRACE_DEPTH=5
 BOT_LOOP_USER_IDS=
+BOT_LOOP_ENABLED=true
 BOT_LOOP_MAX_TURNS=3
 BOT_LOOP_MODE=soft
 ENABLE_PROACTIVE_AWARENESS=false
