@@ -29,7 +29,7 @@ var hotInstanceSettings = map[string]bool{
 func onlyHotInstanceChanges(before, after map[string]string) bool {
 	changed := false
 	for key, old := range before {
-		if after[key] != old {
+		if current, exists := after[key]; !exists || current != old {
 			changed = true
 			if !hotInstanceSettings[key] {
 				return false
@@ -37,7 +37,7 @@ func onlyHotInstanceChanges(before, after map[string]string) bool {
 		}
 	}
 	for key, current := range after {
-		if before[key] != current {
+		if old, exists := before[key]; !exists || old != current {
 			changed = true
 			if !hotInstanceSettings[key] {
 				return false
@@ -60,12 +60,12 @@ var hotGlobalSettings = map[string]bool{
 
 func needsGlobalRuntimeReload(before, after map[string]string) bool {
 	for key, old := range before {
-		if after[key] != old && !hotGlobalSettings[key] {
+		if current, exists := after[key]; (!exists || current != old) && !hotGlobalSettings[key] {
 			return true
 		}
 	}
 	for key, current := range after {
-		if before[key] != current && !hotGlobalSettings[key] {
+		if old, exists := before[key]; (!exists || old != current) && !hotGlobalSettings[key] {
 			return true
 		}
 	}
