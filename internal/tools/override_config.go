@@ -72,41 +72,9 @@ func OverrideFrostAgentConfigTool(engine *llm.Engine, writeLocks ...ConfigWriteL
 			if engine == nil || engine.Scope == nil || engine.Scope.Config == nil {
 				return "", errors.New("实例配置不可用")
 			}
-			ctx, cancel := context.WithCancel(ctx)
-			stop := context.AfterFunc(engine.Scope.Context(), cancel)
-			defer func() { stop(); cancel() }()
-			if len(writeLocks) > 0 && writeLocks[0] != nil {
-				if err := writeLocks[0].LockContext(ctx); err != nil {
-					return "", err
-				}
-				defer writeLocks[0].Unlock()
-			}
-			run, ok := llm.RunContextFromContext(ctx)
-			if !ok || run.Mock || run.Proactive || run.Awareness || run.SessionID == "" ||
-				strings.TrimSpace(run.ActorPlatform) == "" || !memory.IsQQPlatform(run.ActorPlatform) ||
-				!admincmd.IsAdmin(run.ActorUserID, engine.Scope) {
-				return "", errors.New("仅允许当前真实对话中的 QQ 管理员明确请求修改配置")
-			}
-			if run.InstanceID == "" || run.InstanceID != engine.InstanceID {
-				return "", errors.New("调用者实例与配置实例不匹配")
-			}
-			if err := ctx.Err(); err != nil {
+			run, err := configOverrideCaller(ctx, engine)
+			if err != nil {
 				return "", err
-			}
-			if err := engine.Scope.Context().Err(); err != nil {
-				return "", err
-			}
-			if run.Turn != nil && run.Turn.Interrupted() {
-				return "", errors.New("对话已中断，取消修改配置")
-			}
-			if engine.Security != nil {
-				principal, err := security.NewPrincipal(run.ActorPlatform, run.ActorUserID)
-				if err != nil {
-					return "", errors.New("调用者身份无效")
-				}
-				if err := engine.Security.CheckAccess(principal); err != nil {
-					return "", errors.New("调用者访问已被限制，拒绝修改配置")
-				}
 			}
 			input, err := parseConfigOverride(args)
 			if err != nil {
@@ -120,6 +88,19 @@ func OverrideFrostAgentConfigTool(engine *llm.Engine, writeLocks ...ConfigWriteL
 				return "", errors.New("不支持此配置操作")
 			}
 			if _, err := configOverrideValue(input.Action, "", input.Value); err != nil {
+				return "", err
+			}
+			ctx, cancel := context.WithCancel(ctx)
+			stop := context.AfterFunc(engine.Scope.Context(), cancel)
+			defer func() { stop(); cancel() }()
+			if len(writeLocks) > 0 && writeLocks[0] != nil {
+				if err := writeLocks[0].LockContext(ctx); err != nil {
+					return "", err
+				}
+				defer writeLocks[0].Unlock()
+			}
+			// Management writes may revoke access while this call waits.
+			if _, err := configOverrideCaller(ctx, engine); err != nil {
 				return "", err
 			}
 			err = engine.Scope.Config.Transform(ctx, key, func(current string) (string, error) {
@@ -142,6 +123,37 @@ func OverrideFrostAgentConfigTool(engine *llm.Engine, writeLocks ...ConfigWriteL
 			return string(result), nil
 		},
 	}
+}
+
+func configOverrideCaller(ctx context.Context, engine *llm.Engine) (llm.RunContext, error) {
+	run, ok := llm.RunContextFromContext(ctx)
+	if !ok || run.Mock || run.Proactive || run.Awareness || run.SessionID == "" ||
+		strings.TrimSpace(run.ActorPlatform) == "" || !memory.IsQQPlatform(run.ActorPlatform) ||
+		!admincmd.IsAdmin(run.ActorUserID, engine.Scope) {
+		return run, errors.New("仅允许当前真实对话中的 QQ 管理员明确请求修改配置")
+	}
+	if run.InstanceID == "" || run.InstanceID != engine.InstanceID {
+		return run, errors.New("调用者实例与配置实例不匹配")
+	}
+	if err := ctx.Err(); err != nil {
+		return run, err
+	}
+	if err := engine.Scope.Context().Err(); err != nil {
+		return run, err
+	}
+	if run.Turn != nil && run.Turn.Interrupted() {
+		return run, errors.New("对话已中断，取消修改配置")
+	}
+	if engine.Security != nil {
+		principal, err := security.NewPrincipal(run.ActorPlatform, run.ActorUserID)
+		if err != nil {
+			return run, errors.New("调用者身份无效")
+		}
+		if err := engine.Security.CheckAccess(principal); err != nil {
+			return run, errors.New("调用者访问已被限制，拒绝修改配置")
+		}
+	}
+	return run, nil
 }
 
 type configOverrideInput struct {
@@ -276,20 +288,13 @@ func overrideIDs(value string) (string, error) {
 const userAdditionOpen = "<user_addition>"
 const userAdditionClose = "</user_addition>"
 
-// appendSystemPrompt only inserts bytes. The last complete, unnested block is
-// recognized. Malformed text before it remains part of the untouched base.
+// appendSystemPrompt only inserts bytes. Existing blocks are reused only when
+// every user_addition boundary in the prompt is complete and unnested.
 func appendSystemPrompt(current, addition string) (string, error) {
 	if strings.TrimSpace(addition) == "" || strings.ContainsRune(addition, 0) || strings.Contains(addition, "<user_addition") || strings.Contains(addition, "</user_addition") {
 		return "", errors.New("追加内容不能为空或包含 user_addition 边界")
 	}
-	open := strings.LastIndex(current, userAdditionOpen)
-	close := strings.LastIndex(current, userAdditionClose)
-	if open >= 0 && close >= open+len(userAdditionOpen) &&
-		(open == 0 || current[open-1] == '\n') &&
-		!strings.Contains(current[open+len(userAdditionOpen):close], "<user_addition") &&
-		!strings.Contains(current[open+len(userAdditionOpen):close], "</user_addition") &&
-		!strings.Contains(current[close+len(userAdditionClose):], "<user_addition") &&
-		!strings.Contains(current[close+len(userAdditionClose):], "</user_addition") {
+	if close := userAdditionInsertionPoint(current); close >= 0 {
 		prefix := current[:close]
 		if !strings.HasSuffix(prefix, "\n") {
 			prefix += "\n"
@@ -301,4 +306,37 @@ func appendSystemPrompt(current, addition string) (string, error) {
 		separator = "\n"
 	}
 	return current + separator + userAdditionOpen + "\n" + addition + "\n" + userAdditionClose, nil
+}
+
+func userAdditionInsertionPoint(prompt string) int {
+	open, lastClose := -1, -1
+	for offset := 0; offset < len(prompt); {
+		next := strings.IndexByte(prompt[offset:], '<')
+		if next < 0 {
+			break
+		}
+		next += offset
+		switch tail := prompt[next:]; {
+		case strings.HasPrefix(tail, userAdditionOpen):
+			if open >= 0 || (next > 0 && prompt[next-1] != '\n') {
+				return -1
+			}
+			open = next
+			offset = next + len(userAdditionOpen)
+		case strings.HasPrefix(tail, userAdditionClose):
+			if open < 0 {
+				return -1
+			}
+			open, lastClose = -1, next
+			offset = next + len(userAdditionClose)
+		case strings.HasPrefix(tail, "<user_addition"), strings.HasPrefix(tail, "</user_addition"):
+			return -1
+		default:
+			offset = next + 1
+		}
+	}
+	if open >= 0 {
+		return -1
+	}
+	return lastClose
 }

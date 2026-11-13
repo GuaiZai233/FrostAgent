@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
@@ -73,9 +74,21 @@ func overrideArgs(action, value string) string {
 	return string(args)
 }
 
+type overrideTestWriteLock struct {
+	acquire func(context.Context) error
+	release func()
+}
+
+func (l overrideTestWriteLock) LockContext(ctx context.Context) error { return l.acquire(ctx) }
+func (l overrideTestWriteLock) Unlock()                               { l.release() }
+
 func TestOverrideConfigAuthorization(t *testing.T) {
 	engine, valid, _ := overrideFixture(t, false)
-	tool := OverrideFrostAgentConfigTool(engine)
+	lockCalls := 0
+	tool := OverrideFrostAgentConfigTool(engine, overrideTestWriteLock{
+		acquire: func(context.Context) error { lockCalls++; return nil },
+		release: func() {},
+	})
 	if tool.IsProactiveAllowed() {
 		t.Fatal("mutation tool allowed in proactive turns")
 	}
@@ -115,6 +128,81 @@ func TestOverrideConfigAuthorization(t *testing.T) {
 	cancel()
 	if _, err := tool.ExecuteContext(ctx, overrideArgs("actionscat_enabled", "false")); err == nil {
 		t.Fatal("canceled request accepted")
+	}
+	if lockCalls != 0 {
+		t.Fatalf("unauthorized calls attempted shared lock %d times", lockCalls)
+	}
+}
+
+func TestOverrideConfigRechecksAuthorizationAfterLock(t *testing.T) {
+	for _, name := range []string{"admin-removed", "access-locked", "request-canceled", "runtime-stopped", "turn-interrupted"} {
+		t.Run(name, func(t *testing.T) {
+			engine, run, _ := overrideFixture(t, false)
+			engine.Security = security.NewController(t.TempDir())
+			session := new(llm.SessionContext)
+			run.Turn = session.ReserveSequenceTurn("fixture-lane", false, false)
+			ctx, cancel := context.WithTimeout(llm.WithRunContext(context.Background(), run), 5*time.Second)
+			defer cancel()
+			waiting, release := make(chan struct{}), make(chan struct{})
+			unlocked := false
+			tool := OverrideFrostAgentConfigTool(engine, overrideTestWriteLock{
+				acquire: func(ctx context.Context) error {
+					close(waiting)
+					select {
+					case <-release:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				},
+				release: func() { unlocked = true },
+			})
+			result := make(chan error, 1)
+			go func() {
+				_, err := tool.ExecuteContext(ctx, overrideArgs("actionscat_enabled", "false"))
+				result <- err
+			}()
+			select {
+			case <-waiting:
+			case <-ctx.Done():
+				t.Fatal("authorized call did not attempt the lock")
+			}
+			switch name {
+			case "admin-removed":
+				if err := engine.Scope.Config.Update("ADMIN_QQ_IDS", "fixture-other-admin", false); err != nil {
+					t.Fatal(err)
+				}
+			case "access-locked":
+				principal, err := security.NewPrincipal(run.ActorPlatform, run.ActorUserID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := engine.Security.Lock(principal, "synthetic revocation"); err != nil {
+					t.Fatal(err)
+				}
+			case "request-canceled":
+				cancel()
+			case "runtime-stopped":
+				engine.Scope.Cancel()
+			case "turn-interrupted":
+				session.ReserveSequenceTurn("fixture-lane", true, false)
+			}
+			close(release)
+			select {
+			case err := <-result:
+				if err == nil {
+					t.Fatal("revoked caller changed config after waiting for the lock")
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("revoked caller did not finish")
+			}
+			if name != "request-canceled" && name != "runtime-stopped" && !unlocked {
+				t.Fatal("rejected caller retained the acquired lock")
+			}
+			if engine.Scope.Config.Get("ACTIONSCAT_ENABLED") == "false" {
+				t.Fatal("revoked caller persisted config")
+			}
+		})
 	}
 }
 
@@ -216,10 +304,39 @@ func TestOverrideConfigPersistsAndAppliesLive(t *testing.T) {
 }
 
 func TestAppendSystemPromptBoundaries(t *testing.T) {
+	for _, original := range []string{"base", "base\n", ""} {
+		first, err := appendSystemPrompt(original, "first")
+		if err != nil || !strings.HasPrefix(first, original) || !strings.HasSuffix(first, "<user_addition>\nfirst\n</user_addition>") {
+			t.Fatalf("original was changed: %q, %v", first, err)
+		}
+		second, err := appendSystemPrompt(first, "second")
+		if err != nil || !strings.HasPrefix(second, original) || !strings.HasSuffix(second, "<user_addition>\nfirst\nsecond\n</user_addition>") {
+			t.Fatalf("later addition did not reuse valid block: %q, %v", second, err)
+		}
+	}
+	original := "base\n<user_addition>\nold\n</user_addition>\nsuffix"
+	got, _ := appendSystemPrompt(original, "new")
+	if got != "base\n<user_addition>\nold\nnew\n</user_addition>\nsuffix" {
+		t.Fatalf("valid block/suffix changed: %q", got)
+	}
+	original = "base\n<user_addition>old</user_addition>\n<user_addition>last</user_addition>\nsuffix"
+	got, _ = appendSystemPrompt(original, "new")
+	if got != "base\n<user_addition>old</user_addition>\n<user_addition>last\nnew\n</user_addition>\nsuffix" {
+		t.Fatalf("last valid block/suffix changed: %q", got)
+	}
+}
+
+func TestAppendSystemPromptMalformedBoundaries(t *testing.T) {
 	for _, original := range []string{
-		"base", "base\n", "", "base\n<user_addition>old", "base\n</user_addition>old</user_addition>",
+		"base\n<user_addition>old", "base\n</user_addition>old</user_addition>",
 		"base\n<user_addition attr='bad'>old</user_addition>", "base\n</user_addition><user_addition>",
 		"base\n<user_addition>old</user_addition", "base\n<user_addition>outer<user_addition>inner</user_addition></user_addition>",
+		"base\n<user_addition>outer\n<user_addition>inner</user_addition>",
+		"base\n<user_addition>\nouter\n<user_addition>\ninner\n</user_addition>",
+		"base\n<user_addition>outer\n<user_addition>inner</user_addition></user_addition>",
+		"base\n</user_addition>\n<user_addition>valid</user_addition>",
+		"base\n<user_addition>valid</user_addition>\n<user_addition",
+		"base <user_addition>inline</user_addition>",
 	} {
 		t.Run(original, func(t *testing.T) {
 			first, err := appendSystemPrompt(original, "first")
@@ -227,15 +344,10 @@ func TestAppendSystemPromptBoundaries(t *testing.T) {
 				t.Fatalf("malformed original was changed: %q, %v", first, err)
 			}
 			second, err := appendSystemPrompt(first, "second")
-			if err != nil || !strings.HasPrefix(second, original) || !strings.HasSuffix(second, "<user_addition>\nfirst\nsecond\n</user_addition>") {
-				t.Fatalf("later addition did not reuse valid block: %q, %v", second, err)
+			if err != nil || second != first+"\n<user_addition>\nsecond\n</user_addition>" {
+				t.Fatalf("malformed base allowed block reuse: %q, %v", second, err)
 			}
 		})
-	}
-	original := "base\n<user_addition>\nold\n</user_addition>\nsuffix"
-	got, _ := appendSystemPrompt(original, "new")
-	if got != "base\n<user_addition>\nold\nnew\n</user_addition>\nsuffix" {
-		t.Fatalf("valid block/suffix changed: %q", got)
 	}
 }
 
