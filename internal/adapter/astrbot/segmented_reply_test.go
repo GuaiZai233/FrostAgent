@@ -349,13 +349,23 @@ func TestSegmentedReplyPartialWriteFailure(t *testing.T) {
 }
 
 func TestSegmentedReplyDelivery(t *testing.T) {
-	for _, enabled := range []bool{true, false} {
-		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+	for _, tc := range []struct {
+		name, limit string
+		enabled     bool
+	}{
+		{"enabled", "0", true},
+		{"disabled", "0", false},
+		{"single segment limit", "1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := config.Update(replyformat.EnvKey, fmt.Sprint(enabled), false); err != nil {
+			if err := config.Update(replyformat.EnvKey, fmt.Sprint(tc.enabled), false); err != nil {
+				t.Fatal(err)
+			}
+			if err := config.Update(replyformat.LimitEnvKey, tc.limit, false); err != nil {
 				t.Fatal(err)
 			}
 			if err := config.Update("STICKER_ACTIVITY", "0", false); err != nil {
@@ -376,7 +386,7 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}
-			if enabled {
+			if tc.enabled && tc.limit != "1" {
 				want = []string{"first", "second", "`" + replyformat.SegmentMark + "`"}
 			}
 			conn.SetReadDeadline(time.Now().Add(3 * time.Second))

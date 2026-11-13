@@ -12,7 +12,7 @@ const EnvKey = "ENABLE_MULTI_SEGMENT_REPLY"
 const SegmentMark = "<FROSTAGENT_SEGMENT_MARK>"
 
 // LimitEnvKey caps how many segments of one reply are delivered. Zero, empty,
-// or invalid values mean no cap.
+// or invalid values mean no cap. One disables segmentation.
 const LimitEnvKey = "MULTI_SEGMENT_REPLY_MAX_SEGMENTS"
 
 // MaxSegmentLimit is the largest accepted value for LimitEnvKey.
@@ -27,10 +27,18 @@ func ParseLimit(value string) int {
 	return limit
 }
 
+// Enabled reads the live settings, treating a one-segment limit as disabled.
+func Enabled(getenv func(string) string) bool {
+	return getenv(EnvKey) == "true" && ParseLimit(getenv(LimitEnvKey)) != 1
+}
+
 // SplitLimited splits text for delivery. When segmentation is enabled and limit
 // is positive, it keeps a random subset of at most limit segments, preserving
-// their original order and discarding the rest.
+// their original order and discarding the rest. A limit of one disables splitting.
 func SplitLimited(text string, enabled bool, limit int) []string {
+	if limit == 1 {
+		enabled = false
+	}
 	parts := Split(text, enabled)
 	if !enabled || limit <= 0 || len(parts) <= limit {
 		return parts

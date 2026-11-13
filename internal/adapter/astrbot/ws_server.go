@@ -1602,7 +1602,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 	}
 	multiSegment, segmentLimit := false, 0
 	if engine != nil {
-		multiSegment = engine.Getenv(replyformat.EnvKey) == "true"
+		multiSegment = replyformat.Enabled(engine.Getenv)
 		segmentLimit = replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))
 	}
 	replyParts := replyformat.SplitLimited(replyText, multiSegment, segmentLimit)
