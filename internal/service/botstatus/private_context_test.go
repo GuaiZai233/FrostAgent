@@ -13,7 +13,7 @@ import (
 )
 
 func TestPrivateSessionInspection(t *testing.T) {
-	for _, id := range []string{"private:test_native_user", "aiocqhttp:private:test_alias_user", "astrbot:private:test_bridge_user", "telegram:private:test_telegram_user", "telegram:private:test_user:group:label"} {
+	for _, id := range []string{"private:test_native_user", "qq:private:test_alias_user", "fixture:private:test_bridge_user", "telegram:private:test_telegram_user", "telegram:private:test_user:group:label"} {
 		t.Run(id, func(t *testing.T) {
 			manager := llm.NewSessionManager()
 			svc := New(&llm.Engine{SessionManager: manager}, "test", "")
@@ -113,9 +113,9 @@ func TestSessionInspectionKindWithOpaqueID(t *testing.T) {
 		{"group:test_room:private:label", false, true},
 		{"telegram:private:test_user:group:label", true, false},
 		{"telegram:group:test_room:private:label", false, true},
-		{"mock:test_connection:astrbot:private:test_user:group:label", true, false},
-		{"mock:test_connection:astrbot:group:test_room:private:label", false, true},
-		{"ASTRBOT:PRIVATE:test_user", true, false},
+		{"mock:test_connection:fixture:private:test_user:group:label", true, false},
+		{"mock:test_connection:fixture:group:test_room:private:label", false, true},
+		{"FIXTURE:PRIVATE:test_user", true, false},
 		{"unknown:test_session", false, false},
 	} {
 		t.Run(tt.id, func(t *testing.T) {

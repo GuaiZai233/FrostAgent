@@ -73,10 +73,6 @@ export function formatPlatform(platform: string | undefined | null): string {
       return '未知';
     case 'onebot':
       return 'OneBot';
-    case 'astrbot':
-      return 'AstrBot';
-    case 'aiocqhttp':
-      return 'aiocqhttp';
     case 'telegram':
       return 'Telegram';
     case 'discord':

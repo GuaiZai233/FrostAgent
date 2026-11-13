@@ -607,7 +607,7 @@ func platformsMatch(a, b string) bool {
 }
 
 func isQQPlatform(p string) bool {
-	return p == "" || p == "qq" || p == "onebot" || p == "aiocqhttp"
+	return p == "" || p == "qq" || p == "onebot"
 }
 
 func canonicalPlatform(p string) string {

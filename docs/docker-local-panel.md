@@ -58,7 +58,7 @@ docker compose -f compose.yaml -f compose.local.yaml up -d --build
 
 Open **http://127.0.0.1:8088** on the Docker host. Use HTTP, not HTTPS. The adapter's
 host mapping and container port remain those in your base Compose file;
-same-default-network OneBot/AstrBot clients use `frostagent:<adapter target port>`.
+same-default-network OneBot clients use `frostagent:<adapter target port>`.
 The panel port is not the adapter port.
 
 The commands build the existing local FA image when needed and pull the pinned

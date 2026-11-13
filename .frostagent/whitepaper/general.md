@@ -49,7 +49,7 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
 
-默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。端口映射及普通网桥来源必须携带正确的管理控制令牌，私有 IP、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。缺少合法凭据时在绑定端口前退出，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；切库缺少凭据会拒绝切换并恢复原库，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot/AstrBot WebSocket。
+默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。端口映射及普通网桥来源必须携带正确的管理控制令牌，私有 IP、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。缺少合法凭据时在绑定端口前退出，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；切库缺少凭据会拒绝切换并恢复原库，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot WebSocket。
 
 Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；只有这个真实回环连接沿用原 Access 信任策略，普通网桥来源仍需令牌。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，构建时将管理与适配器默认都绑定宿主回环，并保留管理回环限制；host 模式无端口映射。标准桥接镜像不应直接用于 host 网络。
 
@@ -65,15 +65,15 @@ Docker CI 分别构建桥接/host 镜像，以临时数据验证独立 `docker r
 
 “Bot 行为与回复策略”提供“允许发送戳一戳行为”（默认关闭）、“行为附加自定义文本”（默认空）和冷却时间（默认 30 秒，可填 0～86400 秒，0 表示不冷却）。文本输入框灰字为“的...”，预览随输入更新。留空时发送用户消息“（用户戳了戳你）”，填写后发送“（用户戳了戳你 自定义文本）”。
 
-OneBot notice/notify/poke 及 AstrBot aiocqhttp 插件转发的同类通知，只有目标为当前 Bot、操作者不是 Bot 自己时才可唤醒。每个群/私聊独立冷却，同一群所有人共享；实例之间独立，同一实例的连接共用冷却，拒绝的通知不会排队调用 LLM。只有通过入口安全检查、满足唤醒与对话模型路由条件的戳一戳才占用冷却；规范化阶段仅检查已有冷却，资格检查通过后再原子准入，防止被拒绝用户占用全群 CD，并发时也不会重复放行。冷却状态保存在运行时，重启后重置。设置保存后热生效，不需重启或迁移。
+OneBot notice/notify/poke 通知只有目标为当前 Bot、操作者不是 Bot 自己时才可唤醒。每个群/私聊独立冷却，同一群所有人共享；实例之间独立，同一实例的连接共用冷却，拒绝的通知不会排队调用 LLM。只有通过入口安全检查、满足唤醒与对话模型路由条件的戳一戳才占用冷却；规范化阶段仅检查已有冷却，资格检查通过后再原子准入，防止被拒绝用户占用全群 CD，并发时也不会重复放行。冷却状态保存在运行时，重启后重置。设置保存后热生效，不需重启或迁移。
 
-接受的通知进入现有普通对话流程，遵守群聊对话总开关、可信用户身份、安全检查、模型路由、会话顺序和雪花计费；费用归触发用户。通知使用独立计费任务标识，回复不会自动引用不存在的平台消息。AstrBot 对被忽略通知返回终止响应，避免插件等待超时或回落到默认 LLM。
+接受的通知进入现有普通对话流程，遵守群聊对话总开关、可信用户身份、安全检查、模型路由、会话顺序和雪花计费；费用归触发用户。通知使用独立计费任务标识，回复不会自动引用不存在的平台消息。
 
 ### 并发回归验证
 
-每次面向 main 的 PR 和 main 推送，Linux CI 都运行 `go test -race`，覆盖实例生命周期、安全服务、LLM（含会话与群聊压缩）、记忆存储与反思、群摘要存储、模型路由，以及 OneBot / AstrBot 适配器。检测命令与包列表以 `.github/workflows/ci.yml` 的 `Run concurrency and race regressions` 步骤为准，单包超时为 300 秒。
+每次面向 main 的 PR 和 main 推送，Linux CI 都运行 `go test -race`，覆盖实例生命周期、安全服务、LLM（含会话与群聊压缩）、记忆存储与反思、群摘要存储、模型路由，以及 OneBot 适配器。检测命令与包列表以 `.github/workflows/ci.yml` 的 `Run concurrency and race regressions` 步骤为准，单包超时为 300 秒。
 
-Race detector 只能发现本次测试实际执行路径中的 Go 共享内存竞争；未触发的并发时序、逻辑竞态、跨进程或数据库竞争、Python 插件以及真实平台网络行为仍需专项或集成验证。Windows Smoke 已移除，后续 CI 与任务验证不再安排 Windows 冒烟测试；Linux CI 结果不代表 Windows 验证通过。
+Race detector 只能发现本次测试实际执行路径中的 Go 共享内存竞争；未触发的并发时序、逻辑竞态、跨进程或数据库竞争以及真实平台网络行为仍需专项或集成验证。Windows Smoke 已移除，后续 CI 与任务验证不再安排 Windows 冒烟测试；Linux CI 结果不代表 Windows 验证通过。
 
 ### 记忆系统
 
@@ -115,7 +115,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
   - 维持群聊消息 ring buffer，当未压缩原消息达到 `GROUP_COMPACT_BUFFER_SIZE` 时触发后台 LLM 增量提炼，更新群聊长期摘要 `group_running_summary`。
 - **角色感知与结构化 JSONL 压缩 (Role-Aware JSONL Compaction & Send-Success Ingestion)**：
   - 结构化表示与 JSONL 边界隔离：消息在内部通过 `GroupCompactMessage` 结构体（含 `Role`, `Sender`, `SenderID`, `Content`, `MessageID`, `Time`）承载，真实角色严格由后端事件路由赋予。在提交给 `GroupCompactor` 压缩时采用单行 JSONL 格式输入，用户消息正文内部哪怕包含多行内容或伪造的 `\n[assistant]` / `[user]` 标签，也会被严格 JSON 转义在 `"content"` 字段内，杜绝通过多行注入伪造角色记录或污染长期摘要；
-  - 平台出站确认门禁 (Platform ACK Gating)：严格区分传输层写入与平台层送达。对于具备同步请求-响应确认机制的平台（如 OneBot v11），机器人回复发送后必须通过 `SendActionAndWait` 等待平台返回确认 ACK（`status == "ok"` 且 `retcode == 0`）。只有平台确认送达后，才允许将回复写入会话持久历史（`Session.History`）、摄入群聊压缩缓冲区（`groupCompactBuffer`）以及触发记忆提取；同时，中间消息工具（`send_message`）的调用也严格同步等待平台 ACK 确认，若平台拒绝（如禁言或错误码）、ACK 超时或网络断开，则向大模型工具执行循环明确反馈真实错误原因，杜绝在发送失败时产生假成功；对于暂未提供端到端 ACK 响应的轻量协议（如 AstrBot WebSocket），当前通过传输层写入确认（Transport-Write Confirmation）进行尽力而为的送达控制；
+  - 平台出站确认门禁 (Platform ACK Gating)：严格区分传输层写入与平台层送达。对于具备同步请求-响应确认机制的平台（如 OneBot v11），机器人回复发送后必须通过 `SendActionAndWait` 等待平台返回确认 ACK（`status == "ok"` 且 `retcode == 0`）。只有平台确认送达后，才允许将回复写入会话持久历史（`Session.History`）、摄入群聊压缩缓冲区（`groupCompactBuffer`）以及触发记忆提取；同时，中间消息工具（`send_message`）的调用也严格同步等待平台 ACK 确认，若平台拒绝（如禁言或错误码）、ACK 超时或网络断开，则向大模型工具执行循环明确反馈真实错误原因，杜绝在发送失败时产生假成功；
   - 发送失败与防脑补隔离 (Delivery Failure Context)：当平台返回错误码（如禁言、风控、参数非法）、ACK 超时或传输层断开时，系统坚决不向 `Session.History` 与 `groupCompactBuffer` 提交该 assistant 消息，保留原始 user 输入，同步执行 `TrimSession` 防止受限历史无界膨胀，并在会话中记录瞬时 `DeliveryFailure`。在下一轮对话生成时，以一次性瞬态方式向大模型注入 `<delivery_context>`（包含平台、错误原因与 `Do not assume the user saw or received that response.` 指令）告知上次发送未送达，并在使用后原子清空，杜绝机器人“自以为发出了其实被屏蔽”的平行世界幻觉；
   - 压缩提示词边界与事实隔离：提示词明确界定 `assistant` 仅作为对话演进背景参考，严禁将智能体单方面推测或陈述升级为群友事实或群内共识（除非后续群友确认），并准确提炼群友对智能体的纠正与反馈；
   - Visual Inspector 角色渲染与正文不透明度保证：Web 控制台 Prompt 检查组件结构化解析角色前缀并为机器人消息渲染 `Assistant / Bot` 专属紫色徽章与背景高亮，机器人消息缺少 sender 时显示当前实例 `BOT_NAME`（无实例或未配置时回退 `助手`），同时保持用户原始正文的不透明度，绝不破坏性正则裁剪合法正文。
@@ -130,7 +130,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **摘要分组显式关联与会话上下文 Inspector (Summary Groups & Session Context Inspector)**：
   - 私聊检查：会话列表支持单独筛选私聊，并展示当前私聊历史及最近一次成功 `compact` 的摘要和输入批次；摘要注入的 user/assistant 消息通过内部序列标识与真实对话区分，不通过用户文本猜测。仅保留最新批次的内存检查信息；会话重置、清空或摘要从历史中裁剪后不再展示，不新增私聊持久化或自动压缩。私聊摘要弹窗只读，群聊的总结删除和分群模型配置入口保持原有范围。可视化仅拆分私聊用户消息末尾符合适配器格式的 `response_context` / `system_context` 包装，正文中的同名标签保持完整；附加上下文默认折叠，原始文本保持完整。
   - 显式映射追踪：`SessionContext` 在 `CommitGroupCompact` 时有界保留最近一次压缩批次的原始消息范围与消息 ID 集合（`SummaryGroup`），并在 `GroupContextSnapshot` 与 ConnectRPC `GetSessionContext` 接口中输出；该批次关联的是处理完成后的累计 running summary，不宣称保存全部历史原消息，避免前端文本模糊匹配和无界内存增长；
-  - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 `aiohttp`、`OneBot`、`AstrBot` 等群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
+  - 分会话群聊调试：Web 控制台提供左侧导航独立入口「Prompt 检查」(`#/prompt`，会话上下文检查)，采用分群聊会话视图（支持按 OneBot 群号快速筛选与搜索）；点击群聊即可载入该群实时群友聊天记录、滚动摘要与 Prompt 结构化预览；历史真实 LLM 请求则由「日志」页提供独立的「LLM 请求检查」弹窗；
   - 群级模型页内配置：「会话与 Prompt」中的群聊模型配置入口直接打开当前页弹窗，六个工作负载使用与实例默认配置相同的模型下拉选项，并支持继承实例默认；保存并发布仅更新当前群的覆盖，保留其他群和默认路由，以已发布配置为基线避免带入其他草稿；QQ 平台别名按后端规则匹配，发布成功后刷新当前会话上下文。
   - 实例路由发布冲突保护：`ModelRouterService.Publish` 必须携带调用者保存的 `expected_configuration`；后端在发布锁内同时核对活动版本与草稿路由，草稿被另一页面替换或版本已更新时拒绝发布，保留活动配置和替换后的草稿。旧网页及直接调用接口的脚本缺少校验信息时提示刷新后重试。前端发布携带原始保存请求的配置，不能信任两步调用之间可能已被替换的 SaveDraft 响应；SQL 实例只比较自身路由，共享供应商目录继续按编辑页面 owner 管理，不引入持久化格式或迁移。
   - 群级模型发布状态：发布 RPC 发出后禁用弹窗取消、关闭、Esc 与遮罩关闭，直到发布成功关闭并刷新当前上下文，或失败后显示错误并恢复操作；页面卸载仍强制清理弹窗，失效页面不会接收异步刷新。
@@ -144,14 +144,14 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **系统提示词（`SYSTEM_PROMPT`）**：彻底与 Control Plane 全局环境变量解耦，作为实例级核心环境变量存储于 `data/instance_<id>/.env` 中。新建实例时由 `instanceconfig.Template` 赋予默认基础助手设定（`SYSTEM_PROMPT=你是一个乐于助人的助手。`），在 Web 设置页中归属「当前实例」与「立即生效」作用域，修改后通过 Runtime Scope 实时内存映射即时热生效而无需重启实例。
 - **引导提示词**：`以下是示例对话，请仿照句子格式、语气等回应接下来的用户输入。`
 - **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范，持久化保存于各实例的 `data/instance_<id>/dialogue.yml`。
-- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。OneBot 与 AstrBot 将当前系统时间追加到用户消息的 `response_context.guidance` 末尾，统一按 UTC+8 动态生成（例如 `当前系统时间：2026-11-7 23:43(UTC+8)。`），系统提示词不再注入每轮时间。
+- **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。OneBot 将当前系统时间追加到用户消息的 `response_context.guidance` 末尾，统一按 UTC+8 动态生成（例如 `当前系统时间：2026-11-7 23:43(UTC+8)。`），系统提示词不再注入每轮时间。
 - **实例级生命周期与模板初始化**：创建新实例时，系统自动从模板路径（默认为 `eval/dialogue/dialogue.yml`，可通过 Control Plane 的 `DEFAULT_DIALOGUE_TEMPLATE` 环境变量自定义）拷贝生成初始 `dialogue.yml`，并写入默认 `SYSTEM_PROMPT`；实例删除时彻底清理，不留孤儿数据。
 - **快速配置（Copy）两阶段事务**：在实例克隆复制过程中，包含 `SYSTEM_PROMPT` 的 `.env` 与 `dialogue.yml` 共同纳入事务配置清单，经历暂存（Stage）、校验、预备提交与崩溃恢复保障，确保整套人设（提示词与对话示例）与环境配置同步原子转移。
 - **并发安全与内存热重载**：每个实例运行时启动时预先解析 YAML 并缓存于 `Engine.DialoguePrompt`，通过读写锁 `sync.RWMutex` 保护，彻底消除每轮对话中的重复磁盘 I/O。Web 端通过 `/instances/<id>/...` 保存或更新原始 YAML 时，原子落盘并即时刷新内存提示词，热重载无缝生效。
 - **升级兼容性边界与无隐式迁移（Breaking Migration Boundary）**：系统提示词下沉为实例级配置属于显式的破坏性迁移。系统坚决不执行隐式数据回填或跨层穿透读取：Control Plane 不再暴露全局 `SYSTEM_PROMPT`，存量实例目录中的 `.env` 若未定义 `SYSTEM_PROMPT`，在升级后将解析为空，绝不会隐式继承或持久化根级旧配置，避免造成隐蔽的状态污染；用户需在 Web 设置面板中显式为其赋予独立提示词。新建实例则由模板自动赋予默认助手设定。
 - **Web UI 管理与响应式排版**：前端控制台提供「人设对话」管理页面与「后端设置」页面，严格绑定当前选中的实例，支持可视化卡片增删改查、排序、实时提示词片段预览、直接编辑原始 YAML 以及实例专属环境变量热修改。在「后端设置」中针对环境变量表（特别是超长提示词 `SYSTEM_PROMPT` 等长文本字段）引入固定表格布局（Fixed Table Layout）、层叠顶端对齐（`.table.env-table td { vertical-align: top; }` 优先于基础表格居中规则）与自适应断字换行规范（`table-layout: fixed`、`overflow-wrap: anywhere`、`word-break: break-all`、`whitespace-pre-wrap`），确保超宽文本无论在何种视口下均自动折行，杜绝横向滚动挤占，并使编辑与删除操作按键始终常驻于可视屏幕顶端范围内。
 - **非安全上下文兼容的客户端 ID 生成**：浏览器仅在安全上下文（HTTPS 或 localhost）中暴露 `crypto.randomUUID()`，控制台若经局域网 HTTP 地址访问，该函数为 `undefined`。模型路由页面的草稿 owner 与模型名称 ID 统一经 `apps/web/src/utils/random-id.ts` 的 `randomUUID()` 生成：优先使用原生 `randomUUID`，不可用时基于 `crypto.getRandomValues`（所有上下文均可用）按 RFC 4122 v4 格式拼装。此前该缺陷会导致模型路由页面在 HTTP 访问时显示「页面加载失败」，且因 `sessionStorage` 未写入而刷新无效。
-- **只读自描述工具 (`get_frostagent_info`)**：Bot 可通过单一工具的 `section` 参数查询自身运行信息，参数由 Schema 严格限定为 `overview` / `model` / `features` 三者之一，拒绝其它键与额外参数。`overview` 返回 Bot 名称（`BOT_NAME`）、别名（`BOT_ALIASES`，逗号分隔并去除空白）、FrostAgent 版本、运行时长与当前已建立连接的接入平台（OneBot、AstrBot，依据适配器的活动 WebSocket 连接数判定）；`model` 仅返回当前请求路由解析出的主对话上游模型名称：按请求的 `RouteScope` 与 `RouteSnapshot` 解析，因此群组专属绑定生效；无请求上下文时回退全局路由。端点、密钥与解析错误细节一律不回显；`features` 按固定顺序报告记忆、向量检索（`ENABLE_EMBEDDING` 生效）、Sandbox（已启用且后端存在）、MCP（至少一个服务处于已连接状态）、ActionsCat（已启用且已配置端点）与表情包子系统的可用性。所有值在每次调用时实时读取，不做缓存；工具不接受模型提供的配置输入，且不允许在主动回复轮次中调用。
+- **只读自描述工具 (`get_frostagent_info`)**：Bot 可通过单一工具的 `section` 参数查询自身运行信息，参数由 Schema 严格限定为 `overview` / `model` / `features` 三者之一，拒绝其它键与额外参数。`overview` 返回 Bot 名称（`BOT_NAME`）、别名（`BOT_ALIASES`，逗号分隔并去除空白）、FrostAgent 版本、运行时长与当前已建立连接的接入平台（OneBot，依据适配器的活动 WebSocket 连接数判定）；`model` 仅返回当前请求路由解析出的主对话上游模型名称：按请求的 `RouteScope` 与 `RouteSnapshot` 解析，因此群组专属绑定生效；无请求上下文时回退全局路由。端点、密钥与解析错误细节一律不回显；`features` 按固定顺序报告记忆、向量检索（`ENABLE_EMBEDDING` 生效）、Sandbox（已启用且后端存在）、MCP（至少一个服务处于已连接状态）、ActionsCat（已启用且已配置端点）与表情包子系统的可用性。所有值在每次调用时实时读取，不做缓存；工具不接受模型提供的配置输入，且不允许在主动回复轮次中调用。
 
 - **管理员配置追加工具 (`override_frostagent_config`)**：当前真实 QQ 管理员可在明确自然语言请求下修改当前实例的提示词追加区、防循环、主动感知、ActionsCat 开关和表情包积极度；提示词和 BotID 只追加，禁止模拟/主动轮次修改。沙箱与安全控制档位不在范围内。参数、边界识别与权限规则见 [管理员自然语言配置工具](config-override.md)。
 
@@ -159,7 +159,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 
 为了在群聊高频消息场景下保持长期对话连贯性且避免 Prompt 上下文迅速膨胀爆表，FrostAgent 实现了高容错的群聊滚动压缩器（`GroupCompactor`）：
 
-- **无感后台摄入与总结**：各平台适配器（OneBot、AstrBot）在收到群聊消息时自动摄入 `groupCompactBuffer`。当未压缩消息达到批次阈值（`bufferSize`，默认 20 条）且满足调用冷却（`minInterval`，默认 30 秒）时，异步启动 LLM 进行增量总结。
+- **无感后台摄入与总结**：OneBot 适配器在收到群聊消息时自动摄入 `groupCompactBuffer`。当未压缩消息达到批次阈值（`bufferSize`，默认 20 条）且满足调用冷却（`minInterval`，默认 30 秒）时，异步启动 LLM 进行增量总结。
 - **压缩指令与会话数据分层**：自动与手动压缩共用同一请求构造：固定压缩规则单独作为 `system` 消息，已有群聊总结与新消息 JSONL 作为 `user` 消息发送。群友正文、图片描述和旧摘要不拼入系统指令，JSONL 内的角色元数据与原始内容保持不变。失败时仍按既有策略保留缓冲并重试，不将空响应视为成功摘要。
 - **批次阈值与安全缓冲区解耦及 Invariant 保证**：将 Batch 触发阈值（`bufferSize`）与未提交消息缓冲区上限（`maxBufferSize`，默认 200 条）解耦，系统强制维护 `maxBufferSize >= bufferSize` 的不变量约束（非法值会自动修正并告警）。在 safety buffer 容量范围内有效避免因 in-flight compaction/retry 导致的新消息被意外淘汰。
 - **基于确认位点（Committed Sequence）的水位裁剪**：每次快照记录 `ThroughSequence`，仅当 LLM 成功返回有效总结且会话代数（`generation`）匹配时，`CommitGroupCompact` 才安全移除小于等于该位点的已提交消息，后续并发流入的新消息被完整保留。
@@ -202,59 +202,33 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 针对表情包偷取观察缓存（`stealer`），引入连接代际隔离机制（`ObservationScope`）：每个 WebSocket 连接拥有独立连接代，贴纸观察按代标记。当跨上游切换或重连后，缺失 `message_id` 不会误匹配旧代贴纸，携带旧代显式 `message_id` 的调用会被立即拒绝（`ErrStickerNotInScope`），杜绝向上游错误查询过时句柄或发生短 ID 碰撞；在连接断开时自动清理该连接代的观察缓存；
     - 出站引用消息门禁：在工具调用下发（`SendHook`）与结构化回复组装阶段，严格基于当前连接维护的 `messageSessions` 验证 `quote.message_id` 是否属于当前连接活跃代及目标会话（包括当前连接代收发的消息，以及经由当前连接 `get_msg` 查询成功并验证属于当前会话的历史引用目标）；跨连接代、未曾观测或跨会话的过时/未验证 ID 将在协议序列化前被立即拦截并拒绝，杜绝 NapCat（局部吞掉引用段仍返回成功）与 LuckyLillia（全请求报错）在过时引用上的上游行为分歧；
     - 引用消息查询（`get_msg`）在遇到过期 ID、上游重启后失效、消息已撤回、跨会话消息或查询超时时，严格执行确定性优雅降级（Graceful Degradation），保留已成功取得的引用节点并停止后续追溯，绝不中断或阻断核心对话事件分发；
-    - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。直接引用节点优先提供插件已转发的图片字节，并保留回查中可读取的其他图片；视觉请求按解码后的图片内容去重，避免不完整 Reply.chain、缓存标识或失效 URL 造成丢图或重复。OneBot 使用已有 `get_msg` 通道；AstrBot 的 aiocqhttp 插件声明支持回查后，仅在后端通过入站安全门禁并确认需要回复时，按后端请求回查，后端验证消息 ID 和会话归属。其他 AstrBot 平台若没有对应历史查询能力，则不扩展引用链。
+    - 入站引用追溯由实例级 `ENABLE_QUOTE_TRACE`（默认开启）及 `QUOTE_TRACE_DEPTH`（默认 5，范围 1～10）控制。深度按直接引用消息起算，逐层读取引用父消息，遇到重复 ID、越界或查询失败立即停止；模型请求以最近到最早的顺序提供 `quoted_messages`，每张历史图片的视觉描述附着在其自身消息节点。视觉请求按解码后的图片内容去重，避免缓存标识或失效 URL 造成重复。OneBot 使用已有 `get_msg` 通道。
   - **发送失败与平台 ACK 语义规范 (Canonical Send Failure Semantics)**：
     - 宿主路径预检 (O(1) 内存)：出站本地媒体（`image`、`record`、`video`、`file`）通过文件元数据与 1 字节探针验证存在性、可读性与非空。原生 QQ 发送器对贴纸、显式 inline 和明确路径拒绝后的回落使用有界 Base64 缓冲；整次发送的分段、沙箱产物与封面共用 30 MiB 预算；
     - 跨容器文件系统边界说明：共享路径需要 OneBot 网关能访问相同文件，`auto` 仅在明确路径拒绝后尝试有界内联，`shared` 禁止该回落。公开 HTTP(S) 媒体交由网关拉取。原生 OneBot 的 `/sandbox/...` 或 `sandbox:/sandbox/...` 则在发送前通过当前来源会话的沙箱后端读取并内联，无需共享卷；沙箱读取失败不转向宿主路径。详见 [QQ 富消息发送](../../docs/qq-rich-send.md)；
     - 上游 ACK 门禁：通过 `SendActionAndWait` 监听平台响应。若上游返回错误码（如 LuckyLillia 在媒体转换抛错时整体报错，或群禁言/风控），FrostAgent 坚决不向持久历史提交该 assistant 消息，记录瞬态 `DeliveryFailure` 并向工具调用返回错误；若上游返回成功（如 NapCat 部分元素转换异常时局部过滤但整体返回成功），FrostAgent 尊重平台 ACK 并正常提交历史；
   - **入站媒体异常可观测性 (Inbound Media Resolution Observability)**：
     - 针对 NapCat“局部容错丢弃媒体但仍上报文本”与 LuckyLillia“媒体异常导致整条事件无法分发”的上游行为差异，适配器在收到媒体段但数据缺失或下载失败时输出明确的诊断日志，杜绝未记录的静默语义漂移。
-- **AstrBot 适配器 (`internal/adapter/astrbot` 与独立的 [AstrBot 插件](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter))**：
-  - Python 插件源码、回归测试和 WebSocket 兼容性 CI 已迁至上述独立仓库，按 AGPL-3.0 发布；本仓库继续维护 Go 端桥接协议及测试。
-  - 基于双向 WebSocket 长连接的轻量 JSON 专有协议；
-  - 具备跨平台会话与记忆前缀隔离（如 `astrbot:group:<id>` / `astrbot:user:<id>`）；
-  - 支持群聊无感 running compact 实时摄入与记忆反思；
-  - 支持 Agent 工具调用阶段的 `sendHook` 中间消息流式即时下发；
-  - 群聊回复统一在出站协议边界应用 `ENABLE_REPLY_IN_GROUP_MSG` 与 `ENABLE_AT_IN_GROUP_MSG`：自动引用当前入站消息并提及触发用户，显式 `quote` 组件优先且不会重复注入引用；仅在自动插入 @ 且紧随其后的正文没有前导空白时补一个分隔空格，已有空白原样保留，纯引用不补空格；AstrBot 插件将引用映射为平台原生 `Reply` 消息段；
-  - 包含客户端自动断线重连与周期心跳保活。
-- **AstrBot ↔ 原生 OneBot 语义对齐架构 (Semantic Parity Engine, `internal/adapter/parity`)**：
-  - 为保障在切换或共存运行 AstrBot 与原生 OneBot (OneBot v11) 适配器时在已定义契约范围内保持行为语义一致与平滑迁移，系统在 8 大语义维度实现了双向对齐与规范化（Parity）：
-    1. **表情包出站装饰与统一装饰策略 (Unified Decoration Policy & Sticker Bypass)**：在 `internal/adapter/parity` 实现集中化装饰策略引擎（`PlanGroupDecoration`），AstrBot 与 OneBot 统一委托至该共享策略。出站消息若包含表情包/动画表情（`mface`、`sticker`、`sub_type == 1`、`is_sticker`），两端适配器均统一跳过群聊自动回复引用与 @ 提及装饰，杜绝表情包被多余文本段破坏视觉呈现；同时统一装饰编排顺序为 `[Quote, Mention, Content]`，并在已有引用时将新增 @ 插入于首个引用之后，消除两端消息段顺序分歧；
-    2. **引用去重对齐 (Quote Deduplication)**：当工具调用或消息链中已包含显式引用（`reply` 或 `quote`）时，两端均抑制自动引用包装，彻底杜绝双重引用；
-    3. **提及去重对齐 (Mention Deduplication)**：当消息链中已包含显式针对目标用户的 @ 提及（`at` 或 `mention_user`）时，两端均抑制自动 @ 装饰，彻底杜绝重复 @ 提醒；
-    4. **会话命名空间与单实例不变量对齐 (Session Namespace & Single Canonical Instance Parity)**：
-       - `SessionManager` 对会话 map 实施严格的单一规范键不变量（`CanonicalSessionKey`），杜绝同指针跨键多重插入导致的 map 污染、`Count()` 计数虚高、`ListSessions()` 重复条目以及 `Delete()` 残留孤儿键漏洞，同时保留 `SessionContext.ConversationID` 初始平台标识供 Web 调试检查精准分类；
-       - `groupsummary.Store` 全边界实施规范化（`CanonicalSessionID`），在磁盘加载阶段无感去重旧版别名，并在 `Generation`、`Upsert` 与 `Delete` 全生命周期统一跨别名追踪代际（Generation Epoch），彻底杜绝跨适配器删除后的死者苏生（Resurrection）与并发滚动压缩造成的脏写回滚；
-    5. **记忆所有权命名空间与反思目录对齐 (Memory Owner Namespace & Reflection Catalog Parity)**：记忆存储引擎（`memory.Store`）在写入与加载时全面规范化 QQ 记忆所有者（`CanonicalOwner`），并在检索与召回门禁（`memory.Gateway`）中通过 `OwnersMatch` 与 `OwnerAliases` 实现跨 `aiocqhttp:` / `onebot:` / `qq:` 别名的无感匹配，杜绝记忆数据孤岛与跨适配器丢失；记忆反思器（`Reflector`）在全量反思时基于 `CanonicalOwner` 进行聚类分组，保证同一逻辑 QQ 用户每轮仅触发一次反思请求（避免旧前缀与新规范所有者并发调用导致的重复 LLM 开销与状态覆盖）；主题目录存储（`CatalogStore`）全生命周期统一至单一 canonical bucket 存储，对旧版别名支持自动迁移与别名感知检索，避免目录命名空间分叉；
-    6. **模型路由平台作用域与冲突校验对齐 (Model Router Platform Scope & Conflict Validation Parity)**：模型路由器的群组覆盖策略统一识别 QQ 生态协议（`qq`、`onebot`、`aiocqhttp`），在两端适配器下为群聊匹配一致的模型绑定规则；在配置校验阶段引入基于规范平台（`canonicalPlatform`）的重复性校验，若配置中同时出现针对同一群号的别名冲突覆盖（如同时显式配置 `onebot` 与 `aiocqhttp` 覆盖），校验阶段主动拒绝并明确报错，杜绝因配置顺序导致第二条规则静默失效（Silent First-Wins）；
-    7. **计费外部身份对齐 (Billing External Identity Parity)**：计费系统外部身份识别统一规范化为 canonical `"qq"` 平台与标准 QQ 任务 ID（`BillingTaskID`），确保无论通过哪种传输通道均计入相同的用户账单与余额体系；
-    8. **纯 @ 提及交互引导与结构化交互元数据对齐 (Mention-Only Interaction Guidance, Structural Metadata & Raw Segment Inspection)**：
-       - **统一入站交互契约 (Canonical Inbound Interaction Invariant)**：在 `internal/adapter/parity` 中定义统一的 `MentionInteraction` 结构与 `IsMentionOnly` 规则引擎。一条群聊消息判定为显式纯 @Bot 邀请响应（`mention_only: true`）必须在已定义并测试覆盖的 QQ 语义契约范围内严格满足 7 项不变量：
-         1. `IsGroup == true`（仅群聊生效）；
-         2. `IsMentionedBot == true`（显式针对机器人唤醒/@）；
-         3. `HasOtherMention == false`（未同时 @ 其他群成员）；
-         4. `HasReply == false`（未包含回复引用上下文；引用先验发言代表存在前置对话依赖，而非纯粹的向 Bot 打招呼）；
-         5. `HasImages == false`（未包含图片/表情等多媒体附件或媒体组件结构）；
-         6. `HasOtherContent == false`（未包含非文本/非图片组件，如 Face 表情、语音 Record、视频 Video、文件 File 等特殊段）；
-         7. `strings.TrimSpace(UserText) == ""`（未包含除空格外的正文内容）。
-       - **结构化元数据保留与双端一致性 (Structural Interaction Metadata Preservation)**：针对 AstrBot 插件（独立仓库 [main.py](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter/blob/main/main.py)）将非纯文本段（At、Face、Record、Image 等）与纯文本分离导致入站 `Content` 丢失组件结构的现象，插件在构建载荷时主动遍历消息段组件链与 raw OneBot segments，抽取 `has_other_mention`（是否存在非 Bot 本身的 @）、`has_other_content`（是否存在除 Plain/Reply/Image/MFace/At 外的其他特殊组件）以及 `has_media_content`（是否存在图片/表情等多媒体结构，无论附件是否成功下载/转换 Base64），并将其保留在入站 `payload["metadata"]` 中。Go 端适配器（`internal/adapter/astrbot/ws_server.go`）解析该元数据并注入 `IsMentionOnlyAstrBot`，杜绝 `@Bot + @OtherUser`、`@Bot + Face` 以及媒体转换失败时的 `@Bot + Image` 在 AstrBot 侧因 `Content` 为空而误判为纯 @ 交互的结构性语义漂移（Semantic Drift）；
-       - **原始段检查与差分测试保障 (Differential Test Suite)**：OneBot 适配器直接基于原始消息段链（`IsMentionOnlyOneBotSegments`）判定纯 @Bot 交互，严格校验是否仅由目标为 Bot `self_id` 的 `at` 消息段和纯空白字符 `text` 组成（杜绝 `extractUserText` 将 `at` 转写为 `[@<qq>]` 文本导致的检测失效，并在文本解析兜底中使用 `StripBotSelfMentionTokens` 仅移除自身 mention 标记以防止误判 `@Bot @OtherUser`）。在 `internal/adapter/astrbot/parity_differential_test.go` 中建立了覆盖出站装饰（`TestCrossAdapterDecorationDifferential`）与入站纯提及（`TestCrossAdapterInboundMentionOnlyDifferential`）的双向表格驱动跨适配器差分测试套件，彻底废除人工拼接合成 token 文本的测试 Hack，直接基于两端真实入站载荷、非文本段（Face/Record）以及图片转换失败场景进行语义一致性回归校验。
-- **共存与独立控制**：
-  - 支持通过实例数据库设置（`ENABLE_ONEBOT_ADAPTER`, `ENABLE_ASTRBOT_ADAPTER` 等）独立开启、关闭或共存运行多个适配器。
+- **OneBot 消息规范化 (`internal/adapter/parity`)**：
+  - `PlanGroupDecoration` 统一处理群聊自动引用、@ 提及、去重和表情包装饰跳过策略，消息顺序为 `[Quote, Mention, Content]`。
+  - `IsMentionOnlyOneBotSegments` 依据原始消息段检查纯 @Bot 交互，包含其他用户提及、引用、图片或非文本组件时不判定为纯提及。
+  - 会话、记忆、摘要、模型路由和计费继续统一 `onebot` 与 `qq` 身份；未知平台保持独立命名空间。
+- **连接控制**：实例的连接页面管理 `ONEBOT_WS_ENABLED`、正向/反向模式、上游地址及独立入站/出站令牌。
+
+AstrBot 运行支持及历史别名兼容已移除，升级影响见[移除说明](../../docs/astrbot-removal.md)。
 
 ### Bot 连续对话防循环
 
 - 「系统设置 > Bot 服务端设置 > Bot 行为与回复策略」可输入用户 ID，点击「添加」或按回车逐个加入 Bot 标记列表，并逐项移除。列表编辑加入页面统一草稿；点击顶部草稿栏的「保存」时，与其他设置批量提交，包含输入框中尚未添加的 ID；「还原」可撤销列表和待添加输入。列表为空时不限制；实例级 `BOT_LOOP_ENABLED=false` 可关闭防循环并保留 BotID（未配置时保留旧行为）。配置使用 `BOT_LOOP_USER_IDS`（逗号分隔；裸 ID 匹配所有平台，`platform:ID` 仅匹配对应平台）、`BOT_LOOP_MAX_TURNS`（默认 3）和 `BOT_LOOP_MODE`（`soft` / `hard`）。
-- OneBot 与 AstrBot 按入站顺序、按会话为每个标记 Bot 独立累计对话请求。切换 Bot、普通群聊消息和主动回复均不恢复额度；只有未标记用户有效地明确唤醒（@、名称/别名或已启用的戳一戳）才恢复当前会话内所有 Bot 的额度。戳一戳未通过冷却准入时不会计数或恢复额度；被安全或路由规则静默拒绝的消息也不会计数或恢复额度，安全规则直接发出的拒绝回复仍按有效对话计数。清空会话、重启或变更 Bot 防循环配置仍会重置额度。
-- AstrBot 旧插件携带的 `bot_loop_interrupted` 仅保留协议兼容，新后端不据此恢复额度，因此过滤消息、插件重启或发送者切换不会绕过上限。无需为此增加过滤消息上报；关闭全量群消息转发时，名称/别名只有在消息原本会被转发的情况下才能被后端识别。
-- 超过上限后，`hard` 在后端丢弃请求及安全直接回复；AstrBot 发送 `suppress_llm: true` 的终态 `noop` 避免原生 LLM 兜底。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。
+- OneBot 按入站顺序、按会话为每个标记 Bot 独立累计对话请求。切换 Bot、普通群聊消息和主动回复均不恢复额度；只有未标记用户有效地明确唤醒（@、名称/别名或已启用的戳一戳）才恢复当前会话内所有 Bot 的额度。戳一戳未通过冷却准入时不会计数或恢复额度；被安全或路由规则静默拒绝的消息也不会计数或恢复额度，安全规则直接发出的拒绝回复仍按有效对话计数。清空会话、重启或变更 Bot 防循环配置仍会重置额度。
+- 超过上限后，`hard` 在后端丢弃请求及安全直接回复。`soft` 仅向本轮 LLM 请求快照前置静默建议，不写入持久会话历史；模型仍自行决定是否调用 `stay_silent`。安全直接回复不调用对话模型，因此没有可注入的请求。
 
 ### 主动回复与静默决策系统 (Proactive Reply & Silence Decision System)
 
 为了让智能体在群聊场景中具备像真实群友一样自发参与讨论的互动能力，同时避免被动全量响应造成的 Token 浪费与群友打扰，FrostAgent 引入了基于概率触发与大模型主动静默研判的双重主动回复架构：
 
 - **入站概率 Roll 与触发唤醒抽象 (Probability Roll & Inbound Wake Signal)**：
-  - 各适配器（OneBot v11 与 AstrBot）在接收到未被直接唤醒（未显式 @ 机器人或提及机器人名称）的群聊消息时，首先检查主动回复配置。若全局启用且通过概率 Roll（`proactive.Roll` / `proactive.RollWithRand` 命中当前设定的触发概率），则将该入站消息标记为主动触发（`wakeSignals.Proactive = true` 或 AstrBot 元数据 `_frostagent_proactive_reply: true`），作为有效唤醒信号进入主处理管线；
+  - OneBot v11 适配器在接收到未被直接唤醒（未显式 @ 机器人或提及机器人名称）的群聊消息时，首先检查主动回复配置。若全局启用且通过概率 Roll（`proactive.Roll` / `proactive.RollWithRand` 命中当前设定的触发概率），则将该入站消息标记为主动触发（`wakeSignals.Proactive = true`），作为有效唤醒信号进入主处理管线；
   - 概率由实例数据库设置 `PROACTIVE_REPLY_PROBABILITY` 与 `ENABLE_PROACTIVE_REPLY` 控制。触发概率精度为 `0.01 ~ 1.00`（步长 0.01），且系统保证主动回复一旦开启，有效概率严格不低于 `0.01`；若设定为 0 或明确禁用，则绝不触发；
   - 若群聊配置了 `GROUP_REPLY_ON_MENTION=false`（群聊不回复），则主动回复与被提及回复一并受到总开关压制，保证行为策略的一致性。
 - **群聊白名单入站门禁与零触发保障 (Group Whitelist Ingress Gate & Zero-Trigger Guarantee)**：
@@ -266,13 +240,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - **前置硬门禁拦截**：适配器在进行概率随机掷骰前，通过 `proactive.RollGroupWithRand` 检查目标群聊（`proactive.IsGroupAllowed`）。一旦白名单模式启动，任何不在白名单列表（`PROACTIVE_REPLY_GROUP_WHITELIST`）中的群聊直接短路拒绝、永远不触发主动回复随机 Roll 与大模型调用，实现确定性的零出站与零触发保障；
   - **严格平台隔离与规范化匹配 (Option B Platform Isolation, N2, R1 & R2)**：
     - 白名单群号列表支持逗号、分号及各类空白符分隔解析（`proactive.ParseGroupWhitelist`），并自动修剪空白、规范化前缀大小写与去重；
-    - **QQ 生态特权裸 ID 归一**：中国大陆主流的 QQ/OneBot 生态（`targetPlatform == "qq" || targetPlatform == ""`）保留原生纯数字群号习惯（如 `123456`），纯数字裸 ID 归属严格限定于 QQ 家族，支持 `123456` 以及 `qq:123456`、`onebot:123456`、`aiocqhttp:123456` 互通匹配；
-    - **非 QQ 平台强前缀隔离**：非 QQ 平台（Telegram、Discord、AstrBot 等）严格要求携带平台限定前缀（如 `telegram:123456`、`discord:123456`、`astrbot:10001`）。纯数字裸 ID 绝不匹配非 QQ 平台，彻底杜绝跨平台相同数字群号之间的碰撞与意外越权触发；
-    - **缺省平台规范化与会话身份对齐 (R1)**：适配器（AstrBot 等）在入站概率判定（`shouldReplyWithRNG`）时，将缺省未填的 `event.Platform` 规范化为 `"astrbot"`，与其入站会话标识（`sessionKey`）保持完全一致，严禁缺省平台跌落为 QQ 家族身份，杜绝缺少 platform 字段的 AstrBot 事件意外穿透 QQ 裸群号白名单；
+    - **QQ 生态特权裸 ID 归一**：中国大陆主流的 QQ/OneBot 生态（`targetPlatform == "qq" || targetPlatform == ""`）保留原生纯数字群号习惯（如 `123456`），纯数字裸 ID 归属严格限定于 QQ 家族，支持 `123456` 以及 `qq:123456`、`onebot:123456` 互通匹配；
+    - **非 QQ 平台强前缀隔离**：非 QQ 平台（Telegram、Discord 等）严格要求携带平台限定前缀（如 `telegram:123456`、`discord:123456`）。纯数字裸 ID 绝不匹配非 QQ 平台，彻底杜绝跨平台相同数字群号之间的碰撞与意外越权触发；
     - **显式平台参数下群号不透明处理 (R2)**：当适配器显式传入平台参数时，`proactive.IsGroupAllowed` 将 `groupID` 视为不透明标识（Opaque Identifier），不再对内部包含冒号的群号（如 `room:42`）进行截断覆盖，既支持如 `telegram:room:42` 的合法冒号群号匹配，又彻底杜绝外部客户端在群号中伪造平台前缀（如 Discord 传入 `telegram:123`）冒充并越权命中其他平台白名单。仅当未显式传入平台参数时，方允许解析带前缀群号用于向后兼容；
-  - **入站元数据深度净化 (Ingress Metadata Sanitization)**：适配器（AstrBot 等）在入站最前置阶段自动剥除任何由外部客户端伪造的 `_frostagent_` 保留元数据前缀（如 `_frostagent_should_reply`、`_frostagent_proactive_reply`），防止不受信 payload 绕过白名单门禁与前置意图判定。
 - **跨平台群名称缓存与会话元数据传播 (Cross-Platform Group Name Caching)**：
-  - 各适配器（OneBot v11 与 AstrBot）在接收到群聊消息、群资料查询（`get_group_info`）或协议事件（`event.GroupName`）时，将群名称同步记录到 `SessionManager`（`SetGroupName` / `GetGroupName`）与内存活跃 `SessionContext` 中；
+  - OneBot v11 适配器在接收到群聊消息、群资料查询（`get_group_info`）时，将群名称同步记录到 `SessionManager`（`SetGroupName` / `GetGroupName`）与内存活跃 `SessionContext` 中；
   - 控制平面 API（`botstatus.Service.GetSessions`）在返回会话列表时携带 `group_name` 字段（Protobuf `frostagent.v1.SessionInfo.group_name`），不仅涵盖当前内存中的活跃群聊，还包含由持久化群聊纪要存储（`GroupSummaryStore`）还原的持久会话，实现全平台统一的群聊名称回显。
 - **Prompt 缓存不变式与瞬时请求快照隔离 (Prompt Caching Invariant & Request Snapshot Isolation)**：
   - **杜绝污染系统提示词**：为了保护现代大模型服务商（Anthropic / OpenAI 等）的静态 Prompt 缓存机制（System Prompt Prefix Cache），系统坚决不在全局或实例的系统提示词（System Prompt）中动态注入主动回复指令；
@@ -282,41 +254,39 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     如果你认为有必要看图以获得更完整的上下文，调用 inspect_message_image 工具获取图片内容。如果触发主动回复逻辑的消息上面一条正好有图片，**必须查看它**。
     ```
   - 既赋予了大模型在当轮交互中准确识别“本条消息无需强制回答”的语境决策权，又确保后续多轮交互中历史上下文不受瞬时指令污染、且公共静态前缀完全一致、100% 保持缓存命中。
-  - **触发日志与控制台非隐藏可见性**：各适配器（OneBot v11 与 AstrBot）在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
+  - **触发日志与控制台非隐藏可见性**：OneBot v11 适配器在消息通过前置白名单、入站安全及路由等校验后，向当轮大模型请求拼接主动回复引导词时，立即在系统日志中记录一条 SYSTEM 级别的 INFO 日志 `【触发主动回复逻辑】`，并通过 `InfoWithConsoleSummary` 保证其在控制台标准输出中不被压缩隐藏为 `...`，确保运维人员与开发者在控制台实时直观观测到主动回复事件的触发点。概率命中后被前置校验丢弃的消息，以及显式 @、叫名字或私聊唤醒，均不记录该日志；该日志不代表上游请求成功或最终发送回复。
 - **规范静默决策工具与零出站保障 (Silence Decision Tool: `stay_silent`)**：
-  - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息，AstrBot 下发 `suppress_llm: true` 的终态 `noop`。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。AstrBot 插件 0.2.2 在下载/去重前附带 `metadata.sticker_only`，防止下载失败或附件合并丢失普通图片信息；旧插件只在空文本且当前附件全部明确标记为表情包、没有缺失槽位时保守识别，不从 `[图片]` 等展示文本猜测。
+  - **纯表情包主动静默（Option A）**：未显式唤醒的当前消息仅包含有协议标记的表情包时，在主动回复概率命中并通过原有入站安全与路由门禁后，由后端代行一次 `stay_silent`，不请求对话或视觉模型、不回查引用图片。仍按原有静默路径保留用户历史、群聊 compact、记忆提取与轮次计数；OneBot 不发送群消息。空白文字和引用标记不改变纯表情包判定，但不读取被引用消息的内容；任何实质文字、普通图片、其他或未知组件都保留原有回复路径。普通图片（包括 GIF）、文字与表情包混合、图片与表情包混合、显式唤醒和私聊不受此限制。
   - 为了给大模型提供确定性的“放弃发言”出口，工具链注册了专用的规范静默终止工具 `stay_silent`；
   - **工具规范性与执行拦截**：底层工具注册表（`internal/tools`）、Agent 运行时（`internal/instance/runtime.go`）与大模型执行调度器（`internal/llm/agent.go`）统一采用标准拼写 `stay_silent`，模型调用该工具即判定为终态静默动作（`IsStaySilentTool`），安全中止后续工具执行，清空任何出站文本，实现无痕静默退出；
-  - **AstrBot 终态控制动作与下游 LLM 抑制**：针对 AstrBot 插件客户端（独立仓库 [astrbot_plugin_frostagent_adapter](https://github.com/FrostAI/astrbot_plugin_frostagent_adapter)）对转发消息设置的 120 秒等待队列（`queue.get()`），当主动回复或对话轮次决策静默、或模型产生空文本终态时，适配器下发协议级终态动作 `Action{Action: "noop", SuppressLLM: true, Echo: "reply_" + event.MessageID}`。该动作不向群聊发送任何可见的 `send_message` 消息，同时令插件立即退出等待循环并调用 `event.should_call_llm(True)` 明确抑制 AstrBot 默认原生大模型处理，杜绝 120s 超时挂起与备用 LLM 误触发。
 - **入站安全审查 Fail-Closed 与主动静默丢弃 (Security Gating & Silent Dropping)**：
   - 未唤醒的普通群聊背景消息旁路安全网关审查以节约延迟与 Token 开销；而一旦命中主动回复，该消息被正式提升为入站对话请求，必须与显式唤醒消息一样严格流经安全看门狗（`security.Controller.GateIngress`），杜绝利用概率触发绕过敏感词检测或越狱防护的安全旁路漏洞；
-  - **主动触发被阻断时的静默丢弃防打扰门禁**：若命中主动回复的消息被安全审查拦截（命中黑名单、高危敏感词或安全服务内部异常 Fail-Closed），系统严格区分显式唤醒（`isExplicitlyWoken` / `isExplicitWake`）与主动命中：仅对显式 @ 或叫名字的请求发送安全拒绝回复，而对后台随机 Roll 命中的违规或服务故障消息执行完全静默丢弃，绝不向群聊发送打扰性安全报错。在 AstrBot 适配器中，静默丢弃同样下发携带 `suppress_llm: true` 的协议级 `noop` 控制动作，在杜绝向群发送可见消息的同时，可靠抑制 AstrBot 原生兜底 LLM；普通未唤醒的群聊闲聊背景消息则保持原有的无抑制 `noop`（`suppress_llm: false`），完整保持客户端原生事件传播链。
+  - **主动触发被阻断时的静默丢弃防打扰门禁**：若命中主动回复的消息被安全审查拦截（命中黑名单、高危敏感词或安全服务内部异常 Fail-Closed），系统严格区分显式唤醒（`isExplicitlyWoken` / `isExplicitWake`）与主动命中：仅对显式 @ 或叫名字的请求发送安全拒绝回复，而对后台随机 Roll 命中的违规或服务故障消息执行完全静默丢弃，绝不向群聊发送打扰性安全报错。
 - **主动回复计费完全豁免与免费策略 (Billing Exemption for Proactive Turns)**：
-  - **免计费与零预留/结算保证**：主动回复属于 Bot 自发参与互动的探索性行为，发言群友并无明确唤醒意图。因此系统严格规定主动回复完全免费，即使触发大模型深度思考与工具调用（无论大模型最终决定参与发言还是调用 `stay_silent` 工具放弃插嘴），各适配器（OneBot v11 与 AstrBot）均不初始化 `BillingRunState`（`billingState = nil`），彻底旁路 `ReserveLLM` 资金预留与 `CommitLLM` 扣费结算；
+  - **免计费与零预留/结算保证**：主动回复属于 Bot 自发参与互动的探索性行为，发言群友并无明确唤醒意图。因此系统严格规定主动回复完全免费，即使触发大模型深度思考与工具调用（无论大模型最终决定参与发言还是调用 `stay_silent` 工具放弃插嘴），OneBot v11 适配器均不初始化 `BillingRunState`（`billingState = nil`），彻底旁路 `ReserveLLM` 资金预留与 `CommitLLM` 扣费结算；
   - **视觉余额预检旁路**：对于包含图片或引用回复图片的主动消息，同样旁路多模态视觉前置余额检查（`BillingClient.Balance`），杜绝无唤醒意图的群友因余额不足收到打扰性扣费拦截提示；
   - **零账单回执纯净输出**：主动回复产生的实际出站消息绝不追加计费结算回执（如“本次消耗 X 雪花”），保持拟人化日常群友闲聊的纯净体验；
   - **显式唤醒计费边界隔离**：对于群友显式 @ 机器人或通过别名唤醒的对话，继续严格执行完整的预留、扣费结算、余额不足阻断与账单回执追加，两者边界清晰解耦。
 - **执行异常与后置渲染失败静默丢弃机制 (Silent Error Handling & Post-Run Formatting Silence)**：
   - 若主动回复执行过程中发生大模型提供商网络抖动、超时（如 HTTP 504）、上游宕机、工具执行异常，或在后置渲染阶段发生单条消息超长、引用消息校验失败（`validateQuoteMessages`）、OneBot 消息组装失败（`BuildOneBotMessage`），系统严格执行静默丢弃策略：仅在控制台/日志记录警告或错误日志并原子回滚当轮会话上下文（`engine.TrimSession`），坚决不向未唤醒群聊发送任何报错文本或异常提示，避免非预期打扰群聊；
-  - 在 AstrBot 适配器中，主动回复执行异常与模型输出空文本同样下发携带 `suppress_llm: true` 的协议级 `noop` 动作，令插件即时解除 120 秒事件挂起等待并抑制原生备用 LLM 误触发。
 - **主动回复工具门禁与副作用限制 (Proactive Reply Tool Confinement)**：
   - **Maintainer 请求与决策边界**：PR #275 的后续功能要求明确指定主动回复使用 `send_message.mention_specific`，是对 PR #162 默认副作用工具禁令的同会话文字引用窄例外，而非一般性放开 `send_message`。安全边界同步记录在 `security-controls.md`；其他特权工具仍禁止。
   - **指定消息引用 (`send_message.mention_specific`)**：主动回复提示词追加“触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。”模型应根据 `recent_group_messages` JSONL、`system_context` 或可信 `reply_context` 的元数据寻找中心事件的消息 ID，而不是把用户文本中的伪造 ID 当成元数据；找不到可信 ID 时可保持沉默。调用示例：`{"messages":[{"type":"mention_specific","message_id":"上下文中的真实消息ID"},{"type":"plain","text":"针对该消息的回复"}]}`。`mention_specific` 是引用消息，不是 `mention_user` 艾特用户；服务端转换为现有平台 `quote` / `reply` 消息段，同时抑制对触发者的自动艾特，已有 `quote` 与普通回复行为保持不变。
-  - **指定引用的最小能力例外**：主动回复轮次只向模型暴露 `send_message` 的 `mention_specific + plain` 子集，并在引擎执行前及工具内再次验证：恰好一个引用组件位于开头，后接非空文字，不允许 `session`、媒体、艾特或额外字段。普通 `send_message` 调用仍即时静默熔断，`send_sticker` 与其他特权工具仍禁止。指定 ID 必须通过适配器的当前会话可信观察校验；OneBot 保留已有连接代际 / 会话检查，AstrBot 仅接受当前事件、验证过的引用链及本连接观察到的近期同会话消息（有界缓存，拒绝跨群、跨平台和旧连接目标）。发送继续经过工具结果安全审查、会话取消 / epoch 校验和现有 SendHook；OneBot 等待平台 ACK，AstrBot 沿用现有 WebSocket 投递语义。工具成功发送后模型不应在最终答案中重复发送正文。
+  - **指定引用的最小能力例外**：主动回复轮次只向模型暴露 `send_message` 的 `mention_specific + plain` 子集，并在引擎执行前及工具内再次验证：恰好一个引用组件位于开头，后接非空文字，不允许 `session`、媒体、艾特或额外字段。普通 `send_message` 调用仍即时静默熔断，`send_sticker` 与其他特权工具仍禁止。指定 ID 必须通过适配器的当前会话可信观察校验；OneBot 保留已有连接代际 / 会话检查。发送继续经过工具结果安全审查、会话取消 / epoch 校验和现有 SendHook；OneBot 等待平台 ACK。工具成功发送后模型不应在最终答案中重复发送正文。
   - **旁观者零误伤原则与威胁模型**：主动回复是 Bot 面对无唤醒意图群友时的自发插嘴。群友未 @ 机器人或呼唤其名字，属于被动触发对话；若大模型产生幻觉或遭遇上下文诱导，可能误调用副作用/特权工具（特别是 `ban_user` 封禁旁观群友、`execute_command` 执行宿主命令、`send_message`/`steal_sticker` 产生非预期外部调用、以及 ActionsCat/MCP 变异或管理工具）；
   - **P1: 三层纵深防御与全量副作用即时静默熔断**：
     - **前置 Schema 过滤 (Pre-call Tool Filtering)**：在调用大模型前，基于执行上下文 `RunContext.Proactive` 通过白名单 `IsProactiveAllowedTool`（`isToolAllowedForProactive`）动态剔除其他副作用与外部特权工具，仅放行 `stay_silent`、`memory`、上述受限的 `send_message.mention_specific` 及显式实现主动回复许可接口的扩展工具；`send_sticker` 始终禁止，即使工具显式声明主动回复许可也不能绕过。ActionsCat 工具（即使是只读工具）因依赖管理令牌（`ACTIONSCAT_MANAGEMENT_TOKEN`）可能导致日志或构建信息在任意群友触发的轮次中泄露，故完全排除在主动回复白名单之外；
     - **主动回复表情包发送硬限制**：引擎在最终输出和工具发送边界过滤 `mface`、`sticker`、`is_sticker` 及图片 `sub_type` / `subType` 标记（含嵌套 `data`）；OneBot 同时过滤旧式 CQ 字符串中的表情包。混合消息只移除表情包组件，保留普通图片、文本及顺序，并保留 `session` 与未知外层字段；全表情包消息不发送。未标记为表情包的普通图片（包括 GIF）不受影响，显式唤醒轮次保持原有行为；
     - **服务端引擎全量副作用工具即时熔断 (Server-Side Runtime Interception & Immediate Silent Fuse)**：执行本批任何工具前，`llm.Engine` 先预检全部 ToolCalls 的权限与 `send_message` 受限参数形状。若包含 `ban_user`、`execute_command`、超出指定引用子集的 `send_message`、ActionsCat 等禁止调用，整批静默终止，本批 executor / SendHook 零调用，包含排在非法调用之前的 memory 与合法引用也不执行；不向模型回传错误追加迭代，不写入封禁状态、不向群聊发送报错。尚未成功发送时返回 `Silent: true`；若此前已成功发送指定引用，则返回空的工具已发送终态，保留已投递历史而不追加消息。这是权限预检，不是外部投递事务，通过预检后的运行时失败不撤销已经成功送达的消息；
     - **整轮一次指定引用**：一个主动回复 run 最多成功投递一条指定引用消息链。同批包含多个 `send_message` 时，在任何 executor 执行前整批拒绝；此前迭代已成功投递时，后续批次再次请求 `send_message` 同样整批终止。仅 SendHook 成功消耗额度，失败可在后续迭代重试；额度不跨 run 或会话共享。终止后不重复发送，也不清除先前已确认的公开回复历史。
-    - **已投递事实与终态清理隔离**：主动指定引用在 SendHook 确认成功后，其 compact slot 立即转正，不再随本轮后续未送达消息回滚。两端适配器在所有退出路径统一提交尚未最终归档的 `deliveries.Text()`：后续 `stay_silent`、provider / 安全错误、迭代耗尽、渲染或最终投递失败均不删除已确认的 assistant 历史；已归档时不重复提交，会话 epoch 改变后不恢复旧历史。兜底归档与最终回调分开记录完成状态：取消后晚到的 AstrBot terminal noop 复用已归档的同一正文；不同的真实最终发送仍追加公开历史，最终回调的 compact / 自动提取只准入一次。noop 没有新增公开消息，即使回调先于兜底完成，也只替换暂存正文、不再追加副本。成功发送后的静默也不再追加误导性的 `[stay_silent]` 自动记忆提取记录。
-    - **指定引用最终正文去重**：引擎仅记录 SendHook 确认成功的主动指定引用正文；最终纯文字与已投递正文完全相同（忽略首尾空白）时，清空重复最终正文，两端适配器沿用空终态处理与工具已投递历史。OneBot 通过适配器回调提供实际可见文本，复用最终发送的 `tools.Msg` 解析及 `BuildOneBotMessage`，纯 plain 组件按顺序拼接、不插入分隔符；`is_sticker:false`、普通文字组件未使用的属性、被渲染器忽略的根/组件字段不会绕过去重。媒体、引用和艾特等非纯文本消息不做此规范化；AstrBot 不设置该回调，保持 JSON 字面文本语义。不同可见正文、发送失败、显式唤醒轮次保持原行为，不做语义相似度去重。
-    - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃（OneBot 丢弃，AstrBot 下发带 `suppress_llm: true` 的 `noop`），彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
+    - **已投递事实与终态清理隔离**：主动指定引用在 SendHook 确认成功后，其 compact slot 立即转正，不再随本轮后续未送达消息回滚。OneBot 适配器在所有退出路径统一提交尚未最终归档的 `deliveries.Text()`：后续 `stay_silent`、provider / 安全错误、迭代耗尽、渲染或最终投递失败均不删除已确认的 assistant 历史；已归档时不重复提交，会话 epoch 改变后不恢复旧历史。成功发送后的静默也不再追加误导性的 `[stay_silent]` 自动记忆提取记录。
+    - **指定引用最终正文去重**：引擎仅记录 SendHook 确认成功的主动指定引用正文；最终纯文字与已投递正文完全相同（忽略首尾空白）时，清空重复最终正文，OneBot 适配器沿用空终态处理与工具已投递历史。OneBot 通过适配器回调提供实际可见文本，复用最终发送的 `tools.Msg` 解析及 `BuildOneBotMessage`，纯 plain 组件按顺序拼接、不插入分隔符；`is_sticker:false`、普通文字组件未使用的属性、被渲染器忽略的根/组件字段不会绕过去重。媒体、引用和艾特等非纯文本消息不做此规范化。不同可见正文、发送失败、显式唤醒轮次保持原行为，不做语义相似度去重。
+    - **主动回复迭代耗尽静默防打扰**：当主动回复轮次耗尽最大迭代次数时，引擎同样以 `Silent: true`（配合内部错误 `ErrMaxIterationsReached`）终态静默退出，适配器层静默丢弃，彻底杜绝向未艾特机器人的群聊输出“FrostAgent错误：达到最大迭代次数，未能得出最终答案”；
     - **记忆子系统完整放行（Maintainer 澄清与 Option A 边界）**：根据 Maintainer 裁定，记忆是 Bot 的核心认知与人设基石，主动回复轮次享有完整、无限制的记忆能力（包括 `memory` 的 `write`、`search`、`list`、`reflect`，以及正常的 `RecordRecall` 召回计数累加与更新时间戳），自动记忆提取机制亦正常参与；Option A 限制严格收敛至外部/宿主特权副作用（如 `ban_user`、`execute_command`、超出指定引用子集的 `send_message`、ActionsCat/MCP 变异或管理操作）；
     - **工具实现层双重校验 (Tool-Level Defense-in-Depth)**：`ban_user` 工具在执行前提取 `RunContext.Proactive`，若为主动回复轮次直接拒绝并报错，坚决不持久化锁定旁观者。
   - **P2: 模型输出看门狗阻断透传、格式化校验与静默丢弃 (Output Watchdog Gating & Formatting Silence, `OutputBlocked`)**：
     - 在模型最终输出阶段（`StageModelOutput`），若输出内容被安全看门狗（Watchdog）拦截或安全分类器发生故障（Fail-Closed），`Engine` 将其标记为 `AgentRunResult.OutputBlocked = true` 穿透至适配器层；
-    - 适配器层（OneBot 与 AstrBot）针对主动回复轮次的 `OutputBlocked` 以及后置消息组装校验失败（引用校验失败、多媒体消息构建失败、单条消息超长等）执行完全静默丢弃（OneBot 不发送群消息并回滚会话；AstrBot 下发携带 `suppress_llm: true` 的 `noop` 终态动作），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或内部格式化错误提示，同时在显式唤醒轮次中完整保留标准安全警示与错误反馈。
+    - 适配器层（OneBot）针对主动回复轮次的 `OutputBlocked` 以及后置消息组装校验失败（引用校验失败、多媒体消息构建失败、单条消息超长等）执行完全静默丢弃（不发送群消息并回滚会话），彻底杜绝在无唤醒意图的主动插嘴轮次向群聊输出突兀的安全警示或内部格式化错误提示，同时在显式唤醒轮次中完整保留标准安全警示与错误反馈。
 - **Web 控制台可视化滑块、白名单配置与状态同步**：
   - 前端控制台在「系统设置 > Bot 行为与服务端设置 > Bot 行为与回复策略」提供专门的「主动回复」配置卡片；
   - 配备平滑范围滑块（`<input type="range" class="slider" min="0.01" max="1.00" step="0.01">`）与手动数值输入框（`<input type="number" step="0.01">`），支持实时双向无缝联动、百分比动态预览与快速开关；
@@ -329,10 +299,10 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
 
 ### 管理员消息指令系统 (Administrator Message Commands System)
 
-为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 与 AstrBot 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：
+为了让系统管理员能够脱离 Web 控制台、直接在即时通讯客户端（OneBot v11 平台，涵盖群聊与私聊会话）对运行中的 Bot 实例执行敏捷运维管理，FrostAgent 设计并实现了兼具高安全性、入站早期拦截与执行旁路特性的管理员消息指令系统：
 
 - **入站早期拦截与管线旁路 (Early Ingress Interception & Pipeline Bypass)**：
-  - 指令判定与拦截锚定于各适配器（OneBot 与 AstrBot）事件读取循环（`readLoop`）最前端，早于内容安全审查（`GateIngress`）、工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
+  - 指令判定与拦截锚定于各适配器（OneBot）事件读取循环（`readLoop`）最前端，早于内容安全审查（`GateIngress`）、工作负载路由检查（`routeSnapshot.IsDisabled`）、群聊滚动压缩缓冲摄入（`captureGroupCompactMessage`）以及任何大模型推理轮次；
   - **前置安全旁路、非管理员静默丢弃与管理员 Access-Only 强门禁**：
     - 指令候选识别与管理员身份鉴权优先于安全看门狗（Watchdog Ingress Gate）执行；
     - 对于非管理员发送的指令候选消息，即使其参数包含敏感或高危特征词，也在此阶段直接静默丢弃，绝不触发安全审查拦截、绝不发出 `RejectInspectorMsg` 等安全拒绝回复，亦不产生安全审计违规计数（Strike）或账户锁定，充分保障运维指令系统的隐蔽性与防探测要求；非指令候选的常规聊天消息则继续正常流经安全审查；
@@ -344,7 +314,6 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 无论在群聊还是私聊场景下，触发指令均严格强制要求当前消息显式包含针对 Bot 自身的**真实 @ 提及**；
   - 严禁裸指令词触发、文本唤醒词误触、自定义别名/代称识别、引用回复偷渡以及历史消息 @ 冒充；
   - **OneBot 端适配**：严格扫描当前单条入站消息段数组（`event.Message`），仅当匹配到协议原生段 `seg.Type == "at"` 且目标 QQ 与当前登录账号一致（`seg.Data["qq"] == event.SelfID`）时判定有效，完全忽略历史回放 `event.Messages`，严禁纯文本 `[@<botID>]` 或正则假 At 规避，并在判定成功后从消息链中精准剥离该 Bot @ 元素以提取纯指令文本；
-  - **AstrBot 端适配**：严格依赖协议层 `event.IsAt == true` 强元数据标识，并由 `StripLeadingMention` 剔除文本首部的提及前缀。
 - **代数一致性与并发执行守卫 (Epoch Invalidation & Concurrency Guards)**：
   - **初始代数不变式**：会话默认初始 Epoch 设定为 1（`Epoch()`, `BeginRun()`, `GetOrCreate()`），确保首轮对话即处于严格的代数防线保护下；
   - **预留时刻锚定**：适配器在预留会话轮次时刻（`turn.Epoch()`）即刻锚定 `startEpoch`，并在阻塞式引用消息查找（`lookupReplyContext` / `get_msg`）与多模态视觉预处理完成后持续核验，防止长耗时预处理掩盖并覆盖重置操作；
@@ -355,7 +324,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 构建前中后三道严密代数防线与主动提交代数屏障状态机 (Active-Commit Generation Barrier State Machine)：在大模型提取调用前、大模型响应解析后核验代数一致性与上下文有效性；通过 `core.ExtractionCommitBarrier`（包含 `barrierPending`、`barrierWriting`、`barrierDone`、`barrierAborted` 四态同步状态机，绑定会话当前 Epoch、上下文及完成通道 `done`）注入提取流程；支持整批任务内多路由分组顺序提交（`EndCommit()` 在代数匹配且未被取消时原子重置为 `barrierPending` 并换发全新 `done` 通道，直至任务 `cleanup()` 调用 `Close()` 终结为 `barrierDone`）；在记忆持久化提交时，`Store.SaveEntriesConditionallyContext` 在持有写锁（`Store.mu.Lock()`）内调用原子 `barrier.TryBeginCommit()`，在同一同步互斥锁下原子核验未被中止且代数匹配，并立即变迁为 `barrierWriting`（若已中止或代数不匹配则原子变迁至 `barrierAborted` 并返回 `false` 触发 `ErrConditionFailed`），彻底消除校验与标记写入之间的 TOCTOU 竞态间隙；会话重置时（`ResetSession`）通过 `SessionContext.resetMu` 串行化重置等待阶段，快照活跃屏障且在等待完成前始终保留在 `s.extractionBarriers` 登记中，原子递增 Epoch 并调用 `b.AbortAndWait()`：若屏障尚处于 `barrierPending` 则原子置为 `barrierAborted` 并即刻返回以拒绝对旧代记忆的后续提交尝试；若已取得屏障进入 `barrierWriting`，则以确定性无超时等待（`<-b.done`）阻塞至本次不可逆的磁盘 I/O 写入（`s.save(brain)`）及其 `defer barrier.EndCommit()` 完全完成，杜绝提前超时逃逸或并发重置绕过等待导致的旧世代写穿漏洞，保证会话重置返回给管理员时所有磁盘写入处于完全终态，最后再清理已终止屏障登记；
   - **批量工具多轮打断**：Multi-tool 批量工具调用循环在每一轮工具执行前原子核验会话 Epoch 与上下文取消状态，若会话在上一工具执行中被重置，后续工具立即跳过并使整个 Agent Run 强制返回静默结果；
   - **SendHook 传输双向守卫**：中间消息下发在传输写入前、写入后双向核验 Epoch，重置后立即丢弃；
-  - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK 与 AstrBot 传输写入确认）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。
+  - **平台确认与历史回写屏障**：平台确认回调（OneBot 同步响应 ACK）与持久化 Assistant 历史回写（`session.AddMessage`）均置于 Epoch 校验之后，彻底杜绝延迟平台确认将过时回复回写至新代会话。
 - **私聊压缩历史序列单调性 (Sequence-Based Private Compaction Invariant)**：
   - 会话上下文使用全局严格单调递增的序列号（`nextMsgSeq uint64`、`historySeq []uint64`）追踪每一条历史消息；
   - 私聊压缩快照记录捕获上限 `snapshot.LastSeq`；提交时基于该序列阈值保留所有在此期间追加的新消息，免疫并发历史裁剪（`TrimHistory`/`TrimSession`）导致的切片错位与静默丢消息缺陷；
@@ -367,10 +336,9 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - 指令名称（`reset`, `ban`, `unban`, `compact`, `reflect`）统一解析为不区分大小写的标准小写指令。
 - **Option A 受信身份鉴权与零泄漏静默丢弃 (Option A Auth & Zero-Leak Silent Dropping)**：
   - 鉴权源严格且仅沿用实例专属环境变量 `ADMIN_QQ_IDS`（以逗号、分号或空白分隔）；未配置或为空时，没有任何用户具备管理员指令权限；
-  - 调用者身份唯一源自协议层提供的真实发送者元数据（`event.UserID`），严禁信任大模型输出、用户昵称、聊天正文自称，亦不向群主、群管理员或 AstrBot 宿主管理员提供任何隐式提权；
+  - 调用者身份唯一源自协议层提供的真实发送者元数据（`event.UserID`），严禁信任大模型输出、用户昵称、聊天正文自称，亦不向群主、群管理员或其他上游角色提供任何隐式提权；
   - **非管理员静默丢弃（防探测）**：对于满足「真实 @ 机器人 + 匹配指令前缀」但发送者非管理员的消息，系统坚决不向聊天端返回任何提示、拒绝信息或报错回复，彻底杜绝普通群友或恶意攻击者探测 Bot 指令系统的存在性：
     - OneBot 适配器直接返回并中断处理，不发送任何响应动作；
-    - AstrBot 适配器向协议端下发携带 `SubType: "admin_silent_drop"` 与 `SuppressLLM: true` 的 `Action{Type: "action", Action: "noop", Echo: "reply_" + event.MessageID}` 动作。AstrBot 插件捕获该特征动作后，显式调用 `event.should_call_llm(True)` 主动压制 AstrBot 宿主默认的大模型调用流程，杜绝产生额外 LLM Token 开销、聊天回复污染或上下文泄漏；而常规群聊压缩等无提示处理（标准 noop）则保持正常的事件广播链路；
   - **管理员语法错误提示**：当已鉴权的管理员输入未知指令或参数语法错误时，系统返回紧凑的参数错误说明与当前前缀下的完整指令用法速查卡。
 - **五大核心运维指令语义与调度保障 (Core Command Semantics)**：
   - **`reset` 会话重置与 In-Flight 及时打断**：
@@ -382,7 +350,6 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
   - **`ban <userID>` 全局封禁** 与 **`unban <userID>` 全局解封**：
     - **结构化提及解析与协议对齐 (Structured Mention Resolution)**：
       - **OneBot 适配器**：废除原先将非 Bot 的目标提及段降级为纯文本提示标记（`[@<targetID>]`）的退化序列化流程。在 `extractOneBotAdminCommand` 中直接遍历入站消息段数组（`[]content.MessageSegment`），识别目标 `at` 段（`seg.Type == "at"` 且 `atQQ != selfID`），将其目标 ID 作为真实标识提取并拼接至指令文本流中，从根本上解决群聊中 `@Bot /ban @User` 降级为伪文本标记的缺陷；
-      - **AstrBot 适配器**：在 Python 插件层安全提取入站提及目标并透传至事件元数据（`event.Metadata["mentioned_user_ids"]`），在 Go 适配器层 `extractAstrBotAdminCommand` 中解析目标提及，并在出现多个提及目标或全员通配时 Fail-Closed；
     - **目标用户 ID 深度规范化与清洗 (`admincmd.CleanTargetID`)**：
       - 提供统一纵深防御层，规范化兼容裸 ID（`10002`、`user-99`）、带 `@` 前缀的提及（`@10002`）以及中括号标记（`[@10002]`、`[10002]`），自动剥离外层符号得到纯净的主体 ID；
       - 严格拒绝全局通配符（`all`、`全体成员`、`0`）、非法定界符（冒号、空格、中括号、尖括号、反斜杠、引号等）以及非 ASCII 字符或群昵称（如 `[@测试昵称]`）；
@@ -393,7 +360,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - **指令边界校验与 Fail-Closed 不变性 (Command Boundary Sanitization & Fail-Closed Invariants)**：
       - 在管理指令与适配器入口边界通过 `admincmd.CleanTargetID` 严格校验目标主体，从源头阻断任何形如 `qq:[@10002]` 的伪 Principal 生成与持久化至 `AccessStore`；
       - 遇到多个目标提及（如 `/ban @user1 @user2`）、文本参数与提及目标冲突（如 `/ban user_A` 但提及了 `user_B`）、未知/格式错误提及或非法字符时，系统统一执行严格的 Fail-Closed 策略并向管理员返回清晰的错误提示，绝不向 `AccessStore` 写入任何错误或伪造的封禁记录；
-    - **跨平台规范化**：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，Telegram/Discord/AstrBot 等保留规范平台名），实现精准跨平台 Principal 锁定与解封；
+    - **跨平台规范化**：通过 `security.CanonicalPlatform(cmdCtx.RouteScope.Platform)` 动态解析调用者所在适配器平台（OneBot 映射为 `qq`，其他平台 等保留规范平台名），实现精准跨平台 Principal 锁定与解封；
     - 通过 `security.Controller.Lock` 将目标用户置入全局锁定状态，锁定原因严格指定为 `"Admin ban"`；通过 `security.Controller.Unlock` 解除锁定状态；
     - 回复文本：「已成功封禁用户 <userID>。」 / 「已成功解封用户 <userID>。」；
   - **`compact` 强制即时上下文压缩**：
@@ -401,14 +368,11 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - **独立工作负载路由解耦**：私聊压缩解耦于普通对话模型路由，统一调度至 `WorkloadGroupCompact` 专属提供商与模型，即使当前会话被规则禁用日常对话，管理员仍可独立调度会话压缩；
     - 群聊会话调用 `GroupCompactor.ForceCompact`，私聊会话启动专属单轮压缩工作流并在后台完成原子提交；
     - 具备防重入状态防护：无可压缩内容或已有压缩任务正在执行时返回友好提示；
-    - **双阶段异步回执时序门禁**：设立 `startSent` 门禁通道，强制确保「已开始...压缩总结...」起始回执（AstrBot 携带 `IsIntermediate: true` 标识）由底层传输成功发散后，才释放后台异步执行完毕后的最终完成/失败通知，保证因果时序严格一致；
+    - **双阶段异步回执时序门禁**：设立 `startSent` 门禁通道，强制确保「已开始...压缩总结...」起始回执由底层传输成功发散后，才释放后台异步执行完毕后的最终完成/失败通知，保证因果时序严格一致；
   - **`reflect` 即时记忆反思**：
     - 针对当前会话所有者（`group:<id>` 或 `private:<id>`）调度 `ReflectionManager.Start` 进行深度记忆反思提炼；
     - 内部维护互斥运行锁，已有任务进行中时阻止重复触发；
     - 同样采用起始回执与完成回执的双阶段异步反馈时序门禁机制。
-- **AstrBot 出站平台元数据与主动 UMO 路由 (AstrBot Outbound Platform & Proactive UMO Routing)**：
-  - 出站 `Action` 结构体显式声明 `Platform` 字段并由适配器全量填入；
-  - 当后台任务或长耗时执行超过插件等待超时（120s）回退至主动推送（`_dispatch_proactive_action`）时，系统精确依据 `Platform` 与会话类型构造 UMO（`{platform}:GroupMessage:{id}` 或 `{platform}:FriendMessage:{id}`），彻底杜绝跨平台消息投递丢失。
 - **Web 端指令设置与多实例隔离 (`#/settings/commands`)**：
   - 前端控制台在「系统设置」第三张卡片独立提供「指令设置」入口（卡片严格排列次序：1. Bot 服务端设置，2. 网页端外观设置，3. 指令设置）；
   - **路由守卫拦截**：当用户未选择任何激活实例进入 `#/settings/commands` 时，友好提示「请选择实例」，杜绝空指针异常；
@@ -432,9 +396,8 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 实例日志流只允许进入仍处于活跃 Scope 的 Runtime，且流请求上下文绑定到其捕获的 Runtime Scope；停止或删除过程中即使旧 Runtime 尚未解除引用，也不会在流终止后重新建立订阅；
   - 进入删除墓碑状态的实例仅允许读取状态和重试删除，禁止重命名、启停或参与快速配置，避免半删除配置被重新创建。
   - 概览分别展示实例管理名称与实例 `BOT_NAME`；侧边栏概览下方的「连接」页使用 Control Plane 下发的本次启动实际采用的 `WS_LISTEN_ADDR` 生成实例专属适配器地址并提供复制入口。设置页修改后的待重启值不会提前污染地址。
-  - OneBot 与 AstrBot 分别使用 `ONEBOT_WS_ENABLED` / `ASTRBOT_WS_ENABLED` 控制真实上游连接，缺省为 `true`，停用时保留配置并拒绝普通反向连接、停止正向拨号，浏览器 mock 直接对话保留。启用后各自使用实例设置 `ONEBOT_WS_MODE` / `ASTRBOT_WS_MODE` 二选一：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
+  - OneBot 使用 `ONEBOT_WS_ENABLED` 控制真实上游连接，缺省为 `true`，停用时保留配置并拒绝普通反向连接、停止正向拨号，浏览器 mock 直接对话保留。启用后使用实例设置 `ONEBOT_WS_MODE` 选择连接方向：缺省 `reverse`（反向 WebSocket，FA 作为服务端），可选 `forward`（正向 WebSocket，FA 作为客户端）。正向模式使用对应的 `*_WS_URL` / `*_WS_TOKEN`；同一适配器不同时接受普通反向连接。配置复用 settings KV 存储，无 schema migration；令牌属于 secret，不进入无密钥设置导出。
   - 设置批量保存前校验最终的模式／URL／Token 组合，保存后重建该实例连接，停用及换库会取消拨号、重连等待和已建立连接。客户端在 runtime 发布后才启动，带有界握手超时、退避重试和原有 Ping/Pong 心跳；不关闭 TLS 证书校验，不在连接日志中输出凭证。
-  - AstrBot 插件默认仍作为客户端连接实例专属地址；0.2.0 起可设置 `ws_mode=forward` 作为配套服务端（默认回环 `127.0.0.1:1244`，非回环必须设置访问令牌，仅一个活跃 FA 连接）。此模式不改变 HTTP 管理面板的回环及认证边界。
   - MCP 配置、连接管理器与动态工具目录属于具体实例，分别持久化在 `data/instance_<id>/mcp_servers.json`；实例停用时配置仍可编辑，但所有实时 MCP 连接随实例停止，零实例时不暴露根级 `MCPService`。
   - 系统提示词（`SYSTEM_PROMPT`）与人设预设对话（Few-Shot Dialogue）实现实例级彻底隔离：系统提示词解耦自 Control Plane 全局配置，独立保存于各实例的 `data/instance_<id>/.env`，支持修改后内存即时热生效；人设预设对话独立保存于各实例的 `data/instance_<id>/dialogue.yml`，实例构建时载入内存并通过读写锁保证零读盘开销。两者共同构成实例的人设基石，并统一纳入两阶段克隆事务与清理清单。
   - Sandbox Gateway 地址、凭据与基础命名空间属于 Control Plane 配置；启用且配置有效时，每个实例按 `<基础命名空间>/<稳定实例 ID>` 派生独立 worker 命名空间并注册 `execute_command`。启动探测失败只记录告警，执行仍严格 fail-closed，不回退宿主机。
@@ -483,14 +446,14 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 临时文件采用同目录唯一随机命名（`os.CreateTemp`），并在写入与提交前预先赋予 `0600` 权限，避免多协程写入碰撞且消除落盘后再次 `os.Chmod` 的潜在脆弱状态；
   - **权限收紧 Fail-Closed 机制**：服务初始化（`New`）时主动将已有 `.env` 文件权限收紧至 `0600`，若收紧失败则向上返回错误并拒绝挂载设置服务，防止静默运行于不安全权限下。
 - **WebSocket 路由独立隔离 (Dedicated WebSocket Mux)**：
-  - OneBot 与 AstrBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
+  - OneBot 协议适配器路由挂载于独立的 `wsMux` 上，避免与 `http.DefaultServeMux` 产生全局路由混淆。
 
 ### 表情包摘取与检索系统 (Sticker Stealing & Retrieval System)
 
 为了让智能体兼具趣味性与原生聊天软件拟人化表达，FrostAgent 实现了表情包自主抓取、多模态视觉摘要与基于情绪语境的智能检索系统：
 
 - **概率抓取与非阻塞并发门禁 (Probabilistic Stealing & Non-blocking Concurrency Gating)**：
-  - 仅对 QQ 平台（OneBot 与 AstrBot `platform == "aiocqhttp"` 适配器中带有 `sub_type == 1` 贴纸标识）的群聊图片进行 25% 概率随机抓取，私聊与其他平台图片自动忽略；
+  - 仅对 QQ 平台（OneBot 适配器中带有 `sub_type == 1` 贴纸标识）的群聊图片进行 25% 概率随机抓取，私聊与其他平台图片自动忽略；
   - 采用容量为 3 的信号量 Channel（`make(chan struct{}, 3)`）实现非阻塞截断机制。当群聊遭遇表情包刷屏时，超出并发上限的请求立即静默丢弃（Zero-Wait Dropping），杜绝多协程下载耗尽服务器带宽与计算资源；
   - 下载 HTTP 客户端强制 30 秒超时，超过 10 MiB 的图片直接拒绝（非静默截断），持久化写入失败时错误向上传播。
 - **存储去重与权重回归机制 (Deduplication & Weight Regression)**：
@@ -503,7 +466,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - 当视觉模型不可用或网络异常时，标记状态为 `unsummarized`（未摘要）并隔离保护，绝不向大模型工具输出未摘要表情包；多模态服务恢复后支持批量一键重试并更新状态为 `ready`。
 - **工具检索与轮盘赌加权随机选择 (`send_sticker` Tool & Weighted Roulette Selection)**：
   - 注册 `send_sticker` 工具供大模型在合适语境下调用；
-  - 实例级 `STICKER_ACTIVITY` 取值 0~10，默认 0。0 时工具返回禁用错误且不发送；1~10 对应每 50、45、…、5 个选定轮次至少发送一次表情包。`STICKER_ACTIVITY_MODE` 可选 `bot_turns`（默认，强制 Bot 对话轮次：每次唤醒或触发主动回复进入对话计一次，最终静默也计数）与 `all_messages`（全部轮次：OneBot/AstrBot 每条传入聊天消息计一次，无需唤醒；心跳、通知、API 回执和 Mock 不计数）。多次模型思考或同轮多条出站消息不重复计数；全部轮次到期只在下一次正常触发对话时执行约束，不会自行触发主动回复。只有成功确认发送的表情包才重置计数。计数在实例内存中，重启、切换模式或调整积极度后重置。
+  - 实例级 `STICKER_ACTIVITY` 取值 0~10，默认 0。0 时工具返回禁用错误且不发送；1~10 对应每 50、45、…、5 个选定轮次至少发送一次表情包。`STICKER_ACTIVITY_MODE` 可选 `bot_turns`（默认，强制 Bot 对话轮次：每次唤醒或触发主动回复进入对话计一次，最终静默也计数）与 `all_messages`（全部轮次：OneBot 每条传入聊天消息计一次，无需唤醒；心跳、通知、API 回执和 Mock 不计数）。多次模型思考或同轮多条出站消息不重复计数；全部轮次到期只在下一次正常触发对话时执行约束，不会自行触发主动回复。只有成功确认发送的表情包才重置计数。计数在实例内存中，重启、切换模式或调整积极度后重置。
   - 在非主动回复轮次的用户消息快照中注入所选模式的剩余轮次数，不修改系统提示词、工具注册表或持久会话历史。到期而未发送表情包时，额外给模型最多三次尝试；模型输出内部标记 `<ignore_enforce_sticker />` 可触发宽容，三次未遵循时后端自动触发。宽容回复以内部工具结果形式传回模型，并放宽后续两条回复；`ignore_enforce_sticker` 不加入工具列表。主动回复仍计入所选轮次计数，但跳过上述强制约束，不因过滤表情包重置额度或授予宽容。
   - 注册管理员限定的 `steal_sticker` 工具，用于响应管理员对当前、引用或近期同会话消息中 QQ 贴纸的显式摘取请求。权限仅按 `ADMIN_QQ_IDS` 中配置的发送者 QQ 号精确匹配，不接受模型传入身份；目标通过可信上下文中的消息 ID 与 `sub_type == 1` 附件索引选择，省略消息 ID 时使用最近一条带贴纸的消息，不接受任意 URL/Base64 参数。适配器将入站图片规范化为受限大小的字节数据，并在同会话有界缓存中保留 24 小时；显式摘取跳过随机概率，但继续复用并发上限、哈希去重、权重累加与视觉摘要管道；
   - 支持对表情包关键词和内容描述进行模糊语境匹配（Fuzzy Matching）；
@@ -515,7 +478,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
       1. **候选检索阶段 (Query Stage)**：模型在独立工具调用批次中单独调用 `send_sticker(query: "...")`，不与 `send_message` 配对。后端匹配关键词与描述，返回最多 20 条 compact 候选（包含完整 `id`、最多 8 个各不超过 128 UTF-8 字节的 `keywords`、不超过 2048 UTF-8 字节的 `description`）。长字段在字符边界精简，完整序列化 JSON（包含选择提示与截断标志）不超过 32 KiB，计入 JSON 转义开销，避免引擎的 64 KiB 上限破坏结果；候选或字段被精简时返回 `truncated: true`，可缩小查询范围后重查。此阶段 `MessagePayload` 为空，不发送文字或贴纸，也不重置配额；
       2. **精确选择阶段 (Select Stage)**：模型根据候选描述选择 ID。需要同时发送文字时，在后续同一批工具调用中先调用 `send_message` 发送 plain，紧接着调用 `send_sticker(id: "...")`；无需文字时仅调用 `send_sticker(id: "...")`。后端验证 ID 后构建原生贴纸消息载荷，成功发送才重置表情包积极度配额；配额到期时文字与选定贴纸仍作为一个有序消息链发送，不改变既有配对失败处理；
     - 两种模式下均支持直接传入 `id` 快速发送指定表情包。该机制在轻微增加一轮模型推理开销的前提下，解决了随机挑选可能带来的语境错配问题，实现了表情包发送精度的显著提升；
-  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` / `subType: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，同时双写 `sub_type: 1` 与 `subType: 1` 确保 NapCat 与 LuckyLillia 均可正确处理，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。AstrBot 协议仅接收现有 `/api/sticker/{id}/image` HTTP 端点，不暴露 FrostAgent 私有存储路径；插件通过独立配置的 `http_base_url` 跨容器下载图片并转换为 OneBot 可消费的 `base64://...`。随后使用独立的 `StickerImage` 组件（不继承 AstrBot SDK 的 `Image` 类），绕过 aiocqhttp 对 `Image` 实例的强制 base64 转换与字段剥离（`_from_segment_to_dict` 的 `isinstance(segment, Image)` 分支），使 `toDict()` 返回的 OneBot 段（含 `sub_type: 1`）完整保留于通用 `segment.toDict()` 回退路径中；
+  - 出站消息自动注入 `is_sticker: true` 与 `sub_type: 1` / `subType: 1` 贴纸标识，由平台适配器发送为原生聊天贴纸而非普通图片。直连 OneBot 时由 FrostAgent 读取私有贴纸文件并编码为 `base64://...`，同时双写 `sub_type: 1` 与 `subType: 1` 确保 NapCat 与 LuckyLillia 均可正确处理，避免将仅在 FrostAgent 文件系统中存在的 `file://` 路径交给独立进程或容器解析。
   - Agent 工具执行循环通过检测工具返回结果中的 `messages` 载荷自动触发 `SendHook` 实际发送，无需按工具名硬编码分发。
 - **Web 控制台表情包管理 (Web Dashboard Management)**：
   - Web 控制台在「Prompt 检查」下方提供「表情包摘取」独立管理页面（`/#stickers`）；
@@ -587,11 +550,11 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
 
 ### 在线直接对话与协议模拟器 (Direct Chat & Adapter Protocol Simulator)
 
-为了在无需依赖 NapCat、AstrBot 宿主等外部上游客户端的环境下对实例模型大脑与人设对话进行快速联调与回归测试，FrostAgent 提供了纯前端运行的 WebSocket 协议模拟器与在线直接对话子系统：
+为了在无需依赖 NapCat 等外部上游客户端的环境下对实例模型大脑与人设对话进行快速联调与回归测试，FrostAgent 提供了纯前端运行的 WebSocket 协议模拟器与在线直接对话子系统：
 
 - **定位与系统边界 (Role & Boundary)**：
-  - **完全绕过上游客户端实现**：控制台前端直接作为标准 WebSocket 客户端，分别连入后端的 `/instances/{id}/ws/onebot` 或 `/instances/{id}/ws/astrbot` 端点；
-  - **协议帧双向仿真**：前端直接对齐 OneBot v11 与 AstrBot 的协议格式，构造入站事件包（`Event`）发送至后端，并监听出站动作包（`Action`）还原对话气泡；
+  - **完全绕过上游客户端实现**：控制台前端直接作为标准 WebSocket 客户端，连入后端的 `/instances/{id}/ws/onebot` 端点；
+  - **协议帧双向仿真**：前端直接对齐 OneBot v11 的协议格式，构造入站事件包（`Event`）发送至后端，并监听出站动作包（`Action`）还原对话气泡；
   - **自动 ACK 确认闭环**：在 OneBot v11 协议中，系统出站消息遵循 `SendActionAndWait` 机制，前端监听并在收到携带 `echo` 的动作帧时立即回传成功确认帧（`{ "status": "ok", "retcode": 0, "echo": action.echo }`），有效避免后端超时或丢弃后续历史记录。
 - **断电全丢与零持久化污染保证 (Zero Durable Mutation & Complete Session Isolation)**：
   - **连接级 Mock 标记与代际隔离 (Namespace Isolation)**：前端连接时显式附加 `?mock=true` 查询参数（或 `X-Mock-Adapter: true` Header），后端在 WebSocket 握手阶段为连接生成独立代际标识（`generation`）并标记 `mock = true`。所有入站事件生成的 Session ID 自动前缀隔离命名空间 `mock:<generation>:<baseKey>`，彻底杜绝模拟会话与生产真实用户/群聊会话混合；
@@ -606,12 +569,11 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **后台任务隔离与跳过**：当连接处于 Mock 模式时，系统显式跳过 `engine.EnqueueExtractionTurn`（不触发长期记忆提取）、跳过 `GroupCompactor.TriggerWithScope` / `captureGroupCompactMessage`（不触发群聊滚动总结落盘）、以及跳过 `stealer.Observe`（不偷取表情包）。会话完全驻留于临时内存中，服务重启或连接断开后完全丢弃，不污染生产存储。
 - **Web 控制台在线对话界面 (Web Dashboard Direct Chat)**：
   - Web 控制台在「MCP 服务器」下方提供独立的「直接对话」页面（`/#chat`）；
-  - **多协议与多场景自由切换**：支持在 OneBot v11 与 AstrBot 两大适配器间无缝切换，并支持私聊（Private）与群聊（Group）场景模拟；
-  - **AstrBot 平台对齐 (Platform Parity)**：在 AstrBot 适配器模式下支持自定义下层平台类型（默认 `aiocqhttp`），确保事件帧与生产 QQ 身份规范化（Memory、Security 与 ModelRouter）完全对齐；
+  - **会话场景切换**：使用 OneBot v11，支持私聊（Private）与群聊（Group）场景模拟；
   - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
   - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
-  - **切页与会话生命周期**：同一浏览器页面、同一选中实例内，控制台切页只卸下对话视图，保留配置、输入草稿、屏幕记录与原 WebSocket；离页期间继续接收回复与 OneBot ACK，因此真实模型上下文可连续。清屏只清除屏幕记录；手动断开结束连接上下文；重新连接保留屏幕记录但开始新的模型上下文；重置会话同时清屏并重新连接。切换模拟协议清屏并创建新连接；切换实例（包括在其他页面操作）销毁旧视图与连接，不保留供切回恢复的会话。刷新、关闭浏览器页面或服务重启后不恢复模型上下文，未新增浏览器存储或服务端持久化；后端仍按原有连接级清理规则取消在途任务并释放临时资源；
-  - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat/AstrBot 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
+  - **切页与会话生命周期**：同一浏览器页面、同一选中实例内，控制台切页只卸下对话视图，保留配置、输入草稿、屏幕记录与原 WebSocket；离页期间继续接收回复与 OneBot ACK，因此真实模型上下文可连续。清屏只清除屏幕记录；手动断开结束连接上下文；重新连接保留屏幕记录但开始新的模型上下文；重置会话同时清屏并重新连接。切换实例（包括在其他页面操作）销毁旧视图与连接，不保留供切回恢复的会话。刷新、关闭浏览器页面或服务重启后不恢复模型上下文，未新增浏览器存储或服务端持久化；后端仍按原有连接级清理规则取消在途任务并释放临时资源；
+  - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
   - **Mock 管理鉴权**：独立适配器监听拒绝所有 mock 请求；管理监听上的 mock 请求遵循现有敏感管理接口鉴权，Origin 仅作浏览器来源校验，不能替代身份认证。远程访问使用 `MCP_CONTROL_TOKEN`（缺省时回退 `ADMIN_TOKEN`），`ALLOW_REMOTE_MCP_MANAGEMENT` 不免除此校验；可信本地回环、容器 connector 和显式 `MCP_ENFORCE_LOCAL_TOKEN` 保持原有策略。浏览器从「前端设置」的访问凭据读取令牌，在同源 WebSocket 握手中提供 `frostagent.direct-chat` 与 `frostagent.control-token.<令牌 UTF-8 字节的无填充 base64url>` 子协议，服务端仅协商前者，令牌不写入 URL 或响应。反向代理若记录握手头，必须将该凭据协议按 Authorization 同等脱敏；跨不可信网络仍须使用 HTTPS/WSS。
   - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
 

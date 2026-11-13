@@ -1,10 +1,10 @@
 # Settings lifecycle audit
 
-Issue: #339. Baseline: main `8dcb0c9` (includes the four hot behavior fixes from #341).
+Issue: #339. Baseline: main `68597a6` (includes #341 hot behavior fixes and #344 AstrBot removal).
 
 ## Inventory and checks
 
-`internal/settingscontract/testdata/lifecycle.tsv` records all 93 catalog keys,
+`internal/settingscontract/testdata/lifecycle.tsv` records all 88 catalog keys,
 two additional internal global keys, and all 42 new-instance template entries.
 Each row records the scope, catalog `RequiresRestart`, instance/control-plane
 restart tables, SQL hot classification, frontend field classification, and seed.
@@ -72,7 +72,7 @@ classification on save and clear.
   frontend global/shared label routing and a real browser session are not covered.
 - Manager regressions use SQLite. Existing PostgreSQL draft/rollback CI coverage
   is complementary; this change adds no PostgreSQL lifecycle matrix, actual QQ /
-  AstrBot / LLM conversation, socket-rebind or process-restart test.
+  LLM conversation, socket-rebind or process-restart test.
 - `BALANCE_QUERY_CONFIG` is catalog-managed but deliberately omitted from
   `ListEnvVars`; its dedicated configuration API is outside this matrix.
 - The internal global keys `ALLOW_REMOTE_MCP_MANAGEMENT` and

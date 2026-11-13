@@ -11,11 +11,6 @@ ALCYONE_BASE_URL	global	restart	false	true	false	reload	<absent>
 ALCYONE_SERVICE_TOKEN	global	restart	false	true	false	reload	<absent>
 ALCYONE_TIMEOUT	global	restart	false	true	false	reload	<absent>
 ALLOW_REMOTE_MCP_MANAGEMENT	global	absent	false	true	true	hidden	<absent>
-ASTRBOT_WS_ENABLED	instance	restart	true	false	false	dedicated	<absent>
-ASTRBOT_WS_INBOUND_TOKEN	instance	restart	true	false	false	dedicated	<absent>
-ASTRBOT_WS_MODE	instance	restart	true	false	false	dedicated	<absent>
-ASTRBOT_WS_TOKEN	instance	restart	true	false	false	dedicated	<absent>
-ASTRBOT_WS_URL	instance	restart	true	false	false	dedicated	<absent>
 BALANCE_QUERY_CONFIG	instance	live	false	false	false	dedicated	<absent>
 BILLING_COMPLETION_PRICE_PER_MILLION	instance	live	true	false	false	reload	<absent>
 BILLING_ENABLED	instance	restart	true	false	false	reload	false

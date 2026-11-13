@@ -28,9 +28,15 @@ func TestSQLGroupsIsolatePlatformsAndShareQQAliases(t *testing.T) {
 	if err != nil || alias != qq {
 		t.Fatalf("QQ aliases did not share a store: %v", err)
 	}
-	astrbot, err := manager.GetGroupStoreForPlatform("aiocqhttp", "test-group")
-	if err != nil || astrbot != qq {
-		t.Fatalf("AstrBot QQ alias did not share a store: %v", err)
+	onebot, err := manager.GetGroupStoreForPlatform("onebot", "test-group")
+	if err != nil || onebot != qq {
+		t.Fatalf("OneBot QQ alias did not share a store: %v", err)
+	}
+	for _, platform := range []string{"aiocqhttp", "astrbot"} {
+		retired, err := manager.GetGroupStoreForPlatform(platform, "test-group")
+		if err != nil || retired == qq {
+			t.Fatalf("retired platform %q shared the QQ store: %v", platform, err)
+		}
 	}
 	other, err := manager.GetGroupStoreForPlatform("discord", "test-group")
 	if err != nil || other == qq {

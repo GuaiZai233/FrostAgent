@@ -21,9 +21,9 @@ func TestCreateScheduleUsesTrustedConversationDelivery(t *testing.T) {
 		drop                           bool
 	}{
 		{"onebot private", "onebot", "onebot", "", false},
-		{"astrbot group", "fixture-platform", "astrbot", "fixture-group", false},
+		{"fixture group", "fixture-platform", "fixture", "fixture-group", false},
 		{"legacy nonchat", "", "", "", false},
-		{"older server", "fixture-platform", "astrbot", "fixture-group", true},
+		{"older server", "fixture-platform", "fixture", "fixture-group", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			captured := make(chan actionscat.CreateScheduleReq, 1)

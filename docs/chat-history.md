@@ -8,7 +8,7 @@
 
 - 私聊默认开启，CHAT_HISTORY_PRIVATE_ENABLED=false 可停止新增记录。
 - 群聊始终实行白名单制，CHAT_HISTORY_GROUP_WHITELIST 默认为空。
-- 白名单用英文逗号分隔。QQ 可直接填写群号；其他平台使用 platform:group:id，例如 telegram:group:synthetic-group。QQ 的 qq、onebot、aiocqhttp 前缀视为同一平台。
+- 白名单用英文逗号分隔。QQ 可直接填写群号；其他平台使用 platform:group:id，例如 telegram:group:synthetic-group。QQ 的 qq、onebot 前缀视为同一平台。
 - 白名单群中，即使消息未唤醒机器人、模型路由关闭或机器人保持沉默，也会采集系统收到的当前消息。
 - 修改白名单、关闭私聊持久化只停止后续采集。已有档案继续保留，并可在同一实例、同一平台、同一群聊或私聊中检索。
 - 模拟 Direct Chat 不采集，也不能查询真实档案。不会导入上游打包携带的整段旧上下文。

@@ -4,7 +4,7 @@ import "testing"
 
 func TestParseAndMatch(t *testing.T) {
 	values := map[string]string{
-		"BOT_LOOP_USER_IDS":  "bot-any, AiOcQhTtP:bot-qq; Telegram:CaseID",
+		"BOT_LOOP_USER_IDS":  "bot-any, Qq:bot-qq; Telegram:CaseID",
 		"BOT_LOOP_MAX_TURNS": "2",
 		"BOT_LOOP_MODE":      "hard",
 	}
@@ -18,7 +18,7 @@ func TestParseAndMatch(t *testing.T) {
 	}{
 		{"onebot", "bot-any", true},
 		{"telegram", "bot-any", true},
-		{"aiocqhttp", "bot-qq", true},
+		{"qq", "bot-qq", true},
 		{"telegram", "bot-qq", false},
 		{"telegram", "CaseID", true},
 		{"telegram", "caseid", false},

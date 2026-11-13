@@ -685,7 +685,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     if (key.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('请填写有效的环境变量名');
     const upper = key.toUpperCase();
     if (settingFields[upper] || dedicatedSettingKeys.has(upper) || draft?.values().some((item) => item.key === upper) ||
-      ['BRAIN_PATH', 'DIALOGUE_PATH', 'ONEBOT_WS_PATH', 'ASTRBOT_WS_PATH'].includes(upper)) {
+      ['BRAIN_PATH', 'DIALOGUE_PATH', 'ONEBOT_WS_PATH'].includes(upper)) {
       throw new Error('此项应在常规设置中修改');
     }
     if (new TextEncoder().encode(value).length > 16 * 1024 || /[\r\n\0]/.test(value)) {

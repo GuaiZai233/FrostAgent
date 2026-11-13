@@ -126,7 +126,7 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 		{"text", "ordinary reply", "ordinary reply"},
 	}, proactiveStickerEnvelopeCases()...) {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, adapter := range []string{"onebot", "astrbot"} {
+			for _, adapter := range []string{"onebot"} {
 				for _, proactive := range []bool{false, true} {
 					p := &stickerActivityProvider{responses: []core.ChatMessage{{Role: core.RoleAssistant, Content: tc.payload}}}
 					e := &Engine{Provider: p, MaxIterations: 1}

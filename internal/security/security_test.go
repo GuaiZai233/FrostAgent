@@ -148,8 +148,9 @@ func TestStrikeWindowExpires(t *testing.T) {
 
 func TestCanonicalPlatform(t *testing.T) {
 	cases := map[string]string{
+		"aiocqhttp": "aiocqhttp",
+		"astrbot":   "astrbot",
 		"onebot":    "qq",
-		"aiocqhttp": "qq",
 		"cqhttp":    "qq",
 		"qq":        "qq",
 		"QQ":        "qq",
@@ -246,40 +247,52 @@ func TestCrossAdapterUnifiedPrincipalAndGlobalLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pAstrbot, err := NewPrincipal("aiocqhttp", "synthetic-qq-user")
+	pCanonical, err := NewPrincipal("qq", "synthetic-qq-user")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if pOnebot.Platform != "qq" || pAstrbot.Platform != "qq" {
-		t.Fatalf("expected both platforms to canonicalize to 'qq', got %s and %s", pOnebot.Platform, pAstrbot.Platform)
+	if pOnebot.Platform != "qq" || pCanonical.Platform != "qq" {
+		t.Fatalf("expected both platforms to canonicalize to 'qq', got %s and %s", pOnebot.Platform, pCanonical.Platform)
 	}
-	if pOnebot.Key() != pAstrbot.Key() {
-		t.Fatalf("expected identical principal key across adapters: %s != %s", pOnebot.Key(), pAstrbot.Key())
+	if pOnebot.Key() != pCanonical.Key() {
+		t.Fatalf("expected identical principal key across adapters: %s != %s", pOnebot.Key(), pCanonical.Key())
 	}
 
 	// Lock via OneBot principal
 	if err := ctrl.Lock(pOnebot, "global test lock"); err != nil {
 		t.Fatal(err)
 	}
-
-	// AstrBot should immediately see the lock
-	if err := ctrl.CheckAccess(pAstrbot); !errors.Is(err, ErrLocked) {
-		t.Fatalf("expected AstrBot to be locked by OneBot lock, got %v", err)
+	for _, platform := range []string{"aiocqhttp", "astrbot"} {
+		retired, err := NewPrincipal(platform, "synthetic-qq-user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if retired.Key() == pOnebot.Key() {
+			t.Fatalf("retired platform %q shares the QQ principal", platform)
+		}
+		if err := ctrl.CheckAccess(retired); err != nil {
+			t.Fatalf("retired platform %q inherited the QQ lock: %v", platform, err)
+		}
 	}
-	gateDecision := ctrl.GateIngress(pAstrbot, "hello", AuditEvent{})
+
+	// The canonical QQ principal should immediately see the lock
+	if err := ctrl.CheckAccess(pCanonical); !errors.Is(err, ErrLocked) {
+		t.Fatalf("expected QQ principal to be locked by OneBot lock, got %v", err)
+	}
+	gateDecision := ctrl.GateIngress(pCanonical, "hello", AuditEvent{})
 	if gateDecision.Action != WatchdogBlock || gateDecision.Reason != ErrLocked.Error() {
-		t.Fatalf("AstrBot Ingress gate should block locked user: %+v", gateDecision)
+		t.Fatalf("QQ ingress gate should block locked user: %+v", gateDecision)
 	}
 
-	// Unlock via AstrBot principal
-	if err := ctrl.Unlock(pAstrbot); err != nil {
+	// Unlock via the canonical QQ principal
+	if err := ctrl.Unlock(pCanonical); err != nil {
 		t.Fatal(err)
 	}
 
 	// OneBot should immediately see the unlock
 	if err := ctrl.CheckAccess(pOnebot); err != nil {
-		t.Fatalf("expected OneBot to be unlocked after AstrBot unlock, got %v", err)
+		t.Fatalf("expected OneBot to be unlocked after QQ unlock, got %v", err)
 	}
 }
 
@@ -1554,7 +1567,7 @@ func TestNewPrincipal_Validation(t *testing.T) {
 		{"qq", "10002"},
 		{"qq", "user-99"},
 		{"qq", "admin-1"},
-		{"astrbot", "custom_id.123"},
+		{"fixture", "custom_id.123"},
 		{"telegram", "user_123"},
 		{"eval", "client:attacker"},
 	}
