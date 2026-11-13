@@ -1163,6 +1163,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			}
 		}
 	}
+	groupContextStart := len(requestPrompt)
 	var vettedSummary string
 	if groupSnapshot.RunningSummary != "" {
 		vettedSummary = groupSnapshot.RunningSummary
@@ -1218,6 +1219,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			requestPrompt += "\n\n" + vettedRecent
 		}
 	}
+	groupContextEnd := len(requestPrompt)
 	if quotePrompt := astrBotQuotePrompt(quoteChain); quotePrompt != "" {
 		if engine.Security != nil {
 			principal, err := security.NewPrincipal(securityPlatform, event.UserID)
@@ -1259,9 +1261,13 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
 		}
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+		groupContextStart += len(proactive.PromptPrefix) + 2
+		groupContextEnd += len(proactive.PromptPrefix) + 2
 	}
 	if event.botLoopSoft {
 		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
+		groupContextStart += len(botloop.PromptPrefix) + 2
+		groupContextEnd += len(botloop.PromptPrefix) + 2
 	}
 
 	var (
@@ -1306,17 +1312,17 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 
 		// Only adapter-owned IDs from this session can be selected. Do not parse
 		// IDs out of user text or forwarded, unverified reply metadata.
-		replyTargets := make(map[string]struct{}, len(trustedQuoteIDs)+len(groupSnapshot.RecentStructuredMessages))
+		var replyTargets sync.Map
 		for messageID := range trustedQuoteIDs {
-			replyTargets[messageID] = struct{}{}
+			replyTargets.Store(messageID, struct{}{})
 		}
 		for _, message := range groupSnapshot.RecentStructuredMessages {
 			if message.Role == "user" && conn.observedReplyTarget(event, message.MessageID) {
-				replyTargets[message.MessageID] = struct{}{}
+				replyTargets.Store(message.MessageID, struct{}{})
 			}
 		}
 		canReplyToMessage := func(messageID string) bool {
-			_, ok := replyTargets[messageID]
+			_, ok := replyTargets.Load(messageID)
 			return ok
 		}
 		sendHook := func(toolResultJSON string) error {
@@ -1429,6 +1435,20 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 		}
 		stopThinking := conn.startThinkingStatus(event, engine, turn)
 		defer stopThinking()
+		var refreshPrompt func(context.Context) (llm.PromptRefresh, error)
+		if event.MessageType == "group" && session != nil {
+			refreshPrompt = func(ctx context.Context) (llm.PromptRefresh, error) {
+				snapshot := session.SnapshotGroupContext(engine.GroupRawLimit(), engine.GroupRawMaxChars(), event.MessageID)
+				groupContext, notice, err := engine.GroupContextPrompt(ctx, llm.RunContext{SessionID: conn.sessionKey(event), ActorPlatform: securityPlatform, ActorUserID: event.UserID, Mock: conn.mock}, snapshot)
+				for _, message := range snapshot.RecentStructuredMessages {
+					if message.Role == "user" && conn.observedReplyTarget(event, message.MessageID) {
+						replyTargets.Store(message.MessageID, struct{}{})
+					}
+				}
+				prompt := requestPrompt[:groupContextStart] + groupContext + requestPrompt[groupContextEnd:]
+				return llm.PromptRefresh{Content: promptContentWithImages(prompt, directImageParts), SecurityNotice: notice}, err
+			}
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Turn:        turn,
 			Context:     runCtx,
@@ -1443,6 +1463,7 @@ func replyWithSnapshot(event Event, engine *llm.Engine, conn *wsConn, routeSnaps
 			AdapterID:         "astrbot",
 			InstanceID:        engine.InstanceID,
 			SendHook:          sendHook,
+			RefreshPrompt:     refreshPrompt,
 			CanReplyToMessage: canReplyToMessage,
 			SecurityNotice:    notice,
 			LoadObservedSticker: func(ctx context.Context, messageID string, stickerIndex int) ([]byte, error) {

@@ -126,3 +126,50 @@ func TestTimeSleepConsumesIterationBudget(t *testing.T) {
 		t.Fatalf("sleep reset iteration budget: %+v, calls=%d", result, calls)
 	}
 }
+
+func TestTimeSleepInterruptedByNewInputAndReset(t *testing.T) {
+	for _, reset := range []bool{false, true} {
+		t.Run(fmt.Sprint(reset), func(t *testing.T) {
+			e := &llm.Engine{SessionManager: llm.NewSessionManager(), MaxIterations: 2}
+			s := e.SessionManager.GetOrCreate("private:synthetic-cancel")
+			started := make(chan struct{})
+			tool := TimeSleepTool(func(string) string { close(started); return "60" })
+			e.ToolRegistry = map[string]llm.ToolExecutor{tool.Name(): tool}
+			e.Provider = sleepProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "interrupted-sleep", Type: "function", Function: core.ToolCallFunction{Name: timesleep.ToolName, Arguments: `{"seconds":60}`}}}}}, nil
+			})
+			turn := s.ReserveSequenceTurn("sender:synthetic", true, false)
+			turn.Wait()
+			messages, _, _ := s.PrepareTurnMessages(turn, "old-input", "old-input", nil)
+			finished := make(chan llm.AgentRunResult, 1)
+			go func() {
+				finished <- e.RunMessagesWithContext(messages, llm.RunContext{SessionID: s.ID(), Turn: turn, Epoch: turn.Epoch(), Mock: true, RefreshPrompt: func(context.Context) (llm.PromptRefresh, error) {
+					t.Error("canceled sleep refreshed old prompt")
+					return llm.PromptRefresh{}, nil
+				}})
+				turn.Done()
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("sleep did not start")
+			}
+			if reset {
+				if err := s.ResetSession(nil); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				next := s.ReserveSequenceTurn("sender:synthetic", true, false)
+				defer next.Done()
+			}
+			select {
+			case result := <-finished:
+				if !result.Silent || result.Content != "" || !errors.Is(result.Error, context.Canceled) || e.TotalMessagesProcessed.Load() != 1 {
+					t.Fatalf("stale sleep resumed: %+v", result)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("sleep ignored interruption")
+			}
+		})
+	}
+}
