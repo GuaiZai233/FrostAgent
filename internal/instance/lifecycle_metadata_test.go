@@ -1,13 +1,15 @@
 package instance
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/GuaiZai233/FrostAgent/internal/settingscontract"
 )
 
 func TestSettingsLifecycleSQLClassification(t *testing.T) {
-	entries := settingscontract.Load(t)
+	entries := loadSettingsLifecycle(t)
 	for key, entry := range entries {
 		t.Run(key, func(t *testing.T) {
 			hot := hotInstanceSettings
@@ -62,4 +64,27 @@ func TestSettingsLifecycleSQLClassification(t *testing.T) {
 	if !needsGlobalRuntimeReload(nil, map[string]string{"SYNTHETIC_UNKNOWN_SETTING": "new"}) {
 		t.Error("unknown global keys must retain conservative reload behavior")
 	}
+}
+
+// Keep executable test helpers in _test.go so ordinary package coverage measures
+// the production paths exercised by these tests.
+func loadSettingsLifecycle(t *testing.T) map[string]settingscontract.Entry {
+	t.Helper()
+	var rows []settingscontract.Entry
+	decoder := json.NewDecoder(bytes.NewReader(settingscontract.Inventory))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("empty lifecycle inventory")
+	}
+	entries := make(map[string]settingscontract.Entry, len(rows))
+	for _, row := range rows {
+		if _, exists := entries[row.Key]; row.Key == "" || exists {
+			t.Fatalf("empty or duplicate lifecycle key %q", row.Key)
+		}
+		entries[row.Key] = row
+	}
+	return entries
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
-	"github.com/GuaiZai233/FrostAgent/internal/settingscontract"
 )
 
 func lifecycleRPC(t *testing.T, m *Manager, id, method string, body any) {
@@ -245,7 +244,7 @@ func TestSQLLifecycleInitializedDefaults(t *testing.T) {
 	}
 	values := reopened.Snapshot()
 	seeded := 0
-	for key, entry := range settingscontract.Load(t) {
+	for key, entry := range loadSettingsLifecycle(t) {
 		value, exists := values[key]
 		if entry.Seed == nil {
 			if exists {
