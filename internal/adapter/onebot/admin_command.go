@@ -111,7 +111,7 @@ func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
 	sendDirectReply(action, type1, id, "echo_admin_cmd", event, conn, text)
 }
 
-func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {
+func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, previousError string) bool {
 	if conn != nil && conn.mock {
 		return false
 	}
@@ -146,6 +146,13 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 	if parseErr != nil {
 		sendOneBotReply(event, conn, fmt.Sprintf("%v\n\n%s", parseErr, admincmd.FormatUsage(prefix)))
 		return true
+	}
+	if cmd.Type == admincmd.CmdLog && len(cmd.Args) == 0 {
+		if previousError == "" {
+			sendOneBotReply(event, conn, admincmd.FormatUsage(prefix))
+			return true
+		}
+		cmd.Args = []string{previousError}
 	}
 
 	owner := ""

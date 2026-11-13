@@ -385,6 +385,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if event.MetaEventType == "heartbeat" {
 			continue
 		}
+		previousError := wsConn.takePreviousError(event)
 		wsConn.recordIncomingHistory(event)
 
 		if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
@@ -464,7 +465,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					)
 				}
 			}
-			if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+			if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine, previousError) {
 				botLoopObservation.Finish(false, botLoopConfig.Limit())
 				continue
 			}
