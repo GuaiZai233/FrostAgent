@@ -3,7 +3,7 @@
 Bot 的系统错误统一使用单行格式，只包含主要错误类型、安全摘要和 UUIDv4，例如：
 
 ```text
-[FrostAgent 错误] LLM 响应失败：上游 HTTP 400 (Ref_ID: f08fb287-2c99-4339-bd83-606d2caf6699)
+[FrostAgent 错误] LLM 响应失败：Endpoint HTTP 400 (Ref_ID: f08fb287-2c99-4339-bd83-606d2caf6699)
 ```
 
 LLM、上下文超限、计费、安全拦截、工具执行和消息处理错误均使用此格式。`Ref_ID` 即日志中的错误 UUID。

@@ -27,7 +27,7 @@ var resetHints = map[string]string{
 	"WS_LISTEN_ADDR":                       "127.0.0.1:11023",
 	"ONEBOT_WS_ENABLED":                    "true",
 	"ONEBOT_WS_MODE":                       "reverse",
-	"ONEBOT_WS_URL":                        "ws://上游地址:端口/",
+	"ONEBOT_WS_URL":                        "ws://endpoint-host:端口/",
 	"ONEBOT_WS_TOKEN":                      "未配置访问令牌",
 	"ONEBOT_WS_INBOUND_TOKEN":              "专用 WS 端口不要求令牌；Docker 网桥管理端口拒绝真实连接",
 	"HTTP_ALLOWED_ORIGINS":                 "不额外放行跨域来源",

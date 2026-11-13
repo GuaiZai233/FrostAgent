@@ -63,7 +63,7 @@ type FrostAgentInfoSource struct {
 func FrostAgentInfoTool(source FrostAgentInfoSource) Tool {
 	return Tool{
 		name:        FrostAgentInfoToolName,
-		description: "查询 FrostAgent 自身的只读运行信息。section 可选：overview（Bot 名称、别名、FrostAgent 版本、运行时长、当前接入平台）、model（当前主对话模型的上游模型名称）、features（记忆、向量检索、Sandbox、MCP、ActionsCat、表情包等功能是否可用）。",
+		description: "查询 FrostAgent 自身的只读运行信息。section 可选：overview（Bot 名称、别名、FrostAgent 版本、运行时长、当前接入平台）、model（当前主对话模型的 Endpoint 模型名称）、features（记忆、向量检索、Sandbox、MCP、ActionsCat、表情包等功能是否可用）。",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
