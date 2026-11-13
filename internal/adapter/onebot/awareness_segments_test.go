@@ -20,6 +20,9 @@ func TestAwarenessOneBotSegmentsFinalReply(t *testing.T) {
 	if err := engine.Scope.Config.Update(proactive.AwarenessEnabled, "true", false); err != nil {
 		t.Fatal(err)
 	}
+	if err := engine.Scope.Config.Update(proactive.AwarenessQuietHoursEnabled, "false", false); err != nil {
+		t.Fatal(err)
+	}
 	adapter := NewAdapter(engine)
 	service := &llm.AwarenessService{Engine: engine, Resolve: func(llm.AwarenessTarget) (llm.AwarenessSender, bool) {
 		return adapter.SendAwareness, adapter.AwarenessReady()

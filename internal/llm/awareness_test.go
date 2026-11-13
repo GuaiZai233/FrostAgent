@@ -39,6 +39,9 @@ func awarenessFixture(t *testing.T) (*Engine, *AwarenessService, *instanceconfig
 			return nil
 		}, true
 	}}
+	started := time.Now()
+	noon := time.Date(2026, time.January, 2, 12, 0, 0, 0, time.Local)
+	service.now = func() time.Time { return noon.Add(time.Since(started)) }
 	e.Awareness = service
 	return e, service, config, &sends
 }

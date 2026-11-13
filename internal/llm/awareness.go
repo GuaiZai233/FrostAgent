@@ -27,6 +27,7 @@ type AwarenessService struct {
 	mu      sync.Mutex
 	targets map[string]AwarenessTarget
 	clock   proactive.AwarenessClock
+	now     func() time.Time
 }
 
 func AwarenessTargetFor(platform, kind, id string) AwarenessTarget {
@@ -116,7 +117,34 @@ func (s *AwarenessService) CarryFrom(old *AwarenessService) {
 }
 
 func (s *AwarenessService) allowed(target AwarenessTarget) bool {
-	return proactive.AwarenessAllowed(s.Engine.Getenv, target.Platform, target.Kind, target.ID)
+	return proactive.AwarenessAllowed(s.Engine.Getenv, target.Platform, target.Kind, target.ID) &&
+		!proactive.AwarenessQuietHoursActive(s.Engine.Getenv, s.currentTime())
+}
+
+func (s *AwarenessService) currentTime() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+func (s *AwarenessService) dueTargets() []AwarenessTarget {
+	targets := s.candidates()
+	var ids []string
+	for id, target := range targets {
+		if !s.allowed(target) {
+			continue
+		}
+		if _, ready := s.Resolve(target); ready {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	var due []AwarenessTarget
+	for _, id := range s.clock.Due(s.currentTime(), s.Engine.Getenv(proactive.AwarenessInterval), ids) {
+		due = append(due, targets[id])
+	}
+	return due
 }
 
 func (s *AwarenessService) Run(ctx context.Context) {
@@ -138,24 +166,12 @@ func (s *AwarenessService) Run(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		targets := s.candidates()
-		var ids []string
-		for id, target := range targets {
-			if !s.allowed(target) {
-				continue
-			}
-			if _, ready := s.Resolve(target); ready {
-				ids = append(ids, id)
-			}
-		}
-		sort.Strings(ids)
-		for _, id := range s.clock.Due(time.Now(), s.Engine.Getenv(proactive.AwarenessInterval), ids) {
-			target := targets[id]
+		for _, target := range s.dueTargets() {
 			if !s.Engine.Go(func() { defer s.clock.Done(target.SessionID); s.Trigger(ctx, target) }) {
-				s.clock.Done(id)
+				s.clock.Done(target.SessionID)
 			}
 		}
-		timer.Reset(s.clock.NextDelay(time.Now()))
+		timer.Reset(s.clock.NextDelay(s.currentTime()))
 	}
 }
 
@@ -184,7 +200,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	turn := session.ReserveSequenceTurn("awareness", true, true)
 	defer turn.Done()
 	turn.Wait()
-	if turn.Interrupted() || parent.Err() != nil {
+	if turn.Interrupted() || parent.Err() != nil || !s.allowed(target) {
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)

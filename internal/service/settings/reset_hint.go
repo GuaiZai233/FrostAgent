@@ -3,6 +3,7 @@ package settings
 import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"strconv"
 	"strings"
 	"time"
@@ -10,6 +11,9 @@ import (
 
 // Input placeholders describe code defaults, including dependent defaults.
 var resetHints = map[string]string{
+	proactive.AwarenessQuietHoursEnabled:   "开启",
+	proactive.AwarenessQuietHoursStart:     proactive.DefaultAwarenessQuietStart,
+	proactive.AwarenessQuietHoursEnd:       proactive.DefaultAwarenessQuietEnd,
 	"ENABLE_THINKING_STATUS":               "开启",
 	"BOT_LOOP_ENABLED":                     "开启（有标记 BotID 时生效）",
 	"ENABLE_MULTI_SEGMENT_REPLY":           "关闭",
