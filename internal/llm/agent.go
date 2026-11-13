@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strconv"
@@ -891,6 +892,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 	var specificReplyEchoes proactive.ReplyEchoGuard
 	specificReplyDelivered := false
+	refreshPromptPending := false
 	for i := 0; i < maxIterations; i++ {
 		if runCanceled(ctx) {
 			return AgentRunResult{Silent: true, Error: context.Canceled}
@@ -909,6 +911,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
+		}
+		if refreshPromptPending && runCtx.RefreshPrompt != nil {
+			refreshed, err := runCtx.RefreshPrompt(ctx)
+			if err != nil {
+				return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "挂起后上下文刷新失败", err, runCtx.SessionID), Error: err, Usage: totalUsage}
+			}
+			messages = replaceCurrentPrompt(messages, refreshed.Content)
+			mergeSecurityNotice(&runCtx, refreshed.SecurityNotice)
+			refreshPromptPending = false
 		}
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
@@ -1403,6 +1414,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 					return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: ctx.Err(), Usage: totalUsage}
 				}
+				if tc.Function.Name == timesleep.ToolName && (err == nil || errors.Is(err, timesleep.ErrTimeout)) {
+					refreshPromptPending = true
+				}
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
 						if hasRunCtx && runCtx.Proactive {
@@ -1420,7 +1434,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							Usage:         totalUsage,
 						}
 					}
-					if errors.Is(err, actionscat.ErrDisabled) {
+					if errors.Is(err, timesleep.ErrTimeout) {
+						toolResult = e.Log().ReportError(logs.TOOL, "Timeout", err, runCtx.SessionID)
+					} else if errors.Is(err, actionscat.ErrDisabled) {
 						toolResult = e.Log().ReportError(logs.TOOL, "工具调用失败：ActionsCat 已被管理员禁用", err, runCtx.SessionID)
 					} else {
 						toolResult = e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", tc.Function.Name, err), runCtx.SessionID)

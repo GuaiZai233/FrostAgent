@@ -50,6 +50,7 @@ export const settingFields: Record<string, SettingField> = {
   SECURITY_GATEWAY_TIMEOUT: { label: '安全审查网关超时', group: '安全与权限', hint: '例如 15s；实例值优先于全局值，未配置时才使用兼容安全审查超时' },
   SECURITY_CLASSIFIER_TIMEOUT: { label: '兼容安全审查超时', group: '安全与权限', hint: '安全审查网关超时的旧名称，只有网关超时未配置时使用，并非独立超时' },
   AGENT_MAX_ITERATIONS: { label: '智能体基础迭代轮数', group: '模型与智能体', type: 'number', min: 1, step: 1, hint: '工具执行可能按运行逻辑追加迭代预算' },
+  TIME_SLEEP_TIMEOUT_SECONDS: { label: '挂起工具超时秒数', group: '模型与智能体', type: 'number', positive: true, step: 'any', hot: true, hint: '默认 60 秒；达到上限时工具返回 Timeout，保存后下次调用生效' },
   ACTIONSCAT_ENABLED: { label: '启用 ActionsCat', group: 'ActionsCat', type: 'switch', hot: true, hint: '默认开启；关闭后隐藏全部 ActionsCat 工具并拒绝调用' },
   ACTIONSCAT_ENDPOINT: { label: 'ActionsCat 服务地址', group: 'ActionsCat', hot: true },
   ACTIONSCAT_MANAGEMENT_TOKEN: { label: 'ActionsCat 管理 Token', group: 'ActionsCat', type: 'secret', hot: true },

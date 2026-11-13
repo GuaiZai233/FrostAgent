@@ -654,6 +654,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
+	groupContextStart := len(requestPrompt)
 	var vettedSummary string
 	if groupSnapshot.RunningSummary != "" {
 		vettedSummary = groupSnapshot.RunningSummary
@@ -709,6 +710,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			requestPrompt += "\n\n" + vettedRecent
 		}
 	}
+	groupContextEnd := len(requestPrompt)
 	if responseContext != "" {
 		requestPrompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	}
@@ -748,9 +750,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
 		}
 		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+		groupContextStart += len(proactive.PromptPrefix) + 2
+		groupContextEnd += len(proactive.PromptPrefix) + 2
 	}
 	if botLoopSoft {
 		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
+		groupContextStart += len(botloop.PromptPrefix) + 2
+		groupContextEnd += len(botloop.PromptPrefix) + 2
 	}
 
 	// 4. Call the agent engine with history
@@ -995,6 +1001,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		stopThinking := conn.startThinkingStatus(event, engine, turn)
 		defer stopThinking()
+		var refreshPrompt func(context.Context) (llm.PromptRefresh, error)
+		if event.MessageType == "group" && session != nil {
+			refreshPrompt = func(ctx context.Context) (llm.PromptRefresh, error) {
+				snapshot := session.SnapshotGroupContext(engine.GroupRawLimit(), engine.GroupRawMaxChars(), strconv.FormatInt(int64(event.MessageID), 10))
+				groupContext, notice, err := engine.GroupContextPrompt(ctx, llm.RunContext{SessionID: conn.historyKey(event), ActorPlatform: securityPlatform, ActorUserID: strconv.FormatInt(event.UserID, 10), Mock: conn.mock}, snapshot)
+				prompt := requestPrompt[:groupContextStart] + groupContext + requestPrompt[groupContextEnd:]
+				return llm.PromptRefresh{Content: promptContentWithImages(prompt, directImageParts), SecurityNotice: notice}, err
+			}
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Turn:        turn,
 			Context:     runCtx,
@@ -1009,6 +1024,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			AdapterID:          "onebot",
 			InstanceID:         engine.InstanceID,
 			SendHook:           sendHook,
+			RefreshPrompt:      refreshPrompt,
 			PlatformActionHook: conn.qqActionHook(event, turn, recordDelivery, engine),
 			FinalReplyText:     plainFinalReplyText,
 			CanReplyToMessage: func(messageID string) bool {

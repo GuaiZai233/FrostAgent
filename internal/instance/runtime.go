@@ -230,6 +230,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	registry[qqTool.Name()] = qqTool
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool
+	timeSleepTool := tools.TimeSleepTool(config.Get)
+	registry[timeSleepTool.Name()] = timeSleepTool
 	if securityController != nil {
 		banUserTool := tools.NewBanUserTool(securityController)
 		registry[banUserTool.Name()] = banUserTool

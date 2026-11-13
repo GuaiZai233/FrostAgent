@@ -51,6 +51,22 @@ func TestQQTargetWhitelistValidation(t *testing.T) {
 	}
 }
 
+func TestTimeSleepTimeoutValidation(t *testing.T) {
+	for _, value := range []string{"", "60", "0.01", "120"} {
+		if err := validateUpdate("TIME_SLEEP_TIMEOUT_SECONDS", value); err != nil {
+			t.Fatalf("%q: %v", value, err)
+		}
+	}
+	for _, value := range []string{"0", "-1", "NaN", "+Inf", "invalid", "1e100"} {
+		if err := validateUpdate("TIME_SLEEP_TIMEOUT_SECONDS", value); err == nil {
+			t.Errorf("accepted %q", value)
+		}
+	}
+	if !ExportableValueKeys()["TIME_SLEEP_TIMEOUT_SECONDS"] {
+		t.Fatal("sleep timeout missing from settings export")
+	}
+}
+
 func TestSettingsListEnvVarsReturnsUnmaskedValues(t *testing.T) {
 	t.Setenv("ACTIONSCAT_MANAGEMENT_TOKEN", "sk-secret-key-123456789")
 	t.Setenv("BOT_NAME", "FrostFox")
