@@ -87,6 +87,7 @@ type deliveryReceipt struct {
 }
 
 type wsConn struct {
+	engine *llm.Engine
 	*runtimescope.Scope
 	conn              *websocket.Conn
 	generation        string
@@ -163,23 +164,30 @@ func (c *wsConn) writeTurnJSON(v any, turn *llm.SessionTurn) error {
 	// Instance-bound WebSocket delivery must normalize with this connection's
 	// runtime scope, then marshal an alias so MarshalJSON cannot re-read globals.
 	type actionAlias Action
+	var historyAction *Action
 	switch action := v.(type) {
 	case Action:
 		normalized := action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
 		v = actionAlias(normalized)
+		historyAction = &normalized
 	case *Action:
 		if action != nil {
 			normalized := action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
 			v = actionAlias(normalized)
+			historyAction = &normalized
 		}
 	}
-	return turn.WithAuthority(func() error {
+	err := turn.WithAuthority(func() error {
 		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 			return err
 		}
 		defer c.conn.SetWriteDeadline(time.Time{})
 		return c.conn.WriteJSON(v)
 	})
+	if err == nil && historyAction != nil && historyAction.DeliveryID == "" {
+		c.recordHistoryAction(*historyAction, "sent")
+	}
+	return err
 }
 
 func (c *wsConn) Close() error {
@@ -218,6 +226,7 @@ func (c *wsConn) writeStickerActionAndWaitTurn(action Action, turn *llm.SessionT
 }
 
 func (c *wsConn) writeActionAndWaitTurn(action Action, turn *llm.SessionTurn, timeout time.Duration, description string) error {
+	action = action.withConfiguredGroupMentionScope(c.Scope).withConfiguredGroupReplyScope(c.Scope)
 	action.DeliveryID = fmt.Sprintf("delivery_%d", atomic.AddUint64(&nextDeliveryID, 1))
 	receipts := make(chan deliveryReceipt, 1)
 	c.pendingDeliveries.Store(action.DeliveryID, receipts)
@@ -237,6 +246,7 @@ func (c *wsConn) writeActionAndWaitTurn(action Action, turn *llm.SessionTurn, ti
 			}
 			return fmt.Errorf("AstrBot %s发送失败", description)
 		}
+		c.recordHistoryAction(action, "delivered")
 		return nil
 	case <-c.Context().Done():
 		return c.Context().Err()

@@ -10,6 +10,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -377,6 +378,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 智能体引擎初始化完成", "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after engine assignment)
+	if db != nil {
+		engine.ChatHistory = chathistory.NewRecorder(chathistory.NewStore(db, instanceID), scope.Getenv,
+			func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
+	}
+	historyTool := tools.NewChatHistoryTool(engine)
+	engine.ToolRegistry[historyTool.Name()] = historyTool
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
 	overrideConfigTool := tools.OverrideFrostAgentConfigTool(engine, settingsWriteMu)
@@ -551,6 +558,9 @@ func (r *Runtime) StartBackground() {
 		return
 	}
 	r.backgroundOnce.Do(func() {
+		if r.Engine.ChatHistory != nil {
+			r.Scope.Go(func() { r.Engine.ChatHistory.Run(r.Scope.Context()) })
+		}
 		r.StartEmbeddings()
 		if r.Engine.Awareness != nil {
 			r.Scope.Go(func() { r.Engine.Awareness.Run(r.Scope.Context()) })

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
@@ -37,6 +38,8 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	chathistory.PrivateEnabledKey:              {"是否保存私聊原文（默认开启；关闭后保留已有档案）", false, false, false},
+	chathistory.GroupWhitelistKey:              {"群聊原文持久化白名单（默认空；群内未触发回复的消息也记录；移除后保留历史）", false, false, false},
 	qqextend.TargetGroupsKey:                   {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
 	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
 	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},
@@ -721,6 +724,12 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 func validateUpdate(key, value string) error {
+	if key == chathistory.PrivateEnabledKey && value != "" && value != "true" && value != "false" {
+		return errors.New("私聊原文持久化开关必须为 true 或 false")
+	}
+	if key == chathistory.GroupWhitelistKey {
+		return chathistory.ValidateWhitelist(value)
+	}
 	if key == "BOT_LOOP_ENABLED" && value != "" && value != "true" && value != "false" {
 		return errors.New("Bot 防循环开关必须为 true 或 false")
 	}

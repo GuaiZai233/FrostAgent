@@ -11,6 +11,8 @@ import (
 
 // Input placeholders describe code defaults, including dependent defaults.
 var resetHints = map[string]string{
+	"CHAT_HISTORY_PRIVATE_ENABLED":         "开启",
+	"CHAT_HISTORY_GROUP_WHITELIST":         "空白名单（所有群均不采集）",
 	proactive.AwarenessQuietHoursEnabled:   "开启",
 	proactive.AwarenessQuietHoursStart:     proactive.DefaultAwarenessQuietStart,
 	proactive.AwarenessQuietHoursEnd:       proactive.DefaultAwarenessQuietEnd,

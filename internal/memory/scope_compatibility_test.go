@@ -77,7 +77,7 @@ func TestLegacySQLMemoryScopesSurviveRestartWithoutMigration(t *testing.T) {
 		t.Fatalf("retired field exported: %s %v", raw, err)
 	}
 	var version int
-	if err := db.SQL.QueryRow(`SELECT version FROM schema_meta WHERE id=1`).Scan(&version); err != nil || version != 16 {
+	if err := db.SQL.QueryRow(`SELECT version FROM schema_meta WHERE id=1`).Scan(&version); err != nil || version != storage.SchemaVersion {
 		t.Fatalf("schema version changed: %d %v", version, err)
 	}
 	var legacyColumn string

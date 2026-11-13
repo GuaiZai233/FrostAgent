@@ -225,6 +225,8 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
 			}
 			errs = append(errs, err)
+		} else {
+			c.recordHistoryAction(botAction, oneBotAPIResponse{}, "sent")
 		}
 	}
 	return errors.Join(errs...)
@@ -383,6 +385,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if event.MetaEventType == "heartbeat" {
 			continue
 		}
+		wsConn.recordIncomingHistory(event)
 
 		if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
 			groupIDStr := strconv.FormatInt(event.GroupID, 10)

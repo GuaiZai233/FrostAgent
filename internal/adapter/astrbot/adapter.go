@@ -281,6 +281,8 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("AstrBot Adapter Send 失败: %v", err))
 			}
 			errs = append(errs, err)
+		} else {
+			c.recordHistoryAction(action, "sent")
 		}
 	}
 	return errors.Join(errs...)
@@ -363,6 +365,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 	var c *wsConn
 	if a.engine != nil {
 		c = newWSConn(conn, a.engine.Scope)
+		c.engine = a.engine
 		c.Scope = a.engine.Scope
 	} else {
 		c = newWSConn(conn)
@@ -444,6 +447,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			}
 			continue
 		}
+		c.recordIncomingHistory(event)
 
 		if c.mock && a.engine != nil && a.engine.SessionManager != nil {
 			// Mark at intake, before reservation, bot-loop tracking or any LLM run,

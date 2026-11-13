@@ -129,13 +129,13 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		t.Run(fmt.Sprintf("declared-future-floor-%d", floor), func(t *testing.T) {
 			root, config, db := compatibilityDatabase(t, backend)
 			compatibilitySeedComputerUse(t, db)
-			compatibilityMetadata(t, db, 17, true, floor)
+			compatibilityMetadata(t, db, (SchemaVersion + 1), true, floor)
 			compatibilityExec(t, db, `CREATE TABLE future_extension (id TEXT PRIMARY KEY, payload TEXT NOT NULL)`)
 			compatibilityExec(t, db, `INSERT INTO future_extension VALUES ('synthetic-extension', 'unrecognized-data')`)
 			compatibilityClose(t, db)
 			for range 2 {
 				db = compatibilityReopen(t, root, config)
-				assertCompatibilityVersions(t, db, 17, floor)
+				assertCompatibilityVersions(t, db, (SchemaVersion + 1), floor)
 				compatibilityUpdateInstance(t, db)
 				assertCompatibilityJSON(t, db)
 				var payload string
@@ -149,7 +149,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 	t.Run("future-deletion-protection", func(t *testing.T) {
 		root, config, db := compatibilityDatabase(t, backend)
 		compatibilitySeedComputerUse(t, db)
-		compatibilityMetadata(t, db, 17, true, 14)
+		compatibilityMetadata(t, db, (SchemaVersion + 1), true, 14)
 		compatibilityClose(t, db)
 		db = compatibilityReopen(t, root, config)
 		before := compatibilitySnapshot(t, db.SQL, backend)
@@ -179,7 +179,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 			t.Fatalf("cancellation left deletion marker: %d, %v", pending, err)
 		}
 		assertCompatibilityJSON(t, db)
-		assertCompatibilityVersions(t, db, 17, 14)
+		assertCompatibilityVersions(t, db, (SchemaVersion + 1), 14)
 	})
 
 	rejections := []struct {
@@ -189,7 +189,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		floor    any
 		mutate   func(*testing.T, *DB)
 	}{
-		{"unknown-unmarked-future", 17, false, nil, nil},
+		{"unknown-unmarked-future", (SchemaVersion + 1), false, nil, nil},
 		{"unmarked-v15-missing-table", 15, false, nil, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `DROP TABLE computer_use_tasks`)
 		}},
@@ -199,32 +199,32 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		{"unmarked-v15-altered-table", 15, false, nil, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE computer_use_tasks ADD COLUMN unknown_value TEXT`)
 		}},
-		{"null-floor", 17, true, nil, nil},
-		{"negative-floor", 17, true, -1, nil},
-		{"pre-baseline-floor", 17, true, 6, nil},
-		{"floor-above-version", 17, true, 18, nil},
-		{"requires-newer-program", 17, true, 17, nil},
-		{"missing-core-column", 17, true, 14, func(t *testing.T, db *DB) {
+		{"null-floor", (SchemaVersion + 1), true, nil, nil},
+		{"negative-floor", (SchemaVersion + 1), true, -1, nil},
+		{"pre-baseline-floor", (SchemaVersion + 1), true, 6, nil},
+		{"floor-above-version", (SchemaVersion + 1), true, (SchemaVersion + 2), nil},
+		{"requires-newer-program", (SchemaVersion + 1), true, (SchemaVersion + 1), nil},
+		{"missing-core-column", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE instances DROP COLUMN error`)
 		}},
-		{"unknown-core-column", 17, true, 14, func(t *testing.T, db *DB) {
+		{"unknown-core-column", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE instances ADD COLUMN future_payload TEXT NOT NULL DEFAULT '{}'`)
 		}},
-		{"changed-core-column-type", 17, true, 14, func(t *testing.T, db *DB) {
+		{"changed-core-column-type", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `ALTER TABLE instances DROP COLUMN error`)
 			compatibilityExec(t, db, `ALTER TABLE instances ADD COLUMN error INTEGER NOT NULL DEFAULT 0`)
 		}},
-		{"extra-core-unique-constraint", 17, true, 14, func(t *testing.T, db *DB) {
+		{"extra-core-unique-constraint", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `CREATE UNIQUE INDEX compatibility_extra_unique ON settings(value)`)
 		}},
-		{"extension-fk-to-replaced-core-row", 17, true, 14, func(t *testing.T, db *DB) {
+		{"extension-fk-to-replaced-core-row", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `CREATE TABLE future_settings (
 				scope TEXT NOT NULL, instance_id TEXT NOT NULL, key TEXT NOT NULL, payload TEXT NOT NULL,
 				FOREIGN KEY (scope, instance_id, key) REFERENCES settings(scope, instance_id, key) ON DELETE CASCADE
 			)`)
 			compatibilityExec(t, db, `INSERT INTO future_settings VALUES ('instance', 'synthetic-instance', 'UPSTREAM_API_KEY', 'must-not-cascade')`)
 		}},
-		{"core-cascade-fk-to-replaced-core-row", 17, true, 14, func(t *testing.T, db *DB) {
+		{"core-cascade-fk-to-replaced-core-row", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			compatibilityExec(t, db, `INSERT INTO provider_endpoints(id, display_name, base_url, api_key_source, enabled, position)
 				VALUES ('synthetic-provider', 'Synthetic', 'https://model.invalid/v1', 'manual', 1, 0)`)
 			compatibilityExec(t, db, `INSERT INTO provider_models(id, display_name, endpoint_id, upstream_model, enabled, capabilities, position)
@@ -247,7 +247,7 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 					FOREIGN KEY (model_id) REFERENCES provider_models(id) ON DELETE CASCADE`)
 			}
 		}},
-		{"core-trigger", 17, true, 14, func(t *testing.T, db *DB) {
+		{"core-trigger", (SchemaVersion + 1), true, 14, func(t *testing.T, db *DB) {
 			if db.Backend == SQLite {
 				compatibilityExec(t, db, `CREATE TRIGGER compatibility_update AFTER UPDATE ON instances
 					BEGIN UPDATE settings SET value = 'trigger-value' WHERE key = 'UPSTREAM_API_KEY'; END`)
@@ -326,6 +326,9 @@ func compatibilityExec(t *testing.T, db *DB, statement string, args ...any) {
 
 func compatibilityMetadata(t *testing.T, db *DB, version int, declared bool, floor any) {
 	t.Helper()
+	if version < 17 {
+		compatibilityExec(t, db, `DROP TABLE IF EXISTS chat_history`)
+	}
 	// Reconstruct the historical pre-endpoint-format Computer Use layout.
 	if version == 15 {
 		columns, err := db.tableColumns(context.Background(), db.SQL, "provider_endpoints")

@@ -152,6 +152,7 @@ func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation 
 // of future databases. Extra columns are unsafe while some stores replace rows.
 // Updating this contract requires auditing the reader AND writer paths.
 var compatibleCoreColumns = map[string]string{
+	"chat_history":          "instance_id=text id=text platform=text message_type=text target_id=text message_id=text sender_id=text sender_name=text role=text content=text search_text=text reply_to=text occurred_at=bigint delivery_status=text",
 	"access_records":        "principal_key=text platform=text user_id=text state=text reason=text locked_at=text updated_at=text strike_times_json=text last_blocked_hash=text last_blocked_at=text",
 	"counters":              "key=text value=bigint",
 	"dialogues":             "instance_id=text position=integer id=text scene=text relation=text user_text=text preferred=text",
@@ -286,6 +287,7 @@ func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) erro
 	for table, columns := range compatibleCoreColumns {
 		oldColumns[table] = columns
 	}
+	delete(oldColumns, "chat_history")
 	oldColumns["provider_endpoints"] = strings.TrimSuffix(oldColumns["provider_endpoints"], " api_format=text")
 	return d.validateLayout(ctx, q, oldColumns)
 }

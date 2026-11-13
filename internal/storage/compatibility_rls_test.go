@@ -38,7 +38,7 @@ func TestPostgresMigrationSchemaCompatibilityRowSecurity(t *testing.T) {
 			compatibilitySeedComputerUse(t, db)
 			seedCompatibilityEmbeddingCaches(t, db, false)
 			compatibilityExec(t, db, `DROP TABLE memory_embeddings`)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}
