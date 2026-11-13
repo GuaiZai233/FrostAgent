@@ -1,10 +1,26 @@
 # ADR-0001：无损数据库前向兼容
 
-- **状态：** Accepted
+- **状态：** Accepted（设计目标；部分实现）
 - **日期：** 2026-11-07
 - **决策：** 采用完整性优先（Lossless Forward Compatibility）。
+- **实施状态核对：** 2026-11-13
 
-## 决策
+## 实施状态与当前承诺
+
+本文保留已接受的长期设计目标，**不表示以下决策和验收标准已全部实现**。当前已实现并经配对测试的兼容范围见 [v15 / v16 版本兼容说明](../version-compatibility.md)；[PR #320](https://github.com/GuaiZai233/FrostAgent/pull/320) 实现了其中一个子集，没有替代本 ADR，也没有兑现对任意未来版本、未知模块的通用无损往返保证。
+
+| 设计目标 | 当前实施范围与缺口 |
+| --- | --- |
+| 第 1、2 条：版本仅描述破坏性变化，迁移历史独立 | 附加迁移已有稳定 module ID 和执行记录；核心迁移仍使用版本游标，当前为 16。尚未全面转为独立 migration history。见[核心迁移](../../internal/storage/schema.go)及[附加迁移](../../internal/storage/compatibility_modules.go)。 |
+| 第 3 条：保留未知字段和 JSON 键 | 配对版本覆盖端点格式等指定数据的保留；不能推广为任意未知字段或 JSON 键均可安全重写。当前兼容校验仍会拒绝不受支持的核心表布局。见[兼容校验](../../internal/storage/compatibility.go)。 |
+| 第 5 条：未知模块载荷无损备份、恢复和再次导出 | 已覆盖指定的 Computer Use 元数据和 token usage 等已知内容；通用 opaque payload 存储、模块格式版本及完整性校验协议尚未实现。当前 [ZIP 导出](../../internal/backup/zip.go)枚举已知内容，[ZIP 解码](../../internal/backup/decode.go)使用成员白名单并拒绝未知成员，不能透传未知模块。 |
+| 第 7 条：不以版本号作为统一操作门禁 | 尚未实现。[RequireNativeSchema](../../internal/storage/compatibility.go)仍按受支持版本及有数据的未知模块表拒绝完整操作；[完整备份](../../internal/backup/zip.go)和[实例删除](../../internal/storage/deletion.go)仍使用该检查。 |
+
+这些拒绝检查是在尚不能完整保留未知数据时采取的保护措施。应先实现并验证无损保留机制，再调整操作门禁；直接移除检查会使不完整导出或删除失去保护。拒绝操作与已经发生数据丢失不是同一事实，本处记录的是设计与实施范围的差距。
+
+现有[未来 schema 备份回归](../../internal/backup/schema_compatibility_test.go)、[未知模块保护回归](../../internal/storage/endpoint_format_migration_test.go)及[完整实例操作回归](../../internal/instance/schema_compatibility_test.go)验证的是保护性拒绝及数据未被改写，不是本 ADR 的通用无损往返验收。配对版本的测试通过也不能代替下列验收标准。
+
+## 决策（目标，尚未全部实现）
 
 1. **数据库版本只描述破坏性结构变化。** 新增独立表、可选字段、JSON 键或功能模块，不升级数据库兼容版本；字段重命名、删除、类型或语义不兼容等破坏性变更才升级。
 2. **迁移历史独立于数据库版本。** 每个 migration 使用唯一、不可变的 ID，并记录执行状态；是否执行由 migration 记录决定，不由版本号决定。
@@ -14,7 +30,7 @@
 6. **破坏性迁移采用 Expand-Contract。** 先扩展结构并兼容新旧读写，再回填、验证，最后在独立阶段移除旧结构。禁止静默丢弃旧数据。
 7. **版本号不是操作门禁。** 不得仅因数据库版本较高而拒绝导入、导出或实例删除。确有不兼容时，按具体结构/能力报告错误；不得以版本比较替代实际兼容性判断。
 
-## 影响
+## 影响（目标）
 
 - `schema_meta.version` 不再承担 migration 执行游标；引入独立 Migration ID / history。
 - 重新审视 `min_compatible_version` 和 `RequireNativeSchema`，移除其作为完整备份、恢复、导出、删除统一版本门禁的职责。
@@ -22,7 +38,7 @@
 - 新模块不得把不可丢失数据放入旧版本会清空、重建或整行覆盖的存储路径。
 - 本决策不承诺不同版本进程同时写入同一个数据库。
 
-## 验收标准
+## 验收标准（通用能力，尚未全部通过）
 
 - 新版本写入未知模块数据后，旧版本可以使用已知功能，并完成备份、恢复和再次导出；随后新版本恢复出的模块数据与原数据一致。
 - 旧版本更新已知字段时，未知字段和 JSON 键保持不变。
