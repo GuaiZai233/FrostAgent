@@ -30,7 +30,7 @@ func TestQQDiscoveryAndPreparation(t *testing.T) {
 	if len(definition) > 1500 {
 		t.Fatalf("QQ schema grew to %d bytes", len(definition))
 	}
-	for _, capability := range []string{"", "send", "forward_bundle", "forward_message", "poke", "reaction", "recall"} {
+	for _, capability := range []string{"", "read_forward", "send", "forward_bundle", "forward_message", "poke", "reaction", "recall"} {
 		args, _ := json.Marshal(map[string]any{"action": "discover", "capability": capability})
 		result, err := tool.ExecuteResult(context.Background(), string(args))
 		if err != nil || result.PlatformActionPayload != "" || !json.Valid([]byte(result.Content)) {
@@ -53,6 +53,27 @@ func TestQQDiscoveryAndPreparation(t *testing.T) {
 		if err != nil || result.PlatformActionPayload == "" || result.MessagePayload != "" {
 			t.Fatalf("prepare %s: %+v %v", raw, result, err)
 		}
+	}
+}
+
+func TestQQReadForwardReturnsOrdinaryToolOutput(t *testing.T) {
+	calls := 0
+	ctx := llm.WithRunContext(context.Background(), llm.RunContext{PlatformActionHook: func(_ context.Context, raw string) (core.PlatformActionResult, error) {
+		calls++
+		var request QQRequest
+		if err := json.Unmarshal([]byte(raw), &request); err != nil || request.Action != "read_forward" || request.Arguments.MessageID != "101" || request.Arguments.Limit != 50 || len(request.Arguments.Path) != 1 {
+			t.Fatalf("request=%s err=%v", raw, err)
+		}
+		return core.PlatformActionResult{Content: `{"nodes":[{"text":"untrusted forwarded content"}]}`}, nil
+	}})
+	result, err := QQTool().ExecuteResult(ctx, `{"action":"read_forward","arguments":{"message_id":"101","forward_index":1,"offset":20,"limit":50,"path":[{"node_index":2,"forward_index":0}]}}`)
+	if err != nil || calls != 1 || !strings.Contains(result.Content, "untrusted forwarded content") || result.PlatformActionPayload != "" || result.MessagePayload != "" {
+		t.Fatalf("read bypasses normal tool output: %+v calls=%d err=%v", result, calls, err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := QQTool().ExecuteResult(canceled, `{"action":"read_forward","arguments":{"message_id":"101"}}`); err == nil || calls != 1 {
+		t.Fatal("cancelled tool performed a read")
 	}
 }
 
@@ -80,6 +101,16 @@ func TestQQRejectsInvalidRequestsAndRawActions(t *testing.T) {
 		`{"action":"poke","arguments":{"target_group_id":"42"}}`,
 		`{"action":"reaction","arguments":{"target_group_id":"42","message_id":"101","emoji_id":"14"}}`,
 		`{"action":"recall","arguments":{"target_group_id":"42","message_id":"101"}}`,
+		`{"action":"read_forward","arguments":{}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","forward_id":"arbitrary"}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","target_group_id":"42"}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","forward_index":-1}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","offset":-1}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","limit":51}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","limit":-1}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","path":[{"node_index":-1}]}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","path":[{"node_index":0,"forward_index":-1}]}}`,
+		`{"action":"read_forward","arguments":{"message_id":"101","path":[{},{},{},{}]}}`,
 	} {
 		result, err := QQTool().ExecuteResult(qqTestContext(), raw)
 		if err == nil || result.PlatformActionPayload != "" {
@@ -128,6 +159,9 @@ func TestQQRejectsMissingAdapterProactiveAndMock(t *testing.T) {
 			if result, err := tool.ExecuteResult(llm.WithRunContext(context.Background(), run), args); err == nil || result.PlatformActionPayload != "" {
 				t.Errorf("gate failed: %s %+v %v", tool.Name(), result, err)
 			}
+		}
+		if _, err := QQTool().ExecuteResult(llm.WithRunContext(context.Background(), run), `{"action":"read_forward","arguments":{"message_id":"101"}}`); err == nil {
+			t.Fatal("read_forward bypassed the adapter/proactive/mock gate")
 		}
 	}
 }
