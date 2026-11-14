@@ -105,6 +105,9 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		if c.mock {
 			return core.PlatformActionResult{}, fmt.Errorf("QQ 操作不能在模拟会话中发送")
 		}
+		if request.Action == "read_forward" {
+			return c.readQQForward(ctx, event, turn, request.Arguments)
+		}
 		sourceSessionID := c.historyKey(event)
 		sessionID := sourceSessionID
 		destination := event
