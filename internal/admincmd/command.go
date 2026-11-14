@@ -66,12 +66,13 @@ func FormatUsage(prefix string) string {
 	p := NormalizePrefix(prefix)
 	sep := PrefixSeparator(p)
 	return fmt.Sprintf("管理员指令使用指南：\n"+
+		"私聊直接输入指令，无需 @；群聊除 log 外需 @ Bot。\n"+
 		"%s%sreset - 重置当前会话与上下文\n"+
 		"%s%sban <userID> - 全局安全封禁用户\n"+
 		"%s%sunban <userID> - 解除用户全局安全封禁\n"+
 		"%s%scompact - 立即压缩总结当前会话上下文\n"+
 		"%s%sreflect - 触发记忆反思\n"+
-		"%s%slog <uuidv4> - 私聊查询当前实例错误日志（无需 @）",
+		"%s%slog [uuidv4] - 私聊查询错误日志；省略 UUID 时查询紧邻的 Bot 报错（无需 @）",
 		p, sep,
 		p, sep,
 		p, sep,
@@ -137,6 +138,9 @@ func ParseCandidate(text, prefix string) (cmd ParsedCommand, isCandidate bool, e
 	cmd = ParsedCommand{Type: CommandType(cmdName), Args: args, RawArgs: rawArgs}
 	switch cmd.Type {
 	case CmdLog:
+		if len(args) == 0 {
+			return cmd, true, nil
+		}
 		if len(args) != 1 {
 			return cmd, true, fmt.Errorf("log 指令格式错误：log <uuidv4>")
 		}

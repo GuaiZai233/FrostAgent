@@ -100,6 +100,11 @@ type wsConnection struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	writeMu             sync.Mutex
+	previousErrorMu     sync.Mutex
+	previousErrors      map[string]*previousErrorReply // Protected by previousErrorMu; no message text is retained.
+	outgoingErrorEchoes map[outgoingErrorEcho]struct{} // Protected by previousErrorMu; independent of lookup candidates.
+	errorEchoOrder      []outgoingErrorEcho
+	nextErrorEcho       int
 	messageMu           sync.Mutex
 	pendingMessage      map[string]chan oneBotAPIResponse
 	nextMessageEcho     uint64
@@ -159,18 +164,61 @@ func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
 }
 
 func (c *wsConnection) writeTurnMessage(messageType int, data []byte, turn *llm.SessionTurn) error {
+	var action map[string]json.RawMessage
+	var actionName string
+	if messageType != websocket.TextMessage || c.mock || json.Unmarshal(data, &action) != nil ||
+		json.Unmarshal(action["action"], &actionName) != nil || !isMessageSendAction(actionName) {
+		_, _, err := c.writeTurnMessagePending(messageType, data, turn)
+		return err
+	}
+	// Raw sends return after the socket write, including sends from the reader
+	// itself. Track their ACK asynchronously so the reader can dispatch it.
+	echo, responses := c.registerActionRequest(actionName, "")
+	action["echo"], _ = json.Marshal(echo)
+	data, err := json.Marshal(action)
+	if err != nil {
+		c.clearMessageRequest(echo, responses)
+		return err
+	}
+	key, reply, err := c.writeTurnMessagePending(messageType, data, turn)
+	if err != nil || reply == nil {
+		c.clearMessageRequest(echo, responses)
+		c.finishOutgoingError(key, reply, err)
+		return err
+	}
+	timeout := actionACKTimeout(c.Scope)
+	if !c.Scope.Go(func() {
+		_, ackErr := c.waitActionACK(actionName, echo, responses, timeout, c.Scope.Context())
+		c.finishOutgoingError(key, reply, ackErr)
+		if ackErr != nil {
+			c.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("确认直接消息送达失败: %v", ackErr))
+		}
+	}) {
+		c.clearMessageRequest(echo, responses)
+		c.finishOutgoingError(key, reply, context.Canceled)
+	}
+	return err
+}
+
+// writeTurnMessagePending leaves delivery completion to the caller, allowing
+// ACK-backed actions to publish their platform result instead of the socket write.
+func (c *wsConnection) writeTurnMessagePending(messageType int, data []byte, turn *llm.SessionTurn) (key string, reply *previousErrorReply, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.conn == nil || c.isClosed() {
-		return fmt.Errorf("websocket connection is closed")
+		return "", nil, fmt.Errorf("websocket connection is closed")
 	}
-	return turn.WithAuthority(func() error {
+	err = turn.WithAuthority(func() error {
 		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 			return err
 		}
 		defer c.conn.SetWriteDeadline(time.Time{})
+		if messageType == websocket.TextMessage {
+			key, reply = c.beginOutgoingError(data)
+		}
 		return c.conn.WriteMessage(messageType, data)
 	})
+	return key, reply, err
 }
 
 func (c *wsConnection) Close() error {
