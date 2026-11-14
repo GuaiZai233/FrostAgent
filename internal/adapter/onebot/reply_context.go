@@ -79,14 +79,21 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 		c.clearMessageRequest(echo, responseChannel)
 		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", writeErr)
 	}
+	response, err := c.waitActionACK(action.Action, echo, responseChannel, timeout, ctx)
+	if err == nil {
+		c.recordHistoryAction(action, response, "delivered")
+	}
+	return response, err
+}
 
+func (c *wsConnection) waitActionACK(actionName string, echo string, responseChannel chan oneBotAPIResponse, timeout time.Duration, ctx context.Context) (oneBotAPIResponse, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	defer c.clearMessageRequest(echo, responseChannel)
 	response, err := waitActionResponse(ctx, c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			err = fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
+			err = fmt.Errorf("action %s timeout after %v (echo=%s)", actionName, timeout, echo)
 		}
 		return response, err
 	}
@@ -100,7 +107,6 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 		}
 		return response, fmt.Errorf("onebot api error: retcode=%d %s", response.RetCode, detail)
 	}
-	c.recordHistoryAction(action, response, "delivered")
 	return response, nil
 }
 

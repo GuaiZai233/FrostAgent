@@ -90,11 +90,14 @@ func TestBareLogAfterErrorOverWebSocket(t *testing.T) {
 			if err := client.WriteJSON(event); err != nil {
 				t.Fatal(err)
 			}
-			_, failure := readLogAction(t, client)
+			errorAction, failure := readLogAction(t, client)
 			_, reference, found := strings.Cut(failure, " (Ref_ID: ")
 			id, valid := logs.NormalizeErrorUUID(strings.TrimSuffix(reference, ")"))
 			if !found || !valid || !strings.Contains(failure, "[FrostAgent 错误]") {
 				t.Fatalf("expected genuine bot failure: %q", failure)
+			}
+			if err := client.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": errorAction.Echo}); err != nil {
+				t.Fatal(err)
 			}
 			event.Message = json.RawMessage(`"/log"`)
 			event.MessageID++
@@ -305,5 +308,43 @@ func TestPreviousErrorIgnoresFailedWritesAndBoundsState(t *testing.T) {
 	}
 	if len(conn.previousErrors) != maxTrustedMessageSessions {
 		t.Fatalf("unbounded preceding errors: %d", len(conn.previousErrors))
+	}
+	if len(conn.outgoingErrorEchoes) != maxTrustedMessageSessions || len(conn.errorEchoOrder) != maxTrustedMessageSessions {
+		t.Fatal("unbounded error echo deduplication")
+	}
+}
+
+func TestPreviousErrorEchoCacheBoundsAndSessionIsolation(t *testing.T) {
+	conn := newWSConnection(nil)
+	store := logs.New("test", "test", 20)
+	failure := store.ReportError(logs.SYSTEM, "synthetic failure", nil)
+	for target, text := range map[int]string{202: failure, 303: store.ReportError(logs.SYSTEM, "another failure", nil)} {
+		data, _ := json.Marshal(model.OneBotAction{Action: "send_private_msg", Params: map[string]any{"user_id": target, "message": text}})
+		recordSentPreviousError(conn, data)
+	}
+	echo := model.OneBotEvent{PostType: "message_sent", MessageType: "private", SelfID: 101, UserID: 101, TargetID: 303,
+		Message: mustMarshalPreviousErrorMessage(t, failure)}
+	conn.takePreviousError(echo)
+	if conn.previousErrors["private:303"] != nil || conn.previousErrors["private:202"] == nil {
+		t.Fatal("another conversation's known UUID suppressed an unknown echo")
+	}
+	conn = newWSConnection(nil)
+	for i := 0; i <= maxTrustedMessageSessions; i++ {
+		conn.rememberErrorEcho("private:202", fmt.Sprintf("synthetic-error-%d", i))
+	}
+	if len(conn.outgoingErrorEchoes) != maxTrustedMessageSessions || len(conn.errorEchoOrder) != maxTrustedMessageSessions {
+		t.Fatal("same-conversation error echoes are unbounded")
+	}
+	if _, exists := conn.outgoingErrorEchoes[outgoingErrorEcho{session: "private:202", uuid: "synthetic-error-0"}]; exists {
+		t.Fatal("oldest error echo was not evicted")
+	}
+	latest := outgoingErrorEcho{session: "private:202", uuid: fmt.Sprintf("synthetic-error-%d", maxTrustedMessageSessions)}
+	if _, exists := conn.outgoingErrorEchoes[latest]; !exists {
+		t.Fatal("latest error echo was not retained")
+	}
+	before := conn.nextErrorEcho
+	conn.rememberErrorEcho(latest.session, latest.uuid)
+	if conn.nextErrorEcho != before {
+		t.Fatal("duplicate error echo evicted another entry")
 	}
 }

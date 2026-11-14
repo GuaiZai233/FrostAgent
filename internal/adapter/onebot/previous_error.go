@@ -17,6 +17,44 @@ type previousErrorReply struct {
 	sent     bool // Published by closing done.
 }
 
+type outgoingErrorEcho struct {
+	session string
+	uuid    string
+}
+
+// rememberErrorEcho runs under previousErrorMu. A known local send can echo
+// before or after its ACK, even after its lookup candidate has been consumed.
+// This bounded cache only deduplicates echoes; it never confirms delivery.
+func (c *wsConnection) rememberErrorEcho(key, uuid string) {
+	if uuid == "" {
+		return
+	}
+	echo := outgoingErrorEcho{session: key, uuid: uuid}
+	if _, exists := c.outgoingErrorEchoes[echo]; exists {
+		return
+	}
+	if c.outgoingErrorEchoes == nil {
+		c.outgoingErrorEchoes = make(map[outgoingErrorEcho]struct{})
+	}
+	if len(c.errorEchoOrder) < maxTrustedMessageSessions {
+		c.errorEchoOrder = append(c.errorEchoOrder, echo)
+	} else {
+		delete(c.outgoingErrorEchoes, c.errorEchoOrder[c.nextErrorEcho])
+		c.errorEchoOrder[c.nextErrorEcho] = echo
+		c.nextErrorEcho = (c.nextErrorEcho + 1) % maxTrustedMessageSessions
+	}
+	c.outgoingErrorEchoes[echo] = struct{}{}
+}
+
+func isMessageSendAction(action string) bool {
+	switch action {
+	case "send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg", "send_forward_msg", "forward_group_single_msg", "forward_friend_single_msg":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *previousErrorReply) resolve(ctx, transportCtx context.Context) (string, bool) {
 	if ctx.Err() != nil || transportCtx.Err() != nil {
 		return "", false
@@ -83,12 +121,8 @@ func (c *wsConnection) takePreviousError(event model.OneBotEvent) *previousError
 	reply := c.previousErrors[key]
 	if event.PostType == "message_sent" {
 		if uuid := outgoingErrorUUID(event.Message); uuid != "" {
-			// A delayed echo may refer to an earlier error while the latest send
-			// awaits its ACK. The same lock protects successful chain pruning.
-			for known := reply; known != nil; known = known.previous {
-				if known.uuid == uuid {
-					return nil
-				}
+			if _, known := c.outgoingErrorEchoes[outgoingErrorEcho{session: key, uuid: uuid}]; known {
+				return nil
 			}
 		}
 	}
@@ -116,9 +150,7 @@ func (c *wsConnection) beginOutgoingError(data []byte) (string, *previousErrorRe
 	if json.Unmarshal(data, &action) != nil {
 		return "", nil
 	}
-	switch action.Action {
-	case "send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg", "send_forward_msg", "forward_group_single_msg", "forward_friend_single_msg":
-	default:
+	if !isMessageSendAction(action.Action) {
 		return "", nil
 	}
 	kind, target := "private", historyRawID(action.Params.UserID)
@@ -133,6 +165,7 @@ func (c *wsConnection) beginOutgoingError(data []byte) (string, *previousErrorRe
 	defer c.previousErrorMu.Unlock()
 	key := kind + ":" + strconv.FormatInt(id, 10)
 	uuid := outgoingErrorUUID(action.Params.Message)
+	c.rememberErrorEcho(key, uuid)
 	previous := retainedPreviousError(c.previousErrors[key])
 	if uuid == "" && previous == nil {
 		return "", nil

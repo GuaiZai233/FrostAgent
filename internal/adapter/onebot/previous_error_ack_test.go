@@ -73,13 +73,19 @@ func readPreviousErrorAction(t *testing.T, actions <-chan model.OneBotAction) mo
 	}
 }
 
-func sendPreviousErrorFixture(t *testing.T, conn *wsConnection, actions <-chan model.OneBotAction, text string) {
+func sendPreviousErrorFixture(t *testing.T, conn *wsConnection, actions <-chan model.OneBotAction, ack func(model.OneBotAction, string, int), text string) {
 	t.Helper()
 	data, _ := json.Marshal(model.OneBotAction{Action: "send_private_msg", Params: map[string]any{"user_id": 202, "message": text}})
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		t.Fatal(err)
 	}
-	readPreviousErrorAction(t, actions)
+	ack(readPreviousErrorAction(t, actions), "ok", 0)
+	conn.previousErrorMu.Lock()
+	pending := conn.previousErrors["private:202"]
+	conn.previousErrorMu.Unlock()
+	if id := previousErrorID(t, pending); id == "" || !strings.Contains(text, id) {
+		t.Fatal("fixture error was not confirmed")
+	}
 }
 
 func TestPreviousErrorLogUsesPlatformACKResult(t *testing.T) {
@@ -96,7 +102,7 @@ func TestPreviousErrorLogUsesPlatformACKResult(t *testing.T) {
 				previous := scope.Logger.ReportError(logs.SYSTEM, "previous diagnostic", nil)
 				newError := scope.Logger.ReportError(logs.SYSTEM, "new diagnostic", nil)
 				if message != "error-without-predecessor" {
-					sendPreviousErrorFixture(t, conn, actions, previous)
+					sendPreviousErrorFixture(t, conn, actions, ack, previous)
 				}
 				text := newError
 				ordinary := strings.HasPrefix(message, "ordinary")
@@ -189,7 +195,7 @@ func TestPreviousErrorOutOfOrderACKs(t *testing.T) {
 			previous := store.ReportError(logs.SYSTEM, "previous", nil)
 			first := store.ReportError(logs.SYSTEM, "first", nil)
 			second := store.ReportError(logs.SYSTEM, "second", nil)
-			sendPreviousErrorFixture(t, conn, actions, previous)
+			sendPreviousErrorFixture(t, conn, actions, ack, previous)
 			start := func(text string) (model.OneBotAction, <-chan error) {
 				result := make(chan error, 1)
 				go func() {
@@ -235,5 +241,198 @@ func TestPreviousErrorOutOfOrderACKs(t *testing.T) {
 				t.Fatal("late ACK revived consumed state")
 			}
 		}
+	}
+}
+
+func waitPreviousErrorCompletion(t *testing.T, pending *previousErrorReply) {
+	t.Helper()
+	if pending == nil {
+		t.Fatal("missing delivery candidate")
+	}
+	select {
+	case <-pending.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("delivery completion timeout")
+	}
+}
+
+func TestPreviousErrorDirectReplyUsesPlatformACKResult(t *testing.T) {
+	for _, kind := range []string{"private", "group"} {
+		for _, outcome := range []string{"success", "rejected", "missing-status", "timeout"} {
+			for _, message := range []string{"ordinary", "error", "error-without-predecessor"} {
+				t.Run(kind+"/"+outcome+"/"+message, func(t *testing.T) {
+					conn, actions, ack := setupPreviousErrorACKTest(t)
+					timeout := "2s"
+					if outcome == "timeout" {
+						timeout = "100ms"
+					}
+					scope := newAdminTestScope(t, map[string]string{
+						admincmd.AdminQQIDsEnv: "202", "ONEBOT_ACTION_TIMEOUT": timeout,
+					})
+					defer scope.Wait()
+					defer scope.Cancel()
+					scope.Logger = logs.New("test", "test", 20)
+					conn.Scope = scope
+					engine := &llm.Engine{Scope: scope}
+					event := model.OneBotEvent{PostType: "message", MessageType: kind, SelfID: 101, UserID: 202, GroupID: 303, Message: json.RawMessage(`"/log"`)}
+					actionName, targetKey, target := "send_private_msg", "user_id", "202"
+					if kind == "group" {
+						actionName, targetKey, target = "send_group_msg", "group_id", "303"
+					}
+					previous := scope.Logger.ReportError(logs.SYSTEM, "previous diagnostic", nil)
+					if message != "error-without-predecessor" {
+						data, _ := json.Marshal(model.OneBotAction{Action: actionName, Params: map[string]any{targetKey: target, "message": previous}})
+						recordSentPreviousError(conn, data)
+					}
+					text := scope.Logger.ReportError(logs.SYSTEM, "new diagnostic", nil)
+					if message == "ordinary" {
+						text = "ordinary reply"
+					}
+					// This returns before ACK, as it must also be safe in the reader.
+					sendDirectReply(actionName, targetKey, target, "echo_direct", event, conn, text)
+					action := readPreviousErrorAction(t, actions)
+					pending := conn.takePreviousError(event)
+					if pending == nil {
+						t.Fatal("socket write discarded the delivery candidate")
+					}
+					select {
+					case <-pending.done:
+						t.Fatal("direct reply completed without platform confirmation")
+					default:
+					}
+					if !handleAdminCommand(conn, event, engine, pending) {
+						t.Fatal("log command not consumed")
+					}
+					switch outcome {
+					case "success":
+						ack(action, "ok", 0)
+					case "rejected":
+						ack(action, "failed", 1400)
+					case "missing-status":
+						ack(action, "", 0)
+					}
+					waitPreviousErrorCompletion(t, pending)
+					if pending.sent != (outcome == "success") {
+						t.Fatalf("wrong direct reply result: sent=%v", pending.sent)
+					}
+					reply := readPreviousErrorAction(t, actions)
+					body, _ := json.Marshal(reply.Params)
+					want := admincmd.FormatUsage("/")
+					if outcome == "success" && message != "ordinary" {
+						want = "new diagnostic"
+					} else if outcome != "success" && message != "error-without-predecessor" {
+						want = "previous diagnostic"
+					}
+					params := reply.Params.(map[string]any)
+					actual, _ := historyMessageText(mustMarshalPreviousErrorMessage(t, params["message"]))
+					if !strings.Contains(actual, want) {
+						t.Fatalf("incorrect direct reply lookup: %s", body)
+					}
+					if outcome != "success" && strings.Contains(actual, "new diagnostic") {
+						t.Fatal("lookup exposed an unconfirmed direct reply")
+					}
+					ack(reply, "ok", 0)
+				})
+			}
+		}
+	}
+}
+
+func mustMarshalPreviousErrorMessage(t *testing.T, message any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestPreviousErrorDelayedEchoAfterNewErrorACK(t *testing.T) {
+	for _, kind := range []string{"private", "group"} {
+		for _, firstACK := range []string{"before-new-error", "after-late-echo", "consumed-before-new-error"} {
+			t.Run(kind+"/"+firstACK, func(t *testing.T) {
+				conn, actions, ack := setupPreviousErrorACKTest(t)
+				scope := newAdminTestScope(t, map[string]string{admincmd.AdminQQIDsEnv: "202"})
+				defer scope.Wait()
+				defer scope.Cancel()
+				scope.Logger = logs.New("test", "test", 20)
+				conn.Scope = scope
+				engine := &llm.Engine{Scope: scope}
+				event := model.OneBotEvent{PostType: "message", MessageType: kind, SelfID: 101, UserID: 202, GroupID: 303, Message: json.RawMessage(`"/log"`)}
+				actionName, targetKey, target := "send_private_msg", "user_id", "202"
+				if kind == "group" {
+					actionName, targetKey, target = "send_group_msg", "group_id", "303"
+				}
+				first := scope.Logger.ReportError(logs.SYSTEM, "old diagnostic", nil)
+				second := scope.Logger.ReportError(logs.SYSTEM, "latest diagnostic", nil)
+				sendDirectReply(actionName, targetKey, target, "echo_direct", event, conn, first)
+				firstAction := readPreviousErrorAction(t, actions)
+				conn.previousErrorMu.Lock()
+				firstPending := conn.previousErrors[historyKey(event)]
+				conn.previousErrorMu.Unlock()
+				if firstACK != "after-late-echo" {
+					ack(firstAction, "ok", 0)
+					waitPreviousErrorCompletion(t, firstPending)
+				}
+				if firstACK == "consumed-before-new-error" {
+					conn.takePreviousError(event)
+				}
+				sendDirectReply(actionName, targetKey, target, "echo_direct", event, conn, second)
+				secondAction := readPreviousErrorAction(t, actions)
+				if secondAction.Echo == firstAction.Echo {
+					t.Fatal("concurrent direct replies reused an ACK echo")
+				}
+				conn.previousErrorMu.Lock()
+				secondPending := conn.previousErrors[historyKey(event)]
+				conn.previousErrorMu.Unlock()
+				ack(secondAction, "ok", 0)
+				waitPreviousErrorCompletion(t, secondPending)
+				if secondPending.previous != nil {
+					t.Fatal("confirmed error retained the lookup fallback chain")
+				}
+				echo := event
+				echo.PostType, echo.UserID, echo.TargetID = "message_sent", event.SelfID, event.UserID
+				echo.Message = mustMarshalPreviousErrorMessage(t, first)
+				if conn.takePreviousError(echo) != nil {
+					t.Fatal("delayed echo became a command input")
+				}
+				if firstACK == "after-late-echo" {
+					ack(firstAction, "ok", 0)
+					waitPreviousErrorCompletion(t, firstPending)
+				}
+				pending := conn.takePreviousError(event)
+				if id := previousErrorID(t, pending); id == "" || !strings.Contains(second, id) {
+					t.Fatal("delayed old error echo cleared the latest error")
+				}
+				if !handleAdminCommand(conn, event, engine, pending) {
+					t.Fatal("log command not consumed")
+				}
+				reply := readPreviousErrorAction(t, actions)
+				body, _ := json.Marshal(reply.Params)
+				if !strings.Contains(string(body), "latest diagnostic") || strings.Contains(string(body), "old diagnostic") {
+					t.Fatalf("log did not query the latest error: %s", body)
+				}
+				ack(reply, "ok", 0)
+			})
+		}
+	}
+}
+
+func TestPreviousErrorDirectReplyCancelledOnClose(t *testing.T) {
+	conn, actions, _ := setupPreviousErrorACKTest(t)
+	failure := logs.New("test", "test", 20).ReportError(logs.SYSTEM, "unconfirmed", nil)
+	event := model.OneBotEvent{PostType: "message", MessageType: "private", SelfID: 101, UserID: 202}
+	sendDirectReply("send_private_msg", "user_id", "202", "echo_direct", event, conn, failure)
+	readPreviousErrorAction(t, actions)
+	pending := conn.takePreviousError(event)
+	conn.Close()
+	waitPreviousErrorCompletion(t, pending)
+	if pending.sent {
+		t.Fatal("connection closure confirmed an undelivered error")
+	}
+	conn.messageMu.Lock()
+	defer conn.messageMu.Unlock()
+	if len(conn.pendingMessage) != 0 {
+		t.Fatal("connection closure retained a raw send ACK waiter")
 	}
 }

@@ -243,7 +243,7 @@ func setupTestWS(t *testing.T) (*wsConnection, chan model.OneBotAction, func()) 
 	}()
 
 	cleanup := func() {
-		_ = clientConn.Close()
+		_ = wsConn.Close()
 		server.Close()
 	}
 

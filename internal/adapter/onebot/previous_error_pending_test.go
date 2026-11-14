@@ -77,7 +77,7 @@ func TestBareLogBeforeErrorWriteReturns(t *testing.T) {
 	if err := client.WriteJSON(event); err != nil {
 		t.Fatal(err)
 	}
-	_, failure := readLogAction(t, client)
+	errorAction, failure := readLogAction(t, client)
 	select {
 	case <-gate.wrote:
 	case <-time.After(time.Second):
@@ -97,6 +97,9 @@ func TestBareLogBeforeErrorWriteReturns(t *testing.T) {
 	serverConn.previousErrorMu.Unlock()
 	if pending == nil || !strings.Contains(failure, pending.uuid) {
 		t.Fatal("received error has no pending UUID")
+	}
+	if err := client.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": errorAction.Echo}); err != nil {
+		t.Fatal(err)
 	}
 	event.Message = json.RawMessage(`"/log"`)
 	if err := client.WriteJSON(event); err != nil {
