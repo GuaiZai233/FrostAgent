@@ -56,6 +56,7 @@ func (c *wsConnection) readQQForward(ctx context.Context, event model.OneBotEven
 	if !ok || !c.messageSessionMatches(mid, c.historyKey(event)) {
 		return core.PlatformActionResult{}, fmt.Errorf("message_id 不在当前连接、当前会话的可信上下文中")
 	}
+	a.MessageID = strconv.FormatInt(mid, 10)
 	call := func(action model.OneBotAction) (oneBotAPIResponse, error) {
 		if turn.Interrupted() {
 			return oneBotAPIResponse{}, context.Canceled
@@ -153,8 +154,14 @@ func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model
 		Nodes        []qqReadForwardNode   `json:"nodes"`
 		HasMore      bool                  `json:"has_more"`
 		NextOffset   int                   `json:"next_offset"`
-	}{Status: "ok", MessageID: a.MessageID, ForwardIndex: a.ForwardIndex, Path: a.Path, Total: len(records), Offset: a.Offset, Nodes: []qqReadForwardNode{}}
-	size := 0
+	}{Status: "ok", MessageID: a.MessageID, ForwardIndex: a.ForwardIndex, Path: a.Path, Total: len(records), Offset: a.Offset, Nodes: []qqReadForwardNode{}, NextOffset: a.Offset, HasMore: a.Offset < len(records)}
+	encoded, err := json.Marshal(page)
+	if err != nil {
+		return core.PlatformActionResult{}, err
+	}
+	if len(encoded) > maxQQForwardPage {
+		return core.PlatformActionResult{}, fmt.Errorf("转发记录分页元数据超过 32 KiB")
+	}
 	for index := a.Offset; index < len(records) && len(page.Nodes) < limit; index++ {
 		record := records[index]
 		node := qqReadForwardNode{Index: index, Time: record.time, ForwardCount: len(qqForwardReferences(record.content))}
@@ -162,18 +169,23 @@ func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model
 		node.Sender.Nickname, _ = qqForwardClip(record.name, 128)
 		text, _ := historyMessageText(record.content)
 		node.Text, node.TextTruncated = qqForwardClip(text, maxQQForwardText)
-		encoded, _ := json.Marshal(node)
-		// Reserve space for page metadata, including the bounded traversal path.
-		if size+len(encoded) > maxQQForwardPage-2048 {
+		page.Nodes = append(page.Nodes, node)
+		page.NextOffset = index + 1
+		page.HasMore = page.NextOffset < len(records)
+		// Include metadata and JSON escaping in the size of every candidate page.
+		candidate, err := json.Marshal(page)
+		if err != nil {
+			return core.PlatformActionResult{}, err
+		}
+		if len(candidate) > maxQQForwardPage {
+			if len(page.Nodes) == 1 {
+				return core.PlatformActionResult{}, fmt.Errorf("单条转发记录及分页元数据超过 32 KiB")
+			}
 			break
 		}
-		page.Nodes = append(page.Nodes, node)
-		size += len(encoded) + 1
+		encoded = candidate
 	}
-	page.NextOffset = a.Offset + len(page.Nodes)
-	page.HasMore = page.NextOffset < len(records)
-	encoded, err := json.Marshal(page)
-	return core.PlatformActionResult{Content: string(encoded)}, err
+	return core.PlatformActionResult{Content: string(encoded)}, nil
 }
 
 func qqForwardReferences(raw json.RawMessage) []qqForwardReference {

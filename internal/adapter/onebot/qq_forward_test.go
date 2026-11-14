@@ -188,6 +188,69 @@ func TestQQReadForwardDefaultLimitAndLastPage(t *testing.T) {
 	}
 }
 
+func TestQQReadForwardCanonicalizesPaddedMessageID(t *testing.T) {
+	c := newWSConnection(nil)
+	defer c.Close()
+	event := model.OneBotEvent{MessageType: "private", UserID: testUserID, MessageID: 101, Message: json.RawMessage(`[{"type":"forward","data":{"content":[{"content":"fixture"}]}}]`)}
+	c.rememberMessageSession(101, c.historyKey(event))
+	for _, id := range []string{"101", strings.Repeat(" ", 33000) + "101", "\t\n+000101\u3000"} {
+		request, _ := json.Marshal(tools.QQRequest{Action: "read_forward", Arguments: tools.QQArguments{MessageID: id}})
+		result, err := c.qqActionHook(event, nil, nil, nil)(context.Background(), string(request))
+		if err != nil || len(result.Content) > maxQQForwardPage {
+			t.Fatalf("input bytes=%d output bytes=%d err=%v", len(id), len(result.Content), err)
+		}
+		var page struct {
+			MessageID string              `json:"message_id"`
+			Nodes     []qqReadForwardNode `json:"nodes"`
+		}
+		if err := json.Unmarshal([]byte(result.Content), &page); err != nil || page.MessageID != "101" || len(page.Nodes) != 1 || page.Nodes[0].Text != "fixture" {
+			t.Fatalf("input bytes=%d invalid page: %s err=%v", len(id), result.Content, err)
+		}
+	}
+}
+
+func TestQQReadForwardEnforcesEncodedPageSize(t *testing.T) {
+	source := json.RawMessage(`[{"type":"forward","data":{"content":[{"content":"\u0000<>&"},{"content":"last record"}]}}]`)
+	call := func(model.OneBotAction) (oneBotAPIResponse, error) {
+		t.Fatal("inline content must not query the platform")
+		return oneBotAPIResponse{}, nil
+	}
+	for _, tc := range []struct{ name, id, wantError string }{
+		{"one node fits", strings.Repeat("x", maxQQForwardPage-220), ""},
+		{"escaped metadata exceeds cap", strings.Repeat("\x00", maxQQForwardPage/6), "分页元数据"},
+		{"first node cannot fit", strings.Repeat("x", maxQQForwardPage-150), "单条转发记录"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := readQQForwardPage(source, tools.QQArguments{MessageID: tc.id}, call)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || result.Content != "" {
+					t.Fatalf("oversize response: bytes=%d err=%v", len(result.Content), err)
+				}
+				return
+			}
+			if err != nil || len(result.Content) > maxQQForwardPage || !json.Valid([]byte(result.Content)) {
+				t.Fatalf("encoded page bytes=%d err=%v", len(result.Content), err)
+			}
+			var page struct {
+				Nodes      []qqReadForwardNode `json:"nodes"`
+				NextOffset int                 `json:"next_offset"`
+				HasMore    bool                `json:"has_more"`
+			}
+			_ = json.Unmarshal([]byte(result.Content), &page)
+			if len(page.Nodes) != 1 || page.NextOffset != 1 || !page.HasMore || page.Nodes[0].Text != "\x00<>&" {
+				t.Fatalf("byte-limited page did not advance: nodes=%d next=%d more=%v", len(page.Nodes), page.NextOffset, page.HasMore)
+			}
+			result, err = readQQForwardPage(source, tools.QQArguments{MessageID: tc.id, Offset: page.NextOffset}, call)
+			if err != nil || len(result.Content) > maxQQForwardPage {
+				t.Fatalf("last page bytes=%d err=%v", len(result.Content), err)
+			}
+			if err := json.Unmarshal([]byte(result.Content), &page); err != nil || len(page.Nodes) != 1 || page.Nodes[0].Text != "last record" || page.Nodes[0].Index != 1 || page.NextOffset != 2 || page.HasMore {
+				t.Fatalf("last page failed to resume: err=%v", err)
+			}
+		})
+	}
+}
+
 func TestQQReadForwardRejectsMismatchedHistoricalMetadata(t *testing.T) {
 	for _, kind := range []string{"group", "private"} {
 		t.Run(kind, func(t *testing.T) {
