@@ -71,7 +71,73 @@ func TestModulePayloadRoundTripAndWriteProtection(t *testing.T) {
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("cross-instance deletion: %v", err)
 			}
+			if err := db.RebindModulePayload(ctx, "synthetic-restored", p.ModuleID, p.RecordID, old); !errors.Is(err, ErrModulePayloadConflict) {
+				t.Fatalf("unknown format rebound: %v", err)
+			}
+			if err := db.RebindModulePayload(ctx, "synthetic-restored", p.ModuleID, p.RecordID, future); err != nil {
+				t.Fatal(err)
+			}
+			rows, err = db.ModulePayloads(ctx, "synthetic-restored")
+			if err != nil || rows[0].RequiresRebind {
+				t.Fatalf("explicit binding did not persist: %v", err)
+			}
+			upgraded := p
+			upgraded.FormatVersion = 3
+			upgraded.Data = []byte("new module revision")
+			upgraded.SHA256 = ModulePayloadDigest(upgraded.Data)
+			if err := db.SaveModulePayload(ctx, "synthetic-b", upgraded, &future); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SaveModulePayload(ctx, "synthetic-b", p, &future); !errors.Is(err, ErrModulePayloadConflict) {
+				t.Fatalf("stale revision overwrote upgrade: %v", err)
+			}
+			if err := db.DeleteModulePayload(ctx, "synthetic-b", upgraded.ModuleID, upgraded.RecordID, upgraded.Revision()); err != nil {
+				t.Fatal(err)
+			}
+			rows, err = db.ModulePayloads(ctx, "synthetic-b")
+			if err != nil || len(rows) != 0 {
+				t.Fatal("explicit module retirement failed")
+			}
 		})
+	}
+}
+
+func TestModulePayloadBoundsAndInsertOnly(t *testing.T) {
+	db, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	compatibilityExec(t, db, `INSERT INTO instances(id,name,created_at) VALUES ('synthetic-a','A','now')`)
+	p := ModulePayload{ModuleID: "future.plugin", RecordID: "record", FormatVersion: 1, Data: []byte("original")}
+	p.SHA256 = ModulePayloadDigest(p.Data)
+	if err := db.SaveModulePayload(context.Background(), "synthetic-a", p, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveModulePayload(context.Background(), "synthetic-a", p, nil); !errors.Is(err, ErrModulePayloadConflict) {
+		t.Fatal("insert overwrote existing record")
+	}
+	if err := db.RestoreModulePayloads(context.Background(), "synthetic-a", []ModulePayload{p}); err == nil {
+		t.Fatal("restore accepted occupied target")
+	}
+	if err := ValidateModulePayloads(make([]ModulePayload, MaxModulePayloadRecords+1)); err == nil {
+		t.Fatal("record limit ignored")
+	}
+	p.Data = make([]byte, MaxModulePayloadBytes+1)
+	p.SHA256 = ModulePayloadDigest(p.Data)
+	if err := ValidateModulePayloads([]ModulePayload{p}); err == nil {
+		t.Fatal("record byte limit ignored")
+	}
+	// Bound the write path too, so ordinary modules cannot accumulate a
+	// database which the protocol's own exporter cannot transport.
+	compatibilityExec(t, db, `WITH RECURSIVE records(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM records WHERE n<9999)
+		INSERT INTO module_payloads(instance_id,module_id,record_id,format_version,payload_base64,sha256,requires_rebind)
+		SELECT 'synthetic-a','future.quota',CAST(n AS TEXT),1,'',?,0 FROM records`, ModulePayloadDigest(nil))
+	p.RecordID = "over-quota"
+	p.Data = nil
+	p.SHA256 = ModulePayloadDigest(nil)
+	if err := db.SaveModulePayload(context.Background(), "synthetic-a", p, nil); err == nil {
+		t.Fatal("record quota ignored on write")
 	}
 }
 
