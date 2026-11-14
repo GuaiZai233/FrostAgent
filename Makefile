@@ -16,7 +16,7 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 .DEFAULT_GOAL := build
 
 .PHONY: build build-api build-web build-web-dev check-web
-.PHONY: dev serve-api serve-agent serve-web
+.PHONY: dev serve-api serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
 .PHONY: lint test test-api test-web vet clean ci
 
@@ -25,7 +25,6 @@ build: build-api
 build-api: build-web proto-generate-go
 	mkdir -p ./bin
 	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/app ./cmd/app
-	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/agent ./cmd/agent
 
 check-web: proto-generate-web
 	$(PNPM) --filter @frostagent/web run check
@@ -48,9 +47,6 @@ dev: proto-generate-go build-web-dev
 
 serve-api: build-web proto-generate-go
 	$(GO) run -ldflags="$(BUILD_LDFLAGS)" ./cmd/app
-
-serve-agent: proto-generate-go
-	$(GO) run -ldflags="$(BUILD_LDFLAGS)" ./cmd/agent
 
 serve-web: proto-generate-web
 	$(VITE)
@@ -82,6 +78,7 @@ test-api: build-web proto-generate-go
 	$(GO) test -coverprofile=coverage.out ./...
 
 test-web: check-web build-web
+	$(PNPM) --filter @frostagent/web test
 
 vet: build-web proto-generate-go
 	$(GO) vet ./...

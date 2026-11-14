@@ -11,6 +11,8 @@ import (
 
 // Input placeholders describe code defaults, including dependent defaults.
 var resetHints = map[string]string{
+	"CHAT_HISTORY_PRIVATE_ENABLED":         "开启",
+	"CHAT_HISTORY_GROUP_WHITELIST":         "空白名单（所有群均不采集）",
 	proactive.AwarenessQuietHoursEnabled:   "开启",
 	proactive.AwarenessQuietHoursStart:     proactive.DefaultAwarenessQuietStart,
 	proactive.AwarenessQuietHoursEnd:       proactive.DefaultAwarenessQuietEnd,
@@ -24,15 +26,10 @@ var resetHints = map[string]string{
 	"LISTEN_ADDR":                          "127.0.0.1:8080",
 	"WS_LISTEN_ADDR":                       "127.0.0.1:11023",
 	"ONEBOT_WS_ENABLED":                    "true",
-	"ASTRBOT_WS_ENABLED":                   "true",
 	"ONEBOT_WS_MODE":                       "reverse",
-	"ONEBOT_WS_URL":                        "ws://上游地址:端口/",
+	"ONEBOT_WS_URL":                        "ws://endpoint-host:端口/",
 	"ONEBOT_WS_TOKEN":                      "未配置访问令牌",
 	"ONEBOT_WS_INBOUND_TOKEN":              "专用 WS 端口不要求令牌；Docker 网桥管理端口拒绝真实连接",
-	"ASTRBOT_WS_MODE":                      "reverse",
-	"ASTRBOT_WS_URL":                       "ws://插件地址:1244/",
-	"ASTRBOT_WS_TOKEN":                     "未配置访问令牌",
-	"ASTRBOT_WS_INBOUND_TOKEN":             "专用 WS 端口不要求令牌；Docker 网桥管理端口拒绝真实连接",
 	"HTTP_ALLOWED_ORIGINS":                 "不额外放行跨域来源",
 	"WS_ALLOWED_ORIGINS":                   "不额外放行跨域来源",
 	"SECURITY_CONTROL_MODE":                "基础模式",

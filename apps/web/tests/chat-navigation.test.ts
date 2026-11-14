@@ -64,16 +64,16 @@ dom.window.addEventListener('instance-selected', refresh);
 router.init(root);
 
 try {
-  for (const adapter of ['onebot', 'astrbot']) {
+  for (const adapter of ['onebot']) {
     instanceState.select(instance);
     navigate('/chat');
     await flush();
-    if (adapter === 'astrbot') field('chat-adapter-select', adapter, 'change');
+    assert.equal(root.querySelector('#chat-adapter-select'), null);
+    assert.equal(root.querySelector('#astrbot-config-row'), null);
     const live = socket();
     live.open();
     assert.ok(live.url.includes(`/instances/${instance.id}/ws/${adapter}?mock=true`));
     field('chat-type-select', 'group', 'change');
-    field('chat-astrbot-platform-select', 'telegram', 'change');
     field('chat-uid-input', '90001');
     field('chat-nickname-input', 'Synthetic sender');
     field('chat-group-id-input', '90002');
@@ -86,9 +86,7 @@ try {
     click('btn-send-message');
     field('chat-input-textarea', 'unsent draft');
     const requests = Socket.all.length;
-    const reply = adapter === 'onebot'
-      ? { action: 'send_group_msg', params: { message: 'background final' }, echo: 'delivery-final' }
-      : { action: 'send_message', content: 'background final', echo: 'reply-final' };
+    const reply = { action: 'send_group_msg', params: { message: 'background final' }, echo: 'delivery-final' };
     navigate('/overview');
     assert.equal(live.closes, 0, 'route cleanup must keep the backend mock session alive');
     if (adapter === 'onebot') {
@@ -96,8 +94,6 @@ try {
       const ack = live.sent.at(-1)!;
       assert.equal(ack.echo, 'lookup');
       assert.deepEqual(ack.data, { message_id: (ack.data as { message_id: number }).message_id, group_id: 90002, group_name: 'Synthetic group' });
-    } else {
-      live.receive({ action: 'send_message', content: 'background tool output', is_intermediate: true });
     }
     live.receive(reply);
     assert.equal(root.textContent, 'Overview', 'background replies must stay off the active route');
@@ -106,14 +102,13 @@ try {
     assert.equal(Socket.all.length, requests, 'returning must reuse the same socket without replaying input');
     assert.equal(root.querySelector<HTMLInputElement>('#chat-input-textarea')!.value, 'unsent draft');
     for (const [id, value] of [
-      ['chat-adapter-select', adapter], ['chat-type-select', 'group'], ['chat-astrbot-platform-select', 'telegram'],
+      ['chat-type-select', 'group'],
       ['chat-uid-input', '90001'], ['chat-nickname-input', 'Synthetic sender'],
       ['chat-group-id-input', '90002'], ['chat-group-name-input', 'Synthetic group'], ['chat-card-input', 'Synthetic card'],
     ]) assert.equal(root.querySelector<HTMLInputElement>(`#${id}`)!.value, value);
     assert.equal(root.querySelector<HTMLInputElement>('#chat-is-wake-checkbox')!.checked, false);
     assert.equal(root.textContent!.split('background final').length - 1, 1);
-    if (adapter === 'astrbot') assert.ok(root.textContent!.includes('background tool output'));
-    else assert.equal(live.sent.at(-1)!.echo, 'delivery-final', 'delivery ACK must be sent while detached');
+    assert.equal(live.sent.at(-1)!.echo, 'delivery-final', 'delivery ACK must be sent while detached');
     click('btn-clear-chat');
     assert.equal(live.closes, 0, 'clear screen must retain model context');
     assert.ok(!root.textContent!.includes('background final'));
@@ -121,14 +116,9 @@ try {
     click('btn-send-message');
     const events = live.sent.filter((frame) => frame.post_type === 'message' || frame.type === 'event');
     assert.equal(events.length, 2, 'route return must not duplicate sends');
-    if (adapter === 'astrbot') {
-      assert.equal(events[1].session_id, 'telegram:group:90002');
-      assert.equal(events[1].user_id, '90001');
-      assert.equal(events[1].is_wake, false);
-    } else {
+
       assert.equal(events[1].group_id, 90002);
       assert.equal(events[1].user_id, 90001);
-    }
 
     const staleMessage = live.onmessage!;
     click('btn-disconnect');
@@ -149,20 +139,10 @@ try {
     reset.open();
 
     reset.receive(reply);
-    const staleProtocol = reset.onmessage!;
-    const otherAdapter = adapter === 'onebot' ? 'astrbot' : 'onebot';
-    field('chat-adapter-select', otherAdapter, 'change');
-    const switched = socket();
-    switched.open();
-    assert.equal(reset.closes, 1, 'switching protocol must close its old mock namespace');
-    assert.ok(switched.url.includes(`/ws/${otherAdapter}?mock=true`));
-    staleProtocol({ data: JSON.stringify(reply) });
-    assert.ok(!root.textContent!.includes('background final'), 'protocol switches must clear old messages');
-
     navigate('/overview');
-    const staleReset = switched.onmessage!;
+    const staleReset = reset.onmessage!;
     instanceState.select({ ...instance, id: 'fixture-chat-b' });
-    assert.equal(switched.closes, 1, 'changing instances off-route must dispose the old connection');
+    assert.equal(reset.closes, 1, 'changing instances off-route must dispose the old connection');
     navigate('/chat');
     await flush();
     staleReset({ data: JSON.stringify(reply) });
@@ -214,4 +194,4 @@ try {
   dom.window.close();
   Object.assign(globalThis, originals);
 }
-console.log('PASS: direct-chat route continuity, background frames, controls and instance isolation for both adapters');
+console.log('PASS: direct-chat route continuity, background frames, controls and instance isolation for OneBot');

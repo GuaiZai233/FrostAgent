@@ -31,7 +31,7 @@ func TestPostgresMigrationSchemaCompatibilityCrossSchemaReferences(t *testing.T)
 			root, config, db := compatibilityDatabase(t, Postgres)
 			compatibilitySeedComputerUse(t, db)
 			seedCompatibilityEmbeddingCaches(t, db, false)
-			version := 17
+			version := (SchemaVersion + 1)
 			if test.legacy {
 				version = 15
 			}
@@ -134,7 +134,7 @@ func TestPostgresMigrationSchemaCompatibilitySearchPathReference(t *testing.T) {
 	root, config, db := compatibilityDatabase(t, Postgres)
 	compatibilitySeedComputerUse(t, db)
 	seedCompatibilityEmbeddingCaches(t, db, false)
-	compatibilityMetadata(t, db, 17, true, 14)
+	compatibilityMetadata(t, db, (SchemaVersion + 1), true, 14)
 	var activeSchema string
 	if err := db.SQL.QueryRow(`SELECT current_schema()`).Scan(&activeSchema); err != nil {
 		t.Fatal(err)

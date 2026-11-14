@@ -14,6 +14,8 @@ export type SettingField = {
 // Keep the interface labels here so internal configuration keys never become
 // the primary language of the settings page.
 export const settingFields: Record<string, SettingField> = {
+  CHAT_HISTORY_PRIVATE_ENABLED: { label: '保存私聊原文', group: '聊天记录', type: 'switch', hot: true, hint: '默认开启；关闭后保留已有档案，仍可在原私聊中检索' },
+  CHAT_HISTORY_GROUP_WHITELIST: { label: '群聊原文持久化白名单', group: '聊天记录', hot: true, hint: '默认不保存任何群。QQ 群号用英文逗号分隔；其他平台填写 platform:group:id。保存群内所有收到的消息，包括未触发回复的消息；移除后保留历史。仅关键词检索，按需返回原文片段。' },
   LISTEN_ADDR: { label: '管理页面监听地址', group: '网络与连接', hot: true },
   WS_LISTEN_ADDR: { label: '适配器监听地址', group: '网络与连接' },
   HTTP_ALLOWED_ORIGINS: { label: '管理页面允许的跨域来源', group: '网络与连接', hot: true },
@@ -66,8 +68,7 @@ export const dedicatedSettingKeys = new Set([
   'BALANCE_QUERY_CONFIG',
   'QQ_EXTEND_MESSAGES_TARGET_GROUPS',
   'ONEBOT_WS_ENABLED', 'ONEBOT_WS_MODE', 'ONEBOT_WS_URL', 'ONEBOT_WS_TOKEN',
-  'ASTRBOT_WS_ENABLED', 'ASTRBOT_WS_MODE', 'ASTRBOT_WS_URL', 'ASTRBOT_WS_TOKEN',
-  'ONEBOT_WS_INBOUND_TOKEN', 'ASTRBOT_WS_INBOUND_TOKEN',
+  'ONEBOT_WS_INBOUND_TOKEN',
   'ENABLE_RUNTIME_STATUS_COMMAND',
   'ENABLE_EMBEDDING',
   'ENABLE_THINKING_STATUS',

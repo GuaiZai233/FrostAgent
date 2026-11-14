@@ -322,7 +322,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
         <button class="btn btn-primary btn-sm" id="add-model" ${draft.endpoints.length ? '' : 'disabled'}>${icon('plus', 'w-3.5 h-3.5')} 新增 Model</button>
       </div>
       <div class="card table-card overflow-hidden"><div class="table-container"><table class="table">
-        <thead><tr><th>显示名称</th><th>Endpoint</th><th>上游模型</th><th>能力标签</th><th style="text-align:right">操作</th></tr></thead>
+        <thead><tr><th>显示名称</th><th>Endpoint</th><th>Endpoint 模型</th><th>能力标签</th><th style="text-align:right">操作</th></tr></thead>
         <tbody>${
           draft.models.length
             ? draft.models.map((model) => {
@@ -638,7 +638,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
       canDismiss: () => !savingModel,
       bodyHtml: `
         <div class="form-group"><label class="form-label">Endpoint</label><select class="select" id="model-endpoint">${draft.endpoints.map((endpoint) => `<option value="${escapeHtml(endpoint.id)}" ${endpoint.id === model.endpointId ? 'selected' : ''}>${escapeHtml(endpoint.displayName)}</option>`).join('')}</select></div>
-        <div class="form-group"><label class="form-label">上游模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
+        <div class="form-group"><label class="form-label">Endpoint 模型名称</label><div class="flex gap-2"><input class="input font-mono" id="model-upstream" value="${escapeHtml(model.upstreamModel)}" style="min-width:0;flex:1"><button type="button" class="btn btn-outline btn-icon-sm" id="upstream-model-picker" style="display:none" title="选择获取到的模型" aria-label="选择获取到的模型" aria-haspopup="listbox" aria-expanded="false">${icon('chevron_down', 'w-3.5 h-3.5')}</button><div class="router-model-options" id="upstream-model-options" popover="auto" role="listbox" aria-label="获取到的模型"></div><button type="button" class="btn btn-outline btn-sm" id="fetch-models">获取名称</button></div></div>
         <div class="form-group"><label class="form-label">显示名称（留空自动生成）</label><input class="input" id="model-name" value="${escapeHtml(model.displayName)}"></div>
         <div class="form-group"><label class="form-label" for="model-max-input">最大输入 Tokens（可选）</label><input class="input" id="model-max-input" type="number" min="0" step="1" value="${model.maxInputTokens || ''}" placeholder="未配置时，超限输入将跳过处理"></div>
         <div class="form-group"><label class="form-label">能力标签（纯元数据）</label><div class="flex gap-4 flex-wrap">${['text', 'tools', 'vision', 'embedding'].map((capability) => `<label class="flex items-center gap-2 text-sm"><input type="checkbox" class="checkbox model-cap" value="${capability}" ${model.capabilities.includes(capability) ? 'checked' : ''} ${model.upstreamModel.trim() ? 'disabled' : ''}>${capability}</label>`).join('')}</div><p class="form-hint text-muted" id="model-capability-status" style="display:${model.upstreamModel.trim() ? 'block' : 'none'}">正在获取元数据...</p></div>
@@ -826,7 +826,7 @@ export function mountModelRouterPage(container: HTMLElement, api = createModelRo
           if (savingModel || fetchingModels) return;
           const upstreamModel = upstreamInput.value.trim();
           if (!upstreamModel) {
-            toast.error('请填写上游模型名称');
+            toast.error('请填写 Endpoint 模型名称');
             return;
           }
           model.displayName = displayInput.value.trim() || upstreamModel;

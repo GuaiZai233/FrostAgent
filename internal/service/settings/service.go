@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
@@ -37,6 +38,8 @@ type envEntry struct {
 
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
+	chathistory.PrivateEnabledKey:              {"是否保存私聊原文（默认开启；关闭后保留已有档案）", false, false, false},
+	chathistory.GroupWhitelistKey:              {"群聊原文持久化白名单（默认空；群内未触发回复的消息也记录；移除后保留历史）", false, false, false},
 	qqextend.TargetGroupsKey:                   {"QQ 扩展消息允许跨会话发送到的目标群白名单，空列表禁止跨会话发送", false, false, false},
 	proactive.AwarenessEnabled:                 {"主动感知：不定期自动注入提示词，主动开启私聊或群聊话题", false, false, false},
 	proactive.AwarenessInterval:                {"主动感知活跃阈值，例如 30m - 2h", false, false, false},
@@ -56,16 +59,11 @@ var knownEnvVars = map[string]envEntry{
 	"MULTI_SEGMENT_REPLY_MAX_SEGMENTS":     {"多段回复分段上限（0 或留空为不限制；1 视为关闭多段回复；超出时随机保留上限数量的分段，其余丢弃）", false, false, false},
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
 	"WS_LISTEN_ADDR":                       {"WebSocket 监听地址", false, true, false},
-	"ONEBOT_WS_ENABLED":                    {"启用 OneBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
-	"ASTRBOT_WS_ENABLED":                   {"启用 AstrBot 真实上游连接（默认 true，不影响网页直接对话）", false, true, false},
+	"ONEBOT_WS_ENABLED":                    {"启用 OneBot 真实 Endpoint 连接（默认 true，不影响网页直接对话）", false, true, false},
 	"ONEBOT_WS_MODE":                       {"OneBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
-	"ONEBOT_WS_URL":                        {"OneBot 正向 WebSocket 上游地址", false, true, false},
+	"ONEBOT_WS_URL":                        {"OneBot 正向 WebSocket Endpoint 地址", false, true, false},
 	"ONEBOT_WS_TOKEN":                      {"OneBot 正向 WebSocket 访问令牌", true, true, false},
 	"ONEBOT_WS_INBOUND_TOKEN":              {"OneBot 反向 WebSocket 入站令牌", true, true, false},
-	"ASTRBOT_WS_MODE":                      {"AstrBot：reverse 反向（FA 作为服务端）；forward 正向（FA 作为客户端）", false, true, false},
-	"ASTRBOT_WS_URL":                       {"AstrBot 正向 WebSocket 插件服务端地址", false, true, false},
-	"ASTRBOT_WS_TOKEN":                     {"AstrBot 正向 WebSocket 访问令牌", true, true, false},
-	"ASTRBOT_WS_INBOUND_TOKEN":             {"AstrBot 反向 WebSocket 入站令牌", true, true, false},
 	"HTTP_ALLOWED_ORIGINS":                 {"管理面允许的跨域 Origin，多个值以英文逗号分隔", false, true, false},
 	"WS_ALLOWED_ORIGINS":                   {"允许的 WebSocket Origin", false, true, false},
 	"SECURITY_CONTROL_MODE":                {"全局安全控制模式", false, false, false},
@@ -144,7 +142,7 @@ func ExportableValueKeys() map[string]bool {
 	keys := make(map[string]bool)
 	for key, entry := range knownEnvVars {
 		if !entry.IsSecret && key != "DIALOGUE_PATH" && key != "BRAIN_PATH" &&
-			key != "ONEBOT_WS_PATH" && key != "ASTRBOT_WS_PATH" {
+			key != "ONEBOT_WS_PATH" {
 			keys[key] = true
 		}
 	}
@@ -291,7 +289,7 @@ func (s *Service) ListEnvVars(
 		val := os.Getenv(key)
 		inherited := false
 		if s.config != nil {
-			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" || key == "ASTRBOT_WS_PATH" {
+			if key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" {
 				continue
 			}
 			targetStore := s.store(key)
@@ -721,6 +719,12 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 func validateUpdate(key, value string) error {
+	if key == chathistory.PrivateEnabledKey && value != "" && value != "true" && value != "false" {
+		return errors.New("私聊原文持久化开关必须为 true 或 false")
+	}
+	if key == chathistory.GroupWhitelistKey {
+		return chathistory.ValidateWhitelist(value)
+	}
 	if key == "BOT_LOOP_ENABLED" && value != "" && value != "true" && value != "false" {
 		return errors.New("Bot 防循环开关必须为 true 或 false")
 	}

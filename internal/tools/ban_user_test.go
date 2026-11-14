@@ -135,24 +135,24 @@ func TestBanUserToolSimpleAndAggressiveModes(t *testing.T) {
 				t.Fatalf("expected CheckAccess to return ErrLocked, got %v", err)
 			}
 
-			// 2. AstrBot platform normalization
+			// 2. Fixture platform normalization
 			ctxAstr := llm.WithRunContext(context.Background(), llm.RunContext{
-				ActorPlatform: "astrbot",
+				ActorPlatform: "fixture",
 				ActorUserID:   "astr-user-999",
 				InstanceID:    "inst-alpha",
 				SessionID:     "sess-gamma",
 			})
 			_, err = tool.ExecuteContext(ctxAstr, `{"reason":"harassment"}`)
 			if !errors.Is(err, ErrBanUserSuccess) {
-				t.Fatalf("expected ErrBanUserSuccess for astrbot, got err=%v", err)
+				t.Fatalf("expected ErrBanUserSuccess for fixture, got err=%v", err)
 			}
 
-			pAstr, err := security.NewPrincipal("astrbot", "astr-user-999")
+			pAstr, err := security.NewPrincipal("fixture", "astr-user-999")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if !ctrl.IsLocked(pAstr) {
-				t.Fatal("expected principal astrbot:astr-user-999 to be locked")
+				t.Fatal("expected principal fixture:astr-user-999 to be locked")
 			}
 		})
 	}

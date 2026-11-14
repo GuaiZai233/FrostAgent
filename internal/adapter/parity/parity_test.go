@@ -233,36 +233,6 @@ func TestMentionOnlyDetection(t *testing.T) {
 	if IsMentionOnlyOneBotSegments(true, 123456, atWithRecordSegs, false, false) {
 		t.Errorf("atWithRecordSegs should not be mention only")
 	}
-
-	// AstrBot
-	if !IsMentionOnlyAstrBot(true, true, "", false, false, false, false) {
-		t.Errorf("expected AstrBot pure @ to be mention only")
-	}
-	if !IsMentionOnlyAstrBot(true, true, "   ", false, false, false, false) {
-		t.Errorf("expected AstrBot whitespace text to be mention only")
-	}
-	if IsMentionOnlyAstrBot(false, true, "", false, false, false, false) {
-		t.Errorf("AstrBot private should not be mention only")
-	}
-	if IsMentionOnlyAstrBot(true, false, "", false, false, false, false) {
-		t.Errorf("AstrBot not @ should not be mention only")
-	}
-	if IsMentionOnlyAstrBot(true, true, "test", false, false, false, false) {
-		t.Errorf("AstrBot with text should not be mention only")
-	}
-	if IsMentionOnlyAstrBot(true, true, "", true, false, false, false) {
-		t.Errorf("AstrBot with attachment should not be mention only")
-	}
-	if IsMentionOnlyAstrBot(true, true, "", false, true, false, false) {
-		t.Errorf("AstrBot with reply should not be mention only")
-	}
-	if IsMentionOnlyAstrBot(true, true, "", false, false, true, false) {
-		t.Errorf("AstrBot with other mention should not be mention only")
-	}
-	if IsMentionOnlyAstrBot(true, true, "", false, false, false, true) {
-		t.Errorf("AstrBot with other content should not be mention only")
-	}
-
 	// Canonical interaction contract
 	if !IsMentionOnly(MentionInteraction{
 		IsGroup:        true,
@@ -294,9 +264,6 @@ func TestMentionOnlyDetection(t *testing.T) {
 }
 
 func TestBillingParity(t *testing.T) {
-	if CanonicalBillingPlatform("aiocqhttp") != "qq" {
-		t.Errorf("expected aiocqhttp billing platform to map to qq")
-	}
 	if CanonicalBillingPlatform("onebot") != "qq" {
 		t.Errorf("expected onebot billing platform to map to qq")
 	}

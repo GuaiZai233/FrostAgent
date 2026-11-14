@@ -250,13 +250,13 @@ func isAdapterOrMessagePath(path string) bool {
 	if len(parts) != 2 || !strings.HasPrefix(path, "/instances/") {
 		return false
 	}
-	return parts[1] == "ws/onebot" || parts[1] == "ws/astrbot" || parts[1] == "api/v1/messages/send"
+	return parts[1] == "ws/onebot" || parts[1] == "api/v1/messages/send"
 }
 
 func isAdapterWebSocketPath(path string) bool {
 	parts := strings.Split(strings.TrimPrefix(path, "/instances/"), "/")
 	return strings.HasPrefix(path, "/instances/") && len(parts) == 3 && parts[1] == "ws" &&
-		(parts[2] == "onebot" || parts[2] == "astrbot")
+		parts[2] == "onebot"
 }
 
 // Keep the adapter listener separate from the HTTP management surface.

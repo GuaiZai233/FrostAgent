@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
-	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -54,10 +54,8 @@ type Runtime struct {
 	Engine         *llm.Engine
 	Handler        http.Handler
 	Onebot         *onebot.Adapter
-	Astrbot        *astrbot.Adapter
 	backgroundOnce sync.Once
 	onebotClient   bool
-	astrbotClient  bool
 }
 
 func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB, settingsWriteMu tools.ConfigWriteLock) (*Runtime, error) {
@@ -68,13 +66,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		return nil, config.Error()
 	}
 	onebotConnection, onebotError := wsclient.Load(config.Get, "ONEBOT")
-	astrbotConnection, astrbotError := wsclient.Load(config.Get, "ASTRBOT")
 	if enabled {
 		if onebotError != nil {
 			return nil, fmt.Errorf("OneBot connection: %w", onebotError)
-		}
-		if astrbotError != nil {
-			return nil, fmt.Errorf("AstrBot connection: %w", astrbotError)
 		}
 	}
 	if err := safeTree(dir); err != nil {
@@ -377,6 +371,12 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 智能体引擎初始化完成", "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after engine assignment)
+	if db != nil {
+		engine.ChatHistory = chathistory.NewRecorder(chathistory.NewStore(db, instanceID), scope.Getenv,
+			func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
+	}
+	historyTool := tools.NewChatHistoryTool(engine)
+	engine.ToolRegistry[historyTool.Name()] = historyTool
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
 	overrideConfigTool := tools.OverrideFrostAgentConfigTool(engine, settingsWriteMu)
@@ -455,34 +455,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.Handle("/api/v1/actionscat", actionsCatSvc)
 
 	ob := onebot.NewAdapter(engine)
-	ab := astrbot.NewAdapter(engine)
 	ob.ConfigureConnection(onebotConnection)
-	ab.ConfigureConnection(astrbotConnection)
 	ob.SetIncomingDispatcher(actionsCatClient)
-	ab.SetIncomingDispatcher(actionsCatClient)
 	ob.SetStealer(stealer)
-	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)
-	dispatcher.RegisterAdapter(ab)
 	engine.Awareness = &llm.AwarenessService{Engine: engine, Resolve: func(target llm.AwarenessTarget) (llm.AwarenessSender, bool) {
-		switch target.AdapterID {
-		case "onebot":
-			return ob.SendAwareness, ob.AwarenessReady()
-		case "astrbot":
-			return ab.SendAwareness, ab.AwarenessReady()
-		}
-		if !memory.IsQQPlatform(target.Platform) {
-			return ab.SendAwareness, ab.AwarenessReady()
-		}
-		// Until an inbound route is known, two usable adapters are ambiguous.
-		onebotReady, astrbotReady := ob.AwarenessReady(), ab.AwarenessReady()
-		if onebotReady == astrbotReady {
+		if (target.AdapterID != "" && target.AdapterID != "onebot") || !memory.IsQQPlatform(target.Platform) {
 			return nil, false
 		}
-		if onebotReady {
-			return ob.SendAwareness, true
-		}
-		return ab.SendAwareness, true
+		return ob.SendAwareness, ob.AwarenessReady()
 	}}
 	// Read-only self-description. Registered after the adapters so it can report
 	// live platform connections; every value is read at call time.
@@ -497,9 +478,6 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			var platforms []string
 			if ob.ConnectionCount() > 0 {
 				platforms = append(platforms, "onebot")
-			}
-			if ab.ConnectionCount() > 0 {
-				platforms = append(platforms, "astrbot")
 			}
 			return platforms
 		},
@@ -528,19 +506,17 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		},
 	})
 	engine.ToolRegistry[frostInfoTool.Name()] = frostInfoTool
-	// Keep both endpoints for reverse connections and browser mock sessions.
-	// Each adapter rejects real inbound connections in forward mode.
+	// Keep OneBot available for reverse connections and browser mock sessions.
+	// The adapter rejects real inbound connections in forward mode.
 	mux.HandleFunc("/ws/onebot", ob.Handler())
-	mux.HandleFunc("/ws/astrbot", ab.Handler())
 	if !enabled {
 		engine.StartedAt = time.Time{}
 		logger.Clear()
 	}
 	success = true
 	return &Runtime{
-		Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab,
-		onebotClient:  !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
-		astrbotClient: !astrbotConnection.Disabled && astrbotConnection.Mode == wsclient.Forward,
+		Scope: scope, Engine: engine, Handler: mux, Onebot: ob,
+		onebotClient: !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
 	}, nil
 }
 
@@ -551,15 +527,15 @@ func (r *Runtime) StartBackground() {
 		return
 	}
 	r.backgroundOnce.Do(func() {
+		if r.Engine.ChatHistory != nil {
+			r.Scope.Go(func() { r.Engine.ChatHistory.Run(r.Scope.Context()) })
+		}
 		r.StartEmbeddings()
 		if r.Engine.Awareness != nil {
 			r.Scope.Go(func() { r.Engine.Awareness.Run(r.Scope.Context()) })
 		}
 		if r.onebotClient {
 			r.Scope.Go(func() { r.Onebot.RunClient(r.Scope.Context()) })
-		}
-		if r.astrbotClient {
-			r.Scope.Go(func() { r.Astrbot.RunClient(r.Scope.Context()) })
 		}
 	})
 }
@@ -572,7 +548,6 @@ func (r *Runtime) StartEmbeddings() {
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
 	r.Onebot.CloseConnections()
-	r.Astrbot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()
 }

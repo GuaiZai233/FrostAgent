@@ -19,7 +19,7 @@ function publishInOrder(api: ModelRouterAPI, action: () => Promise<void>): Promi
 
 function canonicalPlatform(platform: string): string {
   const normalized = platform.trim().toLowerCase();
-  return ['', 'qq', 'onebot', 'aiocqhttp'].includes(normalized) ? 'qq' : normalized;
+  return ['', 'qq', 'onebot'].includes(normalized) ? 'qq' : normalized;
 }
 
 export function openGroupModelConfig(

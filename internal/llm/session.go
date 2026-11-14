@@ -2438,7 +2438,7 @@ func (sm *SessionManager) TransferSessionsTo(next *SessionManager) {
 	sm.groupNames = make(map[string]string)
 }
 
-// GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。
+// GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 onebot:group:xxx ↔ group:xxx）。
 func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	sessionID = strings.TrimSpace(sessionID)
 	canonicalID := memory.CanonicalSessionKey(sessionID)

@@ -20,7 +20,7 @@ func TestMemoryReadScopesTrustedSender(t *testing.T) {
 		want []memory.SearchScope
 	}{
 		{"private", RunContext{Owner: "synthetic-a"}, []memory.SearchScope{{Type: memory.ScopePrivate, Owner: "synthetic-a"}}},
-		{"group sender", RunContext{ActorUserID: "synthetic-a", ActorPlatform: "aiocqhttp"}, []memory.SearchScope{group, {Type: memory.ScopePrivate, Owner: "synthetic-a"}}},
+		{"group sender", RunContext{ActorUserID: "synthetic-a", ActorPlatform: "qq"}, []memory.SearchScope{group, {Type: memory.ScopePrivate, Owner: "synthetic-a"}}},
 		{"next sender", RunContext{ActorUserID: "synthetic-b", ActorPlatform: "onebot"}, []memory.SearchScope{group, {Type: memory.ScopePrivate, Owner: "synthetic-b"}}},
 		{"no sender", RunContext{}, []memory.SearchScope{group}},
 		{"no platform", RunContext{ActorUserID: "synthetic-a"}, []memory.SearchScope{group}},

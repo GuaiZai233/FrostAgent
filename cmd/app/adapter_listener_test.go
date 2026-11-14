@@ -17,7 +17,7 @@ import (
 )
 
 func TestAdapterListenerRejectsMockBeforeDispatch(t *testing.T) {
-	for _, adapter := range []string{"onebot", "astrbot"} {
+	for _, adapter := range []string{"onebot"} {
 		for _, attempt := range []struct{ name, query, header string }{
 			{"query", "?mock=true", ""},
 			{"encoded query", "?m%6fck=tr%75e", ""},
@@ -82,7 +82,7 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 			defer management.Close()
 			settings := frostagentv1connect.NewSettingsServiceClient(management.Client(), management.URL+"/instances/"+info.ID)
 			var updates []*v1.EnvVar
-			for _, prefix := range []string{"ONEBOT", "ASTRBOT"} {
+			for _, prefix := range []string{"ONEBOT"} {
 				updates = append(updates,
 					&v1.EnvVar{Key: prefix + "_WS_ENABLED", Value: config.enabled},
 					&v1.EnvVar{Key: prefix + "_WS_MODE", Value: config.mode},
@@ -131,7 +131,7 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 					t.Fatal("browser handshake did not select the credential-free Direct Chat protocol")
 				}
 			}
-			for _, adapter := range []string{"onebot", "astrbot"} {
+			for _, adapter := range []string{"onebot"} {
 				path := "/instances/" + info.ID + "/ws/" + adapter
 				assertHandshake(adapterListener.URL, path, nil, config.status)
 				for _, attempt := range []struct{ query, header string }{

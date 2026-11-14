@@ -11,7 +11,7 @@ function pageHostname(pageOrigin: string): string {
 export function instanceWebSocketURL(
   listenAddress: string,
   instanceID: string,
-  adapter: 'onebot' | 'astrbot',
+  adapter: 'onebot',
   pageOrigin: string,
   query?: string,
 ): string {
@@ -38,7 +38,7 @@ export function instanceWebSocketURL(
 export function dashboardWebSocketURL(
   pageOrigin: string,
   instanceID: string,
-  adapter: 'onebot' | 'astrbot',
+  adapter: 'onebot',
   query?: string,
 ): string {
   const url = new URL(pageOrigin);

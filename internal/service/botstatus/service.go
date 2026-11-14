@@ -552,9 +552,6 @@ func isPrivateSession(sessionID string) bool {
 // derivePlatform infers the platform from the session ID prefix.
 func derivePlatform(sessionID string) string {
 	s := strings.ToLower(sessionID)
-	if strings.HasPrefix(s, "astrbot:") {
-		return "astrbot"
-	}
 	if strings.HasPrefix(s, "onebot:") || strings.HasPrefix(s, "qq:") {
 		return "onebot"
 	}
@@ -569,7 +566,7 @@ func derivePlatform(sessionID string) string {
 	}
 	// 兼容已知使用下划线作为前缀分隔的历史/外部会话格式（如 discord_group_123）。
 	// 针对已知平台前缀白名单匹配，避免将包含下划线的普通 ID（如 some_random_id）误判为平台名。
-	for _, knownPrefix := range []string{"discord_", "telegram_", "onebot_", "astrbot_", "aiocqhttp_"} {
+	for _, knownPrefix := range []string{"discord_", "telegram_", "onebot_"} {
 		if strings.HasPrefix(s, knownPrefix) {
 			return strings.TrimSuffix(knownPrefix, "_")
 		}

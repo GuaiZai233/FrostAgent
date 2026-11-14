@@ -277,7 +277,7 @@ def exercise(root, temporary, host_mode=False):
             if not host_mode:
                 assert client(peer, remote_host, 11023, path, payload, method=method)['status'] == 404, path
         assert len(api('/api/instances')['instances']) == 1
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_management_websocket(read, ws)
             check_management_websocket(lambda path, headers: read(path, headers={**FORWARDED, **headers}), ws)
@@ -295,17 +295,17 @@ def exercise(root, temporary, host_mode=False):
                 check_adapter_websocket(lambda path, headers: published_websocket(published, path, headers), ws)
         # Both protocols have independent inbound credentials on every ingress.
         # The bridge management listener must not inherit anonymous WS behavior.
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_real_websocket_auth(read, ws, required=not host_mode)
             if not host_mode:
                 check_real_websocket_auth(published_read, ws, required=True)
                 check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 8080, path, headers=headers), ws, required=True)
         updates = [{'key': adapter.upper() + '_WS_INBOUND_TOKEN', 'value': 'synthetic-inbound-' + adapter}
-                   for adapter in ('onebot', 'astrbot')]
+                   for adapter in ('onebot',)]
         update_rpc = f'/instances/{instance_id}/frostagent.v1.SettingsService/UpdateEnvVars'
         assert api(update_rpc, {'updates': updates}, FORWARDED).get('success')
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             token = 'synthetic-inbound-' + adapter
             check_real_websocket_auth(read, ws, token)
@@ -321,12 +321,12 @@ def exercise(root, temporary, host_mode=False):
         if not host_mode:
             settings['settings']['WS_LISTEN_ADDR'] = '127.0.0.1:11023'
             assert api('/api/instances/global/import/settings', settings).get('success')
-            for adapter in ('onebot', 'astrbot'):
+            for adapter in ('onebot',):
                 ws = f'/instances/{instance_id}/ws/{adapter}'
                 assert client(peer, remote_host, 11023, ws, headers=UPGRADE)['status'] == 0
                 check_real_websocket_auth(lambda path, headers: client(peer, remote_host, 8080, path, headers=headers), ws, 'synthetic-inbound-' + adapter)
         assert api(update_rpc, {'clearKeys': [entry['key'] for entry in updates]}, FORWARDED).get('success')
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_adapter_websocket(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws)
             check_real_websocket_auth(read, ws, required=not host_mode)
@@ -335,7 +335,7 @@ def exercise(root, temporary, host_mode=False):
                 assert published_read(ws, headers={**UPGRADE, 'Authorization': 'Bearer synthetic-inbound-' + adapter})['status'] == 401
         print('PASS: inbound adapter tokens, no-token compatibility, management isolation, loopback WS listener')
         if host_mode:
-            print('PASS: host topology, double loopback, public Host/Origin, OneBot/AstrBot')
+            print('PASS: host topology, double loopback, public Host/Origin, OneBot')
             return
 
         settings['settings']['WS_LISTEN_ADDR'] = '0.0.0.0:1235'
@@ -350,7 +350,7 @@ def exercise(root, temporary, host_mode=False):
             assert api('/api/instances/global/import/settings', settings).get('success')
             expected = 0 if address.startswith('127.') else 401
             assert client(peer, remote_host, 8080, '/api/storage')['status'] == expected
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_adapter_websocket(lambda path, headers: client(peer, remote_host, 1235, path, headers=headers), ws)
             published = int(command(*compose, 'port', 'frostagent', '1235').rsplit(':', 1)[1])
@@ -362,7 +362,7 @@ def exercise(root, temporary, host_mode=False):
         assert read('/api/instances', headers=FORWARDED)['status'] == 401
         bearer = {**FORWARDED, 'Authorization': 'Bearer synthetic-control-token'}
         assert read('/api/instances', headers=bearer)['status'] == 200
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             check_management_websocket(read, f'/instances/{instance_id}/ws/{adapter}', token='synthetic-control-token')
         # The former README bootstrap flow uses these two management endpoints.
         # Test their auth and settings semantics directly rather than executing docs.
@@ -426,7 +426,7 @@ def exercise(root, temporary, host_mode=False):
         assert 'management and adapter listeners must use different ports' in logs.stdout + logs.stderr
         assert read('/api/instances')['status'] == 0
         print('PASS: connector namespace, published management token auth, public Host/Origin, API/RPC, '
-              'OneBot/AstrBot, SQL guards, non-root, graceful shutdown and persistence')
+              'OneBot, SQL guards, non-root, graceful shutdown and persistence')
     except BaseException:
         subprocess.run((*compose, 'logs', '--no-color'), check=False)
         raise

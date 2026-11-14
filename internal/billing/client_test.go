@@ -126,7 +126,7 @@ func TestClient_ReserveLLM_FallbackIdempotencyKey(t *testing.T) {
 	client := NewClient(server.URL, "test-token", 2*time.Second)
 	// 1. When IdempotencyKey is empty but TaskID is present
 	_, err := client.ReserveLLM(context.Background(), LLMReserveRequest{
-		Platform:    "astrbot",
+		Platform:    "fixture",
 		ExternalID:  "u-999",
 		TaskID:      "task-abc",
 		AmountMinor: 100,
@@ -134,8 +134,8 @@ func TestClient_ReserveLLM_FallbackIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve failed: %v", err)
 	}
-	if len(capturedKey) < 8 || !strings.HasPrefix(capturedKey, "res_astrbot_task-abc_") {
-		t.Errorf("expected auto-generated key starting with 'res_astrbot_task-abc_', got %q", capturedKey)
+	if len(capturedKey) < 8 || !strings.HasPrefix(capturedKey, "res_fixture_task-abc_") {
+		t.Errorf("expected auto-generated key starting with 'res_fixture_task-abc_', got %q", capturedKey)
 	}
 
 	// 2. When IdempotencyKey and TaskID are both empty

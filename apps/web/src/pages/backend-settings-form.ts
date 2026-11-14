@@ -3,7 +3,7 @@ import { escapeHtml } from '../utils/formatters';
 import { dedicatedSettingKeys, settingFields } from './backend-setting-fields';
 
 const groupOrder = [
-  '对话与上下文', '记忆与压缩', '模型与智能体', '适配器',
+  '对话与上下文', '聊天记录', '记忆与压缩', '模型与智能体', '适配器',
   '网络与连接', '安全与权限', '计费', '沙箱', 'ActionsCat',
 ];
 
@@ -36,6 +36,8 @@ export function renderBackendSettingsForm(
             const kind = field.type ?? 'text';
             const enabled = item.key === 'ACTIONSCAT_ENABLED'
               ? !['false', '0', 'no', 'off'].includes(item.value.trim().toLowerCase())
+              : item.key === 'CHAT_HISTORY_PRIVATE_ENABLED'
+                ? item.value.trim() !== 'false'
               : item.value === 'true';
             const input = kind === 'switch'
               ? `<label class="toggle-switch" title="${label}"><input id="setting-${key}" type="checkbox" role="switch" aria-label="${label}" data-setting-switch="${key}" ${enabled ? 'checked' : ''} /><span aria-hidden="true"></span></label>`

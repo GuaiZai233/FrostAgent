@@ -137,6 +137,8 @@ Object.assign(globalThis, { window: new EventTarget(), document: {
 Object.assign(globalThis, { HTMLInputElement: Element, HTMLSelectElement: class {} });
 instanceState.select({ id: 'a1b2c3d4', name: 'test', enabled: false, created_at: '' });
 let values = [
+  { key: 'CHAT_HISTORY_PRIVATE_ENABLED', value: '', isSecret: false },
+  { key: 'CHAT_HISTORY_GROUP_WHITELIST', value: '', isSecret: false },
   { key: 'MAX_CONTEXT_MESSAGES', value: '20', resetHint: '50', isSecret: false },
   { key: 'ENABLE_AT_IN_GROUP_MSG', value: 'false', isSecret: false },
   { key: 'ENABLE_THINKING_STATUS', value: 'true', isSecret: false },
@@ -658,6 +660,26 @@ assert.equal(el('thinking-status-cb').checked, true, 'saved opt-in reloads');
 cleanup();
 
 const draft = new SettingsDraft([{ key: 'BOT_NAME', value: 'old', isSecret: false }], [{ key: 'EMPTY', value: '' }]);
+values = [
+  { key: 'CHAT_HISTORY_PRIVATE_ENABLED', value: '', isSecret: false },
+  { key: 'CHAT_HISTORY_GROUP_WHITELIST', value: '', isSecret: false },
+];
+cleanup = mountBackendSettingsPage(root as unknown as HTMLElement, api, extraAPI);
+await settle();
+assert.equal(el('setting-CHAT_HISTORY_PRIVATE_ENABLED').checked, true, 'unset private originals default on');
+assert.equal(el('setting-CHAT_HISTORY_GROUP_WHITELIST').value, '', 'group originals require an explicit whitelist');
+el('setting-CHAT_HISTORY_PRIVATE_ENABLED').checked = false;
+el('setting-CHAT_HISTORY_PRIVATE_ENABLED').emit('change');
+el('setting-CHAT_HISTORY_GROUP_WHITELIST').value = 'qq:group:fixture-group';
+el('setting-CHAT_HISTORY_GROUP_WHITELIST').emit('input');
+el('settings-draft-save').click();
+await settle();
+assert.ok(writes.at(-1)?.some(({ key, value }) => key === 'CHAT_HISTORY_PRIVATE_ENABLED' && value === 'false'));
+assert.ok(writes.at(-1)?.some(({ key, value }) => key === 'CHAT_HISTORY_GROUP_WHITELIST' && value === 'qq:group:fixture-group'));
+el('backend-refresh-btn').click();
+await settle();
+assert.equal(el('setting-CHAT_HISTORY_PRIVATE_ENABLED').checked, false, 'private opt-out survives reload');
+cleanup();
 draft.set('BOT_NAME', '');
 assert.equal(draft.pending()[0].value, null);
 draft.set('BOT_NAME', 'old');

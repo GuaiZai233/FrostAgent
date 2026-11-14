@@ -197,7 +197,7 @@ assert.equal(deleteCalls, 2, 'unmounted page deleted a summary through a stale d
 process.stdout.write('PASS: merged page pagination, group actions, and deletion failure\n');
 
 const privateSession = {
-  ...session, sessionId: 'astrbot:private:test_user', platform: 'astrbot', groupSummary: 'stale private summary',
+  ...session, sessionId: 'fixture:private:test_user', platform: 'fixture', groupSummary: 'stale private summary',
 };
 const privateRoot = new MockElement();
 const privateCalls: string[] = [];
@@ -209,7 +209,7 @@ const privateAPI = {
   async getSessionContext(id: string) {
     privateCalls.push(id);
     return {
-      sessionId: id, platform: 'astrbot', runningSummary: 'fresh private compact',
+      sessionId: id, platform: 'fixture', runningSummary: 'fresh private compact',
       promptText: '{"messages":[]}',
       recentStructuredMessages: [{
         role: 'assistant', content: 'private reply', sender: '', senderId: '', messageId: '', time: '',
@@ -225,7 +225,7 @@ const privateTabs = privateRoot.querySelector('#prompt-platform-filter-tabs').qu
 privateTabs.find((tab) => tab.getAttribute('data-filter') === 'all-private')!.click();
 await Promise.resolve();
 const privateList = privateRoot.querySelector('#prompt-session-list');
-assert.match(privateList.innerHTML, /astrbot:private:test_user/);
+assert.match(privateList.innerHTML, /fixture:private:test_user/);
 assert.doesNotMatch(privateList.innerHTML, /onebot:group:123/);
 privateList.querySelectorAll('.prompt-session-card')[0].click();
 await Promise.resolve();
@@ -242,7 +242,7 @@ assert.match(privateDialog.innerHTML, /fresh private compact/);
 assert.doesNotMatch(privateDialog.innerHTML, /prompt-delete-summary-btn/);
 assert.equal(deleteCalls, 2, 'private summary viewing must not call the group delete API');
 privateTabs.find((tab) => tab.getAttribute('data-filter') === 'all-groups')!.click();
-assert.doesNotMatch(privateList.innerHTML, /astrbot:private:test_user/);
+assert.doesNotMatch(privateList.innerHTML, /fixture:private:test_user/);
 assert.match(privateList.innerHTML, /onebot:group:123/);
 cleanupPrivate();
 process.stdout.write('PASS: private filter, context rendering, fresh read-only summary, and group-only actions\n');
