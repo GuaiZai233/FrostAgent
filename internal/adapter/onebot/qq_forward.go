@@ -93,10 +93,12 @@ func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model
 			return nil, fmt.Errorf("forward_index %d 不存在（共 %d 个转发记录）", index, len(refs))
 		}
 		ref := refs[index]
-		if len(ref.content) > 0 && string(ref.content) != "null" {
+		// A gateway may populate content with an unexpanded preview object.
+		// Prefer the authoritative resource when present; inline records need no ID.
+		if strings.TrimSpace(ref.id) == "" {
 			return decodeQQForwardRecords(ref.content)
 		}
-		if strings.TrimSpace(ref.id) == "" || len(ref.id) > 1024 {
+		if len(ref.id) > 1024 {
 			return nil, fmt.Errorf("转发记录缺少有效资源 ID")
 		}
 		// OneBot v11 specifies id; NapCat uses message_id for the same resource.

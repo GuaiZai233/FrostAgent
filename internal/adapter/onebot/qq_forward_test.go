@@ -21,6 +21,8 @@ import (
 func TestQQReadForwardFormatsAndMediaPlaceholders(t *testing.T) {
 	for _, tc := range []struct{ name, source, response, text string }{
 		{"napcat", `[{"type":"forward","data":{"id":"resource-root"}}]`, `{"messages":[{"message_id":999,"sender":{"user_id":42,"nickname":"fixture"},"time":123,"message":[{"type":"text","data":{"text":"hello"}},{"type":"image","data":{"url":"https://example.invalid/private-media","base64":"secret-media"}}]}]}`, "hello[image]"},
+		{"napcat preview", `[{"type":"forward","data":{"id":"resource-root","content":{}}}]`, `{"messages":[{"sender":{"user_id":42,"nickname":"fixture"},"time":123,"message":"hello"}]}`, "hello"},
+		{"napcat empty preview", `[{"type":"forward","data":{"id":"resource-root","content":[]}}]`, `{"messages":[{"sender":{"user_id":42,"nickname":"fixture"},"time":123,"message":"hello"}]}`, "hello"},
 		{"standard", `[{"type":"forward","data":{"id":"resource-root"}}]`, `{"message":[{"type":"node","data":{"uin":"42","name":"fixture","time":"123","content":[{"type":"text","data":{"text":"hello"}},{"type":"file","data":{"file":"/private-media"}}]}}]}`, "hello[file]"},
 		{"cq", `"[CQ:forward,id=resource-root]"`, `{"messages":[{"sender":{"user_id":"42","nickname":"fixture"},"time":123,"content":"hello[CQ:record,file=secret-media]"}]}`, "hello[record]"},
 	} {
