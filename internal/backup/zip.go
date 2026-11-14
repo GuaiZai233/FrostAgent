@@ -20,6 +20,19 @@ import (
 // BuildInstanceZIP returns a self-contained backup without creating a server
 // side archive. Sticker bytes are separate members, never embedded in JSON.
 func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
+	var archive []byte
+	err := db.ReadSnapshot(context.Background(), func(snapshot *storage.DB) error {
+		var err error
+		archive, err = buildInstanceZIPSnapshot(snapshot, instanceID, imageDir)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return archive, nil
+}
+
+func buildInstanceZIPSnapshot(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
 	if err := db.RequireNativeSchema(context.Background(), "export a complete instance backup"); err != nil {
 		return nil, err
 	}
@@ -63,6 +76,10 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	modules, err := db.ModulePayloads(context.Background(), instanceID)
+	if err != nil {
+		return nil, err
+	}
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
 	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
@@ -71,6 +88,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		data any
 	}{
 		{"manifest.json", manifest},
+		{"modules.json", ModulePayloads{ProtocolVersion: storage.ModulePayloadProtocol, Records: modules}},
 		{"setting.json", settings},
 		{"skills.json", skillPackages},
 		{"computer_use.json", computerUse},

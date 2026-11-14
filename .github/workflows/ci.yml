@@ -47,7 +47,7 @@ jobs:
       - name: Test PostgreSQL migrations
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
-        run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic)' -count=1 -v -coverprofile=coverage-postgres.out
+        run: go test ./internal/storage -run '^(TestPostgresMigration|TestProviderSchemaMigration|TestProviderMigrationFailureIsAtomic|TestV1Cleanup|TestModulePayload|TestReadSnapshot)' -count=1 -v -coverprofile=coverage-postgres.out
       - name: Test shared providers on PostgreSQL
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable

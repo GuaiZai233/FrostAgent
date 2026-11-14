@@ -199,6 +199,7 @@ var migrations = []migration{
 	{version: 15, preservesCompatibility: true},
 	{version: 16},
 	{version: 17, statements: chatHistorySchema},
+	{version: 18, statements: v1CleanupSchema},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
@@ -261,6 +262,7 @@ func (d *DB) createSchema(ctx context.Context) error {
 		if retired {
 			continue
 		}
+		statement = cleanV1Statement(statement)
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("create v7 schema: %w", err)
 		}
@@ -271,6 +273,9 @@ func (d *DB) createSchema(ctx context.Context) error {
 			minimumCompatible = max(minimumCompatible, step.version)
 		}
 		for _, statement := range step.statements {
+			if step.version == 18 {
+				continue // Fresh databases never contain retired structures.
+			}
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("create schema v%d: %w", step.version, err)
 			}
@@ -288,6 +293,9 @@ func (d *DB) createSchema(ctx context.Context) error {
 	}
 	if _, err := tx.ExecContext(ctx, d.Bind(`INSERT INTO schema_meta(id, version, min_compatible_version) VALUES (1, ?, ?)`), SchemaVersion, minimumCompatible); err != nil {
 		return fmt.Errorf("write schema version: %w", err)
+	}
+	if err := createModulePayloads(ctx, tx); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -308,6 +316,11 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	if err := validateCompatibility(version, minimumCompatible); err != nil {
 		return err
 	}
+	if step.version == 18 {
+		if err := d.validateV1Cleanup(ctx, tx); err != nil {
+			return err
+		}
+	}
 	for _, statement := range step.statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply schema migration v%d: %w", step.version, err)
@@ -325,6 +338,11 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	}
 	if step.version == 13 {
 		if err := d.repairEmbeddingColumns(ctx, tx); err != nil {
+			return err
+		}
+	}
+	if step.version == 18 {
+		if err := createModulePayloads(ctx, tx); err != nil {
 			return err
 		}
 	}

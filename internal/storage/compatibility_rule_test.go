@@ -167,7 +167,7 @@ func TestPostgresMigrationSchemaCompatibilityRewriteRules(t *testing.T) {
 	}
 }
 
-func proveCompatibilityRuleEffect(t *testing.T, db *sql.DB, write, effect string) {
+func proveCompatibilityRuleEffect(t *testing.T, db SQLConnection, write, effect string) {
 	t.Helper()
 	tx, err := db.Begin()
 	if err != nil {

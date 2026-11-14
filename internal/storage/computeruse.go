@@ -251,23 +251,17 @@ type ComputerUseMetadata struct {
 // SnapshotComputerUse reads related registrations and task facts in one
 // transaction, while deliberately excluding the bridge configuration.
 func (d *DB) SnapshotComputerUse(ctx context.Context, instanceID string) (ComputerUseMetadata, error) {
-	tx, err := d.SQL.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return ComputerUseMetadata{}, err
-	}
-	defer tx.Rollback()
-	projects, err := d.computerUseProjects(ctx, tx, instanceID)
-	if err != nil {
-		return ComputerUseMetadata{}, err
-	}
-	tasks, err := d.computerUseTasks(ctx, tx, instanceID)
-	if err != nil {
-		return ComputerUseMetadata{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return ComputerUseMetadata{}, err
-	}
-	return ComputerUseMetadata{Projects: projects, Tasks: tasks}, nil
+	var result ComputerUseMetadata
+	err := d.ReadSnapshot(ctx, func(view *DB) error {
+		var err error
+		result.Projects, err = view.computerUseProjects(ctx, view.SQL, instanceID)
+		if err != nil {
+			return err
+		}
+		result.Tasks, err = view.computerUseTasks(ctx, view.SQL, instanceID)
+		return err
+	})
+	return result, err
 }
 
 func (d *DB) computerUseTasks(ctx context.Context, q computerUseQuerier, instanceID string) ([]ComputerUseTask, error) {

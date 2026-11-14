@@ -42,7 +42,8 @@ jobs:
         run: |
           buf generate --template buf.gen.yaml
           go test -c -o "$RUNNER_TEMP/schema-current-roundtrip.test" ./internal/versioncompat
+          go test -c -o "$RUNNER_TEMP/future-module-roundtrip.test" ./internal/versioncompat/futuremodule
           (cd .compat-v16 && buf generate --template buf.gen.yaml && go test -c -o "$RUNNER_TEMP/schema16-roundtrip.test" ./internal/versioncompat)
           (cd .compat-v15 && buf generate --template buf.gen.yaml && go test -c -o "$RUNNER_TEMP/schema15-roundtrip.test" ./internal/versioncompat)
       - name: Round-trip old edits and both ZIP formats
-        run: python3 scripts/test_schema_roundtrip.py --v15-binary "$RUNNER_TEMP/schema15-roundtrip.test" --v16-binary "$RUNNER_TEMP/schema16-roundtrip.test" --current-binary "$RUNNER_TEMP/schema-current-roundtrip.test"
+        run: python3 scripts/test_schema_roundtrip.py --v15-binary "$RUNNER_TEMP/schema15-roundtrip.test" --v16-binary "$RUNNER_TEMP/schema16-roundtrip.test" --current-binary "$RUNNER_TEMP/schema-current-roundtrip.test" --future-module-binary "$RUNNER_TEMP/future-module-roundtrip.test"

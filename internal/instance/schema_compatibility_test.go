@@ -36,6 +36,8 @@ func compatibilityGuardManager(t *testing.T) *Manager {
 func markCompatibleFutureSchema(t *testing.T, db *storage.DB) {
 	t.Helper()
 	for _, statement := range []string{
+		`CREATE TABLE future_extension (instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE, payload TEXT NOT NULL)`,
+		`INSERT INTO future_extension VALUES ('1234abcd','unknown SQL module')`,
 		`CREATE TABLE IF NOT EXISTS computer_use_config (instance_id TEXT PRIMARY KEY REFERENCES instances(id) ON DELETE CASCADE, config_json TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS computer_use_projects (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(instance_id, id))`,
 		`CREATE TABLE IF NOT EXISTS computer_use_tasks (instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE, id TEXT NOT NULL, generation BIGINT NOT NULL, metadata_json TEXT NOT NULL, PRIMARY KEY(instance_id, id))`,

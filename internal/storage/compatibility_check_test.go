@@ -125,7 +125,7 @@ func exerciseCheckConstraintCompatibility(t *testing.T, backend Backend) {
 	}
 }
 
-func compatibilityInstanceDefinition(t *testing.T, db *sql.DB, backend Backend) string {
+func compatibilityInstanceDefinition(t *testing.T, db SQLConnection, backend Backend) string {
 	t.Helper()
 	query := `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'instances'`
 	if backend == Postgres {

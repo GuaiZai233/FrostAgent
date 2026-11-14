@@ -11,6 +11,7 @@ import (
 // disposable databases. Existing feature data must survive the repair.
 func prepareEmbeddingV12(t *testing.T, db *DB, modelColumn, memoryColumn bool) {
 	t.Helper()
+	restoreLegacyColumns(t, db)
 	if _, err := db.SQL.Exec(`ALTER TABLE provider_endpoints DROP COLUMN api_format`); err != nil {
 		t.Fatal(err)
 	}
