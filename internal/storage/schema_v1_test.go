@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -62,29 +63,63 @@ func TestV1CleanupMigration(t *testing.T) {
 }
 
 func TestV1CleanupRollsBack(t *testing.T) {
-	db, err := Open(context.Background(), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	for _, backend := range []Backend{SQLite, Postgres} {
+		t.Run(string(backend), func(t *testing.T) {
+			_, _, db := compatibilityDatabase(t, backend)
+			prepareOldSchema(t, db, 17)
+			populateMigrationFixture(t, db)
+			// Recreate populated archives as retained by an upgraded v17 database.
+			for _, statement := range schemaStatements {
+				for _, table := range []string{"endpoint_ids", "model_endpoints", "model_secrets", "models"} {
+					if strings.HasPrefix(statement, "CREATE TABLE "+table+" (") {
+						compatibilityExec(t, db, statement)
+					}
+				}
+			}
+			for _, statement := range []string{
+				`INSERT INTO endpoint_ids VALUES ('retired-endpoint','synthetic-instance')`,
+				`INSERT INTO model_endpoints(instance_id,id,display_name,base_url,api_key_source,enabled,position) VALUES ('synthetic-instance','retired-endpoint','Retired','https://retired.invalid','sql',1,0)`,
+				`INSERT INTO model_secrets VALUES ('synthetic-instance','retired-endpoint','synthetic-retired-secret')`,
+				`INSERT INTO models VALUES ('synthetic-instance','retired-model','Retired','retired-endpoint','synthetic-model',1,'{}',0)`,
+				`INSERT INTO dialogues(instance_id,position,id,scene,relation,user_text,preferred) VALUES ('synthetic-instance',0,'synthetic-dialogue','retired-scene','retired-relation','question','answer')`,
+				`UPDATE memory_entries SET visibility='retired-value'`,
+			} {
+				compatibilityExec(t, db, statement)
+			}
+			// Fail at the final version update, after every DROP and the module
+			// table/registration have executed, not in the pre-migration guard.
+			if backend == Postgres {
+				compatibilityExec(t, db, `CREATE FUNCTION fail_v1_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic v1 final update failure'; END $$`)
+				compatibilityExec(t, db, `CREATE TRIGGER fail_v1 BEFORE UPDATE ON schema_meta FOR EACH ROW EXECUTE FUNCTION fail_v1_update()`)
+			} else {
+				compatibilityExec(t, db, `CREATE TRIGGER fail_v1 BEFORE UPDATE ON schema_meta BEGIN SELECT RAISE(ABORT,'synthetic v1 final update failure'); END`)
+			}
+			before := compatibilitySnapshot(t, db.SQL, backend)
+			err := db.applyMigration(context.Background(), migrations[len(migrations)-1])
+			if err == nil || !strings.Contains(err.Error(), "synthetic v1 final update failure") {
+				t.Fatalf("cleanup did not reach the injected final update failure: %v", err)
+			}
+			if after := compatibilitySnapshot(t, db.SQL, backend); !reflect.DeepEqual(before, after) {
+				t.Fatal("failed cleanup changed tables, columns, data, module registration or version")
+			}
+			assertCompatibilityVersions(t, db, 17, 17)
+			assertMigrationFixture(t, db)
+			if backend == Postgres {
+				compatibilityExec(t, db, `DROP TRIGGER fail_v1 ON schema_meta`)
+				compatibilityExec(t, db, `DROP FUNCTION fail_v1_update()`)
+			} else {
+				compatibilityExec(t, db, `DROP TRIGGER fail_v1`)
+			}
+			if err := db.applyMigration(context.Background(), migrations[len(migrations)-1]); err != nil {
+				t.Fatal(err)
+			}
+			assertCompatibilityVersions(t, db, 18, 18)
+			assertMigrationFixture(t, db)
+			if err := db.RequireNativeSchema(context.Background(), "export after cleanup retry"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
-	defer db.Close()
-	prepareOldSchema(t, db, 17)
-	populateMigrationFixture(t, db)
-	compatibilityExec(t, db, `UPDATE memory_entries SET visibility='retired-value'`)
-	compatibilityExec(t, db, `CREATE TRIGGER fail_v1 BEFORE UPDATE ON schema_meta BEGIN SELECT RAISE(ABORT,'synthetic failure'); END`)
-	if err := db.applyMigration(context.Background(), migrations[len(migrations)-1]); err == nil {
-		t.Fatal("failed cleanup succeeded")
-	}
-	assertCompatibilityVersions(t, db, 17, 17)
-	var value string
-	if err := db.SQL.QueryRow(`SELECT visibility FROM memory_entries`).Scan(&value); err != nil || value != "retired-value" {
-		t.Fatalf("failed cleanup lost data: %q %v", value, err)
-	}
-	assertMigrationFixture(t, db)
-	compatibilityExec(t, db, `DROP TRIGGER fail_v1`)
-	if err := db.applyMigration(context.Background(), migrations[len(migrations)-1]); err != nil {
-		t.Fatal(err)
-	}
-	assertCompatibilityVersions(t, db, 18, 18)
 }
 
 func TestV1CleanupProtectsUnknownDependentTable(t *testing.T) {
