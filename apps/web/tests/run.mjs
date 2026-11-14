@@ -7,6 +7,7 @@ const esbuildPath = require.resolve('esbuild', {
 });
 const { build } = require(esbuildPath);
 for (const testFile of [
+  'dom-fixture.test.ts',
   'instance-api.test.ts',
   'error-lookup-page.test.ts',
   'logs-copy.test.ts',
