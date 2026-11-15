@@ -119,3 +119,32 @@ func TestPersistentSessionsContinueAfterMemoryDatabaseFailure(t *testing.T) {
 		scope.Wait()
 	}
 }
+
+func TestAwarenessDiscoveryOutageDoesNotPauseDurableRuntime(t *testing.T) {
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := memory.NewSQLGroupManager(db, "synthetic", nil)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, durable := range []bool{false, true} {
+		scope := runtimescope.New(nil, nil, nil)
+		t.Cleanup(func() { scope.Cancel(); scope.Wait() })
+		sessions := NewSessionManager(scope)
+		if durable {
+			if err := sessions.EnablePersistence(sessionstate.New(nil, "synthetic", t.TempDir(), nil)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		engine := &Engine{Scope: scope, SessionManager: sessions, GroupManager: groups}
+		service := &AwarenessService{Engine: engine}
+		workerContext, cancelWorker := context.WithCancel(scope.Context())
+		cancelWorker()
+		service.Run(workerContext)
+		if (scope.Context().Err() == nil) != durable {
+			t.Fatalf("durable=%v runtime error=%v", durable, scope.Context().Err())
+		}
+	}
+}

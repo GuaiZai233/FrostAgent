@@ -150,8 +150,7 @@ func (s *AwarenessService) dueTargets() []AwarenessTarget {
 func (s *AwarenessService) Run(ctx context.Context) {
 	if s.Engine.GroupManager != nil {
 		groups, err := s.Engine.GroupManager.ListGroups()
-		if err != nil {
-			s.Engine.PauseOnStorageError(err)
+		if err != nil && !s.Engine.ContinueAfterMemoryStorageError(err) {
 			return
 		}
 		for _, group := range groups {
