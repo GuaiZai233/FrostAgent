@@ -1535,6 +1535,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			messages = append(messages, toolMsg)
 		}
+		if specificReplyDelivered && !runCtx.Awareness {
+			// Finish the validated batch and its memory/transcript bookkeeping,
+			// then keep the confirmed delivery as the complete public answer.
+			// Awareness retains its existing continuation behavior.
+			return AgentRunResult{MemoryWritten: memoryWritten, Usage: totalUsage}
+		}
 		if enforceStickerActivity() && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {
 				if remaining == interval {
