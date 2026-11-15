@@ -67,7 +67,7 @@ func (p *PublicReplyLog) RecordFinalProgress(text string, turn *SessionTurn) {
 			return
 		}
 		p.session.mu.Lock()
-		defer p.session.mu.Unlock()
+		defer p.session.unlockCheckpoint()
 		p.updateFinalLocked(text)
 		if turn == nil || turn.lane == nil {
 			return
@@ -162,7 +162,7 @@ func (p *PublicReplyLog) CommitDelivered() {
 
 func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 	p.session.mu.Lock()
-	defer p.session.mu.Unlock()
+	defer p.session.unlockCheckpoint()
 	if p.epoch != 0 && p.session.epoch != p.epoch {
 		return false
 	}

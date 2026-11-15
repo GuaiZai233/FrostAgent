@@ -212,6 +212,9 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		return cmdCtx.Reply(ctx, "上下文压缩功能已被禁用。", false)
 	}
 	session := e.Engine.SessionManager.GetOrCreate(cmdCtx.SessionID)
+	if err := session.RecoveryError(); err != nil {
+		return err
+	}
 
 	if cmdCtx.IsGroup {
 		if e.Engine.GroupCompactor == nil {

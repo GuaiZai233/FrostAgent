@@ -319,7 +319,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	}
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
-		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
+		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, logs.DefaultBufferSize)}
 		m.instances[info.ID] = i
 		if pathError != nil {
 			m.registry.Instances[index].Enabled = false
@@ -643,7 +643,7 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 	if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(id), "dialogue.yml"), dialogueContent, 0600); err != nil {
 		return Info{}, err
 	}
-	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	i := &managed{id: id, logger: logs.New(id, name, logs.DefaultBufferSize)}
 	r, c, err := m.buildFresh(id, i, false, m.dir(id))
 	partialMCP = i.mcp
 	if err != nil {
@@ -679,7 +679,7 @@ func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
 	}
 	m.registry.Instances = append(m.registry.Instances, info)
 	m.registry.NextNumber++
-	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	i := &managed{id: id, logger: logs.New(id, name, logs.DefaultBufferSize)}
 	m.instances[id] = i
 	if err := instanceconfig.InitializeInstanceSettings(m.db, id); err != nil {
 		info.Error = err.Error()
@@ -753,7 +753,6 @@ func (m *Manager) stop(id string, i *managed) error {
 		m.security.RemoveInstanceProvider(id)
 	}
 	i.logger.EndStreams()
-	i.logger.Clear()
 	err := m.update(id, func(info *Info) { info.Enabled = false })
 	if err != nil {
 		m.mu.Lock()
@@ -978,6 +977,7 @@ func (m *Manager) Delete(id string, all bool) error {
 	}
 
 	if all {
+		i.logger.StopPersistence()
 		err = os.RemoveAll(m.dir(id))
 	} else {
 		for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json", "dialogue.yml"} {
@@ -1428,6 +1428,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 						return
 					}
 				}
+				i.logger.SetPersistentBudget(logs.PersistentBudget(i.config.Get(logs.LogBudgetKey)))
 				for key, values := range buffered.Header() {
 					w.Header()[key] = append([]string(nil), values...)
 				}
@@ -1436,6 +1437,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			}
 			return
 		}
+		i.logger.SetPersistentBudget(logs.PersistentBudget(i.config.Get(logs.LogBudgetKey)))
 		pending := false
 		for k := range instanceconfig.InstanceRestartKeys {
 			if before[k] != after[k] {

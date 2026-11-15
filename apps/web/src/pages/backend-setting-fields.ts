@@ -23,6 +23,7 @@ export const settingFields: Record<string, SettingField> = {
   SECURITY_CONTROL_MODE: { label: '安全控制模式', group: '安全与权限', type: 'select', hot: true, options: [
     { value: 'off', label: '关闭' }, { value: 'simple', label: '基础' }, { value: 'aggressive', label: '严格' },
   ] },
+  LOG_STORAGE_MIB: { label: '持久化日志预算（MiB）', group: '日志与持久化', type: 'number', min: 1, max: 65536, step: 1, hot: true, hint: '默认每实例 128 MiB，包含日志及图片；超限删除最旧记录。会话和 Prompt 检查快照单独保存。' },
   MAX_CONTEXT_MESSAGES: { label: '保留消息条数', group: '对话与上下文', type: 'number', min: 4, step: 1, hot: true },
   ADMIN_QQ_IDS: { label: '管理员 QQ 号', group: '安全与权限', hint: '多个号码用英文逗号分隔', hot: true },
   ADMIN_COMMAND_PREFIX: { label: '管理员指令前缀', group: '安全与权限', hot: true },

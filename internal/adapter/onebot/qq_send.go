@@ -136,6 +136,9 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				return core.PlatformActionResult{}, fmt.Errorf("目标群会话不可用")
 			}
 			targetSession = engine.SessionManager.GetOrCreate(sessionID)
+			if err := targetSession.RecoveryError(); err != nil {
+				return core.PlatformActionResult{}, fmt.Errorf("目标群会话暂时无法恢复: %w", err)
+			}
 			targetEpoch = targetSession.Epoch()
 		}
 		resolve := func(messages []tools.Msg) error {

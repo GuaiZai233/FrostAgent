@@ -176,6 +176,9 @@ message GetSessionContextResponse {
   repeated GroupMessageInfoProto recent_structured_messages = 10;
   // True when the group is outside the group compact whitelist: no summary or raw group context is provided.
   bool group_compact_disabled = 11;
+  // Latest provider-neutral request with inline media; diagnostic only, never replayed.
+  string actual_request_json = 12;
+  string request_at = 13;
 }
 
 // Known provider values are retained alongside calls whose value was omitted.
