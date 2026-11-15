@@ -14,6 +14,10 @@ func SpecificReplyParameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"use_frostagent_decoration": map[string]any{
+				"type": "boolean", "default": true,
+				"description": "Set false to skip automatic sender mentions and reply quotes; explicit message components are preserved. Omit or set true to keep existing decoration rules.",
+			},
 			"messages": map[string]any{
 				"type": "array", "minItems": 2,
 				"description": "Exactly one mention_specific component first, followed by one or more plain components.",
@@ -36,7 +40,8 @@ func SpecificReplyParameters() map[string]any {
 // execution, including hidden fields, multiple targets and session overrides.
 func IsSpecificReply(args string) bool {
 	var payload struct {
-		Messages []struct {
+		UseFrostAgentDecoration *bool `json:"use_frostagent_decoration"`
+		Messages                []struct {
 			Type      string `json:"type"`
 			MessageID string `json:"message_id,omitempty"`
 			Text      string `json:"text,omitempty"`

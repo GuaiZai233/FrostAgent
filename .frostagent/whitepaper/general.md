@@ -211,6 +211,7 @@ FrostAgent 采用统一的消息核心抽象，实现跨平台消息的收发与
     - 针对 NapCat“局部容错丢弃媒体但仍上报文本”与 LuckyLillia“媒体异常导致整条事件无法分发”的上游行为差异，适配器在收到媒体段但数据缺失或下载失败时输出明确的诊断日志，杜绝未记录的静默语义漂移。
 - **OneBot 消息规范化 (`internal/adapter/parity`)**：
   - `PlanGroupDecoration` 统一处理群聊自动引用、@ 提及、去重和表情包装饰跳过策略，消息顺序为 `[Quote, Mention, Content]`。
+  - `send_message` 提供可选布尔参数 `use_frostagent_decoration`：省略或设为 `true` 时保持现有装饰规则；设为 `false` 时，本次调用跳过面板配置的自动引用与 @ 提及，保留显式 `quote`、`mention_user` 等组件的内容及顺序。普通消息与带媒体的发送路径均传递此参数；主动回复和主动感知也声明该参数，各模式原有的消息类型限制与引用校验继续生效。
   - `IsMentionOnlyOneBotSegments` 依据原始消息段检查纯 @Bot 交互，包含其他用户提及、引用、图片或非文本组件时不判定为纯提及。
   - 会话、记忆、摘要、模型路由和计费继续统一 `onebot` 与 `qq` 身份；未知平台保持独立命名空间。
 - **连接控制**：实例的连接页面管理 `ONEBOT_WS_ENABLED`、正向/反向模式、Endpoint 地址及独立入站/出站令牌。

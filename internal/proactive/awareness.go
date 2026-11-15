@@ -76,8 +76,9 @@ type AwarenessMessage struct {
 
 func ParseAwarenessMessages(args string) ([]AwarenessMessage, error) {
 	var payload struct {
-		Session  string             `json:"session"`
-		Messages []AwarenessMessage `json:"messages"`
+		Session                 string             `json:"session"`
+		Messages                []AwarenessMessage `json:"messages"`
+		UseFrostAgentDecoration *bool              `json:"use_frostagent_decoration"`
 	}
 	if err := json.Unmarshal([]byte(args), &payload); err != nil || payload.Session != "" || len(payload.Messages) == 0 {
 		return nil, fmt.Errorf("主动感知仅允许向当前会话发送文本或艾特")
@@ -111,10 +112,15 @@ func AwarenessSendAllowed(args string) bool {
 
 func AwarenessParameters() map[string]any {
 	return map[string]any{"type": "object", "required": []string{"messages"}, "additionalProperties": false,
-		"properties": map[string]any{"messages": map[string]any{"type": "array", "minItems": 1,
-			"items": map[string]any{"type": "object", "required": []string{"type"}, "additionalProperties": false,
-				"properties": map[string]any{"type": map[string]any{"type": "string", "enum": []string{"plain", "mention_user"}},
-					"text": map[string]any{"type": "string"}, "mention_user_id": map[string]any{"type": "string"}}}}}}
+		"properties": map[string]any{
+			"use_frostagent_decoration": map[string]any{
+				"type": "boolean", "default": true,
+				"description": "Set false to skip automatic sender mentions and reply quotes; explicit message components are preserved. Omit or set true to keep existing decoration rules.",
+			},
+			"messages": map[string]any{"type": "array", "minItems": 1,
+				"items": map[string]any{"type": "object", "required": []string{"type"}, "additionalProperties": false,
+					"properties": map[string]any{"type": map[string]any{"type": "string", "enum": []string{"plain", "mention_user"}},
+						"text": map[string]any{"type": "string"}, "mention_user_id": map[string]any{"type": "string"}}}}}}
 }
 
 type awarenessDeadline struct {
