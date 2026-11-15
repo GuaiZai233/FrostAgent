@@ -819,3 +819,48 @@ func TestAncestryHashMatchesSerializedMirror(t *testing.T) {
 		t.Fatalf("equivalent SQL/local JSON became a fork: %v", err)
 	}
 }
+
+func TestLoadPreservesLocalBranchBehindSQLRevision(t *testing.T) {
+	db := checkpointDatabase(t)
+	dir := t.TempDir()
+	seed := New(db, "instance", dir, nil)
+	remote := checkpoint("private:synthetic", 3)
+	remote.Payload = json.RawMessage(`{"version":1,"history":"SQL branch A"}`)
+	if err := seed.writeSQL(context.Background(), remote); err != nil {
+		t.Fatal(err)
+	}
+	local := checkpoint(remote.SessionID, 2)
+	local.Payload = json.RawMessage(`{"version":1,"history":"offline branch B"}`)
+	if err := New(nil, "instance", dir, nil).Save(local); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(db, "instance", dir, nil)
+	if records, err := restarted.Load(context.Background()); !errors.Is(err, ErrConflict) || len(records) != 1 || records[0].Revision != remote.Revision {
+		t.Fatalf("unknown lower local branch was silently replaced: %v %v", records, err)
+	}
+	files, err := filepath.Glob(restarted.path(local.SessionID) + ".*.conflict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, path := range files {
+		data, err := os.ReadFile(path)
+		var record Record
+		if err == nil && json.Unmarshal(data, &record) == nil && equalPayload(record.Payload, local.Payload) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("lower local branch was lost")
+	}
+	if err := restarted.Flush(context.Background()); !errors.Is(err, ErrConflict) {
+		t.Fatal("unresolved conflict without pending writes was hidden")
+	}
+	next := checkpoint(remote.SessionID, 4)
+	if err := restarted.Save(next); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Flush(context.Background()); !errors.Is(err, ErrConflict) || restarted.Status().Pending != 1 {
+		t.Fatalf("new writes escaped unresolved recovery: %v %+v", err, restarted.Status())
+	}
+}

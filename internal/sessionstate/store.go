@@ -180,6 +180,16 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 			}
 			merged[record.SessionID] = record
 			s.pending[record.SessionID] = record
+		} else if record.Revision < old.Revision {
+			// SQL has no durable ancestry column. Its larger counter cannot
+			// prove that the still-readable local branch is safe to discard.
+			loadErr = errors.Join(loadErr, ErrConflict)
+			s.conflicts[record.SessionID] = old
+			if err := s.preserveConflict(record); err != nil {
+				loadErr = errors.Join(loadErr, err)
+				merged[record.SessionID] = record
+				s.pending[record.SessionID] = record
+			}
 		} else if record.Revision == old.Revision && !equalPayload(record.Payload, old.Payload) {
 			loadErr = errors.Join(loadErr, ErrConflict)
 			s.conflicts[record.SessionID] = old
@@ -438,6 +448,9 @@ func (s *Store) Flush(ctx context.Context) error {
 		return nil
 	}
 	var localErr, conflictErr error
+	if len(s.conflicts) > 0 {
+		conflictErr = ErrConflict
+	}
 	for id, record := range s.localPending {
 		err := s.writeMirror(record)
 		if err != nil {
