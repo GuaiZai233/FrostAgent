@@ -18,10 +18,20 @@ var errToolHistoryStorage = errors.New("工具历史存储失败，已停止执�
 
 // ToolHistoryScope derives archive authority exclusively from trusted adapter state.
 func ToolHistoryScope(run RunContext) (chathistory.Scope, bool) {
-	if run.Mock || run.ActorPlatform == "" || run.ActorUserID == "" || run.ActorPlatform == "system" {
+	if run.Mock || run.ActorPlatform == "" || run.ActorUserID == "" {
 		return chathistory.Scope{}, false
 	}
 	scope := chathistory.Scope{Platform: run.ActorPlatform, MessageType: "private", TargetID: run.ActorUserID}.Canonical()
+	if scope.Platform == "system" {
+		// Timer-triggered group work has its own system identity. Only the trusted
+		// awareness route may supply its conversation scope, never a member actor.
+		scope = (chathistory.Scope{Platform: run.RouteScope.Platform, MessageType: "group", TargetID: run.RouteScope.GroupID}).Canonical()
+		if !run.Awareness || !run.Proactive || strings.TrimSpace(run.RouteScope.Platform) == "" || scope.Platform == "system" || scope.Validate() != nil ||
+			run.ActorUserID != run.SessionID || run.SessionID != AwarenessTargetFor(scope.Platform, "group", scope.TargetID).SessionID {
+			return chathistory.Scope{}, false
+		}
+		return scope, true
+	}
 	if run.RouteScope.GroupID != "" {
 		if (chathistory.Scope{Platform: run.RouteScope.Platform}).Canonical().Platform != scope.Platform {
 			return chathistory.Scope{}, false

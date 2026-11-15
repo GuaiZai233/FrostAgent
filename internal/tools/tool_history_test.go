@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 )
@@ -194,5 +195,76 @@ func TestToolHistoryReferencesDiscoverableFromChatSearch(t *testing.T) {
 	}
 	if err != nil || json.Unmarshal([]byte(body), &result) != nil || len(result.Records) != 1 || len(result.Records[0].ToolRefs) != 1 || result.Records[0].ToolRefs[0] != want {
 		t.Fatalf("chat search lost source association or leaked foreign refs: %s %v", body, err)
+	}
+}
+
+func TestToolHistoryOversizedStickerPairReadStaysQuarantined(t *testing.T) {
+	for _, toolName := range []string{"send_message", "send_sticker"} {
+		for _, field := range []string{"content", "payload"} {
+			t.Run(toolName+"/"+field, func(t *testing.T) {
+				t.Setenv(sticker.ActivityEnvKey, "10")
+				t.Setenv(sticker.ActivityModeEnvKey, sticker.ActivityBotTurns)
+				engine, run := toolHistoryFixture(t)
+				engine.MaxIterations = 5
+				sends := 0
+				run.SendHook = func(string) error { sends++; return nil }
+				outputs := map[string]core.ToolExecutionResult{
+					"send_message": {Content: "fixture-prepared", MessagePayload: `{"messages":[{"type":"plain","text":"fixture-text"}]}`},
+					"send_sticker": {Content: "fixture-prepared", MessagePayload: `{"messages":[{"type":"image","path":"/fixture/sticker.png","is_sticker":true}]}`},
+				}
+				output := outputs[toolName]
+				oversized := strings.Repeat("x", llm.MaxToolOutputBytes+1) + "fixture-uninspected"
+				if field == "content" {
+					output.Content = oversized
+				} else {
+					output.MessagePayload = oversized
+				}
+				output.RawResult = `{"content":[{"type":"text","text":"fixture-private-mcp-original"}]}`
+				outputs[toolName] = output
+				engine.ToolRegistry = map[string]llm.ToolExecutor{}
+				for name, value := range outputs {
+					engine.ToolRegistry[name] = Tool{name: name, executeResult: func(context.Context, string) (core.ToolExecutionResult, error) { return value, nil }}
+				}
+				for range 5 {
+					engine.RecordBotTurn()
+				}
+				calls := 0
+				engine.Provider = specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
+					calls++
+					if calls > 1 {
+						return core.ChatMessage{Role: core.RoleAssistant, Content: "fixture-final"}
+					}
+					var batch []core.ToolCall
+					for _, name := range []string{"send_message", "send_sticker"} {
+						batch = append(batch, core.ToolCall{ID: name + "-fixture", Type: "function", Function: core.ToolCallFunction{Name: name, Arguments: `{"fixture":"private-argument"}`}})
+					}
+					return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: batch}
+				}}
+				if result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture-input"}}, run); result.Error != nil {
+					t.Fatal(result.Error)
+				}
+				if sends != 0 {
+					t.Fatal("oversized pair was sent")
+				}
+				records, err := engine.ToolHistory.Export(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var archived toolhistory.Record
+				for _, record := range records {
+					if record.Tool == toolName {
+						archived = record
+					}
+				}
+				if archived.State != "complete" || archived.ResultRaw != output.Content || archived.MCPResultRaw != output.RawResult {
+					t.Fatal("oversized execution original was not retained")
+				}
+				body, err := NewToolHistoryTool(engine).ExecuteContext(llm.WithRunContext(context.Background(), run), fmt.Sprintf(`{"read_target_ref_id":%q}`, archived.RefID))
+				var read toolhistory.Record
+				if err != nil || json.Unmarshal([]byte(body), &read) != nil || read.RefID != archived.RefID || !read.Restricted || read.ArgumentsRaw != "" || read.ResultRaw != "" || read.MCPResultRaw != "" || !strings.Contains(read.ModelResultRaw, "工具结果过大") {
+					t.Fatalf("read exposed an uninspected oversized original: restricted=%t ref=%s bytes=%d err=%v", read.Restricted, read.RefID, len(body), err)
+				}
+			})
+		}
 	}
 }

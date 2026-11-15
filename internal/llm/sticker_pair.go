@@ -90,6 +90,8 @@ func (e *Engine) prepareStickerPairTool(ctx context.Context, run *RunContext, ca
 		return output, e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", call.Function.Name, err), run.SessionID), nil
 	}
 	if len(output.Content) > MaxToolOutputBytes || len(output.MessagePayload) > MaxToolOutputBytes {
+		// This early return skips result inspection; archived originals stay quarantined.
+		output.HistoryRestricted = true
 		return output, e.Log().ReportError(logs.TOOL, "工具执行失败：工具结果过大，配对消息未发送", nil, run.SessionID), nil
 	}
 	securityContent := output.Content

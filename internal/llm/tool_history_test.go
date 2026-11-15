@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
@@ -275,6 +277,85 @@ func TestToolHistoryStickerPairReferencesAndStorageFailures(t *testing.T) {
 				if !errors.Is(err, errToolHistoryStorage) || calls != 2 || sends != 1 {
 					t.Fatalf("pair replayed after delivery: %v calls=%d sends=%d", err, calls, sends)
 				}
+			}
+		})
+	}
+}
+
+func TestToolHistoryGroupAwarenessArchivesSystemOriginSend(t *testing.T) {
+	for _, platform := range []string{"onebot", "fixture-platform"} {
+		t.Run(platform, func(t *testing.T) {
+			e, service, _, sends := awarenessFixture(t)
+			archiveEngine, _, _ := historyEngine(t)
+			e.ToolHistory = archiveEngine.ToolHistory
+			target := AwarenessTargetFor(platform, "group", "fixture-group")
+			args := `{"messages":[{"type":"plain","text":"fixture-awareness-message"}]}`
+			tool := &proactiveMessageTool{structuredResultTool: structuredResultTool{staticTool: staticTool{name: "send_message"}, output: core.ToolExecutionResult{Content: args, MessagePayload: args}}}
+			e.ToolRegistry = map[string]ToolExecutor{"send_message": tool}
+			calls := 0
+			e.Provider = injectionProvider(func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				run, _ := RunContextFromContext(ctx)
+				if run.ActorPlatform != "system" || run.ActorUserID != target.SessionID || !run.Awareness || !run.Proactive {
+					t.Fatalf("awareness borrowed member authority: %+v", run)
+				}
+				calls++
+				if calls > 1 {
+					last := req.Messages[len(req.Messages)-1]
+					if last.Role != core.RoleTool || !strings.Contains(contentToText(last.Content), "fa_toolcall_") {
+						t.Error("system-origin tool result lost its history reference")
+					}
+					return finalInjection(""), nil
+				}
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "fixture-awareness-call", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: args}}}}}, nil
+			})
+			service.Trigger(e.Context(), target)
+			if len(*sends) != 1 {
+				t.Fatalf("awareness sends=%d, want 1", len(*sends))
+			}
+			records, err := e.ToolHistory.Export(context.Background())
+			if err != nil || len(records) != 1 {
+				t.Fatalf("awareness tool call not archived: count=%d err=%v", len(records), err)
+			}
+			r := records[0]
+			wantScope := (chathistory.Scope{Platform: platform, MessageType: "group", TargetID: target.ID}).Canonical()
+			if r.Scope != wantScope || r.ActorID != target.SessionID || r.SourceMessageID != "" || r.ArgumentsRaw != args || r.ResultRaw != args || r.State != "complete" || r.Restricted || !strings.Contains(r.ModelResultRaw, "消息已发送") {
+				t.Fatalf("system-origin archive lost scope, identity or result: %+v", r)
+			}
+			// A regular member in this group can recover the same archived result.
+			scope, allowed := ToolHistoryScope(RunContext{ActorPlatform: platform, ActorUserID: "fixture-member", RouteScope: modelrouter.Scope{Platform: platform, GroupID: target.ID}})
+			if !allowed {
+				t.Fatal("member group scope was rejected")
+			}
+			if got, err := e.ToolHistory.Read(context.Background(), scope, r.RefID); err != nil || got.ResultRaw != args {
+				t.Fatalf("group member cannot recover awareness tool result: %v", err)
+			}
+		})
+	}
+}
+
+func TestToolHistorySystemOriginRequiresTrustedAwarenessGroup(t *testing.T) {
+	base := RunContext{ActorPlatform: "system", ActorUserID: "group:fixture-group", SessionID: "group:fixture-group",
+		RouteScope: modelrouter.Scope{Platform: "qq", GroupID: "fixture-group"}, Awareness: true, Proactive: true}
+	for _, test := range []struct {
+		name   string
+		change func(*RunContext)
+	}{
+		{"mock", func(r *RunContext) { r.Mock = true }},
+		{"not awareness", func(r *RunContext) { r.Awareness = false }},
+		{"not proactive", func(r *RunContext) { r.Proactive = false }},
+		{"private route", func(r *RunContext) { r.RouteScope.GroupID = "" }},
+		{"no platform", func(r *RunContext) { r.RouteScope.Platform = "" }},
+		{"system route", func(r *RunContext) { r.RouteScope.Platform = "system" }},
+		{"foreign group", func(r *RunContext) { r.RouteScope.GroupID = "fixture-foreign" }},
+		{"foreign platform", func(r *RunContext) { r.RouteScope.Platform = "telegram" }},
+		{"foreign session", func(r *RunContext) { r.SessionID = "group:fixture-foreign" }},
+		{"member actor", func(r *RunContext) { r.ActorUserID = "fixture-member" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			run := base
+			test.change(&run)
+			if _, allowed := ToolHistoryScope(run); allowed {
+				t.Fatal("invalid system-origin run acquired a conversation archive scope")
 			}
 		})
 	}
