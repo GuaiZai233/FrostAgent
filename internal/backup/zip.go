@@ -63,6 +63,10 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	toolHistory, err := ExportToolHistory(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
 	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
@@ -77,6 +81,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		{"token_usage.json", usage},
 		{"memory.json", memories},
 		{"chat_history.json", history},
+		{"tool_history.json", toolHistory},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},
 	} {

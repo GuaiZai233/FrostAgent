@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 
@@ -583,7 +585,13 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 	// Parse arguments string into map
 	var argMap map[string]any
 	if args != "" && args != "{}" {
-		if err := json.Unmarshal([]byte(args), &argMap); err != nil {
+		var rawArgs json.RawMessage
+		if err := json.Unmarshal([]byte(args), &rawArgs); err != nil {
+			return reportToolError(ctx, "MCP 工具调用失败：参数 JSON 解析失败", err), nil
+		}
+		decoder := json.NewDecoder(strings.NewReader(args))
+		decoder.UseNumber()
+		if err := decoder.Decode(&argMap); err != nil {
 			return reportToolError(ctx, "MCP 工具调用失败：参数 JSON 解析失败", err), nil
 		}
 	}
@@ -599,6 +607,9 @@ func (s *ServerRuntime) CallTool(ctx context.Context, remoteName string, args st
 	result, err := session.CallTool(ctx, callParams)
 	if err != nil {
 		return reportToolError(ctx, "MCP 工具执行失败", fmt.Errorf("server=%s tool=%s: %w", serverID, remoteName, err)), nil
+	}
+	if data, marshalErr := json.Marshal(result); marshalErr == nil {
+		core.CaptureRawToolResult(ctx, string(data))
 	}
 
 	if result != nil && result.IsError {

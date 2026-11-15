@@ -326,6 +326,9 @@ func compatibilityExec(t *testing.T, db *DB, statement string, args ...any) {
 
 func compatibilityMetadata(t *testing.T, db *DB, version int, declared bool, floor any) {
 	t.Helper()
+	if version < 18 {
+		compatibilityExec(t, db, `DROP TABLE IF EXISTS tool_history`)
+	}
 	if version < 17 {
 		compatibilityExec(t, db, `DROP TABLE IF EXISTS chat_history`)
 	}
