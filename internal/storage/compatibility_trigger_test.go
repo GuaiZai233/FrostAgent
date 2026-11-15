@@ -152,7 +152,7 @@ func TestPostgresMigrationSchemaCompatibilitySearchPathTriggers(t *testing.T) {
 	}
 }
 
-func proveCompatibilityTriggerEffect(t *testing.T, db *sql.DB, table, payloadTable, effect string) {
+func proveCompatibilityTriggerEffect(t *testing.T, db SQLConnection, table, payloadTable, effect string) {
 	t.Helper()
 	tx, err := db.Begin()
 	if err != nil {

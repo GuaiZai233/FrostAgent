@@ -17,8 +17,10 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/backup"
 	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 )
@@ -188,6 +190,14 @@ func TestReleaseProbe(t *testing.T) {
 		}
 	case "seed-history":
 		checked(t, chathistory.NewStore(db, id).Save(ctx, roundtripHistoryRecord()))
+	case "edit-known":
+		checked(t, dialogue.SaveExamplesSQL(db, id, []llm.DialogueExample{{ID: "synthetic-known-edit", User: "current reader question", Preferred: "current reader answer"}}))
+	case "delete":
+		manager, err := instance.NewDatabaseWithDB(root, db)
+		checked(t, err)
+		defer manager.Close()
+		checked(t, manager.PrepareDeletion(id))
+		checked(t, manager.ConfirmDeletion(id))
 	case "verify-history":
 		want := roundtripHistoryRecord()
 		rows, err := chathistory.NewStore(db, id).Search(ctx, want.Scope, chathistory.Query{Keywords: []string{"原文", "100%"}})

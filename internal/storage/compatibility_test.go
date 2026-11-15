@@ -150,6 +150,8 @@ func exerciseSchemaCompatibility(t *testing.T, backend Backend) {
 		root, config, db := compatibilityDatabase(t, backend)
 		compatibilitySeedComputerUse(t, db)
 		compatibilityMetadata(t, db, (SchemaVersion + 1), true, 14)
+		compatibilityExec(t, db, `CREATE TABLE future_extension (id TEXT PRIMARY KEY, payload TEXT NOT NULL)`)
+		compatibilityExec(t, db, `INSERT INTO future_extension VALUES ('synthetic-extension', 'unrecognized-data')`)
 		compatibilityClose(t, db)
 		db = compatibilityReopen(t, root, config)
 		before := compatibilitySnapshot(t, db.SQL, backend)
@@ -326,6 +328,9 @@ func compatibilityExec(t *testing.T, db *DB, statement string, args ...any) {
 
 func compatibilityMetadata(t *testing.T, db *DB, version int, declared bool, floor any) {
 	t.Helper()
+	if version < 18 {
+		restoreLegacyColumns(t, db)
+	}
 	if version < 17 {
 		compatibilityExec(t, db, `DROP TABLE IF EXISTS chat_history`)
 	}
@@ -407,7 +412,7 @@ func assertCompatibilityJSON(t *testing.T, db *DB) {
 
 // Snapshot every user table, column type and raw value, not merely the version
 // number, so a rejected open cannot quietly rewrite unfamiliar data.
-func compatibilitySnapshot(t *testing.T, db *sql.DB, backend Backend) map[string][]string {
+func compatibilitySnapshot(t *testing.T, db SQLConnection, backend Backend) map[string][]string {
 	t.Helper()
 	query := `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`
 	if backend == Postgres {

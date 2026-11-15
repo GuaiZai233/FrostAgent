@@ -286,6 +286,9 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 		return Info{}, err
 	}
 	catalogReady = true
+	if err := m.db.RestoreModulePayloads(context.Background(), info.ID, decoded.Modules); err != nil {
+		return Info{}, err
+	}
 	if err := backup.ImportSettingsWithinCatalogMutation(m.db, info.ID, decoded.Settings); err != nil {
 		return Info{}, err
 	}

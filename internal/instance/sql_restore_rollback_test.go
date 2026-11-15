@@ -24,6 +24,11 @@ func assertRestoreFailureLeavesCatalog(t *testing.T, m *Manager) {
 	if err != nil || source.Error != "" {
 		t.Fatalf("create source: %+v, %v", source, err)
 	}
+	payload := storage.ModulePayload{ModuleID: "future.rollback", RecordID: "one", FormatVersion: 3, Data: []byte("preserved opaque data")}
+	payload.SHA256 = storage.ModulePayloadDigest(payload.Data)
+	if err := m.db.SaveModulePayload(context.Background(), source.ID, payload, nil); err != nil {
+		t.Fatal(err)
+	}
 	catalog := modelrouter.NewSQL(m.db, "")
 	shared := catalog.Draft()
 	shared.Endpoints = []modelrouter.Endpoint{{ID: "existing-provider", DisplayName: "Existing Provider", BaseURL: "https://existing.invalid/v1", Enabled: true}}
@@ -117,6 +122,10 @@ func assertRestoreFailureLeavesCatalog(t *testing.T, m *Manager) {
 		list, _ := m.List()
 		if len(list) != 1 || list[0].ID != source.ID {
 			t.Fatalf("attempt %d left a restored instance: %+v", attempt, list)
+		}
+		var payloadCount int
+		if err := m.db.SQL.QueryRow(`SELECT COUNT(*) FROM module_payloads`).Scan(&payloadCount); err != nil || payloadCount != 1 {
+			t.Fatalf("failed restore left orphan payloads: %d %v", payloadCount, err)
 		}
 		current := catalog.Active()
 		if current.Revision != before.Revision || len(current.Endpoints) != 1 || len(current.Models) != 1 ||

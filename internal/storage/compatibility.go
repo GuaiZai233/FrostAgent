@@ -105,19 +105,41 @@ func (d *DB) prepareCompatibility(ctx context.Context, expectedVersion int) erro
 }
 
 // RequireNativeSchema protects operations that claim to encompass an entire
-// instance. Older code cannot export, restore or delete unknown module data.
-// Normal operations on the validated core remain available.
+// instance. Opaque module payloads are understood structurally, even when their
+// formats are unknown. Arbitrary SQL extension tables remain outside this contract.
 func (d *DB) RequireNativeSchema(ctx context.Context, operation string) error {
 	return d.requireNativeSchema(ctx, d.SQL, operation)
 }
 
 func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation string) error {
-	var version int
-	if err := q.QueryRowContext(ctx, `SELECT version FROM schema_meta WHERE id = 1`).Scan(&version); err != nil {
+	var version, minimum int
+	if err := q.QueryRowContext(ctx, `SELECT version,min_compatible_version FROM schema_meta WHERE id = 1`).Scan(&version, &minimum); err != nil {
 		return err
 	}
-	if version > SupportedSchemaVersion {
-		return fmt.Errorf("%s requires a program supporting database schema %d; this program supports %d and cannot preserve all newer module data", operation, version, SupportedSchemaVersion)
+	if err := validateCompatibility(version, minimum); err != nil {
+		return err
+	}
+	if minimum > SupportedSchemaVersion {
+		return fmt.Errorf("%s requires compatible schema %d; this program supports %d", operation, minimum, SupportedSchemaVersion)
+	}
+	if err := d.validateFutureLayout(ctx, q); err != nil {
+		return fmt.Errorf("%s cannot preserve the database layout: %w", operation, err)
+	}
+	if d.Backend == Postgres {
+		// Ordinary operations can preserve independent external modules in
+		// place. Complete export/deletion cannot account for their lifecycle.
+		var external string
+		err := q.QueryRowContext(ctx, `SELECT pg_catalog.format('%I.%I',n.nspname,c.relname)
+			FROM pg_catalog.pg_constraint f JOIN pg_catalog.pg_class c ON c.oid=f.conrelid
+			JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+			WHERE f.contype='f' AND f.confrelid=pg_catalog.to_regclass('instances')
+			AND n.nspname<>current_schema() ORDER BY n.nspname,c.relname LIMIT 1`).Scan(&external)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == nil {
+			return fmt.Errorf("%s cannot preserve external module table %s", operation, external)
+		}
 	}
 	tables, err := d.schemaTables(ctx, q)
 	if err != nil {
@@ -128,7 +150,7 @@ func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation 
 			continue
 		}
 		switch table {
-		case "schema_meta", "storage_selection", "endpoint_ids", "model_endpoints", "model_secrets", "models", "memory_embeddings", "memory_embedding_scopes", "module_migrations":
+		case "schema_meta", "storage_selection", "memory_embeddings", "memory_embedding_scopes", "module_migrations":
 			continue
 		case "computer_use_config", "computer_use_projects", "computer_use_tasks":
 			if _, err := d.matchColumns(ctx, q, table, compatibleComputerUseColumns[table]); err != nil {
@@ -152,10 +174,11 @@ func (d *DB) requireNativeSchema(ctx context.Context, q schemaReader, operation 
 // of future databases. Extra columns are unsafe while some stores replace rows.
 // Updating this contract requires auditing the reader AND writer paths.
 var compatibleCoreColumns = map[string]string{
+	"module_payloads":       "instance_id=text module_id=text record_id=text format_version=integer payload_base64=text sha256=text requires_rebind=integer",
 	"chat_history":          "instance_id=text id=text platform=text message_type=text target_id=text message_id=text sender_id=text sender_name=text role=text content=text search_text=text reply_to=text occurred_at=bigint delivery_status=text",
 	"access_records":        "principal_key=text platform=text user_id=text state=text reason=text locked_at=text updated_at=text strike_times_json=text last_blocked_hash=text last_blocked_at=text",
 	"counters":              "key=text value=bigint",
-	"dialogues":             "instance_id=text position=integer id=text scene=text relation=text user_text=text preferred=text",
+	"dialogues":             "instance_id=text position=integer id=text user_text=text preferred=text",
 	"group_members":         "instance_id=text platform=text group_id=text user_id=text nickname=text card=text role=text preferred_name=text aliases_json=text source=text created_at=text updated_at=text last_spoke_at=text",
 	"group_profiles":        "instance_id=text platform=text group_id=text group_name=text updated_at=text",
 	"group_summaries":       "instance_id=text platform=text group_id=text summary=text generation=bigint created_at=text updated_at=text",
@@ -163,7 +186,7 @@ var compatibleCoreColumns = map[string]string{
 	"mcp_servers":           "instance_id=text id=text name=text enabled=integer transport_type=text command=text working_dir=text url=text args_json=text env_json=text headers_json=text position=integer",
 	"mcp_tool_policies":     "instance_id=text server_id=text tool_name=text enabled=integer",
 	"memory_catalogs":       "instance_id=text scope_type=text platform=text group_id=text owner=text catalog_json=text",
-	"memory_entries":        "instance_id=text scope_type=text platform=text group_id=text id=text owner=text owner_type=text content=text summary=text evidence=text source_message_id=text source_sender_id=text source=text visibility=text created_at=text updated_at=text access_count=integer merged_from_json=text source_media=text summary_dirty=integer",
+	"memory_entries":        "instance_id=text scope_type=text platform=text group_id=text id=text owner=text owner_type=text content=text summary=text evidence=text source_message_id=text source_sender_id=text source=text created_at=text updated_at=text access_count=integer merged_from_json=text source_media=text summary_dirty=integer",
 	"memory_merge_archives": "instance_id=text scope_type=text platform=text group_id=text merged_id=text owner=text merged_at=text sources_json=text",
 	"memory_tags":           "instance_id=text scope_type=text platform=text group_id=text memory_id=text tag=text",
 	"model_bindings":        "instance_id=text platform=text group_id=text workload=text mode=text model_id=text",
@@ -233,8 +256,12 @@ func matchColumnLayout(table string, columns []schemaColumn, expected string) er
 	if len(columns) != len(want) {
 		return fmt.Errorf("table %s has missing or unrecognized columns", table)
 	}
-	for index, column := range columns {
-		if column.name+"="+column.kind != want[index] {
+	for _, column := range columns {
+		found := false
+		for _, field := range want {
+			found = found || column.name+"="+column.kind == field
+		}
+		if !found {
 			return fmt.Errorf("table %s column %s does not match the supported layout", table, column.name)
 		}
 	}
@@ -283,10 +310,7 @@ func (d *DB) validateLegacyComputerUse(ctx context.Context, q schemaReader) erro
 			return fmt.Errorf("table %s has unrecognized foreign keys", table)
 		}
 	}
-	oldColumns := make(map[string]string, len(compatibleCoreColumns))
-	for table, columns := range compatibleCoreColumns {
-		oldColumns[table] = columns
-	}
+	oldColumns := legacyCoreColumns()
 	delete(oldColumns, "chat_history")
 	oldColumns["provider_endpoints"] = strings.TrimSuffix(oldColumns["provider_endpoints"], " api_format=text")
 	return d.validateLayout(ctx, q, oldColumns)
@@ -337,7 +361,19 @@ func (d *DB) tableForeignKeys(ctx context.Context, q schemaReader, table string)
 }
 
 func (d *DB) validateFutureLayout(ctx context.Context, q schemaReader) error {
-	return d.validateLayout(ctx, q, compatibleCoreColumns)
+	if err := d.validateLayout(ctx, q, compatibleCoreColumns); err != nil {
+		return err
+	}
+	for table, expected := range compatibleComputerUseColumns {
+		columns, err := d.matchColumns(ctx, q, table, expected)
+		if err != nil {
+			return err
+		}
+		if err := d.validateWriterConstraints(ctx, q, table, columns); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) validateLayout(ctx context.Context, q schemaReader, coreColumns map[string]string) error {

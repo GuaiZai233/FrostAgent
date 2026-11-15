@@ -65,6 +65,25 @@ func testPostgresDialogueCompatibilityColumn(t *testing.T, identity bool) {
 				t.Fatal(err)
 			}
 			defer db.Close()
+			if !identity {
+				// Reproduce the unmarked historical v15 layout. The v1 baseline
+				// no longer carries these omitted columns.
+				for _, statement := range []string{
+					`DROP TABLE module_payloads`,
+					`DELETE FROM module_migrations WHERE id='opaque-instance-payloads/v1'`,
+					`ALTER TABLE dialogues ADD COLUMN scene TEXT NOT NULL DEFAULT ''`,
+					`ALTER TABLE dialogues ADD COLUMN relation TEXT NOT NULL DEFAULT ''`,
+					`ALTER TABLE memory_entries ADD COLUMN visibility TEXT NOT NULL DEFAULT ''`,
+					`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
+					`DROP TABLE chat_history`,
+					`UPDATE schema_meta SET version=15`,
+					`ALTER TABLE schema_meta DROP COLUMN min_compatible_version`,
+				} {
+					if _, err := db.SQL.Exec(statement); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
 			if _, err := db.SQL.Exec(`INSERT INTO instances (id, name, created_at)
 				VALUES ('synthetic-dialogue-instance', 'Synthetic dialogue', '2026-01-01T00:00:00Z')`); err != nil {
 				t.Fatal(err)
@@ -80,8 +99,10 @@ func testPostgresDialogueCompatibilityColumn(t *testing.T, identity bool) {
 			if _, err := db.SQL.Exec(`ALTER TABLE dialogues ALTER COLUMN ` + column + change); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = 14 WHERE id = 1`), storage.SchemaVersion+1); err != nil {
-				t.Fatal(err)
+			if identity {
+				if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = 14 WHERE id = 1`), storage.SchemaVersion+1); err != nil {
+					t.Fatal(err)
+				}
 			}
 			before := dialogueCompatibilitySnapshot(t, db.SQL)
 			err = SaveExamplesSQL(db, "synthetic-dialogue-instance", []llm.DialogueExample{{ID: "synthetic-replacement", User: "replacement", Preferred: "replacement"}})
@@ -119,7 +140,7 @@ func testPostgresDialogueCompatibilityColumn(t *testing.T, identity bool) {
 	}
 }
 
-func dialogueCompatibilitySnapshot(t *testing.T, db *sql.DB) []string {
+func dialogueCompatibilitySnapshot(t *testing.T, db storage.SQLConnection) []string {
 	t.Helper()
 	var snapshot []string
 	for _, query := range []string{

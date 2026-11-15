@@ -115,7 +115,7 @@ func TestPostgresEmbeddingCompatibilityCacheWrites(t *testing.T) {
 	}
 }
 
-func embeddingCompatibilitySnapshot(t *testing.T, db *sql.DB) []string {
+func embeddingCompatibilitySnapshot(t *testing.T, db storage.SQLConnection) []string {
 	t.Helper()
 	var snapshot []string
 	for _, table := range []string{"instances", "memory_entries", "memory_tags", "memory_catalogs", "memory_merge_archives",

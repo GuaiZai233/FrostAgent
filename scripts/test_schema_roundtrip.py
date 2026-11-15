@@ -41,9 +41,11 @@ def main():
     parser.add_argument("--v15-binary", required=True, type=Path)
     parser.add_argument("--v16-binary", required=True, type=Path)
     parser.add_argument("--current-binary", type=Path)
+    parser.add_argument("--future-module-binary", type=Path)
     args = parser.parse_args()
     v15, v16 = args.v15_binary.resolve(), args.v16_binary.resolve()
     current = args.current_binary.resolve() if args.current_binary else None
+    future = args.future_module_binary.resolve() if args.future_module_binary else None
     with tempfile.TemporaryDirectory(prefix="frostagent-version-roundtrip-") as temporary:
         base = Path(temporary)
         for origin in ["v16", "v15"]:
@@ -91,6 +93,21 @@ def main():
                 target_id = json.loads(result.read_text())
                 run(current, "verify-restored", target, instance=target_id)
                 run(current, "verify-history", target, instance=target_id)
+                if future:
+                    run(future, "seed-module", target, instance=target_id)
+                    run(current, "edit-known", target, instance=target_id)
+                    run(future, "verify-module", target, instance=target_id)
+                    for generation in range(2):
+                        opaque_archive = base / f"{origin}-opaque-{generation}.zip"
+                        run(current, "backup", target, archive=opaque_archive, instance=target_id)
+                        target = base / f"{origin}-opaque-{generation}"
+                        run(current, "init", target)
+                        run(current, "restore", target, archive=opaque_archive, result=result)
+                        target_id = json.loads(result.read_text())
+                        run(current, "edit-known", target, instance=target_id)
+                        run(future, "verify-module-restored", target, instance=target_id)
+                    run(current, "delete", target, instance=target_id)
+                    run(future, "verify-deleted", target, instance=target_id)
     print("PASS: both release directions, old edits, and full ZIP round trips", flush=True)
 
 

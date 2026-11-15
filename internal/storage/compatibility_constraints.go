@@ -11,6 +11,10 @@ import (
 // These keys are part of the writer contract: UPSERT conflict targets and
 // cascading deletes must keep their v14 meaning, not merely their column names.
 var compatiblePrimaryKeys = map[string]string{
+	"computer_use_config":     "instance_id",
+	"computer_use_projects":   "instance_id,id",
+	"computer_use_tasks":      "instance_id,id",
+	"module_payloads":         "instance_id,module_id,record_id",
 	"chat_history":            "instance_id,id",
 	"access_records":          "principal_key",
 	"counters":                "key",
@@ -44,7 +48,7 @@ var compatiblePrimaryKeys = map[string]string{
 func compatibleForeignKeys(table string) []schemaForeignKey {
 	var key schemaForeignKey
 	switch table {
-	case "chat_history", "dialogues", "group_profiles", "group_summaries", "mcp_servers", "memory_catalogs",
+	case "computer_use_config", "computer_use_projects", "computer_use_tasks", "module_payloads", "chat_history", "dialogues", "group_profiles", "group_summaries", "mcp_servers", "memory_catalogs",
 		"memory_entries", "memory_merge_archives", "model_bindings", "model_revisions",
 		"pending_deletions", "skills", "sticker_entries", "memory_embedding_scopes":
 		key = schemaForeignKey{"instance_id", "instances", "id", "CASCADE", "NO ACTION"}

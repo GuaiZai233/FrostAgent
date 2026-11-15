@@ -51,6 +51,11 @@ func TestInstanceZIPAfterSkillsV12Migration(t *testing.T) {
 	}
 	// Reconstruct the other branch's v12 without replacing any user rows.
 	for _, statement := range []string{
+		`DROP TABLE module_payloads`,
+		`DELETE FROM module_migrations WHERE id='opaque-instance-payloads/v1'`,
+		`ALTER TABLE dialogues ADD COLUMN scene TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dialogues ADD COLUMN relation TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE memory_entries ADD COLUMN visibility TEXT NOT NULL DEFAULT ''`,
 		`DROP TABLE chat_history`,
 		`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
@@ -62,7 +67,7 @@ func TestInstanceZIPAfterSkillsV12Migration(t *testing.T) {
 		}
 	}
 	images := t.TempDir()
-	if _, err := BuildInstanceZIP(db, id, images); err == nil || !strings.Contains(err.Error(), "api_format") {
+	if _, err := BuildInstanceZIP(db, id, images); err == nil || !strings.Contains(err.Error(), "layout") {
 		t.Fatalf("fixture did not reproduce missing-column backup failure: %v", err)
 	}
 	if err := db.Close(); err != nil {

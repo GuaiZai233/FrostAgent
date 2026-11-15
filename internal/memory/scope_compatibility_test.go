@@ -10,7 +10,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
-func TestLegacySQLMemoryScopesSurviveRestartWithoutMigration(t *testing.T) {
+func TestLegacySQLMemoryScopesSurviveV1Cleanup(t *testing.T) {
 	root := t.TempDir()
 	config := storage.Config{Backend: storage.SQLite, DSN: filepath.Join(root, "memory.db")}
 	db, err := storage.OpenWithConfig(context.Background(), root, config)
@@ -35,6 +35,18 @@ func TestLegacySQLMemoryScopesSurviveRestartWithoutMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simulate rows written by the previous implementation, including a member owner.
+	for _, statement := range []string{
+		`DROP TABLE module_payloads`,
+		`DELETE FROM module_migrations WHERE id='opaque-instance-payloads/v1'`,
+		`ALTER TABLE memory_entries ADD COLUMN visibility TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dialogues ADD COLUMN scene TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dialogues ADD COLUMN relation TEXT NOT NULL DEFAULT ''`,
+		`UPDATE schema_meta SET version=17, min_compatible_version=17`,
+	} {
+		if _, err := db.SQL.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := db.SQL.Exec(`UPDATE memory_entries SET visibility='public', owner='synthetic-sender', owner_type='user' WHERE scope_type='group'`); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +93,7 @@ func TestLegacySQLMemoryScopesSurviveRestartWithoutMigration(t *testing.T) {
 		t.Fatalf("schema version changed: %d %v", version, err)
 	}
 	var legacyColumn string
-	if err := db.SQL.QueryRow(`SELECT visibility FROM memory_entries WHERE id='legacy-user'`).Scan(&legacyColumn); err != nil || legacyColumn != "public" {
-		t.Fatalf("legacy physical column changed: %q %v", legacyColumn, err)
+	if err := db.SQL.QueryRow(`SELECT visibility FROM memory_entries WHERE id='legacy-user'`).Scan(&legacyColumn); err == nil {
+		t.Fatal("retired visibility column still exists")
 	}
 }

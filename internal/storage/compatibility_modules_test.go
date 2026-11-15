@@ -26,7 +26,7 @@ func TestCompatibilityModuleMigrationsAreIdempotent(t *testing.T) {
 		}
 	}
 	var count, after int
-	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM module_migrations`).Scan(&count); err != nil || count != 2 {
+	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM module_migrations`).Scan(&count); err != nil || count != 3 {
 		t.Fatalf("module migration count=%d, %v", count, err)
 	}
 	if err := db.SQL.QueryRow(`SELECT version FROM schema_meta WHERE id=1`).Scan(&after); err != nil || before != after {
