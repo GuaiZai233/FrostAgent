@@ -876,8 +876,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages            []tools.Msg `json:"messages"`
-				SuppressAutoMention bool        `json:"suppress_auto_mention"`
+				Messages                []tools.Msg `json:"messages"`
+				SuppressAutoMention     bool        `json:"suppress_auto_mention"`
+				UseFrostAgentDecoration *bool       `json:"use_frostagent_decoration"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
@@ -894,7 +895,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if len(oneBotSegments) == 0 {
 				return fmt.Errorf("消息内容为空")
 			}
-			if event.MessageType == "group" {
+			if event.MessageType == "group" && (toolOutput.UseFrostAgentDecoration == nil || *toolOutput.UseFrostAgentDecoration) {
 				decorationEvent := event
 				if toolOutput.SuppressAutoMention {
 					decorationEvent.UserID = 0

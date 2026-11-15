@@ -205,7 +205,7 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				}
 			},
 			decorate: func(segments []tools.OneBotSegment) []tools.OneBotSegment {
-				if !external && event.MessageType == "group" {
+				if !external && event.MessageType == "group" && (request.UseFrostAgentDecoration == nil || *request.UseFrostAgentDecoration) {
 					decorationEvent := event
 					if request.SuppressAutoMention {
 						decorationEvent.UserID = 0

@@ -25,6 +25,8 @@ type QQRequest struct {
 	Arguments QQArguments `json:"arguments"`
 	// Derived by send_message after validating mention_specific.
 	SuppressAutoMention bool `json:"suppress_auto_mention,omitempty"`
+	// Passed through by send_message for its per-call decoration preference.
+	UseFrostAgentDecoration *bool `json:"use_frostagent_decoration,omitempty"`
 }
 
 type QQArguments struct {
