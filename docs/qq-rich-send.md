@@ -3,6 +3,8 @@
 FrostAgent 原生提供 QQ 消息组件和互动操作，通过当前对话绑定的 OneBot
 连接发送，支持 NapCat、SnowLuma 的兼容动作。无需安装 Aurabot。
 
+接收用户文件并在沙箱读取，参见[QQ 接收文件与读取](qq-inbound-files.md)。
+
 ## 工具入口
 
 `send_message` 仅接收基础消息组件：文字、图片、语音、视频、文件、@用户、引用与

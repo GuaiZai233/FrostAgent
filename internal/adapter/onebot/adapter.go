@@ -34,6 +34,7 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
+	fileHTTPClient     *http.Client
 	engine             *llm.Engine
 	stealer            *sticker.Stealer
 	mu                 sync.RWMutex
@@ -314,6 +315,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		wsConn = newWSConnection(conn)
 	}
 	wsConn.stealer = a.stealer
+	wsConn.fileHTTPClient = a.fileHTTPClient
 	wsConn.llmErrorReplies = &a.llmErrorReplies
 	wsConn.mock = mock
 	stopCancellation := context.AfterFunc(ctx, func() { _ = wsConn.Close() })
@@ -385,6 +387,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if event.MetaEventType == "heartbeat" {
 			continue
 		}
+		wsConn.rememberInboundFileNotice(event)
 		previousError := wsConn.takePreviousError(event)
 		wsConn.recordIncomingHistory(event)
 
@@ -616,6 +619,10 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
 				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
 			}
+		}
+
+		if isWoken(event, a.engine, routing) {
+			wsConn.rememberInboundFiles(event)
 		}
 
 		if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
