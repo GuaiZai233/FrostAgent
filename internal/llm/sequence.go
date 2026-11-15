@@ -45,6 +45,9 @@ func (s *SessionContext) ReserveSequenceTurn(key string, interrupt, proactive bo
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &SessionTurn{done: make(chan struct{}), epoch: s.epoch, lane: lane, ctx: ctx}
 	t.cancel = func() { t.authorityMu.Lock(); defer t.authorityMu.Unlock(); cancel() }
+	if s.RecoveryError() != nil {
+		t.cancel()
+	}
 	if lane.tail != nil {
 		t.wait = lane.tail.done
 	}

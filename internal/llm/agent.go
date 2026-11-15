@@ -313,6 +313,13 @@ func (e *Engine) RunMessagesWithContext(
 	messages []ChatMessage,
 	runContext RunContext,
 ) AgentRunResult {
+	if !runContext.Mock && runContext.SessionID != "" && e.SessionManager != nil {
+		if session, ok := e.SessionManager.Get(runContext.SessionID); ok {
+			if err := session.(*SessionContext).RecoveryError(); err != nil {
+				return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "会话快照暂时无法恢复，请检查存储状态", err, runContext.SessionID), Error: err}
+			}
+		}
+	}
 	if runContext.Turn != nil {
 		runContext.SkillState = runContext.Turn.SkillSession()
 	}
@@ -822,6 +829,9 @@ func buildExtractionContext(messages []ChatMessage, finalReply string) []core.Ch
 // RunWithSession 执行智能体的主循环（带会话上下文）
 func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	session := e.SessionManager.GetOrCreate(sessionID)
+	if err := session.RecoveryError(); err != nil {
+		return e.Log().ReportError(logs.SYSTEM, "会话快照暂时无法恢复，请检查存储状态", err, sessionID)
+	}
 
 	// 加锁保护会话内部状态
 	session.Lock()

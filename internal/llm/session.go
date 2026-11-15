@@ -275,6 +275,7 @@ type SessionContext struct {
 	checkpointRevision int64
 	checkpointHash     [32]byte
 	checkpointDeleted  bool
+	checkpointReadErr  error
 	mock               atomic.Bool // set only by trusted Direct Chat (mock) runs
 	activeSkills       map[string]activeSkill
 	ConversationID     string
@@ -517,6 +518,11 @@ func (s *SessionContext) ReserveTurn() *SessionTurn {
 	defer s.turnMu.Unlock()
 
 	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{}), epoch: s.Epoch()}
+	if s.RecoveryError() != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		turn.ctx, turn.cancel = ctx, cancel
+	}
 	s.turnTail = turn.done
 	return turn
 }
@@ -540,6 +546,11 @@ func (s *SessionContext) Epoch() uint64 {
 func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, uint64, func()) {
 	if s == nil {
 		return parentCtx, 0, func() {}
+	}
+	if s.RecoveryError() != nil {
+		ctx, cancel := context.WithCancel(parentCtx)
+		cancel()
+		return ctx, 0, cancel
 	}
 	s.mu.Lock()
 	defer s.unlockCheckpoint()
@@ -1041,6 +1052,9 @@ func (s *SessionContext) CancelExtractions() {
 func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) error {
 	if s == nil {
 		return nil
+	}
+	if err := s.RecoveryError(); err != nil {
+		return err
 	}
 	s.resetMu.Lock()
 	defer s.resetMu.Unlock()
@@ -2666,6 +2680,9 @@ func (s *SessionContext) AddMessageAtEpoch(msg core.ChatMessage, epoch uint64) u
 }
 
 func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
+	if s.RecoveryError() != nil {
+		return 0
+	}
 	// 转换 core.ChatMessage -> llm.ChatMessage
 	llmMsg := ChatMessage{
 		Role:          string(msg.Role),
@@ -2781,7 +2798,11 @@ func (sm *SessionManager) ResetSession(sessionID string) error {
 		canonicalID = sessionID
 	}
 	aliases := memory.SessionKeyAliases(sessionID)
-	_, _ = sm.Get(canonicalID)
+	if session, ok := sm.Get(canonicalID); ok {
+		if err := session.(*SessionContext).RecoveryError(); err != nil {
+			return err
+		}
+	}
 
 	sm.mu.RLock()
 	session, ok := sm.sessions[canonicalID]
@@ -2850,6 +2871,10 @@ func (sm *SessionManager) Delete(sessionID string) {
 	if !ok {
 		session, ok = sm.restoreColdLocked(canonicalID)
 	}
+	if ok && session.RecoveryError() != nil {
+		// The ID must remain recoverable if neither copy can currently be read.
+		return
+	}
 	if ok {
 		session.CancelActiveRun()
 		session.mu.Lock()
@@ -2867,17 +2892,17 @@ func (sm *SessionManager) Delete(sessionID string) {
 func (sm *SessionManager) Count() int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	return len(sm.sessions) + len(sm.cold)
+	return len(sm.sessions)
 }
 
 // ListSessions returns a paginated slice of session contexts.
-// CountVisible returns the number of sessions that are not Direct Chat (mock)
+// CountVisible returns the number of live sessions that are not Direct Chat (mock)
 // sessions. It only reads the trusted atomic flag, without sorting or locking
 // individual sessions, so it is cheap enough for the overview poll.
 func (sm *SessionManager) CountVisible() int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	n := len(sm.cold)
+	n := 0
 	for _, sess := range sm.sessions {
 		if !sess.IsMock() {
 			n++

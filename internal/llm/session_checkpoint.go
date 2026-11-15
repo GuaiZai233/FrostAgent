@@ -276,8 +276,10 @@ func (sm *SessionManager) restoreColdLocked(id string) (*SessionContext, bool) {
 			return session, true
 		}
 	}
-	sm.Log().Warn(logs.SYSTEM, "会话快照暂时无法读取，请检查会话存储状态")
-	return nil, false
+	sm.Log().Warn(logs.SYSTEM, "会话快照暂时无法恢复，已停止该会话以保护历史，请检查存储状态")
+	// Keep the cold ID so the next request can retry recovery. This transient
+	// context cannot persist or execute work and is never a new live session.
+	return &SessionContext{ConversationID: id, scope: sm.Scope, epoch: 1, checkpointReadErr: err}, true
 }
 
 func (s *SessionContext) hasLiveSequencesLocked() bool {
@@ -311,4 +313,13 @@ func InspectionContent(content any) string {
 
 func (sm *SessionManager) HasCheckpoint(id string) bool {
 	return sm != nil && sm.Checkpoints != nil && sm.Checkpoints.Revision(memory.CanonicalSessionKey(id)) > 0
+}
+
+// RecoveryError identifies a transient context returned for an existing session
+// whose durable copies cannot currently be recovered. It is immutable.
+func (s *SessionContext) RecoveryError() error {
+	if s == nil {
+		return nil
+	}
+	return s.checkpointReadErr
 }

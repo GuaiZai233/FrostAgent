@@ -25,6 +25,14 @@ type Record struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+var ErrConflict = errors.New("session checkpoint version conflict")
+var ErrUnavailable = errors.New("session checkpoint unavailable")
+
+type conflictError struct{ remote Record }
+
+func (e *conflictError) Error() string { return ErrConflict.Error() }
+func (e *conflictError) Unwrap() error { return ErrConflict }
+
 type Status struct {
 	Pending      int    `json:"pending"`
 	Error        string `json:"error,omitempty"`
@@ -40,6 +48,8 @@ type Store struct {
 	pending      map[string]Record
 	localPending map[string]Record
 	latest       map[string]int64
+	conflicts    map[string]Record
+	readErrors   map[string]error
 	lastError    string
 	localError   string
 	loadError    string
@@ -50,7 +60,7 @@ type Store struct {
 }
 
 func New(db *storage.DB, instanceID, dir string, report func(string)) *Store {
-	s := &Store{db: db, instanceID: instanceID, dir: dir, pending: make(map[string]Record), localPending: make(map[string]Record), latest: make(map[string]int64), report: report}
+	s := &Store{db: db, instanceID: instanceID, dir: dir, pending: make(map[string]Record), localPending: make(map[string]Record), latest: make(map[string]int64), conflicts: make(map[string]Record), readErrors: make(map[string]error), report: report}
 	s.write = s.writeSQL
 	return s
 }
@@ -105,6 +115,10 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, file := range files {
+		if !file.IsDir() && filepath.Ext(file.Name()) == ".conflict" {
+			loadErr = errors.Join(loadErr, ErrConflict)
+			continue
+		}
 		if file.IsDir() || filepath.Ext(file.Name()) != ".json" {
 			continue
 		}
@@ -121,12 +135,11 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 		if old, exists := merged[record.SessionID]; !exists || record.Revision > old.Revision {
 			merged[record.SessionID] = record
 			s.pending[record.SessionID] = record
-		} else if record.Revision == old.Revision && string(record.Payload) != string(old.Payload) {
+		} else if record.Revision == old.Revision && !equalPayload(record.Payload, old.Payload) {
 			loadErr = errors.Join(loadErr, errors.New("conflicting session checkpoint revisions"))
 			// Preserve the local alternative before replacing its mirror with SQL.
 			// Conflict files are diagnostic data, never automatic replay sources.
-			conflictPath := fmt.Sprintf("%s.%x.conflict", path, sha256.Sum256(data))
-			if err := writeAtomic(conflictPath, data); err != nil {
+			if err := s.preserveConflict(record); err != nil {
 				loadErr = errors.Join(loadErr, fmt.Errorf("preserve conflicting checkpoint: %w", err))
 				// Keep the readable local record when its alternative cannot be saved.
 				merged[record.SessionID] = record
@@ -163,6 +176,9 @@ func (s *Store) Save(record Record) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("session checkpoint store closed")
+	}
+	if err := s.readErrors[record.SessionID]; err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	if s.latest[record.SessionID] >= record.Revision {
 		return nil
@@ -210,15 +226,65 @@ func writeAtomic(path string, data []byte) error {
 	return atomicReplaceFile(name, path)
 }
 
+func equalPayload(a, b json.RawMessage) bool {
+	var left, right bytes.Buffer
+	return json.Compact(&left, a) == nil && json.Compact(&right, b) == nil && bytes.Equal(left.Bytes(), right.Bytes())
+}
+
+func (s *Store) readSQL(ctx context.Context, id string) (Record, error) {
+	if s.db == nil {
+		return Record{}, errors.New("session database unavailable")
+	}
+	record := Record{SessionID: id}
+	var payload string
+	err := s.db.SQL.QueryRowContext(ctx, s.db.Bind(`SELECT revision, payload FROM session_states WHERE instance_id = ? AND session_id = ?`),
+		s.instanceID, id).Scan(&record.Revision, &payload)
+	if err != nil {
+		return Record{}, err
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(payload)); err != nil {
+		return Record{}, err
+	}
+	record.Payload = compact.Bytes()
+	if !s.valid(record) {
+		return Record{}, errors.New("invalid SQL checkpoint")
+	}
+	return record, nil
+}
+
 func (s *Store) writeSQL(ctx context.Context, record Record) error {
 	if s.db == nil {
 		return errors.New("session database unavailable")
 	}
-	_, err := s.db.SQL.ExecContext(ctx, s.db.Bind(`INSERT INTO session_states(instance_id, session_id, revision, payload)
+	result, err := s.db.SQL.ExecContext(ctx, s.db.Bind(`INSERT INTO session_states(instance_id, session_id, revision, payload)
 		VALUES (?, ?, ?, ?) ON CONFLICT(instance_id, session_id) DO UPDATE
 		SET revision = excluded.revision, payload = excluded.payload WHERE session_states.revision < excluded.revision`),
 		s.instanceID, record.SessionID, record.Revision, string(record.Payload))
-	return err
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected > 0 {
+		return err
+	}
+	remote, err := s.readSQL(ctx, record.SessionID)
+	if err != nil {
+		return err
+	}
+	if remote.Revision == record.Revision && equalPayload(remote.Payload, record.Payload) {
+		return nil
+	}
+	return &conflictError{remote: remote}
+}
+
+func (s *Store) preserveConflict(record Record) error {
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	path := fmt.Sprintf("%s.%x.conflict", s.path(record.SessionID), sha256.Sum256(data))
+	return writeAtomic(path, data)
 }
 
 func (s *Store) Flush(ctx context.Context) error {
@@ -229,7 +295,7 @@ func (s *Store) Flush(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
-	var localErr error
+	var localErr, conflictErr error
 	for id, record := range s.localPending {
 		data, err := json.Marshal(record)
 		if err == nil {
@@ -245,27 +311,43 @@ func (s *Store) Flush(ctx context.Context) error {
 		s.localError = ""
 	}
 	batch := make([]Record, 0, len(s.pending))
-	for _, record := range s.pending {
+	for id, record := range s.pending {
+		if _, conflicted := s.conflicts[id]; conflicted {
+			conflictErr = ErrConflict
+			continue
+		}
 		batch = append(batch, record)
 	}
 	s.mu.Unlock()
+	var sqlErr error
 	for _, record := range batch {
 		if err := s.write(ctx, record); err != nil {
-			s.mu.Lock()
-			s.lastError = "数据库暂时不可用，会话使用本地快照，聊天继续"
-			s.mu.Unlock()
-			return err
+			var conflict *conflictError
+			if errors.As(err, &conflict) {
+				s.mu.Lock()
+				s.conflicts[record.SessionID] = conflict.remote
+				// Retain both branches before any later local revision is written.
+				conflictErr = errors.Join(conflictErr, err, s.preserveConflict(record), s.preserveConflict(conflict.remote))
+				s.mu.Unlock()
+			} else {
+				sqlErr = errors.Join(sqlErr, err)
+			}
+			continue
 		}
 		s.mu.Lock()
 		if current, exists := s.pending[record.SessionID]; exists && current.Revision == record.Revision {
 			delete(s.pending, record.SessionID)
 		}
-		if len(s.pending) == 0 {
-			s.lastError = ""
-		}
 		s.mu.Unlock()
 	}
-	return localErr
+	s.mu.Lock()
+	if sqlErr != nil {
+		s.lastError = "数据库暂时不可用，会话使用本地快照，聊天继续"
+	} else {
+		s.lastError = ""
+	}
+	s.mu.Unlock()
+	return errors.Join(localErr, sqlErr, conflictErr)
 }
 
 // Close fences late callbacks before an instance directory is removed.
@@ -281,7 +363,14 @@ func (s *Store) Close() {
 func (s *Store) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Status{Pending: len(s.pending), LocalPending: len(s.localPending), Error: strings.Join(nonempty(s.localError, s.lastError, s.loadError), "; ")}
+	var recoveryError, conflictError string
+	if len(s.readErrors) > 0 {
+		recoveryError = "部分会话快照无法恢复，已阻止这些会话覆盖历史，请检查存储状态"
+	}
+	if len(s.conflicts) > 0 {
+		conflictError = "会话快照版本冲突，已保留待提交内容并暂停这些会话的 SQL 写入，请检查冲突副本"
+	}
+	return Status{Pending: len(s.pending), LocalPending: len(s.localPending), Error: strings.Join(nonempty(s.localError, s.lastError, s.loadError, recoveryError, conflictError), "; ")}
 }
 
 func nonempty(values ...string) []string {
@@ -294,14 +383,20 @@ func nonempty(values ...string) []string {
 	return result
 }
 
-// Read uses the latest queued revision before consulting the durable mirror.
+// Read uses the latest queued revision before consulting durable copies. A
+// missing or corrupt local mirror must never turn an existing ID into a new one.
 func (s *Store) Read(id string) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Record{}, errors.New("session checkpoint store closed")
+	}
 	if record, ok := s.pending[id]; ok {
+		delete(s.readErrors, id)
 		return record, nil
 	}
 	if record, ok := s.localPending[id]; ok {
+		delete(s.readErrors, id)
 		return record, nil
 	}
 	data, err := readFile(s.path(id))
@@ -312,7 +407,31 @@ func (s *Store) Read(id string) (Record, error) {
 	if err == nil && (record.SessionID != id || record.Revision != s.latest[id] || !s.valid(record)) {
 		err = errors.New("invalid session checkpoint")
 	}
-	return record, err
+	if err == nil {
+		delete(s.readErrors, id)
+		return record, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	remote, sqlErr := s.readSQL(ctx, id)
+	if sqlErr == nil && remote.Revision < s.latest[id] {
+		sqlErr = errors.New("SQL checkpoint is older than the missing local revision")
+	}
+	if sqlErr != nil {
+		s.readErrors[id] = errors.Join(err, sqlErr)
+		return Record{}, fmt.Errorf("%w: %v", ErrUnavailable, s.readErrors[id])
+	}
+	s.latest[id] = remote.Revision
+	delete(s.readErrors, id)
+	data, localErr := json.Marshal(remote)
+	if localErr == nil {
+		localErr = writeAtomic(s.path(id), data)
+	}
+	if localErr != nil {
+		s.localPending[id] = remote
+		s.localError = "本地会话快照写入失败，已从数据库恢复"
+	}
+	return remote, nil
 }
 
 func readFile(path string) ([]byte, error) {

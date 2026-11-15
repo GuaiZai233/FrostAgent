@@ -394,6 +394,9 @@ func (s *Service) GetSessionContext(
 	if s.engine.SessionManager != nil {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && !sess.IsMock() {
+				if err := sess.RecoveryError(); err != nil {
+					return nil, connect.NewError(connect.CodeUnavailable, err)
+				}
 				snap := sess.SnapshotGroupContext(limit, 100000, "")
 				var history []llm.ChatMessage
 				if isPrivateSession(sessionID) {
