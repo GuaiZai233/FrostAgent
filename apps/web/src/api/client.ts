@@ -584,6 +584,11 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
+export interface PersistenceHealth {
+  logs: { enabled: boolean; budget_bytes: number; used_bytes: number; entries: number; error?: string };
+  sessions: { pending: number; local_pending: number; error?: string };
+}
+
 export function createInstanceAPI(options: { globalModelCatalog?: boolean; catalogDraftOwner?: string } = {}) {
   let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
@@ -670,6 +675,16 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
   return {
     // Bot Overview & Sessions
+    async getPersistenceHealth(): Promise<PersistenceHealth> {
+      selectionSignal.throwIfAborted();
+      if (!instanceID) throw new Error('请先选择实例');
+      const headers = new Headers();
+      const token = getControlToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const response = await fetch(`/instances/${encodeURIComponent(instanceID)}/api/persistence`, { headers, signal: selectionSignal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json() as PersistenceHealth;
+    },
     getOverview(): Promise<GetOverviewResponse> {
       return botClient.getOverview({});
     },

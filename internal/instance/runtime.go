@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
@@ -33,6 +34,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/service/settings"
 	skillservice "github.com/GuaiZai233/FrostAgent/internal/service/skills"
 	stickersvc "github.com/GuaiZai233/FrostAgent/internal/service/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/sessionstate"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
@@ -59,6 +61,12 @@ type Runtime struct {
 }
 
 func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB, settingsWriteMu tools.ConfigWriteLock) (*Runtime, error) {
+	if err := safeTree(dir); err != nil {
+		return nil, err
+	}
+	if err := logger.EnablePersistence(filepath.Join(dir, "logs"), logs.PersistentBudget(config.Get(logs.LogBudgetKey))); err != nil {
+		logger.Warn(logs.SYSTEM, "部分历史日志无法恢复，请检查实例持久化状态")
+	}
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -70,9 +78,6 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		if onebotError != nil {
 			return nil, fmt.Errorf("OneBot connection: %w", onebotError)
 		}
-	}
-	if err := safeTree(dir); err != nil {
-		return nil, err
 	}
 	scope := runtimescope.New(config, global, logger)
 	scope.SetInstanceID(instanceID)
@@ -89,6 +94,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	var routerManager *modelrouter.Manager
 	if db != nil {
 		routerManager = modelrouter.NewSQL(db, instanceID, scope)
+		routerManager.EnableRuntimeFallback()
 	} else {
 		routerManager = modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
 	}
@@ -153,6 +159,13 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	sessionManager := llm.NewSessionManager(scope)
 	sessionManager.SetGroupSummaryStore(groupSummaryStore)
+	if db != nil {
+		checkpoints := sessionstate.New(db, instanceID, filepath.Join(dir, "session-checkpoints"),
+			func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
+		if err := sessionManager.EnablePersistence(checkpoints); err != nil {
+			scope.Log().Warn(logs.SYSTEM, "会话快照恢复不完整，已恢复可读取的记录；请检查存储状态")
+		}
+	}
 	groupCompactBufferSize := positiveIntFromEnv(scope, "GROUP_COMPACT_BUFFER_SIZE", 20)
 	groupCompactMaxBufferSize := positiveIntFromEnv(scope, "GROUP_COMPACT_MAX_BUFFER_SIZE", 0)
 	groupCompactMinInterval := durationFromEnv(scope, "GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
@@ -409,6 +422,19 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 		return nil
 	})
+	mux.HandleFunc("/api/persistence", func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		var checkpointStatus sessionstate.Status
+		if sessionManager.Checkpoints != nil {
+			checkpointStatus = sessionManager.Checkpoints.Status()
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"logs": logger.PersistenceStatus(), "sessions": checkpointStatus})
+	})
 	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsService)
 	mux.Handle(settingsPath, settingsHandler)
 
@@ -511,7 +537,6 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.HandleFunc("/ws/onebot", ob.Handler())
 	if !enabled {
 		engine.StartedAt = time.Time{}
-		logger.Clear()
 	}
 	success = true
 	return &Runtime{
@@ -527,6 +552,9 @@ func (r *Runtime) StartBackground() {
 		return
 	}
 	r.backgroundOnce.Do(func() {
+		if r.Engine.SessionManager.Checkpoints != nil {
+			r.Scope.Go(func() { r.Engine.SessionManager.Checkpoints.Run(r.Scope.Context()) })
+		}
 		if r.Engine.ChatHistory != nil {
 			r.Scope.Go(func() { r.Engine.ChatHistory.Run(r.Scope.Context()) })
 		}

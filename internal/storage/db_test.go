@@ -62,6 +62,11 @@ func fixtureSecretInsert(db *DB) string {
 
 // Only used on fresh disposable test databases to reconstruct historical schemas.
 func prepareOldSchema(t *testing.T, db *DB, version int) {
+	if version < 18 {
+		if _, err := db.SQL.Exec(`DROP TABLE session_states`); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Helper()
 	if version < 17 {
 		if _, err := db.SQL.Exec(`DROP TABLE chat_history`); err != nil {

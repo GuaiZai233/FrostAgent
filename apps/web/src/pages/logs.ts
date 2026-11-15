@@ -72,6 +72,7 @@ export function mountLogsPage(
         </div>
       </header>
 
+      <p id="persistence-health" class="text-xs text-muted" role="status"></p>
       <section class="card p-3.5">
         <form id="logs-error-lookup-form" class="flex items-end gap-3 flex-wrap">
           <div class="form-group flex-1" style="min-width: 16rem;">
@@ -80,7 +81,7 @@ export function mountLogsPage(
           </div>
           <button type="submit" class="btn btn-outline btn-sm">${icon('search', 'w-3.5 h-3.5')}<span>定位错误</span></button>
         </form>
-        <p class="text-xs text-muted mt-2">在所选实例和日志来源中定位；已清理、覆盖或重启前的日志无法查询。</p>
+        <p class="text-xs text-muted mt-2">在所选实例和日志来源中定位；实例日志跨重启保留；已清理或超出预算淘汰的日志无法查询。Control Plane 日志只保留在内存。</p>
       </section>
 
       <div class="form-group" style="width: 14rem;">
@@ -228,11 +229,24 @@ export function mountLogsPage(
     '#stream-entries-container',
   )!;
 
+  async function refreshPersistence() {
+    const status = container.querySelector<HTMLElement>('#persistence-health');
+    if (!status) return;
+    if (instanceState.logSource === 'control-plane') { status.textContent = 'Control Plane 日志仅保存在当前进程内存中。'; return; }
+    try {
+      const health = await api.getPersistenceHealth();
+      if (isUnmounted || instanceState.logSource !== 'instance') return;
+      const mib = (value: number) => (value / 1048576).toFixed(1);
+      status.textContent = `本地日志 ${mib(health.logs.used_bytes)} / ${mib(health.logs.budget_bytes)} MiB · ${health.logs.entries} 条 · 超限清理最旧记录${health.logs.error ? ` · ${health.logs.error}` : ''}`;
+    } catch { if (!isUnmounted) status.textContent = '持久化状态暂时无法读取'; }
+  }
+
   async function loadLogs(errorUuid = '') {
     if (isUnmounted) return;
     const generation = loadRequests.next();
     loading = true;
     renderTable();
+    void refreshPersistence();
 
     try {
       const resp = await api.listLogs(

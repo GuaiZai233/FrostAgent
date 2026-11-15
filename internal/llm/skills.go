@@ -26,7 +26,7 @@ func (s *SessionContext) ActivateSkill(name, revision, arguments string, epoch u
 // Callers providing invalid entries must hold the matching Store snapshot guard.
 func (s *SessionContext) activateSkill(name, revision, arguments string, epoch uint64, invalid map[string]activeSkill) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if epoch != 0 && s.epoch != epoch {
 		return fmt.Errorf("会话已重置，技能调用已失效")
 	}
@@ -46,7 +46,7 @@ func (s *SessionContext) activateSkill(name, revision, arguments string, epoch u
 }
 func (s *SessionContext) HasActiveSkill(name, revision string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	active, ok := s.activeSkills[name]
 	return ok && active.Revision == revision
 }
@@ -56,7 +56,7 @@ func (s *SessionContext) skillSnapshot() map[string]activeSkill {
 }
 func (s *SessionContext) skillSnapshotAtEpoch() (map[string]activeSkill, uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	result := map[string]activeSkill{}
 	for name, active := range s.activeSkills {
 		result[name] = active
@@ -231,7 +231,7 @@ func (e *Engine) reconcileSkillSnapshot(ctx context.Context, snapshot skills.Sna
 			return nil
 		}
 		sess.mu.Lock()
-		defer sess.mu.Unlock()
+		defer sess.unlockCheckpoint()
 		run, _ := RunContextFromContext(ctx)
 		if run.Epoch != 0 && sess.epoch != run.Epoch {
 			return fmt.Errorf("会话已重置，技能调用已失效")

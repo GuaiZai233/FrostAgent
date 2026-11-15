@@ -51,6 +51,7 @@
   {"key": "GROUP_REPLY_ON_MENTION", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "dedicated", "seed": "true"},
   {"key": "HTTP_ALLOWED_ORIGINS", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hot", "seed": null},
   {"key": "LISTEN_ADDR", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hot", "seed": null},
+  {"key": "LOG_STORAGE_MIB", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": "128"},
   {"key": "MAX_CONTEXT_MESSAGES", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": "20"},
   {"key": "MCP_CONTROL_TOKEN", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hot", "seed": null},
   {"key": "MCP_ENFORCE_LOCAL_TOKEN", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hot", "seed": null},

@@ -28,7 +28,7 @@ type executionSequence struct {
 // Only explicit injection triggers cancel earlier work in the same lane.
 func (s *SessionContext) ReserveSequenceTurn(key string, interrupt, proactive bool) *SessionTurn {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if s.epoch == 0 {
 		s.epoch = 1
 	}
@@ -125,7 +125,7 @@ func (t *SessionTurn) SkillSession() *SessionContext {
 // The request's transient background is never copied to the next attempt.
 func (s *SessionContext) PrepareTurnMessages(t *SessionTurn, durable, prompt string, billing *BillingRunState) ([]ChatMessage, *BillingRunState, uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if t != nil && t.epoch != s.epoch {
 		return nil, billing, 0
 	}
@@ -271,7 +271,7 @@ func (s *SessionContext) cancelSequencesLocked() {
 // DropMessage removes only the caller's input, never another sender's tail.
 func (s *SessionContext) DropMessage(id uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	for i, seq := range s.historySeq {
 		if seq == id {
 			s.History = append(s.History[:i], s.History[i+1:]...)

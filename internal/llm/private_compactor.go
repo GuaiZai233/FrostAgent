@@ -213,7 +213,7 @@ func (e *Engine) triggerPrivateCompact(session *SessionContext, route modelroute
 // In-flight snapshots may summarize messages already evicted at this ceiling.
 func (s *SessionContext) trimPrivateHistory(limit int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if limit < 2 || len(s.History) <= limit {
 		return
 	}

@@ -3,6 +3,7 @@ package logs
 import (
 	"container/ring"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ type subscriber struct {
 }
 
 type Store struct {
+	disk        *diskStore
 	buffer      *ring.Ring
 	mu          sync.RWMutex
 	size        int
@@ -94,6 +96,9 @@ func (s *Store) Init(capacity int) {
 	s.buffer = ring.New(s.size)
 	s.imageCache = make(map[string]*cachedImage)
 	s.nextEntryID = 0
+	if s.disk != nil {
+		s.nextEntryID = s.disk.next
+	}
 	s.totalBytes = 0
 }
 
@@ -137,6 +142,9 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 	}
 
 	if previous, ok := s.buffer.Value.(LogEntry); ok {
+		if s.disk != nil {
+			delete(s.disk.failed, previous.ID)
+		}
 		s.releaseImagesLocked(previous.imageRefs)
 		s.totalBytes -= entryBytes(previous)
 	}
@@ -164,6 +172,15 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 	s.buffer = s.buffer.Next()
 	s.totalBytes += entryBytes(entry)
 	s.evictOverBudgetLocked()
+	if s.disk != nil && !s.disk.closed {
+		if err := s.disk.append(entry, retainedImages); err != nil {
+			s.disk.failed[entry.ID] = true
+			s.disk.err = "日志落盘失败，部分日志仅在内存中；请检查磁盘或调大日志预算"
+			fmt.Fprintln(os.Stderr, "日志落盘失败，请检查实例持久化状态")
+		} else if len(s.disk.failed) == 0 {
+			s.disk.err = ""
+		}
+	}
 	s.mu.Unlock()
 
 	// 广播给 subscriber
@@ -284,13 +301,19 @@ func (s *Store) Snapshot() []LogEntry {
 	defer s.mu.RUnlock()
 
 	var logs []LogEntry
+	if s.disk != nil {
+		logs = s.disk.snapshot()
+	}
 	if s.buffer == nil {
 		return logs
 	}
 
 	s.buffer.Do(func(p any) {
 		if p != nil {
-			logs = append(logs, p.(LogEntry))
+			entry := p.(LogEntry)
+			if s.disk == nil || s.disk.failed[entry.ID] {
+				logs = append(logs, entry)
+			}
 		}
 	})
 	return logs
@@ -303,6 +326,14 @@ func (s *Store) Clear() {
 	s.buffer = ring.New(s.size)
 	s.imageCache = make(map[string]*cachedImage)
 	s.totalBytes = 0
+	if s.disk != nil {
+		s.disk.failed = make(map[uint64]bool)
+		if err := s.disk.evictTo(0); err != nil {
+			s.disk.err = "清空持久化日志失败，请检查本地磁盘"
+		} else {
+			s.disk.err = ""
+		}
+	}
 }
 
 func (s *Store) SetMaxBytes(maxBytes int) {

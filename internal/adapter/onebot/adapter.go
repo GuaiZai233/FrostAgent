@@ -394,7 +394,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			if groupIDStr != "" && userIDStr != "" {
 				gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
 				if err != nil {
-					a.engine.PauseOnStorageError(err)
+					a.engine.ContinueAfterMemoryStorageError(err)
 					continue
 				}
 				if gStore != nil {
@@ -407,7 +407,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 						}
 					}
 					if err != nil {
-						a.engine.PauseOnStorageError(err)
+						a.engine.ContinueAfterMemoryStorageError(err)
 						continue
 					}
 				}
@@ -639,8 +639,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
 						}
 					}
-					if err != nil {
-						a.engine.PauseOnStorageError(err)
+					if err != nil && !a.engine.ContinueAfterMemoryStorageError(err) {
 						if turn != nil {
 							turn.Done()
 						}

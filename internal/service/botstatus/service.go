@@ -226,6 +226,9 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
+				if s.engine.SessionManager.HasCheckpoint(record.SessionID) {
+					continue
+				}
 				// Persisted summaries are subject to the same group compact whitelist as live ones.
 				recordSummary := record.Summary
 				if !llm.GroupCompactAllowed(s.engine.Getenv, record.SessionID) {
@@ -410,9 +413,14 @@ func (s *Service) GetSessionContext(
 				resp.SystemPrompt = lastSysPrompt
 				resp.Model = lastModel
 				lastUserPrompt = sess.LastUserPrompt()
+				actualRequest, requestAt := sess.LastActualRequest()
+				resp.ActualRequestJson = actualRequest
+				if !requestAt.IsZero() {
+					resp.RequestAt = requestAt.Format(time.RFC3339Nano)
+				}
 
 				for _, h := range history {
-					contentStr := fmt.Sprintf("%v", h.Content)
+					contentStr := llm.InspectionContent(h.Content)
 					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
 						Role:    h.Role,
 						Content: contentStr,
@@ -423,7 +431,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	// Fallback to durable summary store if active summary is empty
-	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil {
+	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil && !s.engine.SessionManager.HasCheckpoint(sessionID) {
 		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
 			runningSummary = rec.Summary
 		}

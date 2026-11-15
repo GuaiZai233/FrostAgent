@@ -37,18 +37,30 @@ type snapshotCredential struct {
 
 type Manager struct {
 	*runtimescope.Scope
-	mu               sync.RWMutex
-	path             string
-	active           Configuration
-	draft            Configuration
-	secrets          *SecretBackend
-	loadErr          error
-	usage            *tokenusage.Store
-	ReserveEndpoints func([]Endpoint) error
-	db               *storage.DB
-	instanceID       string
-	draftOwner       string
-	draftPending     bool
+	mu                  sync.RWMutex
+	path                string
+	active              Configuration
+	draft               Configuration
+	secrets             *SecretBackend
+	loadErr             error
+	usage               *tokenusage.Store
+	ReserveEndpoints    func([]Endpoint) error
+	db                  *storage.DB
+	instanceID          string
+	draftOwner          string
+	draftPending        bool
+	runtimeFallback     bool
+	lastRuntimeSnapshot *Snapshot
+}
+
+// EnableRuntimeFallback allows an already configured instance to keep using
+// its last coherent route/credential snapshot during a connection outage.
+// Configuration management continues to report SQL errors.
+func (m *Manager) EnableRuntimeFallback() {
+	m.mu.Lock()
+	m.runtimeFallback = true
+	m.mu.Unlock()
+	_ = m.Snapshot()
 }
 
 func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {

@@ -196,6 +196,25 @@ func (e *Engine) PauseOnStorageError(err error) {
 	}
 }
 
+func (e *Engine) durableSessionsEnabled() bool {
+	return e != nil && e.SessionManager != nil && e.SessionManager.Checkpoints != nil
+}
+
+func (e *Engine) handleMemoryStorageError(err error) {
+	e.ContinueAfterMemoryStorageError(err)
+}
+
+// ContinueAfterMemoryStorageError covers optional observation/extraction only.
+// Security purges and access checks retain their existing fail-closed behavior.
+func (e *Engine) ContinueAfterMemoryStorageError(err error) bool {
+	if e.durableSessionsEnabled() {
+		e.Log().Warn(logs.SYSTEM, "记忆数据库暂不可用，本次记忆写入失败，聊天继续")
+		return true
+	}
+	e.PauseOnStorageError(err)
+	return false
+}
+
 func (e *Engine) memoryFailure(operation string, err error) AgentRunResult {
 	wrapped := fmt.Errorf("%s: %w", operation, err)
 	if e.Scope != nil && e.Scope.Config != nil && e.Scope.Config.IsDatabase() {
@@ -345,150 +364,162 @@ func (e *Engine) RunMessagesWithContext(
 	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
-		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
-		if isGroupChat {
-			groupID := runContext.RouteScope.GroupID
-			if groupID == "" && strings.HasPrefix(owner, "group:") {
-				groupID = strings.TrimPrefix(owner, "group:")
-			}
-			senderID := runContext.ActorUserID
-
-			if e.GroupManager != nil && groupID != "" {
-				groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
-				if gErr != nil {
-					return e.memoryFailure("open group memory", gErr)
+		basePrompt := systemPrompt
+		memoryErr := func() error {
+			isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
+			if isGroupChat {
+				groupID := runContext.RouteScope.GroupID
+				if groupID == "" && strings.HasPrefix(owner, "group:") {
+					groupID = strings.TrimPrefix(owner, "group:")
 				}
-				if groupStore != nil {
-					profile, pErr := groupStore.GetProfile()
-					if pErr != nil {
-						return e.memoryFailure("read group profile", pErr)
-					}
-					var senderProfile *memory.MemberProfile
-					if profile != nil {
-						senderProfile = profile.GetMember(senderID)
-						if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
-							systemPrompt += "\n\n" + memberPrompt
-						}
-					}
+				senderID := runContext.ActorUserID
 
-					if groupStore.CatalogStore() != nil {
-						catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
-						if cErr != nil {
-							return e.memoryFailure("read group memory catalog", cErr)
-						} else if catalogContext != "" {
-							systemPrompt += "\n\n" + catalogContext
-						}
+				if e.GroupManager != nil && groupID != "" {
+					groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
+					if gErr != nil {
+						return fmt.Errorf("open group memory: %w", gErr)
 					}
-
-					if e.MemoryGateway != nil {
-						lastUserMsg := extractLastUserMessage(messages)
-						var raw []memory.MemoryEntry
-						var sErr error
-						if e.MemoryEmbeddings != nil {
-							raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
-						} else {
-							raw, sErr = groupStore.Search(lastUserMsg, 0)
+					if groupStore != nil {
+						profile, pErr := groupStore.GetProfile()
+						if pErr != nil {
+							return fmt.Errorf("read group profile: %w", pErr)
 						}
-						if sErr != nil {
+						var senderProfile *memory.MemberProfile
+						if profile != nil {
+							senderProfile = profile.GetMember(senderID)
+							if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
+								systemPrompt += "\n\n" + memberPrompt
+							}
+						}
+
+						if groupStore.CatalogStore() != nil {
+							catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
+							if cErr != nil {
+								return fmt.Errorf("read group memory catalog: %w", cErr)
+							} else if catalogContext != "" {
+								systemPrompt += "\n\n" + catalogContext
+							}
+						}
+
+						if e.MemoryGateway != nil {
+							lastUserMsg := extractLastUserMessage(messages)
+							var raw []memory.MemoryEntry
+							var sErr error
 							if e.MemoryEmbeddings != nil {
-								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
-								raw = nil
+								raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
 							} else {
-								return e.memoryFailure("search group memory", sErr)
+								raw, sErr = groupStore.Search(lastUserMsg, 0)
 							}
-						}
-						if len(raw) > 0 {
-							filtered := e.MemoryGateway.FilterGroup(raw)
-							if len(filtered) > 20 {
-								filtered = filtered[:20]
+							if sErr != nil {
+								if e.MemoryEmbeddings != nil {
+									e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
+									raw = nil
+								} else {
+									return fmt.Errorf("search group memory: %w", sErr)
+								}
 							}
-							if len(filtered) > 0 {
-								groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
-								systemPrompt += "\n\n" + groupMemContext
-								if !runContext.Mock {
-									if err := groupStore.RecordRecall(filtered); err != nil {
-										return e.memoryFailure("record group memory recall", err)
+							if len(raw) > 0 {
+								filtered := e.MemoryGateway.FilterGroup(raw)
+								if len(filtered) > 20 {
+									filtered = filtered[:20]
+								}
+								if len(filtered) > 0 {
+									groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
+									systemPrompt += "\n\n" + groupMemContext
+									if !runContext.Mock {
+										if err := groupStore.RecordRecall(filtered); err != nil {
+											return fmt.Errorf("record group memory recall: %w", err)
+										}
 									}
 								}
 							}
 						}
 					}
 				}
-			}
-			if e.MemoryReader != nil && e.MemoryGateway != nil {
-				for _, scope := range runContext.MemoryReadScopes() {
-					if scope.Type != memory.ScopePrivate {
-						continue
-					}
-					if e.MemoryCatalog != nil {
-						catalogContext, err := e.MemoryCatalog.FormatForPrompt(scope.Owner)
-						if err != nil {
-							return e.memoryFailure("read sender memory catalog", err)
-						}
-						if catalogContext != "" {
-							systemPrompt += "\n\n" + catalogContext
-						}
-					}
-					entries, err := e.SearchMemoryScope(ctx, scope, extractLastUserMessage(messages), nil)
-					if err != nil {
-						if e.MemoryEmbeddings != nil {
-							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("发言者用户记忆向量召回失败，继续对话: %v", err))
+				if e.MemoryReader != nil && e.MemoryGateway != nil {
+					for _, scope := range runContext.MemoryReadScopes() {
+						if scope.Type != memory.ScopePrivate {
 							continue
 						}
-						return e.memoryFailure("recall sender memory", err)
-					}
-					entries = e.MemoryReader.Limit(entries)
-					if len(entries) == 0 {
-						continue
-					}
-					systemPrompt += "\n\n" + e.MemoryGateway.FormatForGroupUserContext(entries, scope.Owner)
-					if !runContext.Mock {
-						if err := e.RecordMemoryScopeRecall(scope, entries); err != nil {
-							return e.memoryFailure("record sender memory recall", err)
+						if e.MemoryCatalog != nil {
+							catalogContext, err := e.MemoryCatalog.FormatForPrompt(scope.Owner)
+							if err != nil {
+								return fmt.Errorf("read sender memory catalog: %w", err)
+							}
+							if catalogContext != "" {
+								systemPrompt += "\n\n" + catalogContext
+							}
+						}
+						entries, err := e.SearchMemoryScope(ctx, scope, extractLastUserMessage(messages), nil)
+						if err != nil {
+							if e.MemoryEmbeddings != nil {
+								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("发言者用户记忆向量召回失败，继续对话: %v", err))
+								continue
+							}
+							return fmt.Errorf("recall sender memory: %w", err)
+						}
+						entries = e.MemoryReader.Limit(entries)
+						if len(entries) == 0 {
+							continue
+						}
+						systemPrompt += "\n\n" + e.MemoryGateway.FormatForGroupUserContext(entries, scope.Owner)
+						if !runContext.Mock {
+							if err := e.RecordMemoryScopeRecall(scope, entries); err != nil {
+								return fmt.Errorf("record sender memory recall: %w", err)
+							}
 						}
 					}
 				}
-			}
-		} else {
-			if owner != "" && e.MemoryCatalog != nil {
-				catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
-				if err != nil {
-					return e.memoryFailure("read memory catalog", err)
-				} else if catalogContext != "" {
-					systemPrompt += "\n\n" + catalogContext
+			} else {
+				if owner != "" && e.MemoryCatalog != nil {
+					catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
+					if err != nil {
+						return fmt.Errorf("read memory catalog: %w", err)
+					} else if catalogContext != "" {
+						systemPrompt += "\n\n" + catalogContext
+					}
+				}
+
+				// 召回 → 网关过滤 → 注入
+				if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+					lastUserMsg := extractLastUserMessage(messages)
+					var raw []memory.MemoryEntry
+					var err error
+					if e.MemoryEmbeddings != nil {
+						raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
+					} else {
+						raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
+					}
+					if err != nil {
+						if e.MemoryEmbeddings != nil {
+							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
+							raw = nil
+						} else {
+							return fmt.Errorf("recall memory: %w", err)
+						}
+					}
+					filtered := e.MemoryGateway.FilterPrivate(raw, owner)
+					filtered = e.MemoryReader.Limit(filtered)
+					if len(filtered) > 0 {
+						memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
+						systemPrompt += "\n\n" + memoryContext
+						if !runContext.Mock {
+							if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+								return fmt.Errorf("record memory recall: %w", err)
+							}
+						}
+					}
 				}
 			}
 
-			// 召回 → 网关过滤 → 注入
-			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
-				lastUserMsg := extractLastUserMessage(messages)
-				var raw []memory.MemoryEntry
-				var err error
-				if e.MemoryEmbeddings != nil {
-					raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
-				} else {
-					raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
-				}
-				if err != nil {
-					if e.MemoryEmbeddings != nil {
-						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
-						raw = nil
-					} else {
-						return e.memoryFailure("recall memory", err)
-					}
-				}
-				filtered := e.MemoryGateway.FilterPrivate(raw, owner)
-				filtered = e.MemoryReader.Limit(filtered)
-				if len(filtered) > 0 {
-					memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
-					systemPrompt += "\n\n" + memoryContext
-					if !runContext.Mock {
-						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-							return e.memoryFailure("record memory recall", err)
-						}
-					}
-				}
+			return nil
+		}()
+		if memoryErr != nil {
+			if !e.durableSessionsEnabled() {
+				return e.memoryFailure("assemble memory context", memoryErr)
 			}
+			systemPrompt = basePrompt
+			e.Log().Warn(logs.SYSTEM, "记忆数据库暂不可用，本轮使用会话上下文继续聊天；依赖数据库的记忆操作暂不可用")
 		}
 
 		messages = append([]ChatMessage{
@@ -678,7 +709,7 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 					return
 				}
 				if errors.Is(err, memory.ErrStorageUnavailable) {
-					e.PauseOnStorageError(err)
+					e.handleMemoryStorageError(err)
 					return
 				}
 				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊批量提取记忆失败 (群: %s): %v", group.groupID, err))
@@ -689,7 +720,7 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 					return
 				}
 				if errors.Is(err, memory.ErrStorageUnavailable) {
-					e.PauseOnStorageError(err)
+					e.handleMemoryStorageError(err)
 					return
 				}
 				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
@@ -1172,6 +1203,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			},
 			TraceID: runCtx.SessionID,
 		}
+		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && runCtx.Mock) {
+			sess.SetLastActualRequest(runCtx.Epoch, modelName, chatReq)
+		}
+
 		var callBilling *BillingRunState
 		if billingActive {
 			callBilling = runCtx.Billing
