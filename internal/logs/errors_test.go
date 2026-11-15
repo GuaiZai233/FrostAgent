@@ -11,7 +11,10 @@ func TestErrorUUIDCorrelatesReplyStoreAndStream(t *testing.T) {
 	subID, stream := store.Subscribe(nil)
 	defer store.Unsubscribe(subID)
 	raw := "Post https://endpoint.invalid/private: synthetic-secret"
-	reply := store.ReportError(LLM_RESPONSE, "LLM 响应失败：网络请求失败", errors.New(raw), "synthetic-trace")
+	var reply string
+	output := captureConsole(t, func() {
+		reply = store.ReportError(LLM_RESPONSE, "LLM 响应失败：网络请求失败", errors.New(raw), "synthetic-trace")
+	})
 	entry := <-stream
 	id, valid := NormalizeErrorUUID(entry.ErrorUUID)
 	if !valid || !strings.Contains(reply, id) || strings.Contains(reply, raw) || strings.Contains(reply, "endpoint.invalid") {
@@ -19,6 +22,9 @@ func TestErrorUUIDCorrelatesReplyStoreAndStream(t *testing.T) {
 	}
 	if want := "[FrostAgent 错误] LLM 响应失败：网络请求失败 (Ref_ID: " + id + ")"; reply != want {
 		t.Fatalf("unexpected reply format: %q", reply)
+	}
+	if !strings.Contains(output, "[Ref_ID: "+id+"]") || output != Console(entry)+"\n" {
+		t.Fatalf("console lost the reply reference or changed on replay: %q", output)
 	}
 	found, ok := store.FindError(strings.ToUpper(id))
 	if !ok || found.Content != entry.Content || !strings.Contains(found.Content, raw) || found.TraceID != "synthetic-trace" {
@@ -39,6 +45,52 @@ func TestErrorUUIDCorrelatesReplyStoreAndStream(t *testing.T) {
 	store.Clear()
 	if _, ok := store.FindError(second); ok {
 		t.Fatal("cleared error still queryable")
+	}
+}
+
+func TestConsoleKeepsErrorReference(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		category Category
+		content  string
+	}{
+		{name: "empty", category: SYSTEM},
+		{name: "multiline", category: TOOL, content: "first\nsecond\tthird"},
+		{name: "long", category: LLM_RESPONSE, content: strings.Repeat("诊断", 3000)},
+		{name: "websocket", category: WEBSOCKET, content: "connection failed"},
+		{name: "http", category: HTTP, content: "request failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := New("synthetic-instance", "test", 1)
+			var id string
+			output := captureConsole(t, func() {
+				if tc.category == WEBSOCKET {
+					store.Websocket(ERROR, tc.content)
+				} else {
+					id = store.Error(tc.category, tc.content)
+				}
+			})
+			entry := store.Snapshot()[0]
+			if _, valid := NormalizeErrorUUID(entry.ErrorUUID); !valid {
+				t.Fatalf("missing error reference: %+v", entry)
+			}
+			if id != "" && id != entry.ErrorUUID {
+				t.Fatalf("returned reference = %q, stored reference = %q", id, entry.ErrorUUID)
+			}
+			if entry.Content != tc.content {
+				t.Fatal("console formatting changed stored diagnostics")
+			}
+			want := "[Ref_ID: " + entry.ErrorUUID + "]"
+			if !strings.Contains(output, want) || strings.Count(output, entry.ErrorUUID) != 1 {
+				t.Fatalf("console must include the full reference once: %q", output)
+			}
+			if output != Console(entry)+"\n" || strings.Count(output, "\n") != 1 {
+				t.Fatalf("console replay must preserve the same single line: %q", output)
+			}
+			if tc.name == "long" && (!strings.HasSuffix(strings.TrimSpace(output), "...") || strings.Contains(output, tc.content)) {
+				t.Fatal("long diagnostics were not truncated")
+			}
+		})
 	}
 }
 
