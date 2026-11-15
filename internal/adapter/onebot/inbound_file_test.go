@@ -24,6 +24,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
+	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 )
@@ -100,12 +101,18 @@ func (b *inboundMemoryBackend) Exec(ctx context.Context, req sandbox.ExecRequest
 	case "check":
 		hash := sha256.Sum256(b.files[key])
 		return result(map[string]any{"present": int64(len(b.files[key])) == q.Size && hex.EncodeToString(hash[:]) == q.Hash})
-	case "write":
+	case "begin", "write":
 		data, err := base64.StdEncoding.DecodeString(q.Data)
-		if err != nil || len(b.stages[stage]) != q.Offset {
+		if q.Op == "begin" {
+			if _, exists := b.stages[stage]; exists || q.Offset != 0 {
+				return sandbox.ExecResult{}, errors.New("duplicate upload")
+			}
+			b.stages[stage] = make([]byte, q.Size)
+		}
+		if err != nil || int64(len(b.stages[stage])) != q.Size || q.Offset < 0 || q.Offset+len(data) > len(b.stages[stage]) {
 			return sandbox.ExecResult{}, errors.New("invalid upload chunk")
 		}
-		b.stages[stage] = append(b.stages[stage], data...)
+		copy(b.stages[stage][q.Offset:], data)
 	case "commit":
 		data := b.stages[stage]
 		hash := sha256.Sum256(data)
@@ -443,6 +450,84 @@ func startInboundServer(t *testing.T, engine *llm.Engine, client *http.Client) (
 	adapter.fileHTTPClient = client
 	server := httptest.NewServer(http.HandlerFunc(adapter.Handler()))
 	return server, "ws" + strings.TrimPrefix(server.URL, "http")
+}
+
+func TestInboundFilePassiveGroupThenMention(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("security-failure=%v", blocked), func(t *testing.T) {
+			t.Setenv("PROACTIVE_REPLY_PROBABILITY", "0")
+			data := fixtureDOCX(t)
+			var downloads, calls, inspected atomic.Int32
+			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+				calls.Add(1)
+				prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
+				if blocked {
+					if strings.Contains(prompt, "<received_files>") {
+						t.Error("security-rejected file was registered")
+					}
+				} else {
+					infos := parseReceivedFiles(t, prompt)
+					if len(infos) != 1 || infos[0].Status != "ready" || infos[0].MessageID != "101" {
+						t.Errorf("passive group file unavailable: %+v", infos)
+					}
+				}
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "fixture reply"}}, nil
+			}}
+			engine := newTestEngine(provider)
+			engine.SandboxBackend = newInboundBackend()
+			engine.Security = security.NewController(t.TempDir())
+			engine.Security.SetMode(security.ControlModeAggressive)
+			engine.Security.SetClassifier(&mockClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				if input.Stage == security.StageIngress && strings.Contains(input.Content, "passive.docx") {
+					inspected.Add(1)
+					if blocked {
+						return security.ClassificationResult{}, errors.New("synthetic classifier unavailable")
+					}
+				}
+				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+			}})
+			server, address := startInboundServer(t, engine, inboundFixtureClient(data, &downloads))
+			defer server.Close()
+			ws, _, err := websocket.DefaultDialer.Dial(address, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ws.Close()
+			event := fileEvent(101, 11, "passive.docx", int64(len(data)))
+			event.MessageType, event.GroupID = "group", 22
+			if err := ws.WriteJSON(event); err != nil {
+				t.Fatal(err)
+			}
+			event.MessageID = 102
+			event.Message = json.RawMessage(`[{"type":"at","data":{"qq":"99"}},{"type":"text","data":{"text":"读取刚才的文件"}}]`)
+			if err := ws.WriteJSON(event); err != nil {
+				t.Fatal(err)
+			}
+			_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+			for {
+				var action model.OneBotAction
+				if err := ws.ReadJSON(&action); err != nil {
+					t.Fatal(err)
+				}
+				if action.Action == "get_group_info" {
+					_ = ws.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"group_id": 22, "group_name": "fixture group"}})
+					continue
+				}
+				if action.Action != "send_group_msg" {
+					t.Fatalf("unexpected action: %s", action.Action)
+				}
+				_ = ws.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 103}})
+				break
+			}
+			wantDownloads := int32(1)
+			if blocked {
+				wantDownloads = 0
+			}
+			if inspected.Load() < 1 || calls.Load() != 1 || downloads.Load() != wantDownloads {
+				t.Fatalf("inspected=%d dialogue=%d downloads=%d", inspected.Load(), calls.Load(), downloads.Load())
+			}
+		})
+	}
 }
 
 func TestInboundFileThenImmediateQuestionThroughTools(t *testing.T) {

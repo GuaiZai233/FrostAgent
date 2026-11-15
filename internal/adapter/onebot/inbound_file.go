@@ -118,12 +118,23 @@ func fileDataInt(data map[string]any, keys ...string) int64 {
 	return 0
 }
 
+func hasInboundFiles(event model.OneBotEvent) bool {
+	if event.PostType != "message" || (event.MessageType != "private" && event.MessageType != "group") {
+		return false
+	}
+	for _, segment := range ParseMessageSegments(event.Message) {
+		if segment.Type == "file" {
+			return true
+		}
+	}
+	return false
+}
+
 // Remember descriptors before dispatching a turn: an immediately following text
 // message can cancel the file turn without losing its attachment. This cache
 // belongs to one connection and is invalidated by session identity and epoch.
 func (c *wsConnection) rememberInboundFiles(event model.OneBotEvent) {
-	if c == nil || c.engine == nil || c.engine.SessionManager == nil || event.PostType != "message" ||
-		(event.MessageType != "private" && event.MessageType != "group") {
+	if c == nil || c.engine == nil || c.engine.SessionManager == nil || !hasInboundFiles(event) {
 		return
 	}
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))

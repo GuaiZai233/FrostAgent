@@ -476,7 +476,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 			event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 		if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-			(isWoken(event, a.engine, routing) || canDispatch) {
+			(isWoken(event, a.engine, routing) || canDispatch || hasInboundFiles(event)) {
 			secPlatform := "onebot"
 			if wsConn.mock {
 				secPlatform = "mock"
@@ -543,6 +543,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				warningNotice = decision.WarningNotice
 			}
 		}
+
+		wsConn.rememberInboundFiles(event)
 
 		var routeSnapshot *modelrouter.Snapshot
 		if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
@@ -619,10 +621,6 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				inject := proactiveTurn || (event.PokeID == "" && (event.MessageType == "private" || routing.WakeSignals.AtBot || routing.WakeSignals.Alias))
 				turn = a.engine.SessionManager.GetOrCreate(wsConn.historyKey(event)).ReserveSequenceTurn(lane, inject, proactiveTurn)
 			}
-		}
-
-		if isWoken(event, a.engine, routing) {
-			wsConn.rememberInboundFiles(event)
 		}
 
 		if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {

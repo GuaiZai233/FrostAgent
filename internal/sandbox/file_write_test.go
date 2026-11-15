@@ -14,7 +14,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func decodeWriteCommand(t *testing.T, command string) fileWriteRequest {
@@ -41,10 +44,14 @@ func writeResult(output string) ExecResult {
 
 func TestWriteFileChunksAndAtomicCommit(t *testing.T) {
 	data := bytes.Repeat([]byte("document fixture"), 7000)
-	var transferred []byte
+	transferred := make([]byte, len(data))
+	written := make(map[int]bool)
+	var mu sync.Mutex
 	committed := false
 	stage := ""
 	backend := &stubBackend{execFunc: func(_ context.Context, req ExecRequest) (ExecResult, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		q := decodeWriteCommand(t, req.Command)
 		if req.SessionID != "source-session" || req.Cwd != "/sandbox" || len(req.Command) > MaxCommandLength || q.Path != "received/fixture.docx" || q.Size != int64(len(data)) {
 			t.Fatalf("incorrect file write request: session=%s path=%s", req.SessionID, q.Path)
@@ -55,12 +62,13 @@ func TestWriteFileChunksAndAtomicCommit(t *testing.T) {
 			t.Fatal("upload staging path changed")
 		}
 		switch q.Op {
-		case "write":
+		case "begin", "write":
 			part, err := base64.StdEncoding.DecodeString(q.Data)
-			if err != nil || len(part) > fileWriteChunkBytes || q.Offset != len(transferred) {
+			if err != nil || len(part) > fileWriteChunkBytes || q.Offset < 0 || q.Offset+len(part) > len(data) || written[q.Offset] || (q.Op == "begin") != (q.Offset == 0) {
 				t.Fatal("invalid chunk")
 			}
-			transferred = append(transferred, part...)
+			written[q.Offset] = true
+			copy(transferred[q.Offset:], part)
 		case "commit":
 			hash := sha256.Sum256(transferred)
 			if !bytes.Equal(transferred, data) || q.Hash != hex.EncodeToString(hash[:]) || q.Data != "" {
@@ -74,6 +82,80 @@ func TestWriteFileChunksAndAtomicCommit(t *testing.T) {
 	}}
 	if err := WriteFile(context.Background(), backend, "source-session", "/sandbox/received/fixture.docx", data); err != nil || !committed {
 		t.Fatalf("write: %v committed=%v", err, committed)
+	}
+}
+
+func TestWriteFileCleansPartialUploadAfterCancellation(t *testing.T) {
+	for _, mode := range []string{"cancel", "deadline", "write-failure"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if mode == "deadline" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+			}
+			defer cancel()
+			var mu sync.Mutex
+			stage, aborted := "", false
+			backend := &stubBackend{execFunc: func(execCtx context.Context, req ExecRequest) (ExecResult, error) {
+				q := decodeWriteCommand(t, req.Command)
+				mu.Lock()
+				defer mu.Unlock()
+				switch q.Op {
+				case "begin":
+					stage = q.Stage
+				case "write":
+					if mode == "deadline" {
+						<-ctx.Done()
+					} else if mode == "cancel" {
+						cancel()
+					}
+					return ExecResult{}, errors.New("interrupted upload")
+				case "abort":
+					deadline, bounded := execCtx.Deadline()
+					if execCtx.Err() != nil || !bounded || time.Until(deadline) > fileWriteCleanupTimeout || q.Stage != stage {
+						t.Error("cleanup did not use a live, bounded context for the partial upload")
+					}
+					aborted = true
+				case "commit":
+					t.Error("partial upload published")
+				}
+				return writeResult(`{"ok":true}`), nil
+			}}
+			if err := WriteFile(ctx, backend, "s", "/sandbox/received/cancelled.docx", make([]byte, fileWriteChunkBytes*12)); err == nil || !aborted || stage == "" {
+				t.Fatalf("err=%v stage=%q aborted=%v", err, stage, aborted)
+			}
+		})
+	}
+}
+
+func TestWriteFileJoinsWorkersBeforeAbort(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var active, started atomic.Int32
+	var aborted bool
+	backend := &stubBackend{execFunc: func(execCtx context.Context, req ExecRequest) (ExecResult, error) {
+		q := decodeWriteCommand(t, req.Command)
+		switch q.Op {
+		case "write":
+			active.Add(1)
+			defer active.Add(-1)
+			if started.Add(1) == fileWriteConcurrency {
+				return ExecResult{}, errors.New("synthetic chunk failure")
+			}
+			<-execCtx.Done()
+			return ExecResult{}, execCtx.Err()
+		case "abort":
+			if active.Load() != 0 || execCtx.Err() != nil {
+				t.Error("cleanup raced with an outstanding worker or inherited its cancellation")
+			}
+			aborted = true
+		case "commit":
+			t.Error("failed upload published")
+		}
+		return writeResult(`{"ok":true}`), nil
+	}}
+	if err := WriteFile(ctx, backend, "s", "/sandbox/received/failed.docx", make([]byte, fileWriteChunkBytes*12)); err == nil || !aborted || started.Load() != fileWriteConcurrency {
+		t.Fatalf("err=%v aborted=%v workers=%d", err, aborted, started.Load())
 	}
 }
 
@@ -166,7 +248,7 @@ func TestFileWriterPythonProtocol(t *testing.T) {
 		}
 		return writeResult(string(output)), nil
 	}}
-	data := bytes.Repeat([]byte("DOCX fixture bytes"), 3000)
+	data := bytes.Repeat([]byte("DOCX fixture bytes"), 30000)
 	name := "received/复习题 '$(touch forbidden).docx"
 	if err := WriteFile(context.Background(), backend, "s", "/sandbox/"+name, data); err != nil {
 		t.Fatal(err)
@@ -208,4 +290,26 @@ func TestFileWriterPythonProtocol(t *testing.T) {
 	if err != nil || present {
 		t.Fatalf("changed file accepted: %v %v", present, err)
 	}
+	t.Run("cancelled upload removes staging file", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		interrupted := &stubBackend{execFunc: func(execCtx context.Context, req ExecRequest) (ExecResult, error) {
+			result, err := backend.Exec(execCtx, req)
+			q := decodeWriteCommand(t, req.Command)
+			if q.Op == "write" && q.Offset == fileWriteChunkBytes {
+				cancel()
+			}
+			return result, err
+		}}
+		if err := WriteFile(ctx, interrupted, "s", "/sandbox/received/cancelled.docx", data); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation: %v", err)
+		}
+		stages, err := filepath.Glob(filepath.Join(inside, "received", ".frostagent-upload-*"))
+		if err != nil || len(stages) != 0 {
+			t.Fatalf("partial uploads remain: %v %v", stages, err)
+		}
+		if _, err := os.Stat(filepath.Join(inside, "received", "cancelled.docx")); !os.IsNotExist(err) {
+			t.Fatalf("cancelled upload was published: %v", err)
+		}
+	})
 }

@@ -9,10 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 )
 
-const fileWriteChunkBytes = 32 << 10
+const (
+	fileWriteChunkBytes     = 32 << 10
+	fileWriteConcurrency    = 8
+	fileWriteCleanupTimeout = 5 * time.Second
+)
 
 type fileWriteRequest struct {
 	Root   string `json:"root"`
@@ -37,7 +42,7 @@ try:
     if not parts or any(p in ("", ".", "..") for p in parts):
         raise ValueError("invalid_path")
     for part in parts[:-1]:
-        if q["op"]!="check":
+        if q["op"] not in ("check", "abort"):
             try: os.mkdir(part,0o700,dir_fd=fd)
             except FileExistsError: pass
         fd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
@@ -60,18 +65,26 @@ try:
         stage=q["stage"]
         if not stage.startswith(".frostagent-upload-") or "/" in stage or "\\" in stage:
             raise ValueError("invalid_stage")
-        if q["op"]=="write":
+        if q["op"] in ("begin", "write"):
             flags=os.O_WRONLY|os.O_NOFOLLOW|os.O_NONBLOCK
-            if q["offset"]==0: flags|=os.O_CREAT|os.O_EXCL
+            if q["op"]=="begin": flags|=os.O_CREAT|os.O_EXCL
             f=os.open(stage,flags,0o600,dir_fd=fd)
             try:
                 s=os.fstat(f)
                 b=base64.b64decode(q["data"],validate=True)
-                if not stat.S_ISREG(s.st_mode) or s.st_size!=q["offset"] or s.st_size+len(b)>q["size"]:
+                expected_size=0 if q["op"]=="begin" else q["size"]
+                if not stat.S_ISREG(s.st_mode) or s.st_size!=expected_size or q["offset"]<0 or q["offset"]+len(b)>q["size"]:
                     raise ValueError("invalid_chunk")
-                os.lseek(f,0,os.SEEK_END)
+                if q["op"]=="begin":
+                    if q["offset"]!=0: raise ValueError("invalid_chunk")
+                    os.ftruncate(f,q["size"])
+                offset=q["offset"]
                 view=memoryview(b)
-                while view: view=view[os.write(f,view):]
+                while view:
+                    n=os.pwrite(f,view,offset)
+                    if n<=0: raise ValueError("invalid_write")
+                    offset+=n
+                    view=view[n:]
             finally: os.close(f)
         elif q["op"]=="commit":
             if not matches(stage): raise ValueError("invalid_content")
@@ -172,22 +185,74 @@ func WriteFile(ctx context.Context, backend Backend, sessionID, name string, dat
 	}
 	req.Stage = ".frostagent-upload-" + hex.EncodeToString(nonce[:])
 	completed := false
+	started := false
 	defer func() {
-		if !completed && ctx.Err() == nil {
+		if started && !completed {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), fileWriteCleanupTimeout)
+			defer cleanupCancel()
 			cleanup := req
 			cleanup.Op, cleanup.Data = "abort", ""
-			_, _ = fileWriteExec(ctx, backend, sessionID, cleanup)
+			_, _ = fileWriteExec(cleanupCtx, backend, sessionID, cleanup)
 		}
 	}()
-	for offset := 0; offset < len(data); offset += fileWriteChunkBytes {
-		end := min(offset+fileWriteChunkBytes, len(data))
-		req.Op, req.Offset, req.Data = "write", offset, base64.StdEncoding.EncodeToString(data[offset:end])
-		if _, err := fileWriteExec(ctx, backend, sessionID, req); err != nil {
-			return err
-		}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	started = true
+	first := req
+	first.Op, first.Data = "begin", base64.StdEncoding.EncodeToString(data[:min(fileWriteChunkBytes, len(data))])
+	if _, err := fileWriteExec(ctx, backend, sessionID, first); err != nil {
+		return err
+	}
+	if err := writeFileChunks(ctx, backend, sessionID, req, data); err != nil {
+		return err
 	}
 	req.Op, req.Data = "commit", ""
 	_, err = fileWriteExec(ctx, backend, sessionID, req)
 	completed = err == nil
 	return err
+}
+
+// Each worker writes disjoint byte ranges in the preallocated staging file.
+// Join every worker before committing or unlinking it, including on cancellation.
+func writeFileChunks(ctx context.Context, backend Backend, sessionID string, req fileWriteRequest, data []byte) error {
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var workers sync.WaitGroup
+	var next, failed sync.Mutex
+	offset := fileWriteChunkBytes
+	var writeErr error
+	for range min(fileWriteConcurrency, (len(data)-1)/fileWriteChunkBytes) {
+		workers.Go(func() {
+			for ctx.Err() == nil {
+				next.Lock()
+				start := offset
+				offset += fileWriteChunkBytes
+				next.Unlock()
+				if start >= len(data) {
+					return
+				}
+				chunk := req
+				chunk.Op, chunk.Offset, chunk.Data = "write", start, base64.StdEncoding.EncodeToString(data[start:min(start+fileWriteChunkBytes, len(data))])
+				if _, err := fileWriteExec(ctx, backend, sessionID, chunk); err != nil {
+					failed.Lock()
+					if writeErr == nil {
+						writeErr = err
+						cancel()
+					}
+					failed.Unlock()
+					return
+				}
+			}
+		})
+	}
+	workers.Wait()
+	if err := parentCtx.Err(); err != nil {
+		return err
+	}
+	if writeErr != nil {
+		return writeErr
+	}
+	return ctx.Err()
 }
