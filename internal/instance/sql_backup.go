@@ -314,6 +314,11 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 			return Info{}, err
 		}
 	}
+	if decoded.ToolHistory != nil {
+		if err := backup.ImportToolHistory(m.db, info.ID, *decoded.ToolHistory); err != nil {
+			return Info{}, err
+		}
+	}
 	if err := backup.ImportStickers(m.db, info.ID, filepath.Join(m.dir(info.ID), "sticker"),
 		decoded.Stickers, decoded.Images); err != nil {
 		return Info{}, err

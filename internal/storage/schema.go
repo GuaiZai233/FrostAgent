@@ -199,6 +199,7 @@ var migrations = []migration{
 	{version: 15, preservesCompatibility: true},
 	{version: 16},
 	{version: 17, statements: chatHistorySchema},
+	{version: 18, statements: toolHistorySchema},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

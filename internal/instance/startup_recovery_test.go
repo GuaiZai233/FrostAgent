@@ -43,6 +43,7 @@ func TestDatabaseStartupClearsRecoveredDisabledError(t *testing.T) {
 	// reconcile the columns and the old instance error, without enabling it.
 	for _, statement := range []string{
 		`DROP TABLE chat_history`,
+		`DROP TABLE tool_history`,
 		`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
 		`ALTER TABLE memory_entries DROP COLUMN summary_dirty`,

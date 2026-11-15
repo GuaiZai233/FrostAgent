@@ -37,6 +37,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
+	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"os"
@@ -372,11 +373,14 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 智能体引擎初始化完成", "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after engine assignment)
 	if db != nil {
+		engine.ToolHistory = toolhistory.NewStore(db, instanceID)
 		engine.ChatHistory = chathistory.NewRecorder(chathistory.NewStore(db, instanceID), scope.Getenv,
 			func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
 	}
 	historyTool := tools.NewChatHistoryTool(engine)
 	engine.ToolRegistry[historyTool.Name()] = historyTool
+	toolHistoryTool := tools.NewToolHistoryTool(engine)
+	engine.ToolRegistry[toolHistoryTool.Name()] = toolHistoryTool
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
 	overrideConfigTool := tools.OverrideFrostAgentConfigTool(engine, settingsWriteMu)
