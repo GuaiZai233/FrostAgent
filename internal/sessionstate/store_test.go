@@ -715,7 +715,26 @@ func TestLocalMirrorCannotChangeKnownAncestry(t *testing.T) {
 
 func testPostgresSQLAncestryCAS(t *testing.T) {
 	db := postgresCheckpointDatabase(t)
-	db.SQL.SetMaxOpenConns(5)
+	var schema string
+	if err := db.SQL.QueryRow(`SELECT current_schema()`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	query.Set("application_name", schema)
+	parsed.RawQuery = query.Encode()
+	// The external writer/observer use ordinary test connections. The app's
+	// connection retains its exclusive lease and single-connection pool.
+	external, err := sql.Open("pgx", parsed.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer external.Close()
+	external.SetMaxOpenConns(2)
 	store := New(db, "instance", t.TempDir(), nil)
 	if err := store.Save(checkpoint("private:synthetic", 1)); err != nil {
 		t.Fatal(err)
@@ -728,7 +747,7 @@ func testPostgresSQLAncestryCAS(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tx, err := db.SQL.Begin()
+	tx, err := external.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +763,7 @@ func testPostgresSQLAncestryCAS(t *testing.T) {
 	observed := false
 	for ctx.Err() == nil {
 		var waiting int
-		err = db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_stat_activity
+		err = external.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_stat_activity
 			WHERE application_name = current_setting('application_name') AND wait_event_type = 'Lock'
 			AND query LIKE 'UPDATE session_states SET revision = %'`).Scan(&waiting)
 		if err != nil {
