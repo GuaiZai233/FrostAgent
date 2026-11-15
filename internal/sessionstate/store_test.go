@@ -2,11 +2,14 @@ package sessionstate
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
@@ -153,13 +156,21 @@ func TestConflictingCheckpointPreservesLocalAlternative(t *testing.T) {
 		t.Fatalf("conflict restore: %v %v", records, err)
 	}
 	files, err := filepath.Glob(next.path(local.SessionID) + ".*.conflict")
-	if err != nil || len(files) != 1 {
-		t.Fatalf("missing preserved conflict: %v %v", files, err)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("missing preserved conflict branches: %v %v", files, err)
 	}
-	data, err := os.ReadFile(files[0])
-	var preserved Record
-	if err != nil || json.Unmarshal(data, &preserved) != nil || string(preserved.Payload) != string(local.Payload) {
-		t.Fatal("local alternative lost")
+	foundLocal, foundSQL := false, false
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		var preserved Record
+		if err != nil || json.Unmarshal(data, &preserved) != nil {
+			t.Fatal("invalid preserved conflict")
+		}
+		foundLocal = foundLocal || equalPayload(preserved.Payload, local.Payload)
+		foundSQL = foundSQL || equalPayload(preserved.Payload, remote.Payload)
+	}
+	if !foundLocal || !foundSQL {
+		t.Fatal("a conflict alternative was lost")
 	}
 	if records, err := New(db, "instance", dir, nil).Load(context.Background()); err == nil || len(records) != 1 {
 		t.Fatalf("conflict artifact was replayed or its warning disappeared: %v", err)
@@ -305,5 +316,150 @@ func TestSQLDriftAfterLocalFailureAndOfflineRestartPreservesConversation(t *test
 	}
 	if !preserved {
 		t.Fatal("offline conversation was lost across conflict recovery")
+	}
+}
+
+func TestConflictFenceSurvivesRestartAndWorkerFlush(t *testing.T) {
+	for _, startup := range []string{"online", "offline", "corrupt-metadata"} {
+		t.Run(startup, func(t *testing.T) {
+			db := checkpointDatabase(t)
+			dir := t.TempDir()
+			store := New(db, "instance", dir, nil)
+			remote := checkpoint("private:synthetic", 2)
+			remote.Payload = json.RawMessage(`{"version":1,"branch":"SQL A"}`)
+			if err := store.writeSQL(context.Background(), remote); err != nil {
+				t.Fatal(err)
+			}
+			local := checkpoint(remote.SessionID, 2)
+			local.Payload = json.RawMessage(`{"version":1,"branch":"local B"}`)
+			if err := store.Save(local); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Flush(context.Background()); !errors.Is(err, ErrConflict) {
+				t.Fatalf("initial conflict: %v", err)
+			}
+			local.Revision = 3
+			local.Payload = json.RawMessage(`{"version":1,"branch":"local B with another message"}`)
+			if err := store.Save(local); err != nil {
+				t.Fatal(err)
+			}
+			if startup == "corrupt-metadata" {
+				files, err := filepath.Glob(store.path(local.SessionID) + ".*.conflict")
+				if err != nil || len(files) == 0 {
+					t.Fatalf("conflict files: %v %v", files, err)
+				}
+				for _, file := range files {
+					// A bad payload must not transfer the fence to another ID.
+					forged := checkpoint("private:peer", 2)
+					data, err := json.Marshal(forged)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(file, data, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			reports := make(chan string, 1)
+			restarted := New(db, "instance", dir, func(message string) {
+				select {
+				case reports <- message:
+				default:
+				}
+			})
+			if startup == "offline" {
+				restarted.db = nil
+			}
+			if records, err := restarted.Load(context.Background()); err == nil || len(records) != 1 || records[0].Revision != 3 {
+				t.Fatalf("restart did not retain the newer local branch: %v %v", records, err)
+			}
+			restarted.db = db
+			if err := restarted.Save(checkpoint("private:peer", 1)); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { defer close(done); restarted.Run(ctx) }()
+			select {
+			case <-reports:
+			case <-time.After(3 * time.Second):
+			}
+			cancel()
+			<-done
+			persisted, err := restarted.readSQL(context.Background(), local.SessionID)
+			if err != nil || persisted.Revision != remote.Revision || !equalPayload(persisted.Payload, remote.Payload) {
+				t.Fatalf("worker overwrote the SQL branch after restart: %+v %v", persisted, err)
+			}
+			if pending, err := restarted.Read(local.SessionID); err != nil || pending.Revision != 3 || !equalPayload(pending.Payload, local.Payload) || restarted.Status().Pending != 1 {
+				t.Fatalf("newer pending conversation was lost: %+v %v %+v", pending, err, restarted.Status())
+			}
+			if _, err := restarted.readSQL(context.Background(), "private:peer"); err != nil {
+				t.Fatal("one restored conflict blocked an unrelated session")
+			}
+			local.Revision = 4
+			if err := restarted.Save(local); err != nil {
+				t.Fatal(err)
+			}
+			if err := restarted.Flush(context.Background()); !errors.Is(err, ErrConflict) {
+				t.Fatalf("later local revision escaped the restored fence: %v", err)
+			}
+		})
+	}
+}
+
+func TestConflictFenceMustPersistBeforeLocalRevisionAdvances(t *testing.T) {
+	db := checkpointDatabase(t)
+	dir := t.TempDir()
+	store := New(db, "instance", dir, nil)
+	remote := checkpoint("private:synthetic", 2)
+	remote.Payload = json.RawMessage(`{"version":1,"branch":"SQL A"}`)
+	if err := store.writeSQL(context.Background(), remote); err != nil {
+		t.Fatal(err)
+	}
+	local := checkpoint(remote.SessionID, 2)
+	if err := store.Save(local); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(context.Background()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("initial conflict: %v", err)
+	}
+	files, err := filepath.Glob(store.path(local.SessionID) + ".*.conflict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if err := os.Remove(file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := json.Marshal(remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := fmt.Sprintf("%s.%x.conflict", store.path(remote.SessionID), sha256.Sum256(data))
+	if err := os.Mkdir(marker, 0700); err != nil {
+		t.Fatal(err)
+	}
+	local.Revision = 3
+	if err := store.Save(local); err == nil || store.Status().LocalPending != 1 {
+		t.Fatalf("local mirror advanced without a durable conflict marker: %v %+v", err, store.Status())
+	}
+	data, err = os.ReadFile(store.path(local.SessionID))
+	var mirror Record
+	if err != nil || json.Unmarshal(data, &mirror) != nil || mirror.Revision != 2 {
+		t.Fatal("failed marker write replaced the old mirror")
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(context.Background()); !errors.Is(err, ErrConflict) || store.Status().LocalPending != 0 {
+		t.Fatalf("marker/local retry: %v %+v", err, store.Status())
+	}
+	restarted := New(db, "instance", dir, nil)
+	if records, err := restarted.Load(context.Background()); err == nil || len(records) != 1 || records[0].Revision != 3 {
+		t.Fatalf("retry did not durably preserve the local branch: %v %v", records, err)
+	}
+	if err := restarted.Flush(context.Background()); !errors.Is(err, ErrConflict) || restarted.Status().Pending != 1 {
+		t.Fatalf("retry did not durably preserve the fence: %v %+v", err, restarted.Status())
 	}
 }

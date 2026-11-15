@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,9 +115,26 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	conflictPaths := make(map[string]bool)
 	for _, file := range files {
-		if !file.IsDir() && filepath.Ext(file.Name()) == ".conflict" {
+		if filepath.Ext(file.Name()) == ".conflict" {
 			loadErr = errors.Join(loadErr, ErrConflict)
+			path := filepath.Join(s.dir, file.Name())
+			if owner := s.conflictOwnerPath(file.Name()); owner != "" {
+				// A damaged artifact must not reopen writes for its known owner.
+				conflictPaths[owner] = true
+			}
+			data, err := readFile(path)
+			var record Record
+			if err == nil {
+				err = json.Unmarshal(data, &record)
+			}
+			if err != nil || !s.valid(record) || path != fmt.Sprintf("%s.%x.conflict", s.path(record.SessionID), sha256.Sum256(data)) {
+				loadErr = errors.Join(loadErr, fmt.Errorf("invalid session conflict metadata %s", file.Name()))
+			} else {
+				// Restore only the fence; diagnostic payloads are never replayed.
+				s.conflicts[record.SessionID] = record
+			}
 			continue
 		}
 		if file.IsDir() || filepath.Ext(file.Name()) != ".json" {
@@ -136,7 +154,8 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 			merged[record.SessionID] = record
 			s.pending[record.SessionID] = record
 		} else if record.Revision == old.Revision && !equalPayload(record.Payload, old.Payload) {
-			loadErr = errors.Join(loadErr, errors.New("conflicting session checkpoint revisions"))
+			loadErr = errors.Join(loadErr, ErrConflict)
+			s.conflicts[record.SessionID] = old
 			// Preserve the local alternative before replacing its mirror with SQL.
 			// Conflict files are diagnostic data, never automatic replay sources.
 			if err := s.preserveConflict(record); err != nil {
@@ -148,12 +167,14 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 	}
 	result := make([]Record, 0, len(merged))
 	for _, record := range merged {
+		if conflictPaths[s.path(record.SessionID)] {
+			if _, known := s.conflicts[record.SessionID]; !known {
+				s.conflicts[record.SessionID] = record
+			}
+		}
 		s.latest[record.SessionID] = record.Revision
 		// SQL-only checkpoints must also survive a subsequent database outage.
-		data, err := json.Marshal(record)
-		if err == nil {
-			err = writeAtomic(s.path(record.SessionID), data)
-		}
+		err := s.writeMirror(record)
 		if err != nil {
 			s.localPending[record.SessionID] = record
 			s.localError = "本地会话快照写入失败"
@@ -183,10 +204,7 @@ func (s *Store) Save(record Record) error {
 	if s.latest[record.SessionID] >= record.Revision {
 		return nil
 	}
-	data, err := json.Marshal(record)
-	if err == nil {
-		err = writeAtomic(s.path(record.SessionID), data)
-	}
+	err := s.writeMirror(record)
 	// SQL can still succeed when the local disk is unavailable. Report the
 	// missing local durability while retaining the latest pending state.
 	s.latest[record.SessionID] = record.Revision
@@ -287,6 +305,36 @@ func (s *Store) preserveConflict(record Record) error {
 	return writeAtomic(path, data)
 }
 
+// conflictOwnerPath recognizes only this store's hashed checkpoint namespace.
+// It can fence a known ID when the artifact payload or checksum is damaged,
+// without trusting that payload as another session's identity or history.
+func (s *Store) conflictOwnerPath(name string) string {
+	owner, suffix, ok := strings.Cut(name, ".json.")
+	digest := strings.TrimSuffix(suffix, ".conflict")
+	if !ok || len(owner) != sha256.Size*2 || len(digest) != sha256.Size*2 {
+		return ""
+	}
+	if _, err := hex.DecodeString(owner + digest); err != nil {
+		return ""
+	}
+	return filepath.Join(s.dir, owner+".json")
+}
+
+// writeMirror is called under mu. A known SQL conflict must have a durable
+// marker before the canonical local mirror can advance to another revision.
+func (s *Store) writeMirror(record Record) error {
+	if conflict, fenced := s.conflicts[record.SessionID]; fenced {
+		if err := s.preserveConflict(conflict); err != nil {
+			return fmt.Errorf("persist session conflict fence: %w", err)
+		}
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(s.path(record.SessionID), data)
+}
+
 func (s *Store) Flush(ctx context.Context) error {
 	s.flushMu.Lock()
 	defer s.flushMu.Unlock()
@@ -297,10 +345,7 @@ func (s *Store) Flush(ctx context.Context) error {
 	}
 	var localErr, conflictErr error
 	for id, record := range s.localPending {
-		data, err := json.Marshal(record)
-		if err == nil {
-			err = writeAtomic(s.path(id), data)
-		}
+		err := s.writeMirror(record)
 		if err != nil {
 			localErr = errors.Join(localErr, err)
 		} else {
@@ -423,10 +468,7 @@ func (s *Store) Read(id string) (Record, error) {
 	}
 	s.latest[id] = remote.Revision
 	delete(s.readErrors, id)
-	data, localErr := json.Marshal(remote)
-	if localErr == nil {
-		localErr = writeAtomic(s.path(id), data)
-	}
+	localErr := s.writeMirror(remote)
 	if localErr != nil {
 		s.localPending[id] = remote
 		s.localError = "本地会话快照写入失败，已从数据库恢复"
