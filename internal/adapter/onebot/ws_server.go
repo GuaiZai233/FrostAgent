@@ -117,6 +117,9 @@ type wsConnection struct {
 	pendingGroupByEcho  map[string]pendingGroupInfo
 	pendingGroupByID    map[int64]string
 	nextGroupEcho       uint64
+	inboundFileMu       sync.Mutex
+	inboundFiles        []*inboundFile
+	fileHTTPClient      *http.Client
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
@@ -763,8 +766,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		requestPrompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
+	var fileQuotes []*resolvedReplyContext
 	if replyContext.Prompt != "" {
 		vettedReply := replyContext.promptWithAncestors()
+		originalReply := vettedReply
 		if engine != nil && engine.Security != nil {
 			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
@@ -784,6 +789,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 		if vettedReply != "" {
+			if vettedReply == originalReply {
+				fileQuotes = quoteNodes
+			}
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
 			if directVision {
 				for _, quote := range quoteNodes {
@@ -792,6 +800,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
+	requestPrompt += conn.prepareInboundFiles(turn.Context(), event, session, fileQuotes)
 
 	if wakeSignals.Proactive {
 		if engine != nil {

@@ -64,6 +64,10 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string, checkpoints .
 	if err != nil {
 		return nil, err
 	}
+	toolHistory, err := ExportToolHistory(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
 	writer := zip.NewWriter(&buffer)
 	sessions, err := ExportSessionStates(db, instanceID)
 	if err != nil {
@@ -89,6 +93,7 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string, checkpoints .
 		{"memory.json", memories},
 		{"chat_history.json", history},
 		{"session_states.json", sessions},
+		{"tool_history.json", toolHistory},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},
 	} {

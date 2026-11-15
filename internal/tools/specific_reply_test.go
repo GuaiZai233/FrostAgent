@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
@@ -69,11 +71,12 @@ func TestSendMsgToolSpecificReplyRejectsUntrustedOrAmbiguousTarget(t *testing.T)
 }
 
 type specificReplyProvider struct {
-	chat func(core.ChatRequest) core.ChatMessage
+	chat  func(core.ChatRequest) core.ChatMessage
+	usage *core.Usage
 }
 
 func (p specificReplyProvider) Chat(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-	return &core.ChatResponse{Message: p.chat(req)}, nil
+	return &core.ChatResponse{Message: p.chat(req), Usage: p.usage}, nil
 }
 
 func TestProactiveSpecificReplyEngine(t *testing.T) {
@@ -111,7 +114,11 @@ func TestProactiveSpecificReplyEngine(t *testing.T) {
 			return nil
 		}
 		result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "later unrelated message"}}, run)
-		if deliveries != 1 || calls != 2 || result.Content != "" || result.Error != nil {
+		wantCalls := 1
+		if failDelivery {
+			wantCalls = 2
+		}
+		if deliveries != 1 || calls != wantCalls || result.Content != "" || result.Error != nil {
 			t.Fatalf("unexpected run: deliveries=%d calls=%d result=%+v", deliveries, calls, result)
 		}
 	}
@@ -192,34 +199,55 @@ func TestProactiveSpecificReplyBatchPreflight(t *testing.T) {
 }
 
 func TestProactiveSpecificReplyBatchAllowsMemoryAndReply(t *testing.T) {
-	var memoryCalls atomic.Int32
-	modelCalls, deliveries := 0, 0
-	send := SendMsgTool()
-	memoryTool := Tool{name: "memory", executeResult: func(context.Context, string) (core.ToolExecutionResult, error) {
-		memoryCalls.Add(1)
-		return core.ToolExecutionResult{Content: "记忆已写入", MemoryWritten: true}, nil
-	}}
-	engine := &llm.Engine{MaxIterations: 2, ToolRegistry: map[string]llm.ToolExecutor{"memory": memoryTool, "send_message": send},
-		Provider: specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
-			modelCalls++
-			if modelCalls == 1 {
-				return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
-					{ID: "memory", Type: "function", Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"write"}`}},
-					{ID: "reply", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}},
-				}}
+	for _, memoryFirst := range []bool{true, false} {
+		name := "memory after reply"
+		if memoryFirst {
+			name = "memory before reply"
+		}
+		t.Run(name, func(t *testing.T) {
+			var memoryCalls atomic.Int32
+			modelCalls, deliveries := 0, 0
+			send := SendMsgTool()
+			memoryTool := Tool{name: "memory", executeResult: func(context.Context, string) (core.ToolExecutionResult, error) {
+				memoryCalls.Add(1)
+				return core.ToolExecutionResult{Content: "记忆已写入", MemoryWritten: true}, nil
+			}}
+			calls := []core.ToolCall{
+				{ID: "memory", Type: "function", Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"write"}`}},
+				{ID: "reply", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}},
 			}
-			return core.ChatMessage{Role: core.RoleAssistant, Content: "reply to earlier topic"}
-		}},
-	}
-	run := specificReplyContext(true)
-	run.SendHook = func(string) error { deliveries++; return nil }
-	result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "unaddressed"}}, run)
-	if memoryCalls.Load() != 1 || deliveries != 1 || modelCalls != 2 || !result.MemoryWritten || result.Content != "" || result.Silent {
-		t.Fatalf("valid memory/reply batch rejected or echoed: memory=%d sends=%d model=%d result=%+v", memoryCalls.Load(), deliveries, modelCalls, result)
+			if !memoryFirst {
+				calls[0], calls[1] = calls[1], calls[0]
+			}
+			engine := &llm.Engine{MaxIterations: 1, ToolRegistry: map[string]llm.ToolExecutor{"memory": memoryTool, "send_message": send},
+				Provider: specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
+					modelCalls++
+					return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: calls}
+				}},
+			}
+			run := specificReplyContext(true)
+			run.SendHook = func(string) error { deliveries++; return nil }
+			session := llm.NewSessionManager().GetOrCreate(run.SessionID)
+			run.Turn = session.ReserveSequenceTurn("proactive", false, true)
+			defer run.Turn.Done()
+			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "unaddressed"}}, run)
+			if memoryCalls.Load() != 1 || deliveries != 1 || modelCalls != 1 || !result.MemoryWritten || result.Content != "" || result.Silent || result.Error != nil {
+				t.Fatalf("valid memory/reply batch rejected or echoed: memory=%d sends=%d model=%d result=%+v", memoryCalls.Load(), deliveries, modelCalls, result)
+			}
+			results := map[string]any{}
+			for _, message := range result.Transcript {
+				if message.Role == "tool" {
+					results[message.ToolCallID] = message.Content
+				}
+			}
+			if len(results) != 2 || results["reply"] != "消息已发送" || results["memory"] != "记忆已写入" {
+				t.Fatalf("completed batch lost tool results: %+v", result.Transcript)
+			}
+		})
 	}
 }
 
-func TestProactiveSpecificReplyEchoStateIsRunLocal(t *testing.T) {
+func TestProactiveSpecificReplyCompletionStateIsRunLocal(t *testing.T) {
 	calls, deliveries := 0, 0
 	tool := SendMsgTool()
 	engine := &llm.Engine{MaxIterations: 2, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool},
@@ -239,7 +267,7 @@ func TestProactiveSpecificReplyEchoStateIsRunLocal(t *testing.T) {
 			t.Fatalf("run %d leaked echo state: %+v", i, result)
 		}
 	}
-	if calls != 3 || deliveries != 1 {
+	if calls != 2 || deliveries != 1 {
 		t.Fatalf("calls=%d sends=%d", calls, deliveries)
 	}
 }
@@ -250,8 +278,8 @@ func TestProactiveSpecificReplyRunLimit(t *testing.T) {
 		proactive, failFirst bool
 		wantSends, wantCalls int
 	}{
-		{"successful reply closes budget", true, false, 1, 2},
-		{"failed delivery permits retry", true, true, 2, 3},
+		{"successful reply completes run", true, false, 1, 1},
+		{"failed delivery permits retry", true, true, 2, 2},
 		{"explicit wake unchanged", false, false, 2, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -291,43 +319,100 @@ func TestProactiveSpecificReplyRunLimit(t *testing.T) {
 	}
 }
 
-func TestProactiveSpecificReplyFinalEcho(t *testing.T) {
-	const sent = "reply to earlier topic"
+func TestSpecificReplyCompletionScope(t *testing.T) {
 	for _, tc := range []struct {
-		name                    string
-		proactive, failDelivery bool
-		final, want             string
+		name                                       string
+		proactive, awareness, failDelivery, noHook bool
+		wantCalls                                  int
 	}{
-		{"echo", true, false, sent, ""},
-		{"whitespace echo", true, false, " \n" + sent + "\n", ""},
-		{"different reply", true, false, "different follow-up", "different follow-up"},
-		{"delivery failed", true, true, sent, sent},
-		{"explicit wake unchanged", false, false, sent, sent},
+		{name: "proactive reply", proactive: true, wantCalls: 1},
+		{name: "delivery failed", proactive: true, failDelivery: true, wantCalls: 2},
+		{name: "no delivery hook", proactive: true, noHook: true, wantCalls: 2},
+		{name: "explicit wake", wantCalls: 2},
+		{name: "awareness", proactive: true, awareness: true, wantCalls: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls, deliveries := 0, 0
+			args := specificReplyArgs
+			if tc.awareness {
+				args = `{"messages":[{"type":"plain","text":"awareness reply"}]}`
+			}
 			tool := SendMsgTool()
 			engine := &llm.Engine{MaxIterations: 2, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool},
 				Provider: specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
 					calls++
 					if calls == 1 {
-						return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}}}}
+						return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: args}}}}
 					}
-					return core.ChatMessage{Role: core.RoleAssistant, Content: tc.final}
+					return core.ChatMessage{Role: core.RoleAssistant, Content: "follow-up content"}
 				}},
 			}
 			run := specificReplyContext(tc.proactive)
-			run.SendHook = func(string) error {
-				deliveries++
-				if tc.failDelivery {
-					return errors.New("fixture delivery failed")
+			run.Awareness = tc.awareness
+			if !tc.noHook {
+				run.SendHook = func(string) error {
+					deliveries++
+					if tc.failDelivery {
+						return errors.New("fixture delivery failed")
+					}
+					return nil
 				}
-				return nil
 			}
 			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture turn"}}, run)
-			if result.Content != tc.want || result.Error != nil || result.Silent || calls != 2 || deliveries != 1 {
-				t.Fatalf("final=%q want=%q result=%+v calls=%d sends=%d", result.Content, tc.want, result, calls, deliveries)
+			wantContent, wantDeliveries := "follow-up content", 1
+			if tc.wantCalls == 1 {
+				wantContent = ""
+			}
+			if tc.noHook {
+				wantDeliveries = 0
+			}
+			if result.Content != wantContent || result.Error != nil || result.Silent || calls != tc.wantCalls || deliveries != wantDeliveries {
+				t.Fatalf("result=%+v calls=%d sends=%d", result, calls, deliveries)
 			}
 		})
+	}
+}
+
+func TestProactiveSpecificReplyWaitsForACKAndCompletesAtIterationLimit(t *testing.T) {
+	var modelCalls atomic.Int32
+	entered, ack := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	defer release.Do(func() { close(ack) })
+	usage := &core.Usage{PromptTokens: 7, CompletionTokens: 3, TotalTokens: 10}
+	tool := SendMsgTool()
+	engine := &llm.Engine{MaxIterations: 1, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool},
+		Provider: specificReplyProvider{usage: usage, chat: func(core.ChatRequest) core.ChatMessage {
+			modelCalls.Add(1)
+			return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}}}}
+		}},
+	}
+	run := specificReplyContext(true)
+	run.SendHook = func(string) error {
+		close(entered)
+		<-ack
+		return nil
+	}
+	finished := make(chan llm.AgentRunResult, 1)
+	go func() {
+		finished <- engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture turn"}}, run)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("delivery did not start")
+	}
+	select {
+	case result := <-finished:
+		t.Fatalf("run finished before delivery confirmation: %+v", result)
+	default:
+	}
+	release.Do(func() { close(ack) })
+	select {
+	case result := <-finished:
+		if result.Error != nil || result.Content != "" || result.Silent || result.Usage.TotalTokens != usage.TotalTokens || modelCalls.Load() != 1 {
+			t.Fatalf("confirmed delivery did not finish successfully with usage: %+v, calls=%d", result, modelCalls.Load())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not finish after ACK")
 	}
 }

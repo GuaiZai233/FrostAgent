@@ -17,6 +17,15 @@ func captureConsole(t *testing.T, fn func()) string {
 	}
 	previous := os.Stdout
 	os.Stdout = writer
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	read := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(reader)
+		read <- readResult{data, err}
+	}()
 	defer func() {
 		os.Stdout = previous
 		_ = writer.Close()
@@ -27,11 +36,11 @@ func captureConsole(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	os.Stdout = previous
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
+	result := <-read
+	if result.err != nil {
+		t.Fatal(result.err)
 	}
-	return string(data)
+	return string(result.data)
 }
 
 func TestConsoleRedactsStoredLogContent(t *testing.T) {
@@ -55,7 +64,7 @@ func TestConsoleRedactsStoredLogContent(t *testing.T) {
 	if !strings.HasSuffix(toolConsole, "] ...") || strings.Contains(toolConsole, full) || strings.Contains(toolConsole, "\n") {
 		t.Fatal(toolConsole)
 	}
-	listener := formatConsoleLine(time.Now(), "", "General", INFO, HTTP, "listening on :8080")
+	listener := formatConsoleLine(LogEntry{Timestamp: time.Now(), Level: INFO, Category: HTTP}, "listening on :8080")
 	if !strings.HasSuffix(listener, "] listening on :8080") {
 		t.Fatal(listener)
 	}

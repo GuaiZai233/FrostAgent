@@ -21,6 +21,8 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
+	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
+	"github.com/google/uuid"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,6 +122,7 @@ func (e *Engine) isToolAllowedForProactive(name string) bool {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
+	ToolHistory *toolhistory.Store
 	ChatHistory *chathistory.Recorder
 	TokenUsage  *tokenusage.Store
 	PokeGate    poke.Gate
@@ -319,6 +322,9 @@ func (e *Engine) RunMessagesWithContext(
 				return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "会话快照暂时无法恢复，请检查存储状态", err, runContext.SessionID), Error: err}
 			}
 		}
+	}
+	if runContext.ToolHistoryRunID == "" {
+		runContext.ToolHistoryRunID = uuid.NewString()
 	}
 	if runContext.Turn != nil {
 		runContext.SkillState = runContext.Turn.SkillSession()
@@ -1023,6 +1029,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// Build transient constraints from current availability so a disabled
 		// tool cannot leave an impossible instruction in later model requests.
+		compactArchivedToolMessages(messages)
 		coreMsgs := convertToCoreMessages(messages)
 		if enforceStickerActivity() {
 			if notice := e.stickerActivityPrompt(); notice != "" {
@@ -1420,14 +1427,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				if e.stickerNeededBeforeReply() {
 					stickerCall := responseMsg.ToolCalls[tcIndex+1]
 					startedTools[tc.ID], startedTools[stickerCall.ID] = true, true
-					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					textResult, stickerResult, archiveErr := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					if archiveErr != nil {
+						return AgentRunResult{Error: archiveErr, MemoryWritten: memoryWritten, Usage: totalUsage}
+					}
 					if runCanceled(ctx) {
 						return AgentRunResult{Silent: true, Error: context.Canceled}
 					}
-					messages = append(messages,
-						ChatMessage{Role: "tool", Content: textResult, ToolCallID: tc.ID},
-						ChatMessage{Role: "tool", Content: stickerResult, ToolCallID: stickerCall.ID},
-					)
+					messages = append(messages, textResult, stickerResult)
 					tcIndex++
 					continue
 				}
@@ -1454,7 +1461,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
 				var err error
 				startedTools[tc.ID] = true
-				execution, err = executeInterruptibleTool(ctx, tool, tc)
+				execution, err = e.executeRecordedTool(ctx, tool, tc)
+				if errors.Is(err, errToolHistoryStorage) {
+					return AgentRunResult{Error: err, MemoryWritten: memoryWritten, Usage: totalUsage}
+				}
 				if runCanceled(ctx) {
 					if isMemoryWriteRequest(tc) {
 						memoryWritten = true
@@ -1466,6 +1476,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
+						if _, archiveErr := e.finishToolHistory(ctx, execution, err.Error(), false); archiveErr != nil {
+							return AgentRunResult{Error: archiveErr}
+						}
 						if hasRunCtx && runCtx.Proactive {
 							return AgentRunResult{
 								MemoryWritten: memoryWritten,
@@ -1496,6 +1509,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							toolResult = stickerEnforcementPrompt
 						} else {
 							e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
+							if _, archiveErr := e.finishToolHistory(ctx, execution, toolResult, false); archiveErr != nil {
+								return AgentRunResult{Error: archiveErr}
+							}
 							return AgentRunResult{
 								MemoryWritten:    memoryWritten,
 								Silent:           true,
@@ -1524,6 +1540,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
+			historyRestricted := false
 			securityContent := toolResult
 			if execution.MessagePayload != "" && execution.MessagePayload != toolResult && len(execution.MessagePayload) <= MaxToolOutputBytes {
 				securityContent += "\n" + execution.MessagePayload
@@ -1532,6 +1549,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				securityContent += "\n" + execution.PlatformActionPayload
 			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, securityContent, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
+				historyRestricted = true
 				if decision.IsFailure {
 					toolResult = security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，外部工具结果已隔离", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果因安全审查服务异常被隔离: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
@@ -1558,7 +1576,12 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				if enforceStickerActivity() && stickerPayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
 						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
-						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
+						var archiveErr error
+						toolResult, archiveErr = e.finishToolHistory(ctx, execution, toolResult, historyRestricted)
+						if archiveErr != nil {
+							return AgentRunResult{Error: archiveErr}
+						}
+						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID, ToolHistoryRefID: execution.HistoryRefID})
 						continue
 					}
 				}
@@ -1573,12 +1596,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if runCanceled(ctx) {
 				return AgentRunResult{Silent: true, Error: context.Canceled}
 			}
+			var archiveErr error
+			toolResult, archiveErr = e.finishToolHistory(ctx, execution, toolResult, historyRestricted)
+			if archiveErr != nil {
+				return AgentRunResult{Error: archiveErr}
+			}
 			toolMsg := ChatMessage{
-				Role:       "tool",
-				Content:    toolResult,
-				ToolCallID: tc.ID,
+				ToolHistoryRefID: execution.HistoryRefID,
+				Role:             "tool",
+				Content:          toolResult,
+				ToolCallID:       tc.ID,
 			}
 			messages = append(messages, toolMsg)
+		}
+		if specificReplyDelivered && !runCtx.Awareness {
+			// Finish the validated batch and its memory/transcript bookkeeping,
+			// then keep the confirmed delivery as the complete public answer.
+			// Awareness retains its existing continuation behavior.
+			return AgentRunResult{MemoryWritten: memoryWritten, Usage: totalUsage}
 		}
 		if enforceStickerActivity() && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {

@@ -163,10 +163,9 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 	}
 	if level == ERROR {
 		entry.ErrorUUID = uuid.NewString()
-		consoleContent = "错误 UUID：" + entry.ErrorUUID + " " + consoleContent
 	}
 	entry.imageRefs = s.retainImagesLocked(retainedImages)
-	consoleLine := formatConsoleLine(entry.Timestamp, entry.InstanceID, entry.InstanceName, level, category, consoleContent)
+	consoleLine := formatConsoleLine(entry, consoleContent)
 
 	s.buffer.Value = entry
 	s.buffer = s.buffer.Next()
@@ -402,24 +401,28 @@ func Console(e LogEntry) string {
 	if e.Level == WARN || e.Level == ERROR {
 		body = e.Content
 	}
-	return formatConsoleLine(e.Timestamp, e.InstanceID, e.InstanceName, e.Level, e.Category, body)
+	return formatConsoleLine(e, body)
 }
 
-func formatConsoleLine(timestamp time.Time, instanceID, instanceName string, level Level, category Category, body string) string {
+func formatConsoleLine(entry LogEntry, body string) string {
 	label := "General"
-	if instanceID != "" {
-		label = "Instance: " + instanceName
+	if entry.InstanceID != "" {
+		label = "Instance: " + entry.InstanceName
 	}
 	body = strings.Join(strings.Fields(body), " ")
 	r := []rune(body)
 	maxLen := 200
-	if level == WARN || level == ERROR {
+	if entry.Level == WARN || entry.Level == ERROR {
 		maxLen = 4096
 	}
 	if len(r) > maxLen {
 		body = string(r[:maxLen-3]) + "..."
 	}
-	return fmt.Sprintf("[%s](%s)[%s][%s] %s", timestamp.Format("15:04:05"), label, level, category, body)
+	reference := ""
+	if entry.ErrorUUID != "" {
+		reference = "[Ref_ID: " + entry.ErrorUUID + "]"
+	}
+	return fmt.Sprintf("[%s](%s)[%s][%s]%s %s", entry.Timestamp.Format("15:04:05"), label, entry.Level, entry.Category, reference, body)
 }
 func Init(size int)                           { General.Init(size) }
 func Info(c Category, v string, t ...string)  { General.Info(c, v, t...) }

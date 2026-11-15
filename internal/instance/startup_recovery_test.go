@@ -44,6 +44,7 @@ func TestDatabaseStartupClearsRecoveredDisabledError(t *testing.T) {
 	for _, statement := range []string{
 		`DROP TABLE session_states`,
 		`DROP TABLE chat_history`,
+		`DROP TABLE tool_history`,
 		`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
 		`ALTER TABLE memory_entries DROP COLUMN summary_dirty`,

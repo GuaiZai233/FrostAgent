@@ -34,6 +34,7 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
+	fileHTTPClient     *http.Client
 	engine             *llm.Engine
 	stealer            *sticker.Stealer
 	mu                 sync.RWMutex
@@ -314,6 +315,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		wsConn = newWSConnection(conn)
 	}
 	wsConn.stealer = a.stealer
+	wsConn.fileHTTPClient = a.fileHTTPClient
 	wsConn.llmErrorReplies = &a.llmErrorReplies
 	wsConn.mock = mock
 	stopCancellation := context.AfterFunc(ctx, func() { _ = wsConn.Close() })
@@ -385,6 +387,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if event.MetaEventType == "heartbeat" {
 			continue
 		}
+		wsConn.rememberInboundFileNotice(event)
 		previousError := wsConn.takePreviousError(event)
 		wsConn.recordIncomingHistory(event)
 
@@ -473,7 +476,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 			event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 		if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-			(isWoken(event, a.engine, routing) || canDispatch) {
+			(isWoken(event, a.engine, routing) || canDispatch || hasInboundFiles(event)) {
 			secPlatform := "onebot"
 			if wsConn.mock {
 				secPlatform = "mock"
@@ -540,6 +543,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				warningNotice = decision.WarningNotice
 			}
 		}
+
+		wsConn.rememberInboundFiles(event)
 
 		var routeSnapshot *modelrouter.Snapshot
 		if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
