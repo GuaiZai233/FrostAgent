@@ -15,7 +15,7 @@ import (
 func StaySilentTool() Tool {
 	return Tool{
 		name:        llm.StaySilentToolName,
-		description: "立即结束本轮会话，且不再输出任何最终文字。如果你认为当前消息不值得回复（如无意义字符、单个无上下文表情或明显无需插话内容），请调用；本轮已调用过任何工具、触发过主动回复逻辑（并已回复完成），然后决定结束时，也必须调用stay_silent结束轮次。一旦打算结束轮次，**严禁额外输出补充内容**，而是直接调用本工具。用户明确要求回复时应正常回答。",
+		description: "立即结束本轮会话，且不再输出任何最终文字。如果你认为当前消息不值得回复（如无意义字符、单个无上下文表情或明显无需插话内容），请调用；本轮调用工具后，如果决定不再回复，也应调用stay_silent结束轮次。群聊概率触发的主动回复在send_message确认送达后由后端自动结束，无需再调用本工具。一旦打算结束轮次，**严禁额外输出补充内容**，而是直接调用本工具。用户明确要求回复时应正常回答。",
 		parameter: map[string]any{
 			"type":                 "object",
 			"properties":           map[string]any{},
