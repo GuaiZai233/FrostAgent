@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,7 +21,13 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
+type RevisionRef struct {
+	Revision int64  `json:"revision"`
+	Hash     string `json:"hash"`
+}
+
 type Record struct {
+	Ancestors []RevisionRef   `json:"ancestors,omitempty"`
 	SessionID string          `json:"session_id"`
 	Revision  int64           `json:"revision"`
 	Payload   json.RawMessage `json:"payload"`
@@ -49,6 +56,8 @@ type Store struct {
 	pending      map[string]Record
 	localPending map[string]Record
 	latest       map[string]int64
+	heads        map[string]RevisionRef
+	ancestors    map[string][]RevisionRef
 	conflicts    map[string]Record
 	readErrors   map[string]error
 	lastError    string
@@ -61,7 +70,7 @@ type Store struct {
 }
 
 func New(db *storage.DB, instanceID, dir string, report func(string)) *Store {
-	s := &Store{db: db, instanceID: instanceID, dir: dir, pending: make(map[string]Record), localPending: make(map[string]Record), latest: make(map[string]int64), conflicts: make(map[string]Record), readErrors: make(map[string]error), report: report}
+	s := &Store{db: db, instanceID: instanceID, dir: dir, pending: make(map[string]Record), localPending: make(map[string]Record), latest: make(map[string]int64), heads: make(map[string]RevisionRef), ancestors: make(map[string][]RevisionRef), conflicts: make(map[string]Record), readErrors: make(map[string]error), report: report}
 	s.write = s.writeSQL
 	return s
 }
@@ -70,7 +79,20 @@ func New(db *storage.DB, instanceID, dir string, report func(string)) *Store {
 func (s *Store) SetValidator(validate func(Record) error) { s.validate = validate }
 
 func (s *Store) valid(record Record) bool {
-	return record.SessionID != "" && record.Revision > 0 && json.Valid(record.Payload) && (s.validate == nil || s.validate(record) == nil)
+	if record.SessionID == "" || record.Revision < 1 || !json.Valid(record.Payload) || (s.validate != nil && s.validate(record) != nil) {
+		return false
+	}
+	var previous int64
+	for _, ancestor := range record.Ancestors {
+		if ancestor.Revision <= previous || ancestor.Revision >= record.Revision || len(ancestor.Hash) != sha256.Size*2 {
+			return false
+		}
+		if _, err := hex.DecodeString(ancestor.Hash); err != nil {
+			return false
+		}
+		previous = ancestor.Revision
+	}
+	return true
 }
 
 func (s *Store) path(id string) string {
@@ -151,6 +173,11 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 			continue
 		}
 		if old, exists := merged[record.SessionID]; !exists || record.Revision > old.Revision {
+			if exists && !record.descendsFrom(old) {
+				loadErr = errors.Join(loadErr, ErrConflict)
+				s.conflicts[record.SessionID] = old
+				loadErr = errors.Join(loadErr, s.preserveConflict(record), s.preserveConflict(old))
+			}
 			merged[record.SessionID] = record
 			s.pending[record.SessionID] = record
 		} else if record.Revision == old.Revision && !equalPayload(record.Payload, old.Payload) {
@@ -173,6 +200,8 @@ func (s *Store) Load(ctx context.Context) ([]Record, error) {
 			}
 		}
 		s.latest[record.SessionID] = record.Revision
+		s.heads[record.SessionID] = reference(record)
+		s.ancestors[record.SessionID] = append([]RevisionRef(nil), record.Ancestors...)
 		// SQL-only checkpoints must also survive a subsequent database outage.
 		err := s.writeMirror(record)
 		if err != nil {
@@ -204,10 +233,16 @@ func (s *Store) Save(record Record) error {
 	if s.latest[record.SessionID] >= record.Revision {
 		return nil
 	}
+	record.Ancestors = append([]RevisionRef(nil), s.ancestors[record.SessionID]...)
+	if head, exists := s.heads[record.SessionID]; exists {
+		record.Ancestors = append(record.Ancestors, head)
+	}
 	err := s.writeMirror(record)
 	// SQL can still succeed when the local disk is unavailable. Report the
 	// missing local durability while retaining the latest pending state.
 	s.latest[record.SessionID] = record.Revision
+	s.heads[record.SessionID] = reference(record)
+	s.ancestors[record.SessionID] = record.Ancestors
 	s.pending[record.SessionID] = record
 	if err != nil {
 		s.localPending[record.SessionID] = record
@@ -245,8 +280,9 @@ func writeAtomic(path string, data []byte) error {
 }
 
 func equalPayload(a, b json.RawMessage) bool {
-	var left, right bytes.Buffer
-	return json.Compact(&left, a) == nil && json.Compact(&right, b) == nil && bytes.Equal(left.Bytes(), right.Bytes())
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 func (s *Store) readSQL(ctx context.Context, id string) (Record, error) {
@@ -260,40 +296,98 @@ func (s *Store) readSQL(ctx context.Context, id string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(payload)); err != nil {
-		return Record{}, err
-	}
-	record.Payload = compact.Bytes()
+	// Keep the exact SQL text for the atomic compare-and-update predicate.
+	record.Payload = json.RawMessage(payload)
 	if !s.valid(record) {
 		return Record{}, errors.New("invalid SQL checkpoint")
 	}
 	return record, nil
 }
 
+func reference(record Record) RevisionRef {
+	// Use the same compact/HTML escaping as the enclosing local Record JSON.
+	encoded, _ := json.Marshal(record.Payload)
+	return RevisionRef{Revision: record.Revision, Hash: fmt.Sprintf("%x", sha256.Sum256(encoded))}
+}
+
+func (record Record) descendsFrom(parent Record) bool {
+	parentRef := reference(parent)
+	for _, ancestor := range record.Ancestors {
+		if ancestor == parentRef {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) writeSQL(ctx context.Context, record Record) error {
 	if s.db == nil {
 		return errors.New("session database unavailable")
 	}
-	result, err := s.db.SQL.ExecContext(ctx, s.db.Bind(`INSERT INTO session_states(instance_id, session_id, revision, payload)
-		VALUES (?, ?, ?, ?) ON CONFLICT(instance_id, session_id) DO UPDATE
-		SET revision = excluded.revision, payload = excluded.payload WHERE session_states.revision < excluded.revision`),
-		s.instanceID, record.SessionID, record.Revision, string(record.Payload))
-	if err != nil {
-		return err
+	// A revision counter cannot identify a branch. Compare the actual SQL
+	// predecessor against durable local ancestry before any replacing write.
+	for attempt := 0; attempt < 3; attempt++ {
+		remote, err := s.readSQL(ctx, record.SessionID)
+		var result sql.Result
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			result, err = s.db.SQL.ExecContext(ctx, s.db.Bind(`INSERT INTO session_states(instance_id, session_id, revision, payload)
+				VALUES (?, ?, ?, ?) ON CONFLICT(instance_id, session_id) DO NOTHING`),
+				s.instanceID, record.SessionID, record.Revision, string(record.Payload))
+		case err != nil:
+			return err
+		case remote.Revision == record.Revision && equalPayload(remote.Payload, record.Payload):
+			return nil
+		case remote.Revision >= record.Revision || !record.descendsFrom(remote):
+			return &conflictError{remote: remote}
+		default:
+			// Checking the exact prior row makes a concurrent SQL change force
+			// another ancestry check instead of overwriting an unseen branch.
+			result, err = s.db.SQL.ExecContext(ctx, s.db.Bind(`UPDATE session_states SET revision = ?, payload = ?
+				WHERE instance_id = ? AND session_id = ? AND revision = ? AND payload = ?`),
+				record.Revision, string(record.Payload), s.instanceID, record.SessionID, remote.Revision, string(remote.Payload))
+		}
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil || affected > 0 {
+			return err
+		}
 	}
-	affected, err := result.RowsAffected()
-	if err != nil || affected > 0 {
-		return err
-	}
-	remote, err := s.readSQL(ctx, record.SessionID)
-	if err != nil {
-		return err
-	}
-	if remote.Revision == record.Revision && equalPayload(remote.Payload, record.Payload) {
+	return fmt.Errorf("%w: SQL checkpoint changed during commit", ErrUnavailable)
+}
+
+// acknowledge keeps ancestry for a newer Save that raced the SQL commit. Only
+// ancestors older than the confirmed SQL row can be dropped. Called under mu.
+func (s *Store) acknowledge(committed Record) error {
+	current, exists := s.pending[committed.SessionID]
+	if !exists {
 		return nil
 	}
-	return &conflictError{remote: remote}
+	var retained []RevisionRef
+	for _, ancestor := range current.Ancestors {
+		if ancestor.Revision >= committed.Revision {
+			retained = append(retained, ancestor)
+		}
+	}
+	current.Ancestors = retained
+	s.ancestors[current.SessionID] = retained
+	if current.Revision == committed.Revision {
+		delete(s.pending, current.SessionID)
+	} else {
+		s.pending[current.SessionID] = current
+	}
+	if err := s.writeMirror(current); err != nil {
+		s.localPending[current.SessionID] = current
+		s.localError = "本地会话快照写入失败，数据库已提交但本地元数据尚未同步"
+		return err
+	}
+	delete(s.localPending, current.SessionID)
+	if len(s.localPending) == 0 {
+		s.localError = ""
+	}
+	return nil
 }
 
 func (s *Store) preserveConflict(record Record) error {
@@ -380,9 +474,7 @@ func (s *Store) Flush(ctx context.Context) error {
 			continue
 		}
 		s.mu.Lock()
-		if current, exists := s.pending[record.SessionID]; exists && current.Revision == record.Revision {
-			delete(s.pending, record.SessionID)
-		}
+		localErr = errors.Join(localErr, s.acknowledge(record))
 		s.mu.Unlock()
 	}
 	s.mu.Lock()
@@ -449,7 +541,7 @@ func (s *Store) Read(id string) (Record, error) {
 	if err == nil {
 		err = json.Unmarshal(data, &record)
 	}
-	if err == nil && (record.SessionID != id || record.Revision != s.latest[id] || !s.valid(record)) {
+	if err == nil && (record.SessionID != id || record.Revision != s.latest[id] || !s.valid(record) || reference(record) != s.heads[id]) {
 		err = errors.New("invalid session checkpoint")
 	}
 	if err == nil {
@@ -467,6 +559,8 @@ func (s *Store) Read(id string) (Record, error) {
 		return Record{}, fmt.Errorf("%w: %v", ErrUnavailable, s.readErrors[id])
 	}
 	s.latest[id] = remote.Revision
+	s.heads[id] = reference(remote)
+	s.ancestors[id] = nil
 	delete(s.readErrors, id)
 	localErr := s.writeMirror(remote)
 	if localErr != nil {

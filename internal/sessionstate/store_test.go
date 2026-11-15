@@ -3,11 +3,14 @@ package sessionstate
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -461,5 +464,339 @@ func TestConflictFenceMustPersistBeforeLocalRevisionAdvances(t *testing.T) {
 	}
 	if err := restarted.Flush(context.Background()); !errors.Is(err, ErrConflict) || restarted.Status().Pending != 1 {
 		t.Fatalf("retry did not durably preserve the fence: %v %+v", err, restarted.Status())
+	}
+}
+
+func TestSQLRecoveryChecksAncestryAfterSeveralOfflineSaves(t *testing.T) {
+	testSQLRecoveryChecksAncestry(t, checkpointDatabase)
+}
+
+func testSQLRecoveryChecksAncestry(t *testing.T, newDB func(*testing.T) *storage.DB) {
+	for _, fork := range []bool{false, true} {
+		t.Run(fmt.Sprint(fork), func(t *testing.T) {
+			db := newDB(t)
+			dir := t.TempDir()
+			seed := New(db, "instance", dir, nil)
+			remote := checkpoint("private:synthetic", 2)
+			remote.Payload = json.RawMessage(`{"version":1,"history":"SQL A"}`)
+			if err := seed.writeSQL(context.Background(), remote); err != nil {
+				t.Fatal(err)
+			}
+			if fork {
+				if err := New(nil, "instance", dir, nil).Save(checkpoint(remote.SessionID, 1)); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := seed.Load(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			offline := New(nil, "instance", dir, nil)
+			if _, err := offline.Load(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			for revision := int64(2); revision <= 4; revision++ {
+				if !fork && revision == 2 {
+					continue
+				}
+				local := checkpoint(remote.SessionID, revision)
+				local.Payload = json.RawMessage(fmt.Sprintf(`{"version":1,"history":"local continuation %d"}`, revision))
+				if err := offline.Save(local); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Pending coalesces to revision 4 before SQL ever sees the local fork.
+			offline.db = db
+			if err := offline.Save(checkpoint("private:peer", 1)); err != nil {
+				t.Fatal(err)
+			}
+			err := offline.Flush(context.Background())
+			persisted, readErr := offline.readSQL(context.Background(), remote.SessionID)
+			if fork {
+				if !errors.Is(err, ErrConflict) || readErr != nil || persisted.Revision != 2 || !equalPayload(persisted.Payload, remote.Payload) || offline.Status().Pending != 1 {
+					t.Fatalf("coalesced fork overwrote SQL: %v %+v %v %+v", err, persisted, readErr, offline.Status())
+				}
+			} else if err != nil || readErr != nil || persisted.Revision != 4 || offline.Status().Pending != 0 {
+				t.Fatalf("legitimate offline continuation failed: %v %+v %v", err, persisted, readErr)
+			}
+			if _, err := offline.readSQL(context.Background(), "private:peer"); err != nil {
+				t.Fatal("one fork blocked the other session")
+			}
+		})
+	}
+}
+
+func TestSQLAncestryProtectsRestartBeforeInflightConflictReturns(t *testing.T) {
+	testSQLInflightConflictAncestry(t, checkpointDatabase)
+}
+
+func testSQLInflightConflictAncestry(t *testing.T, newDB func(*testing.T) *storage.DB) {
+	db := newDB(t)
+	dir := t.TempDir()
+	seed := New(db, "instance", dir, nil)
+	remote := checkpoint("private:synthetic", 2)
+	remote.Payload = json.RawMessage(`{"version":1,"history":"SQL A"}`)
+	if err := seed.writeSQL(context.Background(), remote); err != nil {
+		t.Fatal(err)
+	}
+	local := New(nil, "instance", dir, nil)
+	for revision := int64(1); revision <= 2; revision++ {
+		if err := local.Save(checkpoint(remote.SessionID, revision)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	local.db = db
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	local.write = func(ctx context.Context, record Record) error {
+		close(entered)
+		<-release
+		return local.writeSQL(ctx, record)
+	}
+	done := make(chan error, 1)
+	go func() { done <- local.Flush(context.Background()) }()
+	<-entered
+	for revision := int64(3); revision <= 4; revision++ {
+		if err := local.Save(checkpoint(remote.SessionID, revision)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Simulate restart before the in-flight write can establish a conflict fence.
+	restarted := New(db, "instance", dir, nil)
+	_, _ = restarted.Load(context.Background())
+	err := restarted.Flush(context.Background())
+	persisted, readErr := restarted.readSQL(context.Background(), remote.SessionID)
+	unblock()
+	originalErr := <-done
+	if !errors.Is(err, ErrConflict) || !errors.Is(originalErr, ErrConflict) || readErr != nil || persisted.Revision != remote.Revision || !equalPayload(persisted.Payload, remote.Payload) {
+		t.Fatalf("restart bypassed the unresolved in-flight fork: %v %v %+v %v", err, originalErr, persisted, readErr)
+	}
+	if local.Status().Pending != 1 || restarted.Status().Pending != 1 {
+		t.Fatal("a concurrent newer local state was discarded")
+	}
+}
+
+func TestSQLAncestryRetainsConcurrentAndUncertainCommits(t *testing.T) {
+	testSQLConcurrentCommitAncestry(t, checkpointDatabase)
+}
+
+func testSQLConcurrentCommitAncestry(t *testing.T, newDB func(*testing.T) *storage.DB) {
+	for _, uncertain := range []bool{false, true} {
+		t.Run(fmt.Sprint(uncertain), func(t *testing.T) {
+			db := newDB(t)
+			dir := t.TempDir()
+			store := New(db, "instance", dir, nil)
+			if err := store.Save(checkpoint("private:synthetic", 1)); err != nil {
+				t.Fatal(err)
+			}
+			store.write = func(ctx context.Context, record Record) error {
+				if record.Revision == 1 {
+					if err := store.Save(checkpoint(record.SessionID, 2)); err != nil {
+						return err
+					}
+					if err := store.Save(checkpoint(record.SessionID, 3)); err != nil {
+						return err
+					}
+				}
+				err := store.writeSQL(ctx, record)
+				if uncertain && err == nil {
+					return context.DeadlineExceeded
+				}
+				return err
+			}
+			err := store.Flush(context.Background())
+			if (err != nil) != uncertain || store.Status().Pending != 1 {
+				t.Fatalf("in-flight save was lost: %v %+v", err, store.Status())
+			}
+			restarted := New(db, "instance", dir, nil)
+			if records, err := restarted.Load(context.Background()); err != nil || len(records) != 1 || records[0].Revision != 3 {
+				t.Fatalf("in-flight ancestry was not durable: %v %v", records, err)
+			}
+			if err := restarted.Flush(context.Background()); err != nil || restarted.Status().Pending != 0 {
+				t.Fatalf("valid in-flight continuation failed: %v %+v", err, restarted.Status())
+			}
+		})
+	}
+}
+
+func postgresCheckpointDatabase(t *testing.T) *storage.DB {
+	t.Helper()
+	base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
+	if base == "" {
+		t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+		t.Fatal("PostgreSQL test DSN must be a postgres URI")
+	}
+	admin, err := sql.Open("pgx", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := fmt.Sprintf("fa_session_ancestry_%d", time.Now().UnixNano())
+	if _, err := admin.Exec("CREATE SCHEMA " + schema); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec("DROP SCHEMA " + schema + " CASCADE"); err != nil {
+			t.Error(err)
+		}
+		admin.Close()
+	})
+	query := parsed.Query()
+	query.Set("search_path", schema)
+	query.Set("application_name", schema)
+	parsed.RawQuery = query.Encode()
+	db, err := storage.OpenWithConfig(context.Background(), t.TempDir(), storage.Config{Backend: storage.Postgres, DSN: parsed.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id,name,created_at) VALUES ('instance','Synthetic','now')`); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func TestPostgresSessionStateAncestry(t *testing.T) {
+	t.Run("offline saves", func(t *testing.T) { testSQLRecoveryChecksAncestry(t, postgresCheckpointDatabase) })
+	t.Run("inflight conflict", func(t *testing.T) { testSQLInflightConflictAncestry(t, postgresCheckpointDatabase) })
+	t.Run("concurrent and uncertain commit", func(t *testing.T) { testSQLConcurrentCommitAncestry(t, postgresCheckpointDatabase) })
+	t.Run("whitespace", func(t *testing.T) { testSQLAncestryExactText(t, postgresCheckpointDatabase) })
+	t.Run("concurrent SQL writer", testPostgresSQLAncestryCAS)
+}
+
+func TestSQLAncestryCASUsesExactStoredJSON(t *testing.T) {
+	testSQLAncestryExactText(t, checkpointDatabase)
+}
+
+func testSQLAncestryExactText(t *testing.T, newDB func(*testing.T) *storage.DB) {
+	db := newDB(t)
+	store := New(db, "instance", t.TempDir(), nil)
+	for revision := int64(1); revision <= 2; revision++ {
+		if err := store.Save(checkpoint("private:synthetic", revision)); err != nil {
+			t.Fatal(err)
+		}
+		if revision == 2 {
+			if _, err := db.SQL.Exec(db.Bind(`UPDATE session_states SET payload=? WHERE instance_id='instance'`), "{ \n \"version\": 1 }"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := store.Flush(context.Background()); err != nil {
+			t.Fatalf("equivalent SQL text broke CAS: %v", err)
+		}
+	}
+}
+
+func TestLocalMirrorCannotChangeKnownAncestry(t *testing.T) {
+	db := checkpointDatabase(t)
+	store := New(db, "instance", t.TempDir(), nil)
+	original := checkpoint("private:synthetic", 1)
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	altered := original
+	altered.Payload = json.RawMessage(`{"version":1,"history":"unexpected replacement"}`)
+	data, err := json.Marshal(altered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.path(original.SessionID), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if restored, err := store.Read(original.SessionID); err != nil || !equalPayload(restored.Payload, original.Payload) {
+		t.Fatalf("a replaced mirror supplied the next ancestry base: %+v %v", restored, err)
+	}
+}
+
+func testPostgresSQLAncestryCAS(t *testing.T) {
+	db := postgresCheckpointDatabase(t)
+	db.SQL.SetMaxOpenConns(5)
+	store := New(db, "instance", t.TempDir(), nil)
+	if err := store.Save(checkpoint("private:synthetic", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for revision := int64(2); revision <= 3; revision++ {
+		if err := store.Save(checkpoint("private:synthetic", revision)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := db.SQL.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var lockedRevision int64
+	if err := tx.QueryRow(`SELECT revision FROM session_states WHERE instance_id='instance' AND session_id='private:synthetic' FOR UPDATE`).Scan(&lockedRevision); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- store.Flush(ctx) }()
+	observed := false
+	for ctx.Err() == nil {
+		var waiting int
+		err = db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM pg_stat_activity
+			WHERE application_name = current_setting('application_name') AND wait_event_type = 'Lock'
+			AND query LIKE 'UPDATE session_states SET revision = %'`).Scan(&waiting)
+		if err != nil {
+			break
+		}
+		if waiting > 0 {
+			observed = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !observed {
+		tx.Rollback()
+		<-done
+		t.Fatalf("writer did not reach CAS while the prior SQL row was locked: %v", err)
+	}
+	other := `{"version":1,"branch":"concurrent SQL update"}`
+	if _, err := tx.Exec(db.Bind(`UPDATE session_states SET revision=2,payload=? WHERE instance_id='instance' AND session_id='private:synthetic'`), other); err != nil {
+		tx.Rollback()
+		<-done
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		<-done
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrConflict) {
+		t.Fatalf("concurrent SQL update was not rechecked: %v", err)
+	}
+	persisted, err := store.readSQL(context.Background(), "private:synthetic")
+	if err != nil || persisted.Revision != 2 || !equalPayload(persisted.Payload, json.RawMessage(other)) || store.Status().Pending != 1 {
+		t.Fatalf("CAS overwrote an unseen SQL branch: %+v %v %+v", persisted, err, store.Status())
+	}
+}
+
+func TestAncestryHashMatchesSerializedMirror(t *testing.T) {
+	db := checkpointDatabase(t)
+	store := New(db, "instance", t.TempDir(), nil)
+	original := checkpoint("private:synthetic", 1)
+	original.Payload = json.RawMessage(`{ "version": 1, "content": "<tag>&data" }`)
+	if err := store.Save(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	store.db = nil
+	if record, err := store.Read(original.SessionID); err != nil || !equalPayload(record.Payload, original.Payload) {
+		t.Fatalf("local JSON encoding changed its ancestry identity: %+v %v", record, err)
+	}
+	restarted := New(db, "instance", store.dir, nil)
+	if _, err := restarted.Load(context.Background()); err != nil {
+		t.Fatalf("equivalent SQL/local JSON became a fork: %v", err)
 	}
 }
