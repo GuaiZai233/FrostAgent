@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,6 +159,9 @@ func TestFileWriterPythonProtocol(t *testing.T) {
 		command.Env = append(os.Environ(), "PYTHONPATH="+inside)
 		output, err := command.Output()
 		if err != nil {
+			if failed, ok := err.(*exec.ExitError); ok {
+				return ExecResult{}, fmt.Errorf("writer Python failed: %s", failed.Stderr)
+			}
 			return ExecResult{}, err
 		}
 		return writeResult(string(output)), nil

@@ -21,7 +21,7 @@ type fileWriteRequest struct {
 	Op     string `json:"op"`
 	Size   int64  `json:"size"`
 	Hash   string `json:"hash"`
-	Offset int    `json:"offset,omitempty"`
+	Offset int    `json:"offset"`
 	Data   string `json:"data,omitempty"`
 }
 
