@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -235,6 +236,82 @@ func allowedInboundFileURL(raw string) bool {
 		host == "offline.qq.com" || strings.HasSuffix(host, ".ftn.qq.com")
 }
 
+// Reviewed against IANA's special-purpose registries on 2026-11-15:
+// https://www.iana.org/assignments/iana-ipv4-special-registry/
+// https://www.iana.org/assignments/iana-ipv6-special-registry/
+// IsGlobalUnicast also accepts shared, documentation and reserved addresses.
+// Protocol-assignment and transition ranges are excluded as a whole: QQ file
+// origins must resolve to ordinary Internet endpoints, not special services.
+var inboundFileSpecialNetworks = [...]netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),       // This network.
+	netip.MustParsePrefix("100.64.0.0/10"),   // Shared space, including cloud metadata.
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments.
+	netip.MustParsePrefix("192.0.2.0/24"),    // Documentation.
+	netip.MustParsePrefix("192.88.99.0/24"),  // Deprecated 6to4 relay.
+	netip.MustParsePrefix("198.18.0.0/15"),   // Benchmarking / fake-IP networks.
+	netip.MustParsePrefix("198.51.100.0/24"), // Documentation.
+	netip.MustParsePrefix("203.0.113.0/24"),  // Documentation.
+	netip.MustParsePrefix("240.0.0.0/4"),     // Reserved, including limited broadcast.
+	netip.MustParsePrefix("2001::/23"),       // IETF assignments, including Teredo.
+	netip.MustParsePrefix("2001:db8::/32"),   // Documentation.
+	netip.MustParsePrefix("2002::/16"),       // 6to4 may encapsulate non-public IPv4.
+	netip.MustParsePrefix("3ffe::/16"),       // Former 6bone space (RFC 5156).
+	netip.MustParsePrefix("3fff::/20"),       // Documentation.
+}
+
+// IANA currently assigns ordinary IPv6 global unicast from 2000::/3.
+// https://www.iana.org/assignments/ipv6-address-space/
+// This also excludes NAT64, discard-only, site-local and unallocated ranges.
+var inboundFileIPv6Global = netip.MustParsePrefix("2000::/3")
+
+func allowedInboundFileIP(ip netip.Addr) bool {
+	if !ip.IsValid() || ip.Zone() != "" {
+		return false
+	}
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	if ip.Is6() && !inboundFileIPv6Global.Contains(ip) {
+		return false
+	}
+	for _, prefix := range inboundFileSpecialNetworks {
+		if prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+func newInboundFileDialContext(
+	lookup func(context.Context, string, string) ([]netip.Addr, error),
+	dial func(context.Context, string, string) (net.Conn, error),
+) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, errors.New("无效的附件下载地址")
+		}
+		addresses, err := lookup(ctx, "ip", host)
+		if err != nil || len(addresses) == 0 {
+			return nil, errors.New("附件下载域名解析失败")
+		}
+		// Reject the whole answer before dialing, even if a public IP comes first.
+		for _, ip := range addresses {
+			if !allowedInboundFileIP(ip) {
+				return nil, errors.New("附件下载地址不是公开网络地址")
+			}
+		}
+		for _, ip := range addresses {
+			conn, err := dial(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
+			if err == nil {
+				return conn, nil
+			}
+		}
+		return nil, errors.New("无法连接附件下载服务")
+	}
+}
+
 func newInboundFileHTTPClient() *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{
@@ -242,29 +319,7 @@ func newInboundFileHTTPClient() *http.Client {
 		ResponseHeaderTimeout: 15 * time.Second,
 		IdleConnTimeout:       30 * time.Second,
 		MaxIdleConns:          4,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, errors.New("无效的附件下载地址")
-			}
-			addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-			if err != nil || len(addresses) == 0 {
-				return nil, errors.New("附件下载域名解析失败")
-			}
-			for _, ip := range addresses {
-				ip = ip.Unmap()
-				if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-					return nil, errors.New("附件下载地址不是公开网络地址")
-				}
-			}
-			for _, ip := range addresses {
-				conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-				if err == nil {
-					return conn, nil
-				}
-			}
-			return nil, errors.New("无法连接附件下载服务")
-		},
+		DialContext:           newInboundFileDialContext(net.DefaultResolver.LookupNetIP, dialer.DialContext),
 	}
 	return &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 4 || !allowedInboundFileURL(req.URL.String()) {
