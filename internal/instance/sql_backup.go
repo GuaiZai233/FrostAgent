@@ -129,7 +129,7 @@ func (m *Manager) importSettingsWithComputerUse(id string, data backup.Settings,
 	} else {
 		importErr = backup.ImportSettingsWithComputerUse(m.db, i.id, data, *metadata)
 	}
-	r, c, buildErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	r, c, buildErr := m.buildFresh(i.id, i, enabled)
 	if buildErr == nil && enabled && i.mcp != nil {
 		buildErr = i.mcp.SetRuntimeActive(true)
 	}
@@ -328,7 +328,7 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	if oldMCP != nil {
 		_ = oldMCP.Close()
 	}
-	runtime, config, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
+	runtime, config, err := m.buildFresh(info.ID, i, false)
 	if err != nil {
 		if runtime != nil {
 			runtime.Stop()
@@ -421,7 +421,7 @@ func (m *Manager) CancelDeletion(id string) error {
 		}
 	}
 	m.mu.Unlock()
-	r, c, err := m.buildFresh(i.id, i, false, m.dir(i.id))
+	r, c, err := m.buildFresh(i.id, i, false)
 	i.mu.Lock()
 	i.runtime, i.config = r, c
 	r.StartBackground()
@@ -524,6 +524,10 @@ func (m *Manager) copySQLInstanceSettings(target, source string) error {
 	if m.shutdown.Err() != nil {
 		src.op.RUnlock()
 		return ErrClosing
+	}
+	if err := m.rejectDeleting(src.id); err != nil {
+		src.op.RUnlock()
+		return err
 	}
 	settings, err := backup.ExportSettings(m.db, src.id)
 	if err != nil {

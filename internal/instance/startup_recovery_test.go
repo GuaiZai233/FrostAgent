@@ -93,8 +93,8 @@ func TestDatabaseStartupRetainsCurrentDisabledFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := errors.New("synthetic current initialization failure")
-	manager, err := newManager(root, global, "", db,
-		func(_ *Manager, _ *managed, _ *instanceconfig.Store, _ string, enabled bool) (*Runtime, error) {
+	manager, err := newManager(root, global, db,
+		func(_ *Manager, _ *managed, _ *instanceconfig.Store, enabled bool) (*Runtime, error) {
 			if enabled {
 				t.Fatal("recovery attempted to enable the instance")
 			}

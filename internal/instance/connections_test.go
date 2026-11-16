@@ -295,7 +295,7 @@ func TestConnectionClientDoesNotStartBeforeRuntimePublication(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	candidate, _, err := m.buildFresh(info.ID, item, true, m.dir(info.ID))
+	candidate, _, err := m.buildFresh(info.ID, item, true)
 	if err != nil {
 		t.Fatal(err)
 	}

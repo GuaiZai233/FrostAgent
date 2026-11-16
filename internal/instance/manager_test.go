@@ -5,18 +5,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/backup"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/mcp"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/gorilla/websocket"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -109,7 +113,7 @@ func TestInstanceLogStreamTracksRuntimeCancellationAfterAdmission(t *testing.T) 
 	}
 }
 
-func TestOverviewKeepsEffectiveWebSocketAddressUntilControlPlaneRestart(t *testing.T) {
+func TestOverviewUsesGlobalWebSocketAddressOnRuntimeRebuild(t *testing.T) {
 	m := testManager(t)
 	info := create(t, m, "address-freeze")
 	assertAddress := func(manager *Manager, want string) {
@@ -136,14 +140,10 @@ func TestOverviewKeepsEffectiveWebSocketAddressUntilControlPlaneRestart(t *testi
 	if err := m.Enable(info.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	assertAddress(m, "127.0.0.1:11023")
+	assertAddress(m, ":4321")
 
 	m.Close()
-	next, err := New(
-		m.root,
-		m.global,
-		filepath.Join(filepath.Dir(m.root), "dialogue-restarted.yml"),
-	)
+	next, err := NewDatabase(m.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,14 +152,32 @@ func TestOverviewKeepsEffectiveWebSocketAddressUntilControlPlaneRestart(t *testi
 }
 
 func testManager(t *testing.T) *Manager {
+	return testManagerWithGlobal(t, nil)
+}
+
+func testManagerWithGlobal(t *testing.T, values map[string]string) *Manager {
 	t.Helper()
-	t.Setenv("SANDBOX_ENABLED", "false")
-	dir := t.TempDir()
-	g, err := instanceconfig.Open(filepath.Join(dir, ".env"), true)
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", "")
+	root := t.TempDir()
+	db, err := storage.Open(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(filepath.Join(dir, "data"), g, filepath.Join(dir, "dialogue.yml"))
+	t.Cleanup(func() { _ = db.Close() })
+	global, err := instanceconfig.OpenDatabase(db, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := global.Update("SANDBOX_ENABLED", "false", false); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range values {
+		if err := global.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := NewDatabaseWithDB(root, db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,31 +216,10 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 	}))
 	defer gateway.Close()
 
-	dir := t.TempDir()
-	globalPath := filepath.Join(dir, ".env")
-	raw := strings.Join([]string{
-		"SANDBOX_ENABLED=false",
-		"SANDBOX_BASE_URL=http://file-value.invalid",
-		"SANDBOX_AUTH_TOKEN=file-token",
-		"SANDBOX_SESSION_NAMESPACE=file-namespace",
-		"",
-	}, "\n")
-	if err := os.WriteFile(globalPath, []byte(raw), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SANDBOX_ENABLED", "true")
-	t.Setenv("SANDBOX_BASE_URL", gateway.URL)
-	t.Setenv("SANDBOX_AUTH_TOKEN", "synthetic-token")
-	t.Setenv("SANDBOX_SESSION_NAMESPACE", "frostagent-test")
-	global, err := instanceconfig.Open(globalPath, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m, err := New(filepath.Join(dir, "data"), global, filepath.Join(dir, "dialogue.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(m.Close)
+	m := testManagerWithGlobal(t, map[string]string{
+		"SANDBOX_ENABLED": "true", "SANDBOX_BASE_URL": gateway.URL,
+		"SANDBOX_AUTH_TOKEN": "synthetic-token", "SANDBOX_SESSION_NAMESPACE": "frostagent-test",
+	})
 
 	a := create(t, m, "sandbox-a")
 	b := create(t, m, "sandbox-b")
@@ -322,11 +319,8 @@ func TestMCPIsIsolatedPerInstanceAndHasNoRootEndpoint(t *testing.T) {
 	if _, ok := m.instances[b.ID].mcp.GetServer("only-a"); ok {
 		t.Fatal("instance B observed instance A MCP server")
 	}
-	if _, err := os.Stat(filepath.Join(m.dir(a.ID), "mcp_servers.json")); err != nil {
-		t.Fatalf("instance MCP config was not persisted in its directory: %v", err)
-	}
 	m.Close()
-	restarted, err := New(m.root, m.global, m.sharedPathForTest())
+	restarted, err := NewDatabase(m.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +333,7 @@ func TestMCPIsIsolatedPerInstanceAndHasNoRootEndpoint(t *testing.T) {
 	}
 }
 
-func TestInstanceMCPAuthUsesControlPlaneStartupSnapshot(t *testing.T) {
+func TestInstanceMCPAuthUsesCurrentSQLSettings(t *testing.T) {
 	m := testManager(t)
 	info := create(t, m, "mcp-auth")
 	if err := m.global.Update("MCP_CONTROL_TOKEN", "synthetic-control-token", false); err != nil {
@@ -357,8 +351,17 @@ func TestInstanceMCPAuthUsesControlPlaneStartupSnapshot(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("MCP ignored updated token policy: %d %s", w.Code, w.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodPost, req.URL.String(), strings.NewReader("{}"))
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer synthetic-control-token")
+	w = httptest.NewRecorder()
+	m.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("MCP auth changed before Control Plane restart: %d %s", w.Code, w.Body.String())
+		t.Fatalf("authorized MCP request: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -396,7 +399,7 @@ func TestEmptyControlPlaneAndNameSequence(t *testing.T) {
 	if _, err := m.Create("RENAMED"); err == nil {
 		t.Fatal("case insensitive duplicate accepted")
 	}
-	if err := m.Delete(first.ID, true); err != nil {
+	if err := deleteSQLInstance(m, first.ID); err != nil {
 		t.Fatal(err)
 	}
 	list, _ = m.List()
@@ -456,61 +459,72 @@ func TestSettingsMemoryLogsAndMediaIsolation(t *testing.T) {
 }
 func configureRouter(t *testing.T, m *Manager, id, url string) {
 	t.Helper()
-	r := m.instances[id].runtime.Engine.ModelRouter
-	cfg := r.Draft()
-	eid := "endpoint_test_" + id
-	cfg.Endpoints = []modelrouter.Endpoint{{ID: eid, DisplayName: "mock", BaseURL: url, Enabled: true, APIKeySource: modelrouter.APIKeyStorageManual, APIKeyRef: "endpoint/" + eid}}
-	cfg.Models = []modelrouter.Model{{ID: "model_mock", DisplayName: "mock", EndpointID: eid, UpstreamModel: "mock", Enabled: true}}
-	cfg.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: "model_mock"}
-	if err := r.SaveDraft(cfg); err != nil {
+	catalog := modelrouter.NewSQL(m.db, "")
+	cfg := catalog.Draft()
+	eid, mid := "endpoint_test_"+id, "model_mock_"+id
+	cfg.Endpoints = append(cfg.Endpoints, modelrouter.Endpoint{ID: eid, DisplayName: "mock", BaseURL: url, Enabled: true, APIKeySource: modelrouter.APIKeyStorageManual, APIKeyRef: "endpoint/" + eid})
+	cfg.Models = append(cfg.Models, modelrouter.Model{ID: mid, DisplayName: "mock", EndpointID: eid, UpstreamModel: "mock", Enabled: true})
+	if err := catalog.SaveDraft(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.SetDraftEndpointSecret(eid, "synthetic-test-secret"); err != nil {
+	if _, err := catalog.SetDraftEndpointSecret(eid, "synthetic-test-secret"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.Publish(); err != nil {
+	if _, err := catalog.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	router := m.instances[id].runtime.Engine.ModelRouter
+	routes := router.Draft()
+	routes.GlobalBindings[modelrouter.WorkloadDialogue] = modelrouter.Binding{Mode: modelrouter.BindingModel, ModelID: mid}
+	if err := router.SaveDraft(routes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := router.Publish(); err != nil {
 		t.Fatal(err)
 	}
 }
-func TestCopyPublishedOnlyAndDeleteOptions(t *testing.T) {
+
+func deleteSQLInstance(m *Manager, id string) error {
+	if err := m.PrepareDeletion(id); err != nil {
+		return err
+	}
+	return m.ConfirmDeletion(id)
+}
+
+func setInvalidConnection(t *testing.T, m *Manager, id string) {
+	t.Helper()
+	for key, value := range map[string]string{"ONEBOT_WS_ENABLED": "true", "ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "not-a-websocket-url"} {
+		if err := m.instances[id].config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func TestCopyPublishedSQLSettingsPreservesMemoryAndSharedCredentials(t *testing.T) {
 	m := testManager(t)
-	src := create(t, m, "source")
-	dst := create(t, m, "target")
+	src, dst := create(t, m, "source"), create(t, m, "target")
 	configureRouter(t, m, src.ID, "http://127.0.0.1:1")
-	source := m.instances[src.ID]
-	target := m.instances[dst.ID]
-	if err := target.mcp.AddServer(context.Background(), mcp.ServerConfig{
-		ID:      "target-only",
-		Name:    "Target Only",
-		Enabled: false,
-		Transport: mcp.TransportConfig{
-			Type:    mcp.TransportStdio,
-			Command: "synthetic",
-		},
+	source, target := m.instances[src.ID], m.instances[dst.ID]
+	if err := source.mcp.AddServer(context.Background(), mcp.ServerConfig{
+		ID: "source-server", Name: "Source", Enabled: false,
+		Transport: mcp.TransportConfig{Type: mcp.TransportStdio, Command: "synthetic"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.config.Replace("# copied raw settings\nBOT_NAME=source\nBILLING_ENABLED=false\n"); err != nil {
+	if err := source.config.Update("BOT_NAME", "source", false); err != nil {
 		t.Fatal(err)
 	}
-	// The source draft is deliberately different from the published configuration.
-	draft := source.runtime.Engine.ModelRouter.Draft()
+	w := rpc(t, m, dst.ID, "MemoryService/AddMemory", `{"owner":"synthetic-owner","content":"target-memory"}`, false)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"success":false`) {
+		t.Fatal(w.Body.String())
+	}
+	memories, err := backup.ExportMemories(m.db, dst.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := modelrouter.NewSQL(m.db, "")
+	draft := catalog.Draft()
 	draft.Endpoints[0].DisplayName = "unpublished"
-	if err := source.runtime.Engine.ModelRouter.SaveDraft(draft); err != nil {
-		t.Fatal(err)
-	}
-	brain := []byte(`{"entries":[]}`)
-	brainPath := filepath.Join(m.dir(dst.ID), "brain.json")
-	if err := os.WriteFile(brainPath, brain, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.Enable(dst.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.Copy(dst.ID, src.ID); err == nil {
-		t.Fatal("active target overwritten")
-	}
-	if err := m.Enable(dst.ID, false); err != nil {
+	if err := catalog.SaveDraft(draft); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Copy(dst.ID, src.ID); err != nil {
@@ -518,122 +532,64 @@ func TestCopyPublishedOnlyAndDeleteOptions(t *testing.T) {
 	}
 	copied := target.runtime.Engine.ModelRouter.Active()
 	original := source.runtime.Engine.ModelRouter.Active()
-	if copied.Endpoints[0].ID == original.Endpoints[0].ID || copied.Endpoints[0].DisplayName == "unpublished" {
-		t.Fatal("copied draft or shared endpoint ID")
+	if len(copied.Endpoints) != 1 || copied.Endpoints[0].ID != original.Endpoints[0].ID || copied.Endpoints[0].DisplayName == "unpublished" {
+		t.Fatal("copy changed shared provider identity or published configuration")
 	}
-	if copied.Models[0].EndpointID != copied.Endpoints[0].ID {
-		t.Fatal("model reference not remapped")
+	after, err := backup.ExportMemories(m.db, dst.ID)
+	if err != nil || !reflect.DeepEqual(memories, after) {
+		t.Fatalf("copy changed target memory: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(m.dir(dst.ID), "model_router_secrets.json"))
-	if err != nil || !strings.Contains(string(raw), "synthetic-test-secret") {
-		t.Fatal("manual secret not copied", err)
+	if _, ok := target.mcp.GetServer("source-server"); !ok {
+		t.Fatal("SQL settings copy omitted MCP configuration")
 	}
-	saved, _ := os.ReadFile(brainPath)
-	if string(saved) != string(brain) {
-		t.Fatal("memory changed")
+	if target.config.Get("BOT_NAME") != "source" {
+		t.Fatal("settings not copied")
 	}
-	if _, ok := target.mcp.GetServer("target-only"); !ok {
-		t.Fatal("quick config overwrote target MCP configuration")
-	}
-	rawEnv, _ := target.config.Raw()
-	if !strings.HasPrefix(rawEnv, "# copied raw settings") {
-		t.Fatal("raw env changed")
-	}
-	if err := m.Delete(dst.ID, false); err != nil {
+	if err := deleteSQLInstance(m, src.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(brainPath); err != nil {
-		t.Fatal("retained memory missing", err)
-	}
-	for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json"} {
-		if _, err := os.Stat(filepath.Join(m.dir(dst.ID), name)); !os.IsNotExist(err) {
-			t.Fatal("configuration retained", name, err)
-		}
-	}
-	if err := m.Delete(src.ID, true); err != nil {
-		t.Fatal(err)
+	credential, err := target.runtime.Engine.ModelRouter.EndpointCredential(copied.Endpoints[0].ID)
+	if err != nil || credential.APIKey != "synthetic-test-secret" {
+		t.Fatalf("source deletion changed shared credential: %v", err)
 	}
 	if _, err := os.Stat(m.dir(src.ID)); !os.IsNotExist(err) {
-		t.Fatal("all data not deleted")
+		t.Fatalf("deleted instance directory remains: %v", err)
 	}
 }
 
-func TestCopyRejectsInvalidDialogueBeforeCommit(t *testing.T) {
+func TestCopySQLTransactionFailurePreservesTarget(t *testing.T) {
 	m := testManager(t)
-	source := create(t, m, "source")
-	target := create(t, m, "target")
-	configureRouter(t, m, source.ID, "http://127.0.0.1:1")
-	configureRouter(t, m, target.ID, "http://127.0.0.1:2")
-	if err := m.instances[source.ID].config.Replace("BOT_NAME=source-generation\n"); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.instances[target.ID].config.Replace("BOT_NAME=target-generation\n"); err != nil {
-		t.Fatal(err)
-	}
-
-	if w := rpc(t, m, source.ID, "DialogueService/SaveDialogues", `{"dialogues":[{"id":"source","user":"source","preferred":"source-persona"}]}`, false); w.Code != http.StatusOK {
-		t.Fatalf("save source dialogue: %d %s", w.Code, w.Body.String())
-	}
-	if w := rpc(t, m, target.ID, "DialogueService/SaveDialogues", `{"dialogues":[{"id":"target","user":"target","preferred":"target-persona"}]}`, false); w.Code != http.StatusOK {
-		t.Fatalf("save target dialogue: %d %s", w.Code, w.Body.String())
-	}
-	if err := os.WriteFile(filepath.Join(m.dir(source.ID), "dialogue.yml"), []byte("["), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	files := []string{".env", "model_router.json", "model_router_secrets.json", "dialogue.yml"}
-	before := make(map[string]string, len(files))
-	for _, name := range files {
-		data, err := os.ReadFile(filepath.Join(m.dir(target.ID), name))
-		if err != nil {
+	source, target := create(t, m, "source"), create(t, m, "target")
+	for _, info := range []Info{source, target} {
+		if err := m.instances[info.ID].config.Update("BOT_NAME", info.Name, false); err != nil {
 			t.Fatal(err)
 		}
-		before[name] = string(data)
-	}
-	targetRuntime := m.instances[target.ID].runtime
-	personaBefore := targetRuntime.Engine.PersonaDialogue()
-	m.endpointMu.Lock()
-	ownersBefore := make(map[string]string, len(m.endpointOwners))
-	for id, owner := range m.endpointOwners {
-		ownersBefore[id] = owner
-	}
-	m.endpointMu.Unlock()
-
-	err := m.Copy(target.ID, source.ID)
-	if err == nil || !strings.Contains(err.Error(), "dialogue.yml") {
-		t.Fatalf("copy error = %v, want invalid dialogue.yml", err)
-	}
-	for _, name := range files {
-		data, readErr := os.ReadFile(filepath.Join(m.dir(target.ID), name))
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		if string(data) != before[name] {
-			t.Fatalf("invalid dialogue changed target %s", name)
+		w := rpc(t, m, info.ID, "DialogueService/SaveDialogues",
+			fmt.Sprintf(`{"dialogues":[{"id":"example","user":"hello","preferred":%q}]}`, info.Name), false)
+		if w.Code != http.StatusOK {
+			t.Fatal(w.Body.String())
 		}
 	}
-	if m.instances[target.ID].runtime != targetRuntime {
-		t.Fatal("invalid dialogue replaced the target runtime")
+	before, err := backup.ExportSettings(m.db, target.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := targetRuntime.Engine.PersonaDialogue(); got != personaBefore {
-		t.Fatalf("invalid dialogue changed in-memory persona: %q", got)
+	persona := m.instances[target.ID].runtime.Engine.PersonaDialogue()
+	// Abort after earlier settings writes to verify the SQL transaction rolls them back.
+	_, err = m.db.SQL.Exec(`CREATE TRIGGER fail_copy BEFORE INSERT ON dialogues WHEN NEW.instance_id = '` + target.ID + `' BEGIN SELECT RAISE(ABORT, 'synthetic copy failure'); END`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, statErr := os.Stat(transactionPath(m.dir(target.ID))); !os.IsNotExist(statErr) {
-		t.Fatalf("copy transaction residue remains: %v", statErr)
+	if err := m.Copy(target.ID, source.ID); err == nil || !strings.Contains(err.Error(), "synthetic copy failure") {
+		t.Fatalf("copy error = %v", err)
 	}
-	stages, globErr := filepath.Glob(filepath.Join(m.dir(target.ID), ".copy-stage-*"))
-	if globErr != nil || len(stages) != 0 {
-		t.Fatalf("copy stage residue = %v, err=%v", stages, globErr)
+	after, err := backup.ExportSettings(m.db, target.ID)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("failed copy changed persisted settings: %v", err)
 	}
-	m.endpointMu.Lock()
-	defer m.endpointMu.Unlock()
-	if len(m.endpointOwners) != len(ownersBefore) {
-		t.Fatalf("invalid dialogue changed endpoint ownership: before=%v after=%v", ownersBefore, m.endpointOwners)
-	}
-	for id, owner := range ownersBefore {
-		if m.endpointOwners[id] != owner {
-			t.Fatalf("invalid dialogue changed endpoint owner %s: before=%s after=%s", id, owner, m.endpointOwners[id])
-		}
+	item := m.instances[target.ID]
+	if item.config.Get("BOT_NAME") != target.Name || item.runtime.Engine.PersonaDialogue() != persona {
+		t.Fatal("failed copy changed runtime settings")
 	}
 }
 
@@ -661,11 +617,11 @@ func TestLifecycleBusyBackendAndAutostart(t *testing.T) {
 		t.Fatal(w.Body)
 	}
 	list, _ = m.List()
-	if !list[0].RestartRequired {
-		t.Fatal("restart warning missing")
+	if list[0].RestartRequired {
+		t.Fatal("SQL settings were not applied automatically")
 	}
 	m.Close()
-	next, err := New(m.root, m.global, m.sharedPathForTest())
+	next, err := NewDatabase(m.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,17 +632,19 @@ func TestLifecycleBusyBackendAndAutostart(t *testing.T) {
 	}
 }
 
-func TestInstanceRestartReloadsOnlyItsEnvFromDisk(t *testing.T) {
+func TestInstanceRestartReloadsOnlyItsSQLSettings(t *testing.T) {
 	m := testManager(t)
-	a := create(t, m, "a")
-	b := create(t, m, "b")
-	if err := m.Enable(a.ID, true); err != nil {
+	a, b := create(t, m, "a"), create(t, m, "b")
+	for _, info := range []Info{a, b} {
+		if err := m.Enable(info.ID, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, err := instanceconfig.OpenDatabase(m.db, a.ID, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Enable(b.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(m.dir(a.ID), ".env"), []byte("BOT_NAME=disk-a\nENABLE_ONEBOT_ADAPTER=false\n"), 0600); err != nil {
+	if err := config.Update("BOT_NAME", "database-a", false); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Enable(a.ID, false); err != nil {
@@ -695,242 +653,67 @@ func TestInstanceRestartReloadsOnlyItsEnvFromDisk(t *testing.T) {
 	if err := m.Enable(a.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := m.instances[a.ID].runtime.Scope.Getenv("BOT_NAME"); got != "disk-a" {
-		t.Fatalf("A used stale BOT_NAME %q", got)
+	if got := m.instances[a.ID].runtime.Scope.Getenv("BOT_NAME"); got != "database-a" {
+		t.Fatalf("A used stale settings: %q", got)
 	}
-	if got := m.instances[a.ID].runtime.Scope.Getenv("ENABLE_ONEBOT_ADAPTER"); got != "false" {
-		t.Fatalf("A used stale restart setting %q", got)
-	}
-	if got := m.instances[b.ID].runtime.Scope.Getenv("BOT_NAME"); got == "disk-a" {
-		t.Fatal("A's disk reload leaked into B")
+	if got := m.instances[b.ID].runtime.Scope.Getenv("BOT_NAME"); got == "database-a" {
+		t.Fatal("SQL reload leaked into B")
 	}
 }
 
-func TestEnableRejectsMalformedFreshEnvWithoutStaleValues(t *testing.T) {
+func TestEnableRejectsInvalidSQLConnectionAndRemainsRepairable(t *testing.T) {
 	m := testManager(t)
-	info := create(t, m, "malformed")
-	if err := m.instances[info.ID].config.Replace("BOT_NAME=old-value\n"); err != nil {
-		t.Fatal(err)
-	}
+	info := create(t, m, "invalid")
 	if err := m.Enable(info.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Enable(info.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(m.dir(info.ID), ".env"), []byte("BOT_NAME=\"unterminated\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	setInvalidConnection(t, m, info.ID)
 	if err := m.Enable(info.ID, true); err == nil {
-		t.Fatal("malformed fresh .env was enabled")
+		t.Fatal("invalid connection was enabled")
 	}
 	items, _ := m.List()
 	if items[0].Enabled || items[0].Error == "" {
-		t.Fatalf("malformed instance state = %+v", items[0])
+		t.Fatalf("invalid instance state = %+v", items[0])
 	}
-	managed := m.instances[info.ID]
-	if managed.config == nil || managed.config.Error() == nil {
-		t.Fatal("fresh parse error was not retained for repair")
+	item := m.instances[info.ID]
+	if item.config == nil || item.runtime == nil || item.runtime.Scope.Context().Err() == nil {
+		t.Fatal("missing stopped management runtime")
 	}
-	if got := managed.config.Get("BOT_NAME"); got != "" {
-		t.Fatalf("stale BOT_NAME survived malformed reload: %q", got)
+	if err := item.config.Update("ONEBOT_WS_URL", "ws://127.0.0.1:1", false); err != nil {
+		t.Fatal(err)
 	}
-	if managed.runtime != nil && managed.runtime.Scope.Context().Err() == nil {
-		t.Fatal("malformed instance kept an active runtime")
+	if err := m.Enable(info.ID, true); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func stageTestCopy(t *testing.T, m *Manager, target, source string) copyTransaction {
-	t.Helper()
-	raw, err := m.instances[source].config.Raw()
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg, secrets, copied, err := m.instances[source].runtime.Engine.ModelRouter.CopyPublished(func([]modelrouter.Endpoint) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	removed, err := m.instances[target].runtime.Engine.ModelRouter.DeleteCredentials()
-	if err != nil {
-		t.Fatal(err)
-	}
-	transaction, err := newCopyTransaction(target, copied, removed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := m.dir(target)
-	if _, err = writeCopyTransaction(dir, transaction); err != nil {
-		t.Fatal(err)
-	}
-	stageDir := filepath.Join(dir, transaction.Stage)
-	if err = os.Mkdir(stageDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	dialogueContent, _ := os.ReadFile(filepath.Join(m.dir(source), "dialogue.yml"))
-	if len(dialogueContent) == 0 {
-		dialogueContent = []byte("[]\n")
-	}
-	for name, data := range map[string][]byte{".env": []byte(raw), "model_router.json": cfg, "model_router_secrets.json": secrets, "dialogue.yml": dialogueContent} {
-		if _, err = writeCopyFile(filepath.Join(stageDir, name), data, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err = modelrouter.StageCredentialPromotions(transaction.Credentials, copied); err != nil {
-		t.Fatal(err)
-	}
-	return transaction
-}
-
-func TestCopyTransactionRecoveryNeverExposesMixedConfiguration(t *testing.T) {
-	t.Run("preparing rolls back to old configuration", func(t *testing.T) {
-		m := testManager(t)
-		source := create(t, m, "source")
-		target := create(t, m, "target")
-		configureRouter(t, m, source.ID, "http://127.0.0.1:1")
-		if err := m.instances[source.ID].config.Replace("BOT_NAME=new-generation\n"); err != nil {
-			t.Fatal(err)
-		}
-		if err := m.instances[target.ID].config.Replace("BOT_NAME=old-generation\n"); err != nil {
-			t.Fatal(err)
-		}
-		transaction := stageTestCopy(t, m, target.ID, source.ID)
-		m.Close()
-		next, err := New(m.root, m.global, m.sharedPathForTest())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer next.Close()
-		if got := next.instances[target.ID].config.Get("BOT_NAME"); got != "old-generation" {
-			t.Fatalf("preparing transaction exposed %q", got)
-		}
-		if len(next.instances[target.ID].runtime.Engine.ModelRouter.Active().Endpoints) != 0 {
-			t.Fatal("preparing transaction exposed the new router")
-		}
-		for _, path := range []string{transactionPath(next.dir(target.ID)), filepath.Join(next.dir(target.ID), transaction.Stage)} {
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Fatalf("preparing residue remains at %s: %v", path, err)
-			}
-		}
-	})
-
-	t.Run("committing completes the new configuration", func(t *testing.T) {
-		m := testManager(t)
-		source := create(t, m, "source")
-		target := create(t, m, "target")
-		configureRouter(t, m, source.ID, "http://127.0.0.1:1")
-		if err := m.instances[source.ID].config.Replace("BOT_NAME=new-generation\n"); err != nil {
-			t.Fatal(err)
-		}
-		if err := m.instances[target.ID].config.Replace("BOT_NAME=old-generation\n"); err != nil {
-			t.Fatal(err)
-		}
-		transaction := stageTestCopy(t, m, target.ID, source.ID)
-		transaction.Phase = copyCommitting
-		if _, err := writeCopyTransaction(m.dir(target.ID), transaction); err != nil {
-			t.Fatal(err)
-		}
-		// Simulate a crash after only the first of three target files was replaced.
-		stagedEnv, err := os.ReadFile(filepath.Join(m.dir(target.ID), transaction.Stage, ".env"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(target.ID), ".env"), stagedEnv, 0600); err != nil {
-			t.Fatal(err)
-		}
-		m.Close()
-		next, err := New(m.root, m.global, m.sharedPathForTest())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer next.Close()
-		if got := next.instances[target.ID].config.Get("BOT_NAME"); got != "new-generation" {
-			t.Fatalf("committing transaction did not expose the new env: %q", got)
-		}
-		active := next.instances[target.ID].runtime.Engine.ModelRouter.Active()
-		if len(active.Endpoints) != 1 || len(active.Models) != 1 || active.Models[0].EndpointID != active.Endpoints[0].ID {
-			t.Fatal("committing transaction exposed a mixed model configuration")
-		}
-		for _, path := range []string{transactionPath(next.dir(target.ID)), filepath.Join(next.dir(target.ID), transaction.Stage)} {
-			if _, err := os.Stat(path); !os.IsNotExist(err) {
-				t.Fatalf("committing residue remains at %s: %v", path, err)
-			}
-		}
-	})
-}
-
-func TestCopyKeepsRecoveryMaterialAfterCommittedJournalSyncFailure(t *testing.T) {
+func TestCreateSQLRuntimeFailureRetainsRepairableInstance(t *testing.T) {
 	m := testManager(t)
-	source := create(t, m, "source")
-	target := create(t, m, "target")
-	if err := m.instances[source.ID].config.Replace("BOT_NAME=new-generation\n"); err != nil {
+	builder := m.buildRuntime
+	m.buildRuntime = func(*Manager, *managed, *instanceconfig.Store, bool) (*Runtime, error) {
+		return nil, errors.New("synthetic initialization failure")
+	}
+	info, err := m.Create("repairable")
+	if err != nil || info.Error == "" || info.Enabled {
+		t.Fatalf("create state = %+v, %v", info, err)
+	}
+	records, _, err := m.db.LoadInstances(context.Background())
+	if err != nil || len(records) != 1 || records[0].Error == "" {
+		t.Fatalf("failed instance not persisted: %+v %v", records, err)
+	}
+	m.buildRuntime = builder
+	if err := m.Enable(info.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.instances[target.ID].config.Replace("BOT_NAME=old-generation\n"); err != nil {
-		t.Fatal(err)
-	}
-
-	originalWrite := writeCopyFile
-	injected := false
-	writeCopyFile = func(path string, data []byte, mode os.FileMode) (bool, error) {
-		if !injected && filepath.Base(path) == copyTransactionFile && strings.Contains(string(data), `"phase": "committing"`) {
-			if err := instanceconfig.WriteAtomic(path, data, mode); err != nil {
-				return false, err
-			}
-			injected = true
-			return true, errors.New("synthetic directory sync failure")
-		}
-		return originalWrite(path, data, mode)
-	}
-	err := m.Copy(target.ID, source.ID)
-	writeCopyFile = originalWrite
-	if err == nil || !injected {
-		t.Fatalf("copy error=%v injected=%v", err, injected)
-	}
-	transaction, readErr := readCopyTransaction(m.dir(target.ID), target.ID)
-	if readErr != nil || transaction == nil || transaction.Phase != copyCommitting {
-		t.Fatalf("committed recovery journal missing: transaction=%+v err=%v", transaction, readErr)
-	}
-	if _, statErr := os.Stat(filepath.Join(m.dir(target.ID), transaction.Stage)); statErr != nil {
-		t.Fatalf("copy recovery stage was removed: %v", statErr)
-	}
-	if m.instances[target.ID].runtime != nil {
-		t.Fatal("target runtime exposed files while commit durability was uncertain")
-	}
-	oldEnv, readErr := os.ReadFile(filepath.Join(m.dir(target.ID), ".env"))
-	if readErr != nil || !strings.Contains(string(oldEnv), "BOT_NAME=old-generation") {
-		t.Fatalf("target files changed before durable commit: %q err=%v", oldEnv, readErr)
-	}
-
-	if err = m.Enable(target.ID, false); err != nil {
-		t.Fatal(err)
-	}
-	if got := m.instances[target.ID].config.Get("BOT_NAME"); got != "new-generation" {
-		t.Fatalf("recovery did not complete new configuration: %q", got)
-	}
-	if _, statErr := os.Stat(transactionPath(m.dir(target.ID))); !os.IsNotExist(statErr) {
-		t.Fatalf("recovered journal remains: %v", statErr)
+	records, _, err = m.db.LoadInstances(context.Background())
+	if err != nil || !records[0].Enabled || records[0].Error != "" {
+		t.Fatalf("repair not persisted: %+v %v", records, err)
 	}
 }
 
-func TestCreateFailureRemovesOwnedDirectory(t *testing.T) {
-	m := testManager(t)
-	if err := os.Mkdir(filepath.Join(m.root, "instances.json"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.Create("must-fail"); err == nil {
-		t.Fatal("create unexpectedly succeeded")
-	}
-	paths, err := filepath.Glob(filepath.Join(m.root, "instance_*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(paths) != 0 {
-		t.Fatalf("failed creation left orphan paths: %v", paths)
-	}
-}
-func (m *Manager) sharedPathForTest() string {
-	return filepath.Join(filepath.Dir(m.root), "dialogue.yml")
-}
 func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1013,7 +796,7 @@ func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 	if m.instances[a.ID].runtime.Engine.SessionManager.Count() != 0 || len(m.instances[a.ID].logger.Snapshot()) != 0 {
 		t.Fatal("transient state survived stop")
 	}
-	if err = m.Delete(a.ID, true); err != nil {
+	if err = deleteSQLInstance(m, a.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, resp, err = websocket.DefaultDialer.Dial(wsURL, nil)
@@ -1022,28 +805,36 @@ func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 	}
 }
 
-func TestCopyRollbackOnReloadFailure(t *testing.T) {
+func TestSQLCopyRuntimeFailureIsReportedAndRepairable(t *testing.T) {
 	m := testManager(t)
-	src := create(t, m, "source")
-	dst := create(t, m, "target")
-	configureRouter(t, m, src.ID, "http://127.0.0.1:1")
-	original, _ := m.instances[dst.ID].config.Raw()
-	path := filepath.Join(m.dir(dst.ID), "group_summaries.json")
-	if err := os.WriteFile(path, []byte("invalid"), 0600); err != nil {
+	src, dst := create(t, m, "source"), create(t, m, "target")
+	if err := m.instances[src.ID].config.Update("BOT_NAME", "copied", false); err != nil {
 		t.Fatal(err)
 	}
+	builder := m.buildRuntime
+	m.buildRuntime = func(manager *Manager, item *managed, config *instanceconfig.Store, enabled bool) (*Runtime, error) {
+		if item.id == dst.ID {
+			return nil, errors.New("synthetic runtime failure")
+		}
+		return builder(manager, item, config, enabled)
+	}
 	if err := m.Copy(dst.ID, src.ID); err == nil {
-		t.Fatal("copy succeeded despite invalid target storage")
+		t.Fatal("runtime failure not reported")
 	}
-	raw, _ := os.ReadFile(filepath.Join(m.dir(dst.ID), ".env"))
-	if string(raw) != original {
-		t.Fatal("settings not rolled back")
+	for _, info := range m.registry.Instances {
+		if info.ID == dst.ID && (info.Enabled || info.Error == "") {
+			t.Fatalf("failed copy state = %+v", info)
+		}
 	}
-	if len(m.instances[dst.ID].runtime.Engine.ModelRouter.Active().Endpoints) != 0 {
-		t.Fatal("live router changed after rollback")
+	if m.instances[dst.ID].runtime != nil {
+		t.Fatal("failed copy retained a stale runtime")
 	}
-	if _, err := os.Stat(filepath.Join(m.dir(dst.ID), "model_router.json")); !os.IsNotExist(err) {
-		t.Fatal("new model config was not rolled back", err)
+	m.buildRuntime = builder
+	if err := m.Enable(dst.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if m.instances[dst.ID].runtime.Scope.Getenv("BOT_NAME") != "copied" {
+		t.Fatal("committed SQL settings lost after repair")
 	}
 }
 func TestDeleteCancelsInFlightLLMWithoutResurrection(t *testing.T) {
@@ -1076,7 +867,7 @@ func TestDeleteCancelsInFlightLLMWithoutResurrection(t *testing.T) {
 		t.Fatal("LLM not reached")
 	}
 	done := make(chan error, 1)
-	go func() { done <- m.Delete(info.ID, true) }()
+	go func() { done <- deleteSQLInstance(m, info.ID) }()
 	select {
 	case err = <-done:
 		if err != nil {
@@ -1098,11 +889,9 @@ func TestMalformedInstanceDoesNotStopControlPlane(t *testing.T) {
 	m := testManager(t)
 	bad := create(t, m, "bad")
 	good := create(t, m, "good")
-	if err := os.WriteFile(filepath.Join(m.dir(bad.ID), ".env"), []byte("NOT VALID = \"unterminated"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	setInvalidConnection(t, m, bad.ID)
 	m.Close()
-	next, err := New(m.root, m.global, m.sharedPathForTest())
+	next, err := NewDatabase(m.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1113,7 +902,7 @@ func TestMalformedInstanceDoesNotStopControlPlane(t *testing.T) {
 	if err = next.Enable(bad.ID, true); err == nil {
 		t.Fatal("bad instance enabled")
 	}
-	w := rpc(t, next, bad.ID, "SettingsService/UpdateRawEnvFile", `{"content":"BOT_NAME=repaired\n"}`, false)
+	w := rpc(t, next, bad.ID, "SettingsService/UpdateEnvVar", `{"key":"ONEBOT_WS_URL","value":"ws://127.0.0.1:1"}`, false)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -1122,135 +911,9 @@ func TestMalformedInstanceDoesNotStopControlPlane(t *testing.T) {
 	}
 }
 
-func TestWindowsCredentialCloneAndCleanupWithoutRuntime(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows Credential Manager")
-	}
-	m := testManager(t)
-	src := create(t, m, "source")
-	dst := create(t, m, "target")
-	r := m.instances[src.ID].runtime.Engine.ModelRouter
-	endpointID := "endpoint_credential_" + src.ID
-	target := modelrouter.CredentialTarget(endpointID)
-	cfg := r.Draft()
-	cfg.Endpoints = []modelrouter.Endpoint{{ID: endpointID, DisplayName: "synthetic", BaseURL: "http://127.0.0.1:1", Enabled: true, APIKeySource: modelrouter.APIKeyStorageWindowsCredentialManager, APIKeyRef: target}}
-	if err := r.SaveDraft(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.SetDraftEndpointSecret(endpointID, "synthetic-credential-test-value"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Publish(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = modelrouter.ApplyCredentials([]modelrouter.CredentialChange{{Target: target}}) })
-	if err := m.Copy(dst.ID, src.ID); err != nil {
-		t.Fatal(err)
-	}
-	cloned := m.instances[dst.ID].runtime.Engine.ModelRouter.Active().Endpoints[0]
-	t.Cleanup(func() {
-		_, _ = modelrouter.ApplyCredentials([]modelrouter.CredentialChange{{Target: cloned.APIKeyRef}})
-	})
-	if cloned.ID == endpointID || cloned.APIKeyRef != modelrouter.CredentialTarget(cloned.ID) {
-		t.Fatal("credential reference not remapped")
-	}
-	// Compare without exposing any credential value in test output.
-	secrets, err := modelrouter.CredentialExists(cloned.ID)
-	if err != nil || !secrets {
-		t.Fatal("cloned credential missing", err)
-	}
-	if err = os.WriteFile(filepath.Join(m.dir(src.ID), "group_summaries.json"), []byte("invalid-json"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	m.Close()
-	restarted, err := New(m.root, m.global, m.sharedPathForTest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer restarted.Close()
-	if restarted.instances[src.ID].runtime != nil {
-		t.Fatal("expected failed runtime")
-	}
-	if err = restarted.Delete(src.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	exists, err := modelrouter.CredentialExists(endpointID)
-	if err != nil || exists {
-		t.Fatal("credential leaked without runtime", err)
-	}
-	if err = restarted.Delete(dst.ID, false); err != nil {
-		t.Fatal(err)
-	}
-	exists, err = modelrouter.CredentialExists(cloned.ID)
-	if err != nil || exists {
-		t.Fatal("cloned credential leaked", err)
-	}
-}
-
-func TestWindowsCredentialCopyTransactionRecovery(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("Windows Credential Manager")
-	}
-	m := testManager(t)
-	source := create(t, m, "source")
-	target := create(t, m, "target")
-	router := m.instances[source.ID].runtime.Engine.ModelRouter
-	endpointID := "endpoint_recovery_" + source.ID
-	sourceTarget := modelrouter.CredentialTarget(endpointID)
-	cfg := router.Draft()
-	cfg.Endpoints = []modelrouter.Endpoint{{ID: endpointID, DisplayName: "synthetic", BaseURL: "http://127.0.0.1:1", Enabled: true, APIKeySource: modelrouter.APIKeyStorageWindowsCredentialManager, APIKeyRef: sourceTarget}}
-	if err := router.SaveDraft(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := router.SetDraftEndpointSecret(endpointID, "synthetic-recovery-secret"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := router.Publish(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = modelrouter.ApplyCredentials([]modelrouter.CredentialChange{{Target: sourceTarget}}) })
-
-	transaction := stageTestCopy(t, m, target.ID, source.ID)
-	transaction.Phase = copyCommitting
-	if _, err := writeCopyTransaction(m.dir(target.ID), transaction); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := os.ReadFile(transactionPath(m.dir(target.ID)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(manifest), "synthetic-recovery-secret") {
-		t.Fatal("copy transaction manifest persisted credential material")
-	}
-	m.Close()
-	next, err := New(m.root, m.global, m.sharedPathForTest())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer next.Close()
-	active := next.instances[target.ID].runtime.Engine.ModelRouter.Active()
-	if len(active.Endpoints) != 1 {
-		t.Fatal("recovered endpoint missing")
-	}
-	cloned := active.Endpoints[0]
-	t.Cleanup(func() {
-		_, _ = modelrouter.ApplyCredentials([]modelrouter.CredentialChange{{Target: cloned.APIKeyRef}})
-	})
-	exists, err := modelrouter.CredentialExists(cloned.ID)
-	if err != nil || !exists {
-		t.Fatal("recovered credential missing", err)
-	}
-	if _, err := os.Stat(transactionPath(next.dir(target.ID))); !os.IsNotExist(err) {
-		t.Fatal("recovered credential transaction was not cleaned", err)
-	}
-}
-
 func tombstoneInstanceForTest(t *testing.T, m *Manager, id string) {
 	t.Helper()
-	if err := m.update(id, func(info *Info) {
-		info.Enabled = false
-		info.Deleting = true
-	}); err != nil {
+	if err := m.PrepareDeletion(id); err != nil {
 		t.Fatal(err)
 	}
 	item := m.instances[id]
@@ -1289,7 +952,7 @@ func TestDeletingTombstoneRejectsLifecycleAndCopyOperations(t *testing.T) {
 		if _, err := os.Stat(m.dir(target.ID)); !os.IsNotExist(err) {
 			t.Fatalf("deleting target directory was recreated: %v", err)
 		}
-		if err := m.Delete(target.ID, true); err != nil {
+		if err := m.ConfirmDeletion(target.ID); err != nil {
 			t.Fatalf("retry delete was rejected: %v", err)
 		}
 	})
@@ -1298,29 +961,23 @@ func TestDeletingTombstoneRejectsLifecycleAndCopyOperations(t *testing.T) {
 		m := testManager(t)
 		source := create(t, m, "source")
 		target := create(t, m, "target")
-		before, err := m.instances[target.ID].config.Raw()
-		if err != nil {
-			t.Fatal(err)
-		}
+		before := m.instances[target.ID].config.Snapshot()
 		tombstoneInstanceForTest(t, m, source.ID)
-		if err = os.RemoveAll(m.dir(source.ID)); err != nil {
+		if err := os.RemoveAll(m.dir(source.ID)); err != nil {
 			t.Fatal(err)
 		}
 
-		if err = m.Copy(target.ID, source.ID); !errors.Is(err, ErrDeleting) {
+		if err := m.Copy(target.ID, source.ID); !errors.Is(err, ErrDeleting) {
 			t.Fatalf("copy source error = %v, want ErrDeleting", err)
 		}
 		if m.instances[source.ID].runtime != nil {
 			t.Fatal("deleting source runtime was recreated")
 		}
-		after, err := m.instances[target.ID].config.Raw()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if after != before {
+		after := m.instances[target.ID].config.Snapshot()
+		if !reflect.DeepEqual(after, before) {
 			t.Fatal("target settings changed after rejecting deleting source")
 		}
-		if _, err = os.Stat(m.dir(source.ID)); !os.IsNotExist(err) {
+		if _, err := os.Stat(m.dir(source.ID)); !os.IsNotExist(err) {
 			t.Fatalf("deleting source directory was recreated: %v", err)
 		}
 	})
@@ -1576,7 +1233,7 @@ func TestLifecycleRejectsNonCanonicalIdentifiers(t *testing.T) {
 		if !errors.Is(m.Enable(id, true), os.ErrNotExist) {
 			t.Fatal("invalid enable ID accepted")
 		}
-		if !errors.Is(m.Delete(id, true), os.ErrNotExist) {
+		if !errors.Is(m.PrepareDeletion(id), os.ErrNotExist) {
 			t.Fatal("invalid delete ID accepted")
 		}
 		if !errors.Is(m.Copy(info.ID, id), os.ErrNotExist) {
@@ -1596,39 +1253,30 @@ func TestInstanceDialogueIsolation(t *testing.T) {
 	a := create(t, m, "instance-a")
 	b := create(t, m, "instance-b")
 
-	pathA := filepath.Join(m.dir(a.ID), "dialogue.yml")
-	pathB := filepath.Join(m.dir(b.ID), "dialogue.yml")
-	if _, err := os.Stat(pathA); err != nil {
-		t.Fatalf("instance A dialogue file missing: %v", err)
-	}
-	if _, err := os.Stat(pathB); err != nil {
-		t.Fatalf("instance B dialogue file missing: %v", err)
-	}
-
 	saveBodyA := `{"dialogues":[{"id":"1","user":"早上好","preferred":"主人早上好呀嗷呜~"}]}`
 	wA := rpc(t, m, a.ID, "DialogueService/SaveDialogues", saveBodyA, false)
 	if wA.Code != http.StatusOK {
 		t.Fatalf("SaveDialogues for A failed: %d %s", wA.Code, wA.Body.String())
 	}
 
-	rawA, err := os.ReadFile(pathA)
+	rawA, err := dialogue.LoadPromptSQL(m.db, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(rawA), "主人早上好呀嗷呜~") {
-		t.Fatalf("instance A dialogue.yml does not contain saved content: %s", string(rawA))
+		t.Fatalf("instance A SQL dialogue does not contain saved content: %s", string(rawA))
 	}
 	promptA := m.instances[a.ID].runtime.Engine.PersonaDialogue()
 	if !strings.Contains(promptA, "主人早上好呀嗷呜~") {
 		t.Fatalf("instance A Engine.PersonaDialogue() not updated: %s", promptA)
 	}
 
-	rawB, err := os.ReadFile(pathB)
+	rawB, err := dialogue.LoadPromptSQL(m.db, b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(rawB), "主人早上好呀嗷呜~") {
-		t.Fatalf("instance B dialogue.yml was contaminated by instance A!")
+		t.Fatalf("instance B SQL dialogue was contaminated by instance A!")
 	}
 	promptB := m.instances[b.ID].runtime.Engine.PersonaDialogue()
 	if strings.Contains(promptB, "主人早上好呀嗷呜~") {
@@ -1638,26 +1286,28 @@ func TestInstanceDialogueIsolation(t *testing.T) {
 	if err := m.Copy(b.ID, a.ID); err != nil {
 		t.Fatalf("Copy A to B failed: %v", err)
 	}
-	rawBCopied, err := os.ReadFile(pathB)
+	rawBCopied, err := dialogue.LoadPromptSQL(m.db, b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(rawBCopied), "主人早上好呀嗷呜~") {
-		t.Fatalf("after Copy, instance B dialogue.yml missing cloned dialogue: %s", string(rawBCopied))
+		t.Fatalf("after Copy, instance B SQL dialogue missing cloned dialogue: %s", string(rawBCopied))
 	}
 	promptBCopied := m.instances[b.ID].runtime.Engine.PersonaDialogue()
 	if !strings.Contains(promptBCopied, "主人早上好呀嗷呜~") {
 		t.Fatalf("after Copy, instance B Engine.PersonaDialogue() missing cloned dialogue: %s", promptBCopied)
 	}
 
-	if err := m.Delete(a.ID, true); err != nil {
+	if err := deleteSQLInstance(m, a.ID); err != nil {
 		t.Fatalf("Delete A failed: %v", err)
 	}
-	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
-		t.Fatalf("after Delete, instance A dialogue file still exists!")
+	var remaining int
+	if err := m.db.SQL.QueryRow("SELECT COUNT(*) FROM dialogues WHERE instance_id = ?", a.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("deleted instance dialogue rows = %d, err=%v", remaining, err)
 	}
-	if _, err := os.Stat(pathB); err != nil {
-		t.Fatalf("instance B dialogue file was affected by instance A delete: %v", err)
+	peer, err := dialogue.LoadPromptSQL(m.db, b.ID)
+	if err != nil || !strings.Contains(peer, "主人早上好呀嗷呜~") {
+		t.Fatalf("peer dialogue affected by deletion: %v", err)
 	}
 }
 
@@ -1891,19 +1541,19 @@ func TestInstanceSystemPromptIsolation(t *testing.T) {
 		t.Fatalf("UpdateEnvVar for A failed: code=%d body=%s", wA.Code, wA.Body.String())
 	}
 
-	// 3. Verify instance A reflects the new prompt in config, scope, and persisted .env file.
+	// 3. Verify instance A reflects the new prompt in config, scope, and persisted SQL settings.
 	if got := m.instances[a.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
 		t.Fatalf("instance A config SYSTEM_PROMPT not updated: got %q", got)
 	}
 	if got := m.instances[a.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != customPromptA {
 		t.Fatalf("instance A runtime Scope.Getenv(SYSTEM_PROMPT) not hot-reloaded: got %q", got)
 	}
-	rawA, err := os.ReadFile(filepath.Join(m.dir(a.ID), ".env"))
+	persisted, err := instanceconfig.OpenDatabase(m.db, a.ID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(rawA), "SYSTEM_PROMPT=") {
-		t.Fatalf("instance A .env file missing SYSTEM_PROMPT: %s", string(rawA))
+	if got := persisted.Get("SYSTEM_PROMPT"); got != customPromptA {
+		t.Fatalf("persisted SYSTEM_PROMPT = %q", got)
 	}
 
 	// 4. Verify instance B and global config are completely isolated from instance A's mutation.
@@ -1929,7 +1579,7 @@ func TestInstanceSystemPromptIsolation(t *testing.T) {
 	}
 
 	// 6. Test Delete: deleting instance A should not affect instance B's prompt.
-	if err := m.Delete(a.ID, true); err != nil {
+	if err := deleteSQLInstance(m, a.ID); err != nil {
 		t.Fatalf("Delete A failed: %v", err)
 	}
 	if got := m.instances[b.ID].config.Get("SYSTEM_PROMPT"); got != customPromptA {
@@ -1980,75 +1630,42 @@ func TestInstanceDialogueLogProvenance(t *testing.T) {
 	}
 }
 
-func TestLegacySharedSystemPromptBreakingMigrationBoundary(t *testing.T) {
-	// Simulate upgrading from a legacy setup where SYSTEM_PROMPT was defined globally in root .env
-	// and instances did NOT have SYSTEM_PROMPT in their local .env files.
-	root := t.TempDir()
-	globalPath := filepath.Join(root, "global.env")
-	// Legacy root .env had SYSTEM_PROMPT.
-	if err := os.WriteFile(globalPath, []byte("LISTEN_ADDR=127.0.0.1:8080\nSYSTEM_PROMPT=legacy-shared-sentinel\n"), 0600); err != nil {
+func TestSQLStartupIgnoresAndPreservesLegacyFiles(t *testing.T) {
+	m := testManager(t)
+	info := create(t, m, "sql-instance")
+	if err := m.instances[info.ID].config.Update("SYSTEM_PROMPT", "sql-only-sentinel", false); err != nil {
 		t.Fatal(err)
 	}
-	global, err := instanceconfig.Open(globalPath, true)
+	paths := []string{filepath.Join(m.root, "instances.json"), filepath.Join(m.root, "endpoint_ids.json"), filepath.Join(m.root, ".env")}
+	for _, name := range []string{".env", "brain.json", "group_summaries.json", "model_router.json", "memory_catalog.json", "mcp_servers.json", "dialogue.yml", ".copy-transaction.json"} {
+		paths = append(paths, filepath.Join(m.dir(info.ID), name))
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("legacy-sentinel-invalid-format"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.Close()
+	next, err := NewDatabase(m.root)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Legacy instance directory created before the persona split (no SYSTEM_PROMPT in .env).
-	legacyID := "12345678"
-	legacyDir := filepath.Join(root, "instance_"+legacyID)
-	if err := os.MkdirAll(legacyDir, 0700); err != nil {
+	t.Cleanup(next.Close)
+	infos, _ := next.List()
+	if len(infos) != 1 || infos[0].ID != info.ID {
+		t.Fatalf("legacy registry affected SQL instances: %+v", infos)
+	}
+	if err := next.Enable(info.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	legacyEnv := "BOT_NAME=legacy-fox\nBOT_ALIASES=fox\n"
-	if err := os.WriteFile(filepath.Join(legacyDir, ".env"), []byte(legacyEnv), 0600); err != nil {
-		t.Fatal(err)
+	if got := next.instances[info.ID].runtime.Scope.Getenv("SYSTEM_PROMPT"); got != "sql-only-sentinel" {
+		t.Fatalf("legacy files affected SQL prompt: %q", got)
 	}
-	// Write registry with legacy instance.
-	registryData := fmt.Sprintf(`{"instances":[{"id":%q,"name":"LegacyInstance","enabled":true}]}`, legacyID)
-	if err := os.WriteFile(filepath.Join(root, "instances.json"), []byte(registryData), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	m, err := New(root, global, filepath.Join(root, "template-dialogue.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
-
-	// 1. Verify global store does not expose SYSTEM_PROMPT (it is no longer in GlobalKeys).
-	if got := global.Get("SYSTEM_PROMPT"); got != "" {
-		t.Fatalf("global store exposed non-global key SYSTEM_PROMPT: %q", got)
-	}
-
-	// 2. Verify legacy instance does NOT silently migrate/backfill legacy shared prompt.
-	inst := m.instances[legacyID]
-	if inst == nil {
-		t.Fatalf("legacy instance not loaded")
-	}
-	if got := inst.config.Get("SYSTEM_PROMPT"); got != "" {
-		t.Fatalf("legacy instance unexpectedly migrated/backfilled SYSTEM_PROMPT in config: %q", got)
-	}
-	if got := inst.runtime.Scope.Getenv("SYSTEM_PROMPT"); got != "" {
-		t.Fatalf("legacy instance runtime Scope unexpectedly resolved legacy shared prompt: %q", got)
-	}
-
-	// 3. Verify .env file on disk was not modified with implicit migration data.
-	diskEnv, err := os.ReadFile(filepath.Join(legacyDir, ".env"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(diskEnv), "SYSTEM_PROMPT") {
-		t.Fatalf("legacy instance .env was modified by implicit migration: %s", string(diskEnv))
-	}
-
-	// 4. In contrast, freshly created instances explicitly receive the new default template.
-	fresh, err := m.Create("fresh-instance")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := m.instances[fresh.ID].config.Get("SYSTEM_PROMPT"); got != "你是一个乐于助人的助手。" {
-		t.Fatalf("fresh instance did not receive template prompt: %q", got)
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil || string(content) != "legacy-sentinel-invalid-format" {
+			t.Fatalf("legacy file changed: %s: %v", path, err)
+		}
 	}
 }
 
