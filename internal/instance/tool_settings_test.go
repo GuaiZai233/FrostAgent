@@ -43,9 +43,8 @@ func TestTimeSleepRegistrationAndInstanceSettings(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("save timeout: %d %s", response.Code, response.Body.String())
 	}
-	if engine != m.instances[a.ID].runtime.Engine {
-		t.Fatal("timeout setting restarted runtime")
-	}
+	engine = m.instances[a.ID].runtime.Engine
+	tool = engine.ToolRegistry[timesleep.ToolName]
 	_, err := tool.(core.StructuredToolExecutor).ExecuteResult(context.Background(), `{"seconds":1}`)
 	if !errors.Is(err, timesleep.ErrTimeout) {
 		t.Fatalf("runtime ignored live timeout: %v", err)

@@ -61,7 +61,7 @@ type Runtime struct {
 	onebotClient   bool
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB, settingsWriteMu tools.ConfigWriteLock) (*Runtime, error) {
+func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB, settingsWriteMu tools.ConfigWriteLock) (*Runtime, error) {
 	if err := safeTree(dir); err != nil {
 		return nil, err
 	}
@@ -92,20 +92,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			scope.Wait()
 		}
 	}()
-	var routerManager *modelrouter.Manager
-	if db != nil {
-		routerManager = modelrouter.NewSQL(db, instanceID, scope)
-		routerManager.EnableRuntimeFallback()
-	} else {
-		routerManager = modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
-	}
+	routerManager := modelrouter.NewSQL(db, instanceID, scope)
+	routerManager.EnableRuntimeFallback()
 	if err := routerManager.LoadError(); err != nil {
 		if enabled {
 			return nil, err
 		}
 		scope.Log().Error(logs.SYSTEM, fmt.Sprintf("模型路由配置不可用，已进入未配置状态: %v", err))
 	}
-	tokenUsage, usageErr := tokenusage.New(db, instanceID, filepath.Join(dir, "token_usage.json"))
+	tokenUsage, usageErr := tokenusage.New(db, instanceID, "")
 	if usageErr != nil {
 		scope.Log().Error(logs.SYSTEM, fmt.Sprintf("Token 用量无法读取，统计暂不可用: %v", usageErr))
 	}
@@ -131,41 +126,23 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 
 	// Initialize memory system
-	var store *memory.Store
-	var groupManager *memory.GroupManager
-	if db != nil {
-		store = memory.NewSQLStore(db, instanceID)
-		groupManager = memory.NewSQLGroupManager(db, instanceID, scope)
-	} else {
-		store = memory.NewStore(filepath.Join(dir, "brain.json"))
-		groupManager = memory.NewGroupManager(dir, scope)
-		if err := memory.MigrateLegacyGroupMemories(dir, store, groupManager, scope); err != nil {
-			return nil, fmt.Errorf("migrate legacy group memories: %w", err)
-		}
-	}
+	store := memory.NewSQLStore(db, instanceID)
+	groupManager := memory.NewSQLGroupManager(db, instanceID, scope)
 	reader := memory.NewReader(store, 20)
 	writer := memory.NewWriter(store)
 	writer.Scope = scope
 	writer.SetGroupManager(groupManager)
 	writer.SetLLM(memoryProvider, "model-router-memory-extract")
-	var groupSummaryStore *groupsummary.Store
-	var err error
-	if db != nil {
-		groupSummaryStore, err = groupsummary.NewSQLStore(db, instanceID)
-	} else {
-		groupSummaryStore, err = groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
-	}
+	groupSummaryStore, err := groupsummary.NewSQLStore(db, instanceID)
 	if err != nil {
 		return nil, err
 	}
 	sessionManager := llm.NewSessionManager(scope)
 	sessionManager.SetGroupSummaryStore(groupSummaryStore)
-	if db != nil {
-		checkpoints := sessionstate.New(db, instanceID, filepath.Join(dir, "session-checkpoints"),
-			func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
-		if err := sessionManager.EnablePersistence(checkpoints); err != nil {
-			scope.Log().Warn(logs.SYSTEM, "会话快照恢复不完整，已恢复可读取的记录；请检查存储状态")
-		}
+	checkpoints := sessionstate.New(db, instanceID, filepath.Join(dir, "session-checkpoints"),
+		func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
+	if err := sessionManager.EnablePersistence(checkpoints); err != nil {
+		scope.Log().Warn(logs.SYSTEM, "会话快照恢复不完整，已恢复可读取的记录；请检查存储状态")
 	}
 	groupCompactBufferSize := positiveIntFromEnv(scope, "GROUP_COMPACT_BUFFER_SIZE", 20)
 	groupCompactMaxBufferSize := positiveIntFromEnv(scope, "GROUP_COMPACT_MAX_BUFFER_SIZE", 0)
@@ -197,12 +174,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	// Gateway: conversation scope filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation
-	var catalog *memory.CatalogStore
-	if db != nil {
-		catalog = memory.NewSQLCatalogStore(db, instanceID, memory.ScopePrivate, "", "")
-	} else {
-		catalog = memory.NewCatalogStore(filepath.Join(dir, "memory_catalog.json"))
-	}
+	catalog := memory.NewSQLCatalogStore(db, instanceID, memory.ScopePrivate, "", "")
 	reflector := memory.NewReflector(
 		store,
 		catalog,
@@ -220,10 +192,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	reflections := memory.NewReflectionManager(reflector)
 	reflections.Scope = scope
 
-	var skillStore *skills.Store
-	if db != nil {
-		skillStore = skills.NewStore(db, instanceID)
-	}
+	skillStore := skills.NewStore(db, instanceID)
 
 	// Register tools
 	registry := make(map[string]tools.Tool)
@@ -272,13 +241,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	var summarizer *sticker.Summarizer
 	var stealer *sticker.Stealer
-	var stickerStore *sticker.Store
-	var err2 error
-	if db != nil {
-		stickerStore, err2 = sticker.NewSQLStore(db, instanceID, filepath.Join(dir, "sticker"))
-	} else {
-		stickerStore, err2 = sticker.NewStore(filepath.Join(dir, "sticker"))
-	}
+	stickerStore, err2 := sticker.NewSQLStore(db, instanceID, filepath.Join(dir, "sticker"))
 	if err2 != nil {
 		return nil, err2
 	} else {
@@ -310,26 +273,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	billingCfg := billing.LoadConfig(scope.Getenv)
 	dispatcher := core.NewDefaultDispatcher()
 
-	dialoguePath := filepath.Join(configDir, "dialogue.yml")
-	if db == nil {
-		if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
-			var dialogueContent []byte
-			if templateDialogue != "" {
-				dialogueContent, _ = os.ReadFile(templateDialogue)
-			}
-			if len(dialogueContent) == 0 {
-				dialogueContent = []byte("[]\n")
-			}
-			_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
-		}
-	}
-	var dialoguePrompt string
-	if db != nil {
-		dialoguePrompt, err = dialogue.LoadPromptSQL(db, instanceID)
-	} else {
-		dialoguePrompt, err = llm.LoadDialoguePrompt(dialoguePath)
-	}
-	if err != nil && !os.IsNotExist(err) {
+	dialoguePrompt, err := dialogue.LoadPromptSQL(db, instanceID)
+	if err != nil {
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
@@ -385,11 +330,9 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 智能体引擎初始化完成", "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after engine assignment)
-	if db != nil {
-		engine.ToolHistory = toolhistory.NewStore(db, instanceID)
-		engine.ChatHistory = chathistory.NewRecorder(chathistory.NewStore(db, instanceID), scope.Getenv,
-			func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
-	}
+	engine.ToolHistory = toolhistory.NewStore(db, instanceID)
+	engine.ChatHistory = chathistory.NewRecorder(chathistory.NewStore(db, instanceID), scope.Getenv,
+		func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
 	historyTool := tools.NewChatHistoryTool(engine)
 	engine.ToolRegistry[historyTool.Name()] = historyTool
 	toolHistoryTool := tools.NewToolHistoryTool(engine)
@@ -412,19 +355,13 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.Handle(botPath, botHandler)
 
 	settingsService := settings.NewScoped(config, global, sandboxManager)
-	backend := "sqlite"
-	if db != nil {
-		backend = string(db.Backend)
-	}
+	backend := string(db.Backend)
 	settingsService.SetEmbeddingStorage(backend, func(ctx context.Context) error {
 		if _, err := routerManager.Snapshot().Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{}); err != nil {
 			return fmt.Errorf("请先配置可用的 Embedding 模型路由: %w", err)
 		}
-		if db != nil {
-			_, err := db.EnsureEmbeddingStorage(ctx)
-			return err
-		}
-		return nil
+		_, err := db.EnsureEmbeddingStorage(ctx)
+		return err
 	})
 	mux.HandleFunc("/api/persistence", func(w http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
@@ -457,12 +394,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memoryService)
 	mux.Handle(memoryPath, memoryHandler)
 
-	var dialogueSvc *dialogue.Service
-	if db != nil {
-		dialogueSvc = dialogue.NewSQL(db, instanceID, engine, dialogue.WithLogger(logger))
-	} else {
-		dialogueSvc = dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
-	}
+	dialogueSvc := dialogue.NewSQL(db, instanceID, engine, dialogue.WithLogger(logger))
 	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
 		dialogueSvc,
 	)

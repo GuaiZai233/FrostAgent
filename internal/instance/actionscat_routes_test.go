@@ -4,29 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
-
-	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 )
 
 func TestManager_ActionsCatControlPlaneAuth(t *testing.T) {
-	t.Setenv("SANDBOX_ENABLED", "false")
-	dir := t.TempDir()
-	g, err := instanceconfig.Open(filepath.Join(dir, ".env"), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	testEnv := map[string]string{
 		"MCP_CONTROL_TOKEN": "ctrl_secret_token_888",
 	}
 
-	m, err := New(filepath.Join(dir, "data"), g, filepath.Join(dir, "dialogue.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(m.Close)
+	m := testManager(t)
 
 	// Set dynamic mcpGetenv so it reads from testEnv before creating instance
 	m.mcpGetenv = func(k string) string {

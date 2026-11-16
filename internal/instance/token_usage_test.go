@@ -129,7 +129,7 @@ func TestTokenUsageZIPRestoreAndLegacyCompatibility(t *testing.T) {
 	}
 }
 
-func TestCorruptUsageDoesNotBlockLegacyRuntime(t *testing.T) {
+func TestSQLUsageIgnoresCorruptLegacyFile(t *testing.T) {
 	m := testManager(t)
 	info := create(t, m, "Corrupt Usage")
 	path := filepath.Join(m.dir(info.ID), "token_usage.json")
@@ -141,7 +141,7 @@ func TestCorruptUsageDoesNotBlockLegacyRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := m.instances[info.ID].runtime
-	if runtime == nil || runtime.Engine == nil || runtime.Engine.TokenUsage != nil || runtime.Scope.Context().Err() != nil {
+	if runtime == nil || runtime.Engine == nil || runtime.Engine.TokenUsage == nil || runtime.Scope.Context().Err() != nil {
 		t.Fatal("usage corruption blocked runtime")
 	}
 	response := rpc(t, m, info.ID, "BotStatusService/GetOverview", "{}", false)
@@ -152,8 +152,8 @@ func TestCorruptUsageDoesNotBlockLegacyRuntime(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &overview); err != nil {
 		t.Fatal(err)
 	}
-	if overview["tokenUsage"] != nil {
-		t.Fatal("unavailable usage reported as available")
+	if overview["tokenUsage"] == nil {
+		t.Fatal("SQL usage not reported as available")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(data, corrupt) {

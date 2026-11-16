@@ -687,21 +687,19 @@ func TestProductionRuntimeSecurityGatewayTimeoutConfigAndOverride(t *testing.T) 
 	}
 }
 
-
-
 func TestSecurityGatewayTimeoutPrecedenceAndGlobalOverride(t *testing.T) {
 	m := testManager(t)
 	secCtrl := m.SecurityController()
 
-	// 1. Process environment only (instance and global empty) -> process env wins
+	// 1. SQL settings ignore the process environment.
 	t.Setenv("SECURITY_GATEWAY_TIMEOUT", "60s")
 	infoEnv := create(t, m, "sec-to-env")
 	if err := m.Enable(infoEnv.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	clsEnv := secCtrl.Watchdog.ClassifierForInstance(infoEnv.ID).(*security.LLMClassifier)
-	if clsEnv.Timeout() != 60*time.Second {
-		t.Fatalf("expected process env timeout 60s, got %v", clsEnv.Timeout())
+	if clsEnv.Timeout() != security.DefaultClassifierTimeout {
+		t.Fatalf("expected SQL default timeout, got %v", clsEnv.Timeout())
 	}
 
 	// 2. Global config overrides process environment

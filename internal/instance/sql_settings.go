@@ -157,7 +157,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 	if old != nil {
 		old.Stop()
 	}
-	r, c, err := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	r, c, err := m.buildFresh(i.id, i, enabled)
 	if err == nil && enabled && i.mcp != nil {
 		err = i.mcp.SetRuntimeActive(true)
 	}
@@ -189,7 +189,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 			applyErr = errors.Join(applyErr, currentConfig.Update(key, value, false))
 		}
 	}
-	fallback, fallbackConfig, fallbackErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	fallback, fallbackConfig, fallbackErr := m.buildFresh(i.id, i, enabled)
 	if fallbackErr == nil && enabled && i.mcp != nil {
 		fallbackErr = i.mcp.SetRuntimeActive(true)
 	}
