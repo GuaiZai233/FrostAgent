@@ -154,11 +154,14 @@ message GroupMessageInfoProto {
   string content = 4;
   string message_id = 5;
   string time = 6;
+  // Internal tool timeline annotation, distinct from a delivered assistant reply.
+  string tool_history_run_id = 7;
 }
 
 message SessionHistoryMessageProto {
   string role = 1;
   string content = 2;
+  string tool_history_run_id = 3;
 }
 
 message GetSessionContextResponse {

@@ -161,7 +161,11 @@ func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
 	if !ok {
 		return
 	}
-	line := record.Tool + " (ref_id: " + record.RefID + ")"
+	label := "工具调用"
+	if record.Tool == "read_tool_history" {
+		label = "历史回查"
+	}
+	line := "- " + label + ": " + record.Tool + " (ref_id: " + record.RefID + ")"
 	if record.Tool == "read_tool_history" {
 		var args struct {
 			Ref string `json:"read_target_ref_id"`
@@ -171,7 +175,7 @@ func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
 		}
 	}
 	session.mu.Lock()
-	defer session.mu.Unlock()
+	defer session.unlockCheckpoint()
 	if run.Epoch != 0 && session.epoch != run.Epoch {
 		return
 	}
@@ -181,10 +185,10 @@ func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
 			return
 		}
 	}
-	header := "【工具调用记录；原文可用 read_tool_history 回查】"
+	header := "【工具执行记录】"
 	if record.SourceMessageID != "" {
 		encoded, _ := json.Marshal(record.SourceMessageID)
-		header += " 来源消息: " + string(encoded)
+		header += "\n来源消息: " + string(encoded)
 	}
 	session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: header + "\n" + strings.TrimSpace(line)})
 	session.History[len(session.History)-1].ToolHistoryRunID = record.RunID

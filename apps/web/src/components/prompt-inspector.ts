@@ -4,6 +4,7 @@ import { escapeHtml, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
+import { parseToolHistoryNote, readTargetFromArguments, renderToolActivity, type ToolActivity, type ToolActivityEntry } from './tool-activity';
 
 export interface GroupMessageItem {
   id?: string;
@@ -13,6 +14,8 @@ export interface GroupMessageItem {
   role?: 'user' | 'assistant';
   content: string;
   rawText: string;
+  toolHistoryRunId?: string;
+  toolActivity?: ToolActivity;
   isSummarized?: boolean;
   promptContexts?: Array<{ name: string; content: string }>;
 }
@@ -36,6 +39,7 @@ export interface StructuredGroupMessage {
   content: string;
   messageId: string;
   time: string;
+  toolHistoryRunId?: string;
 }
 
 export interface PromptImage {
@@ -105,6 +109,7 @@ export interface ParsedPrompt {
   /** Group compact is disabled for this group (outside the group compact whitelist). */
   compactDisabled?: boolean;
   recentMessages: GroupMessageItem[];
+  requestMessages?: GroupMessageItem[];
   summaryGroups: SummaryGroupInfo[];
   responseContext?: string;
   systemContext?: string;
@@ -230,6 +235,7 @@ function parseStructuredMessageJSONLine(line: string): GroupMessageItem | null {
       time: typeof record.time === 'string' ? record.time : undefined,
       content: record.content,
       rawText: line,
+      toolHistoryRunId: typeof record.tool_history_run_id === 'string' ? record.tool_history_run_id : undefined,
     };
   } catch {
     return null;
@@ -245,6 +251,7 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
     time: record.time || undefined,
     content: record.content,
     rawText: JSON.stringify(record),
+    toolHistoryRunId: record.toolHistoryRunId,
   };
 }
 
@@ -315,7 +322,7 @@ export function buildInspectorDataFromSessionContext(context: {
   systemPrompt?: string;
   model?: string;
   recentStructuredMessages?: StructuredGroupMessage[];
-  history?: Array<{ role: string; content: string }>;
+  history?: Array<{ role: string; content: string; toolHistoryRunId?: string }>;
 }, instanceBotName?: string): ParsedPrompt {
   const privateSession = isPrivateSession(context.sessionId);
   const configuredBotName = (instanceBotName || context.botName || '').trim();
@@ -351,6 +358,7 @@ export function buildInspectorDataFromSessionContext(context: {
       content: message.content,
       rawText: message.content,
       isSummarized: false,
+      toolHistoryRunId: message.toolHistoryRunId,
     }));
   }
 
@@ -412,7 +420,9 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
 
       if (Array.isArray(json.messages)) {
         let lastUserContent: string | undefined;
-        for (const m of json.messages as Array<{ role?: string; content?: unknown }>) {
+        const requestMessages: GroupMessageItem[] = [];
+        const callsById = new Map<string, ToolActivityEntry>();
+        for (const m of json.messages as Array<{ role?: string; content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; tool_call_id?: string; tool_history_run_id?: string }>) {
           const role = m.role || 'unknown';
           let contentStr = '';
           if (typeof m.content === 'string') {
@@ -439,6 +449,31 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
           } else if (role === 'user') {
             lastUserContent = contentStr;
           }
+          if ((role === 'user' || role === 'assistant') && contentStr) {
+            requestMessages.push({ role, content: contentStr, rawText: contentStr, toolHistoryRunId: m.tool_history_run_id });
+          }
+          if (role === 'assistant' && Array.isArray(m.tool_calls)) {
+            const entries: ToolActivityEntry[] = [];
+            for (const call of m.tool_calls) {
+              if (typeof call?.function?.name !== 'string') continue;
+              const args = typeof call.function.arguments === 'string' ? call.function.arguments : '';
+              const entry: ToolActivityEntry = { tool: call.function.name, arguments: args, callId: call.id,
+                readTargetRefId: readTargetFromArguments(call.function.name, args), phase: 'call' };
+              entries.push(entry);
+              if (call.id) callsById.set(call.id, entry);
+            }
+            if (entries.length) requestMessages.push({ content: '', rawText: JSON.stringify(m), toolActivity: { entries } });
+          }
+          if (role === 'tool') {
+            const call = callsById.get(m.tool_call_id || '');
+            requestMessages.push({ content: '', rawText: contentStr, toolActivity: { entries: [{
+              tool: call?.tool || '未知工具', callId: m.tool_call_id, readTargetRefId: call?.readTargetRefId,
+              result: contentStr, phase: 'result',
+            }] } });
+          }
+        }
+        if (requestMessages.some((m) => m.toolActivity || (m.role === 'assistant' && (m.toolHistoryRunId || parseToolHistoryNote(m.content))))) {
+          result.requestMessages = requestMessages.map(privateHistoryMessage);
         }
         textToParse = lastUserContent ?? '';
       }
@@ -685,7 +720,7 @@ export function renderPromptInspector(
 
         <!-- Trigger User Message -->
         ${
-          parsed.userMessage
+          parsed.userMessage && !parsed.requestMessages?.length
             ? `
           <div class="prompt-section">
             <div class="prompt-section-header">
@@ -777,6 +812,14 @@ export function renderPromptInspector(
         `
             : ''
         }
+
+        ${parsed.requestMessages?.length ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header"><div class="prompt-section-title">${icon('code', 'w-3.5 h-3.5')}<span>实际请求对话与工具记录</span></div></div>
+            <div class="prompt-section-body"><div class="group-messages-container">
+              ${parsed.requestMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model, botName)).join('')}
+            </div></div>
+          </div>` : ''}
 
         <!-- Section 3: Pending / Uncompacted Recent Group Messages -->
         ${
@@ -1007,6 +1050,10 @@ function renderSingleMessageRow(
   model?: string,
   botName = DEFAULT_BOT_NAME,
 ): string {
+  if (msg.role === 'assistant' || msg.toolActivity) {
+    const activity = msg.toolActivity || parseToolHistoryNote(msg.content) || (msg.toolHistoryRunId ? { entries: [], raw: msg.content } : undefined);
+    if (activity) return renderToolActivity(activity);
+  }
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
   const isAssistant = msg.role === 'assistant';
   const roleClass = isAssistant ? 'is-assistant' : 'is-user';

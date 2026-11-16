@@ -425,8 +425,9 @@ func (s *Service) GetSessionContext(
 				for _, h := range history {
 					contentStr := llm.InspectionContent(h.Content)
 					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
-						Role:    h.Role,
-						Content: contentStr,
+						Role:             h.Role,
+						Content:          contentStr,
+						ToolHistoryRunId: h.ToolHistoryRunID,
 					})
 				}
 			}
@@ -509,12 +510,13 @@ func (s *Service) GetSessionContext(
 
 func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoProto {
 	return &v1.GroupMessageInfoProto{
-		Role:      message.Role,
-		Sender:    message.Sender,
-		SenderId:  message.SenderID,
-		Content:   message.Content,
-		MessageId: message.MessageID,
-		Time:      message.Time,
+		Role:             message.Role,
+		Sender:           message.Sender,
+		SenderId:         message.SenderID,
+		Content:          message.Content,
+		MessageId:        message.MessageID,
+		Time:             message.Time,
+		ToolHistoryRunId: message.ToolHistoryRunID,
 	}
 }
 
