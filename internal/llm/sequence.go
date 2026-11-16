@@ -284,10 +284,20 @@ func (s *SessionContext) DropMessage(id uint64) {
 	}
 }
 
+func cloneProviderState(state *core.ProviderState) *core.ProviderState {
+	if state == nil {
+		return nil
+	}
+	copy := *state
+	copy.Content = append(copy.Content[:0:0], state.Content...)
+	return &copy
+}
+
 func cloneMessages(messages []ChatMessage) []ChatMessage {
 	result := append([]ChatMessage(nil), messages...)
 	for i := range result {
 		result[i].ToolCalls = append([]ToolCall(nil), result[i].ToolCalls...)
+		result[i].ProviderState = cloneProviderState(result[i].ProviderState)
 		if parts, ok := result[i].Content.([]core.ContentPart); ok {
 			parts = append([]core.ContentPart(nil), parts...)
 			for j := range parts {

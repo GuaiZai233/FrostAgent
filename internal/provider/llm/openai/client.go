@@ -143,9 +143,18 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 			Content:    msg.Content,
 			ToolCallID: msg.ToolCallID,
 		}
-		if msg.Role == core.RoleAssistant && state.Matches(msg, reasoningStateFormat, req.Model, origin) {
-			if err := json.Unmarshal(msg.ProviderState.Content, &cm.ReasoningContent); err != nil {
-				return nil, fmt.Errorf("decode Chat Completions reasoning state: %w", err)
+		if msg.Role == core.RoleAssistant {
+			if state.Matches(msg, reasoningStateFormat, req.Model, origin) {
+				if err := json.Unmarshal(msg.ProviderState.Content, &cm.ReasoningContent); err != nil {
+					return nil, fmt.Errorf("decode Chat Completions reasoning state: %w", err)
+				}
+			}
+			// Tool-enabled thinking APIs require this field on every assistant
+			// turn, including synthetic, rewritten, and pre-upgrade history.
+			// An empty wire-only placeholder never replays mismatched state.
+			if cm.ReasoningContent == nil && len(req.Tools) > 0 {
+				empty := ""
+				cm.ReasoningContent = &empty
 			}
 		}
 		for _, tc := range msg.ToolCalls {

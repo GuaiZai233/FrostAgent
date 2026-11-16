@@ -78,6 +78,7 @@ func truncateRunes(value string, limit int) string {
 // answer was blocked or failed-closed by the security watchdog.
 type AgentRunResult struct {
 	Content          string
+	FinalMessage     *core.ChatMessage // Original terminal response; state is reusable only for identical confirmed text.
 	MemoryWritten    bool
 	Silent           bool
 	StaySilentCalled bool
@@ -892,6 +893,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		if runCanceled(ctx) {
 			result.Content = ""
+			result.FinalMessage = nil
 			result.Silent = true
 			result.SilenceReason = "canceled"
 			result.Error = context.Canceled
@@ -1360,6 +1362,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
 			return AgentRunResult{
 				Content:       contentStr,
+				FinalMessage:  &resp.Message,
 				MemoryWritten: memoryWritten,
 				OutputBlocked: outputBlocked,
 				Usage:         totalUsage,

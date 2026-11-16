@@ -31,7 +31,7 @@
 
 ### Chat Completions 思考数据回传
 
-OpenAI 兼容响应中的 `reasoning_content` 通过现有 `ProviderState` 保存，不混入 assistant 可见正文；后续请求只在端点身份、实际请求 URL、模型以及正文和工具调用均未变化时，将其恢复为 assistant 消息的 `reasoning_content`。空字符串与缺失字段分别保留。DeepSeek 思考模式带工具的请求需要回传此前所有 assistant 消息的思考数据，因此工具调用回复和普通最终回复都保留此状态，并随内部会话消息转换和历史序列化传递。切换端点或模型、修改消息后不回放旧状态；已有缺少思考数据的历史不会被伪造补全。
+OpenAI 兼容响应中的 `reasoning_content` 通过现有 `ProviderState` 保存，不混入 assistant 可见正文；后续请求只在端点身份、实际请求 URL、模型以及正文和工具调用均未变化时，将其恢复为 assistant 消息的 `reasoning_content`。空字符串与缺失字段分别保留。DeepSeek 思考模式带工具的请求需要回传此前所有 assistant 消息的思考数据，因此工具调用回复和普通最终回复都保留此状态，并随内部会话消息转换和历史序列化传递。最终模型响应的状态随完整发送确认保留到会话历史和执行序列，且仅在确认正文与模型原文完全一致时保留；分段拼接、过滤改写和部分发送不会继承不匹配的真实思考。切换端点或模型、修改消息后仍不回放旧状态。按照 Maintainer 选择的兼容策略，带工具的 Chat Completions 请求对缺失或失配状态的 assistant 消息在发送时补 `reasoning_content: ""`，覆盖旧历史、压缩确认和其他合成消息；占位值不写成持久化的模型思考状态。不带工具的请求继续省略缺失字段。
 
 ### 模型能力元数据 (models.dev 提示)
 
