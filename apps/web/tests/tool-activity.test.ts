@@ -6,7 +6,10 @@ import {
   parsePrompt,
   renderPromptInspector,
 } from '../src/components/prompt-inspector';
-import { parseToolHistoryNote } from '../src/components/tool-activity';
+import {
+  parseToolHistoryNote,
+  type ToolArgumentsLoader,
+} from '../src/components/tool-activity';
 
 const { JSDOM } = createRequire(resolve('package.json'))('jsdom');
 const dom = new JSDOM('<div id="inspector"></div>');
@@ -164,6 +167,166 @@ renderPromptInspector(
 assert.equal(container.querySelectorAll('[data-tool-activity]').length, 1);
 assert.equal(container.querySelector('script'), null);
 assert.equal(container.querySelector('.msg-role-badge'), null);
+
+const queryArguments = '{ "query": "好奇 探头", "id":7700000000000000001 }';
+const readArguments = `{"read_target_ref_id":"${originalRef}"}`;
+const calls: string[] = [];
+const load: ToolArgumentsLoader = async (refId) => {
+  calls.push(refId);
+  return {
+    refId,
+    tool: refId === originalRef ? 'send_message' : 'read_tool_history',
+    argumentsRaw: refId === originalRef ? queryArguments : readArguments,
+    argumentsAvailable: true,
+  };
+};
+const data = buildInspectorDataFromSessionContext({
+  sessionId: 'private:fixture-user',
+  history: [{ role: 'assistant', content: current }],
+});
+let cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: load,
+});
+assert.equal(calls.length, 0, 'parameters must not load before expansion');
+assert.equal(container.querySelectorAll('.tool-activity-ref').length, 2);
+assert.equal(
+  container.querySelectorAll('.tool-activity-ref')[0].textContent,
+  `(${originalRef})`,
+);
+assert.equal(
+  container.querySelectorAll('.tool-activity-ref')[1].textContent,
+  `(${readRef})`,
+);
+assert.doesNotMatch(
+  container.textContent!,
+  /完整引用|本次引用|读取的引用|读取 →/,
+);
+const flush = () => new Promise((resolve) => setTimeout(resolve, 15));
+for (const [refId, args] of [
+  [originalRef, queryArguments],
+  [readRef, readArguments],
+]) {
+  const details = container.querySelector(
+    `details[data-tool-ref="${refId}"]`,
+  ) as HTMLDetailsElement;
+  assert.equal(details.querySelector('summary')!.textContent, '详细参数');
+  details.open = true;
+  await flush();
+  assert.equal(
+    details.querySelector('pre')!.textContent,
+    args,
+    'raw JSON, spaces and large integers must remain exact',
+  );
+  details.open = false;
+  await flush();
+  details.open = true;
+  await flush();
+}
+assert.deepEqual(
+  calls,
+  [originalRef, readRef],
+  'each archived call should load once',
+);
+cleanup();
+
+let attempt = 0;
+renderPromptInspector(container, data, {
+  loadToolArguments: async (refId) => {
+    if (attempt++ === 0) throw new Error('fixture outage');
+    return {
+      refId,
+      tool: 'send_message',
+      argumentsRaw: '<script>fixture</script>',
+      argumentsAvailable: true,
+    };
+  },
+});
+let detail = container.querySelector(
+  'details[data-tool-ref]',
+) as HTMLDetailsElement;
+detail.open = true;
+await flush();
+assert.match(detail.textContent!, /参数加载失败/);
+const retry = detail.querySelector('button') as HTMLButtonElement;
+assert.equal(retry.hidden, false);
+retry.click();
+await flush();
+assert.equal(
+  detail.querySelector('pre')!.textContent,
+  '<script>fixture</script>',
+);
+assert.equal(detail.querySelector('script'), null);
+
+renderPromptInspector(container, data, {
+  loadToolArguments: async (refId) => ({
+    refId,
+    tool: 'send_message',
+    argumentsRaw: '',
+    argumentsAvailable: false,
+  }),
+});
+detail = container.querySelector(
+  'details[data-tool-ref]',
+) as HTMLDetailsElement;
+detail.open = true;
+await flush();
+assert.equal(detail.querySelector('pre')!.textContent, '参数已隔离，无法展示');
+
+let release!: (value: Awaited<ReturnType<ToolArgumentsLoader>>) => void;
+cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: () =>
+    new Promise((resolve) => {
+      release = resolve;
+    }),
+});
+detail = container.querySelector(
+  'details[data-tool-ref]',
+) as HTMLDetailsElement;
+detail.open = true;
+await flush();
+cleanup();
+container.innerHTML = '<p>next session</p>';
+release({
+  refId: originalRef,
+  tool: 'send_message',
+  argumentsRaw: 'stale parameters',
+  argumentsAvailable: true,
+});
+await flush();
+assert.equal(
+  container.textContent,
+  'next session',
+  'old requests must not write into the next inspector',
+);
+
+const nativeRaw = JSON.stringify({
+  messages: [
+    {
+      role: 'assistant',
+      tool_calls: [
+        {
+          id: 'fixture-native',
+          function: { name: 'send_message', arguments: queryArguments },
+        },
+      ],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'fixture-native',
+      content: `fixture result\n(ref_id: ${originalRef})`,
+    },
+  ],
+});
+renderPromptInspector(container, parsePrompt(nativeRaw));
+assert.equal(
+  container.querySelectorAll('.tool-activity-ref')[0].textContent,
+  `(${originalRef})`,
+  'native call should recover the archived UUID from its paired result',
+);
+assert.equal(
+  container.querySelector('.tool-activity-arguments')!.textContent,
+  queryArguments,
+);
 dom.window.close();
 process.stdout.write(
   'PASS: distinct tool calls, historical reads, legacy records, native results, folding and escaping\n',

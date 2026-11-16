@@ -4,7 +4,7 @@ import { escapeHtml, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
-import { parseToolHistoryNote, readTargetFromArguments, renderToolActivity, type ToolActivity, type ToolActivityEntry } from './tool-activity';
+import { bindToolArguments, parseToolHistoryNote, readTargetFromArguments, refFromToolResult, renderToolActivity, type ToolActivity, type ToolActivityEntry, type ToolArgumentsLoader } from './tool-activity';
 
 export interface GroupMessageItem {
   id?: string;
@@ -466,9 +466,11 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
           }
           if (role === 'tool') {
             const call = callsById.get(m.tool_call_id || '');
+            const refId = refFromToolResult(contentStr);
+            if (call && refId) call.refId = refId;
             requestMessages.push({ content: '', rawText: contentStr, toolActivity: { entries: [{
               tool: call?.tool || '未知工具', callId: m.tool_call_id, readTargetRefId: call?.readTargetRefId,
-              result: contentStr, phase: 'result',
+              result: contentStr, phase: 'result', refId,
             }] } });
           }
         }
@@ -608,6 +610,7 @@ export function renderPromptInspector(
     onViewSummary?: () => void;
     onConfigureModel?: () => void;
     modelConfigHref?: string;
+    loadToolArguments?: ToolArgumentsLoader;
   } = {},
 ): () => void {
   const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw, options.botName) : dataOrRaw;
@@ -615,8 +618,10 @@ export function renderPromptInspector(
   const privateSession = parsed.sessionKind === 'private';
   const chatLabel = privateSession ? '私聊' : '群聊';
   let viewMode: 'visual' | 'raw' = 'visual';
+  let argumentsCleanup = () => {};
 
   function render() {
+    argumentsCleanup();
     if (viewMode === 'raw') {
       container.innerHTML = `
         <div class="prompt-inspector-card">
@@ -958,6 +963,7 @@ export function renderPromptInspector(
   }
 
   function bindInteractiveEvents() {
+    argumentsCleanup = bindToolArguments(container, options.loadToolArguments);
     container.querySelector<HTMLButtonElement>('#pi-view-summary-btn')
       ?.addEventListener('click', () => options.onViewSummary?.());
 
@@ -982,7 +988,7 @@ export function renderPromptInspector(
   render();
 
   return () => {
-    // Cleanup if needed
+    argumentsCleanup();
   };
 }
 
@@ -1186,7 +1192,9 @@ export function openPromptInspectorDialog(
   raw: string,
   title = 'Prompt Inspector',
   botName = DEFAULT_BOT_NAME,
+  loadToolArguments?: ToolArgumentsLoader,
 ): void {
+  let cleanup: (() => void) | undefined;
   openDialog({
     title,
     description: '查看发送给 LLM 的结构化上下文、群消息历史与摘要分组',
@@ -1200,9 +1208,10 @@ export function openPromptInspectorDialog(
     onMount: (dialogEl, close) => {
       const mountEl = dialogEl.querySelector<HTMLElement>('#dialog-prompt-inspector-mount');
       if (mountEl) {
-        renderPromptInspector(mountEl, raw, { showRawToggle: true, title, botName });
+        cleanup = renderPromptInspector(mountEl, raw, { showRawToggle: true, title, botName, loadToolArguments });
       }
       dialogEl.querySelector('#pi-dialog-close-btn')?.addEventListener('click', close);
     },
+    onClose: () => cleanup?.(),
   });
 }

@@ -433,6 +433,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       showRawToggle: true,
       title,
       botName,
+      loadToolArguments: typeof api.getToolHistoryEntry === 'function' ? refId => api.getToolHistoryEntry(refId) : undefined,
       modelConfigHref: session && !groupId ? '#/model-router' : undefined,
       onConfigureModel: session && groupId
         ? () => {

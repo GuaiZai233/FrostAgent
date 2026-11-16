@@ -17,6 +17,13 @@ export interface ToolActivity {
   raw?: string;
 }
 
+export type ToolArgumentsLoader = (refId: string) => Promise<{
+  refId: string;
+  tool: string;
+  argumentsRaw: string;
+  argumentsAvailable: boolean;
+}>;
+
 const refPattern =
   'fa_toolcall_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const entryPattern = new RegExp(
@@ -86,8 +93,8 @@ export function readTargetFromArguments(
   return undefined;
 }
 
-function shortRef(value: string): string {
-  return value.startsWith('fa_toolcall_') ? `…${value.slice(-8)}` : value;
+export function refFromToolResult(content: string): string | undefined {
+  return content.match(new RegExp(`\\(ref_id: (${refPattern})\\)\\s*$`))?.[1];
 }
 
 export function renderToolActivity(activity: ToolActivity): string {
@@ -132,23 +139,84 @@ export function renderToolActivity(activity: ToolActivity): string {
               : read
                 ? '历史回查'
                 : '工具调用';
-          const details = [
-            ['本次引用', entry.refId],
-            ['读取的引用', entry.readTargetRefId],
-            ['调用 ID', entry.callId],
-            ['调用参数', entry.arguments],
-            ['返回原文', entry.result],
-          ].filter((item) => item[1] !== undefined);
+          const id = entry.refId || entry.callId;
           return `<div class="tool-activity-entry" data-kind="${read ? 'history-read' : 'tool-call'}">
-          <div class="tool-activity-entry-title"><span class="tool-activity-order">${index + 1}</span><span class="tool-activity-kind">${label}</span><code>${escapeHtml(entry.tool)}</code></div>
-          ${entry.readTargetRefId ? `<div class="tool-activity-target">读取 → <code title="${escapeHtml(entry.readTargetRefId)}">${escapeHtml(shortRef(entry.readTargetRefId))}</code></div>` : ''}
-          <details class="tool-activity-details"><summary>完整引用${entry.arguments !== undefined ? '与参数' : entry.result !== undefined ? '与返回原文' : ''}</summary>
-            <dl>${details.map(([label, value]) => `<dt>${label}</dt><dd><pre>${escapeHtml(value || '')}</pre></dd>`).join('')}</dl>
-          </details>
+          <div class="tool-activity-entry-title"><span class="tool-activity-order">${index + 1}</span><span class="tool-activity-kind">${label}</span><code>${escapeHtml(entry.tool)}</code>${id ? `<code class="tool-activity-ref">(${escapeHtml(id)})</code>` : ''}</div>
+          ${
+            entry.phase === 'result'
+              ? `<details class="tool-activity-details"><summary>返回原文</summary><pre>${escapeHtml(entry.result || '')}</pre></details>`
+              : `
+          <details class="tool-activity-details" ${entry.refId ? `data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}"` : ''} data-arguments-state="${entry.arguments !== undefined ? 'loaded' : 'idle'}">
+            <summary>详细参数</summary>
+            <pre class="tool-activity-arguments">${escapeHtml(entry.arguments ?? '展开后加载参数')}</pre>
+            <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
+          </details>`
+          }
         </div>`;
         })
         .join('')}
       ${!activity.entries.length && activity.raw ? `<pre class="tool-activity-raw">${escapeHtml(activity.raw)}</pre>` : ''}
     </div>
   </details>`;
+}
+
+export function bindToolArguments(
+  container: HTMLElement,
+  load?: ToolArgumentsLoader,
+): () => void {
+  let active = true;
+  const requests = new Map<string, ReturnType<ToolArgumentsLoader>>();
+  for (const details of container.querySelectorAll?.<HTMLDetailsElement>(
+    'details[data-tool-ref]',
+  ) || []) {
+    const pre = details.querySelector<HTMLElement>('.tool-activity-arguments')!;
+    const retry = details.querySelector<HTMLButtonElement>(
+      '.tool-activity-retry',
+    )!;
+    const refId = details.dataset.toolRef!;
+    const fetchArguments = async () => {
+      if (
+        details.dataset.argumentsState === 'loaded' ||
+        details.dataset.argumentsState === 'loading'
+      )
+        return;
+      if (!load) {
+        pre.textContent = '当前视图无法加载历史参数';
+        return;
+      }
+      details.dataset.argumentsState = 'loading';
+      pre.textContent = '正在加载参数…';
+      retry.hidden = true;
+      try {
+        let request = requests.get(refId);
+        if (!request) {
+          request = load(refId);
+          requests.set(refId, request);
+        }
+        const result = await request;
+        if (!active || !details.isConnected) return;
+        if (result.refId !== refId || result.tool !== details.dataset.toolName)
+          throw new Error('工具记录不匹配');
+        pre.textContent = result.argumentsAvailable
+          ? result.argumentsRaw
+          : '参数已隔离，无法展示';
+        details.dataset.argumentsState = 'loaded';
+      } catch {
+        requests.delete(refId);
+        if (!active || !details.isConnected) return;
+        details.dataset.argumentsState = 'error';
+        pre.textContent = '参数加载失败，请重试';
+        retry.hidden = false;
+      }
+    };
+    details.addEventListener('toggle', () => {
+      if (details.open) void fetchArguments();
+    });
+    retry.addEventListener('click', () => {
+      void fetchArguments();
+    });
+  }
+  return () => {
+    active = false;
+  };
 }

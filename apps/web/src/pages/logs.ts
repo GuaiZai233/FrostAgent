@@ -486,6 +486,7 @@ export function mountLogsPage(
         promptPayload,
         `LLM 请求检查 — ${selectedEntry?.source || 'LLM'} · ${formatDateTime(selectedEntry?.timestamp)}`,
         botName,
+        typeof api.getToolHistoryEntry === 'function' ? refId => api.getToolHistoryEntry(refId) : undefined,
       );
     });
   }
@@ -531,6 +532,7 @@ export function mountLogsPage(
             promptPayload,
             `LLM 请求检查 — ${entry.source || 'LLM'} · ${formatDateTime(entry.timestamp)}`,
             botName,
+            typeof api.getToolHistoryEntry === 'function' ? refId => api.getToolHistoryEntry(refId) : undefined,
           );
         });
 
