@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
+	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"strconv"
 	"strings"
 )
@@ -64,6 +65,8 @@ func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *ru
 	var b strings.Builder
 	for _, seg := range remainingSegments {
 		switch seg.Type {
+		case "reply":
+			// A quote reference selects a message for the command; it is not command text.
 		case "text":
 			if text, ok := seg.Data["text"].(string); ok {
 				b.WriteString(text)
@@ -109,6 +112,35 @@ func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
 		id = strconv.FormatInt(event.GroupID, 10)
 	}
 	sendDirectReply(action, type1, id, "echo_admin_cmd", event, conn, text)
+}
+
+// banQuotedSticker marks the sticker in the message quoted by an admin command
+// as inappropriate. The quoted message must be sent by the bot itself, and it
+// must contain exactly one sticker; plain images and text are rejected.
+func (c *wsConnection) banQuotedSticker(ctx context.Context, event model.OneBotEvent) (string, error) {
+	if c.stealer == nil {
+		return "", errors.New("表情包功能未启用")
+	}
+	messageID, ok := replyMessageID(event)
+	if !ok {
+		return "", errors.New("请引用一条机器人发送的表情包消息后再使用该指令")
+	}
+	resolved := c.lookupMessageContext(ctx, event, messageID)
+	if resolved.MessageID == "" || len(resolved.Segments) == 0 {
+		return "", errors.New("无法获取被引用的消息")
+	}
+	if resolved.SenderID != event.SelfID {
+		return "", errors.New("只能标记机器人发送的表情包")
+	}
+	sources := stickerSourcesFromSegments(resolved.Segments)
+	if len(sources) != 1 {
+		return "", errors.New("被引用的消息不是单个表情包，无法标记")
+	}
+	data, err := sticker.LoadImageSource(ctx, sources[0])
+	if err != nil {
+		return "", fmt.Errorf("读取表情包失败：%w", err)
+	}
+	return c.stealer.MarkInappropriate(data)
 }
 
 func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {
@@ -169,6 +201,9 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 			Reply: func(ctx context.Context, text string, isIntermediate bool) error {
 				sendOneBotReply(event, conn, text)
 				return nil
+			},
+			BanQuotedSticker: func(ctx context.Context) (string, error) {
+				return conn.banQuotedSticker(ctx, event)
 			},
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {

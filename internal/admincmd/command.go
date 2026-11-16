@@ -21,6 +21,9 @@ const (
 	CmdUnban   CommandType = "unban"
 	CmdCompact CommandType = "compact"
 	CmdReflect CommandType = "reflect"
+	// CmdBanSticker marks the sticker quoted by the caller as inappropriate.
+	// The target is resolved by the adapter from the quoted message, not from args.
+	CmdBanSticker CommandType = "bansticker"
 )
 
 // ParsedCommand represents a parsed administrator message command.
@@ -67,7 +70,9 @@ func FormatUsage(prefix string) string {
 		"%s%sban <userID> - 全局安全封禁用户\n"+
 		"%s%sunban <userID> - 解除用户全局安全封禁\n"+
 		"%s%scompact - 立即压缩总结当前会话上下文\n"+
-		"%s%sreflect - 触发记忆反思",
+		"%s%sreflect - 触发记忆反思\n"+
+		"%s%sbansticker - 引用机器人发送的表情包，将其标记为不合适",
+		p, sep,
 		p, sep,
 		p, sep,
 		p, sep,
@@ -154,6 +159,11 @@ func ParseCandidate(text, prefix string) (cmd ParsedCommand, isCandidate bool, e
 	case CmdReflect:
 		if len(args) != 0 {
 			return cmd, true, fmt.Errorf("reflect 指令不需要任何参数")
+		}
+		return cmd, true, nil
+	case CmdBanSticker:
+		if len(args) != 0 {
+			return cmd, true, fmt.Errorf("bansticker 指令不需要任何参数，请引用要标记的表情包后发送")
 		}
 		return cmd, true, nil
 	default:

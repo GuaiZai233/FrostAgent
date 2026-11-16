@@ -142,6 +142,7 @@ type resolvedReplyContext struct {
 	SessionID   string
 	Segments    []content.MessageSegment
 	ParentID    int64
+	SenderID    int64
 	Ancestors   []resolvedReplyContext
 }
 
@@ -336,6 +337,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		SessionID:   historyKey(event),
 		Segments:    segments,
 		ParentID:    replyMessageIDFromRaw(data.Message),
+		SenderID:    data.UserID,
 	}
 }
 

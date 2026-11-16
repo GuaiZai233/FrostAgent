@@ -37,6 +37,10 @@ type CommandContext struct {
 	CallerUserID string
 	RouteScope   modelrouter.Scope
 	Reply        func(ctx context.Context, text string, isIntermediate bool) error
+	// BanQuotedSticker resolves the sticker quoted by the command message and
+	// marks it inappropriate, returning the sticker ID. Nil when the platform
+	// adapter cannot resolve quoted stickers.
+	BanQuotedSticker func(ctx context.Context) (string, error)
 }
 
 // Executor orchestrates administrator message command execution.
@@ -87,6 +91,8 @@ func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd Parse
 		return e.executeCompact(ctx, cmdCtx)
 	case CmdReflect:
 		return e.executeReflect(ctx, cmdCtx)
+	case CmdBanSticker:
+		return e.executeBanSticker(ctx, cmdCtx)
 	default:
 		return fmt.Errorf("未知指令：%s", cmd.Type)
 	}
@@ -120,6 +126,17 @@ func (e *Executor) executeReset(ctx context.Context, cmdCtx CommandContext) erro
 		return cmdCtx.Reply(ctx, fmt.Sprintf("当前会话已重置，但持久化总结清理失败：%v", errors.Join(errs...)), false)
 	}
 	return cmdCtx.Reply(ctx, "当前会话已重置。", false)
+}
+
+func (e *Executor) executeBanSticker(ctx context.Context, cmdCtx CommandContext) error {
+	if cmdCtx.BanQuotedSticker == nil {
+		return cmdCtx.Reply(ctx, "当前平台不支持引用表情包标记。", false)
+	}
+	id, err := cmdCtx.BanQuotedSticker(ctx)
+	if err != nil {
+		return cmdCtx.Reply(ctx, fmt.Sprintf("标记表情包失败：%v", err), false)
+	}
+	return cmdCtx.Reply(ctx, fmt.Sprintf("已将该表情包标记为不合适（%s）。", id[:min(12, len(id))]), false)
 }
 
 func (e *Executor) executeBan(ctx context.Context, cmdCtx CommandContext, cmd ParsedCommand) error {

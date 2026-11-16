@@ -21,6 +21,7 @@ const (
 var (
 	ErrStealerBusy       = errors.New("sticker stealer is busy")
 	ErrStickerNotInScope = errors.New("sticker is not available in the current session context")
+	ErrStickerNotStored  = errors.New("sticker is not in the collection")
 )
 
 type StealResult struct {
@@ -281,6 +282,27 @@ func (s *Stealer) Steal(ctx context.Context, data []byte) (StealResult, error) {
 		return StealResult{}, ErrStealerBusy
 	}
 	return s.collect(ctx, data)
+}
+
+// MarkInappropriate manually quarantines the already-collected sticker whose
+// bytes match data. It never adds a new entry: bytes that are not in the
+// collection return ErrStickerNotStored. It returns the sticker ID on success.
+func (s *Stealer) MarkInappropriate(data []byte) (string, error) {
+	if err := validateImageData(data); err != nil {
+		return "", err
+	}
+	if s.store == nil {
+		return "", errors.New("sticker store is unavailable")
+	}
+	hash := HashBytes(data)
+	if !s.store.Exists(hash) {
+		return "", ErrStickerNotStored
+	}
+	if err := s.store.MarkSuspectedInappropriate(hash); err != nil {
+		return "", fmt.Errorf("mark sticker inappropriate: %w", err)
+	}
+	s.Log().Info(logs.SYSTEM, fmt.Sprintf("sticker: manually marked inappropriate %s", hash[:12]))
+	return hash, nil
 }
 
 func (s *Stealer) collect(ctx context.Context, data []byte) (StealResult, error) {
