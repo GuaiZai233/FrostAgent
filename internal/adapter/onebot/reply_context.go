@@ -337,7 +337,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		SessionID:   historyKey(event),
 		Segments:    segments,
 		ParentID:    replyMessageIDFromRaw(data.Message),
-		SenderID:    data.UserID,
+		SenderID:    replySenderID(data),
 	}
 }
 
@@ -362,6 +362,18 @@ func (c *wsConnection) replyMessageMatchesEvent(event model.OneBotEvent, message
 	default:
 		return false
 	}
+}
+
+// replySenderID returns the sender of a get_msg response. OneBot v11 carries it
+// in sender.user_id; a top-level user_id is accepted as a fallback.
+func replySenderID(data oneBotMessageData) int64 {
+	if data.UserID != 0 {
+		return data.UserID
+	}
+	if data.Sender != nil {
+		return data.Sender.UserID
+	}
+	return 0
 }
 
 func privateMessagePeer(selfID int64, data oneBotMessageData) (int64, bool) {
