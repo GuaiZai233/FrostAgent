@@ -74,8 +74,15 @@ func (p *PublicReplyLog) SetFinalMessage(message *core.ChatMessage) {
 // inherit reasoning/signatures bound to a different provider message.
 func (p *PublicReplyLog) finalMessageForText(text string) core.ChatMessage {
 	message := core.ChatMessage{Role: core.RoleAssistant, Content: text}
-	if p.finalMessage != nil && p.finalMessage.Content == text &&
-		p.acknowledgedFinalText != nil && *p.acknowledgedFinalText == text {
+	acknowledged := false
+	if p.acknowledgedFinalText != nil {
+		acknowledged = *p.acknowledgedFinalText == text
+	} else if len(p.texts) > 0 {
+		// Record already proves delivery, regardless of which commit wins.
+		// A distinct final ACK above always takes precedence over fallback.
+		acknowledged = strings.Join(p.texts, "\n") == text
+	}
+	if p.finalMessage != nil && p.finalMessage.Content == text && acknowledged {
 		message.ProviderState = cloneProviderState(p.finalMessage.ProviderState)
 	}
 	return message
@@ -188,7 +195,6 @@ func (p *PublicReplyLog) CommitDelivered() {
 		defer p.mu.Unlock()
 		if !p.closed && p.finalID == 0 && len(p.texts) > 0 {
 			text := strings.Join(p.texts, "\n")
-			p.acknowledgedFinalText = &text
 			if p.commitFinalLocked(text, false) {
 				p.fallbackText = text
 			}

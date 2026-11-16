@@ -191,7 +191,7 @@ func TestFinalReasoningSourceIsImmutableAndExact(t *testing.T) {
 }
 
 func TestFinalReasoningRequiresAcknowledgedText(t *testing.T) {
-	for _, mode := range []string{"no ACK text", "different ACK text", "exact ACK text", "recorded fallback"} {
+	for _, mode := range []string{"no ACK text", "different ACK text", "exact ACK text", "recorded direct final", "recorded fallback first", "recorded concurrent"} {
 		t.Run(mode, func(t *testing.T) {
 			source := core.ChatMessage{Role: core.RoleAssistant, Content: "original"}
 			state.Remember(&source, "openai_chat_completions", "synthetic-model", "synthetic-reasoning", state.Origin{URL: "https://synthetic.invalid/chat/completions"})
@@ -200,21 +200,35 @@ func TestFinalReasoningRequiresAcknowledgedText(t *testing.T) {
 			log.SetFinalMessage(&source)
 			switch mode {
 			case "different ACK text":
+				log.Record("original", nil)
 				log.RecordFinalProgress("rendered text", nil)
 			case "exact ACK text":
 				log.RecordFinalProgress("original", nil)
-			case "recorded fallback":
+			case "recorded direct final", "recorded fallback first", "recorded concurrent":
 				log.Record("original", nil)
+			}
+			if mode == "recorded fallback first" {
 				log.CommitDelivered()
 			}
-			if !log.CommitFinal("original", false) {
+			if mode == "recorded concurrent" {
+				start := make(chan struct{})
+				fallbackDone := make(chan struct{})
+				finalDone := make(chan bool, 1)
+				go func() { <-start; log.CommitDelivered(); close(fallbackDone) }()
+				go func() { <-start; finalDone <- log.CommitFinal("original", false) }()
+				close(start)
+				if !<-finalDone {
+					t.Fatal("concurrent final not committed")
+				}
+				<-fallbackDone
+			} else if !log.CommitFinal("original", false) {
 				t.Fatal("final not committed")
 			}
 			history := session.Snapshot()
 			if len(history) != 1 || history[0].Content != "original" {
 				t.Fatalf("committed history changed: %+v", history)
 			}
-			wantState := mode == "exact ACK text" || mode == "recorded fallback"
+			wantState := mode != "no ACK text" && mode != "different ACK text"
 			if (history[0].ProviderState != nil) != wantState {
 				t.Fatal("reasoning retention did not follow actual acknowledged text")
 			}
