@@ -917,3 +917,25 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 		t.Errorf("expected nickname rejection, got: %q", reply)
 	}
 }
+
+func TestExtractOneBotAdminCommand_QuotedBanSticker(t *testing.T) {
+	scope := newAdminTestScope(t, map[string]string{
+		admincmd.AdminCommandPrefixEnv: "/",
+	})
+	msg, _ := json.Marshal([]map[string]any{
+		{"type": "reply", "data": map[string]any{"id": "555"}},
+		{"type": "at", "data": map[string]any{"qq": "10001"}},
+		{"type": "text", "data": map[string]any{"text": " /bansticker"}},
+	})
+	event := model.OneBotEvent{
+		SelfID:      10001,
+		UserID:      20001,
+		GroupID:     30001,
+		MessageType: "group",
+		Message:     msg,
+	}
+	cmd, isCand, err := extractOneBotAdminCommand(event, "/", scope)
+	if !isCand || err != nil || cmd.Type != admincmd.CmdBanSticker || len(cmd.Args) != 0 {
+		t.Fatalf("expected CmdBanSticker despite reply segment, got isCand=%v err=%v cmd=%+v", isCand, err, cmd)
+	}
+}

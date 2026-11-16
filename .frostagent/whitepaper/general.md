@@ -350,6 +350,7 @@ AstrBot 运行支持及历史别名兼容已移除，升级影响见[移除说�
     - 立即调用 `CancelActiveRun()` 打断正在执行的大模型 HTTP 请求与工具执行循环；
     - 取消所有在途记忆提取（`CancelExtractions`）并递增会话 Epoch 代数：使已在 FIFO 队列中排队等待的后续轮次（`turn.Wait()`）在获取锁后通过 `!turn.IsValid(sess)` 立即感知失效自毁退出，大模型请求完成后的回复提交与在途记忆抽取在检测到 Epoch 变动时主动放弃落盘写入与发送回复；
     - 回复文本：「当前会话已重置。」；
+  - **`bansticker` 表情包不合适标记**：管理员引用机器人发送的表情包消息并发送 `bansticker`（无参数）。OneBot 适配器通过 `get_msg` 回查被引用消息，要求其发送者为机器人自身且恰好包含一个表情包（普通图片与纯文字均拒绝）；读取其字节并计算 SHA-256 哈希，仅对已收藏的表情包调用 `Stealer.MarkInappropriate` 设置人工封禁标记（`manual_blocked`），不会新增条目，未收藏的表情包返回明确错误。标记立即生效，后续不再被发送；AstrBot 适配器暂未接入引用解析，执行器会返回平台不支持的提示；
   - **`ban <userID>` 全局封禁** 与 **`unban <userID>` 全局解封**：
     - **结构化提及解析与协议对齐 (Structured Mention Resolution)**：
       - **OneBot 适配器**：废除原先将非 Bot 的目标提及段降级为纯文本提示标记（`[@<targetID>]`）的退化序列化流程。在 `extractOneBotAdminCommand` 中直接遍历入站消息段数组（`[]content.MessageSegment`），识别目标 `at` 段（`seg.Type == "at"` 且 `atQQ != selfID`），将其目标 ID 作为真实标识提取并拼接至指令文本流中，从根本上解决群聊中 `@Bot /ban @User` 降级为伪文本标记的缺陷；
