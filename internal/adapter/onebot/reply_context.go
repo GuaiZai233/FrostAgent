@@ -542,6 +542,9 @@ func (c *wsConnection) loadObservedImage(
 	if imageIndex < 0 {
 		return nil, fmt.Errorf("image_index %d 不能小于 0", imageIndex)
 	}
+	if strings.HasPrefix(messageID, qqForwardImagePrefix) {
+		return c.loadQQForwardImage(ctx, event, messageID, imageIndex)
+	}
 
 	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)
 	if messageID == currentMessageID {

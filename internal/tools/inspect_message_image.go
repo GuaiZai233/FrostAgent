@@ -41,13 +41,15 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 		name: InspectMessageImageToolName,
 		description: "Use this tool when a relevant message in recent_group_messages, reply_context, or system_context contains a placeholder such as [图片], " +
 			"but its visual content is unavailable. Provide the exact message_id from the conversation context. " +
-			"If the message contains multiple images, use image_index (zero-based) to select the specific image.",
+			"For images inside QQ forwarded chat records, first call read_forward and pass the node's exact image_ref as message_id. " +
+			"If the message or forwarded node contains multiple images, use image_index (zero-based) to select the specific image. " +
+			"Forward image references only support image inspection; never use them for replies, forwarding, reactions, or recalls.",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"message_id": map[string]any{
 					"type":        "string",
-					"description": "Exact message_id from recent_group_messages, reply_context, or system_context.",
+					"description": "Exact message_id from trusted conversation context, or exact image_ref returned by QQ read_forward.",
 				},
 				"image_index": map[string]any{
 					"type":        "integer",
