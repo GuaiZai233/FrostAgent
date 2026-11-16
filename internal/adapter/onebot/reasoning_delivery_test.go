@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,12 +21,22 @@ import (
 func TestOneBotConfirmedReplyReasoningNextTurn(t *testing.T) {
 	for _, tc := range []struct {
 		name, output, history, reasoning string
-		parts                            []string
+		parts                            []any
 		failLast                         bool
 	}{
-		{name: "unchanged", output: "first-answer", history: "first-answer", reasoning: "synthetic-reasoning", parts: []string{"first-answer"}},
-		{name: "segmented", output: "first" + replyformat.SegmentMark + "second", history: "first\n\nsecond", parts: []string{"first", "second"}},
-		{name: "partial", output: "first" + replyformat.SegmentMark + "unsent", history: "first", parts: []string{"first", "unsent"}, failLast: true},
+		{name: "unchanged", output: "first-answer", history: "first-answer", reasoning: "synthetic-reasoning", parts: []any{"first-answer"}},
+		{name: "segmented", output: "first" + replyformat.SegmentMark + "second", history: "first\n\nsecond", parts: []any{"first", "second"}},
+		{name: "partial", output: "first" + replyformat.SegmentMark + "unsent", history: "first", parts: []any{"first", "unsent"}, failLast: true},
+		{
+			name: "structured JSON", output: `{"messages":[{"type":"plain","text":"hi"}]}`,
+			history: `{"messages":[{"type":"plain","text":"hi"}]}`,
+			parts:   []any{[]tools.OneBotSegment{{Type: "text", Data: map[string]any{"text": "hi"}}}},
+		},
+		{
+			name: "native media", output: `{"messages":[{"type":"image","url":"https://example.invalid/synthetic.png"}]}`,
+			history: `{"messages":[{"type":"image","url":"https://example.invalid/synthetic.png"}]}`,
+			parts:   []any{[]tools.OneBotSegment{{Type: "image", Data: map[string]any{"file": "https://example.invalid/synthetic.png"}}}},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32
@@ -83,14 +94,19 @@ func TestOneBotConfirmedReplyReasoningNextTurn(t *testing.T) {
 				t.Fatal(err)
 			}
 			socket.SetReadDeadline(time.Now().Add(5 * time.Second))
-			acknowledge := func(want string, fail bool) {
+			acknowledge := func(want any, fail bool) {
 				t.Helper()
 				var action model.OneBotAction
 				if err := socket.ReadJSON(&action); err != nil {
 					t.Fatal(err)
 				}
-				if action.Action != "send_private_msg" || action.Params.(map[string]any)["message"] != want {
-					t.Fatalf("unexpected action: %+v, want=%q", action, want)
+				wantJSON, _ := json.Marshal(want)
+				var wantMessage any
+				if err := json.Unmarshal(wantJSON, &wantMessage); err != nil {
+					t.Fatal(err)
+				}
+				if action.Action != "send_private_msg" || !reflect.DeepEqual(action.Params.(map[string]any)["message"], wantMessage) {
+					t.Fatalf("unexpected action: %+v, want=%s", action, wantJSON)
 				}
 				status, code := "ok", 0
 				if fail {

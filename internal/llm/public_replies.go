@@ -41,6 +41,9 @@ type PublicReplyLog struct {
 	finalAccepted bool
 	finalID       uint64
 	finalMessage  *core.ChatMessage
+	// A committed history body can be raw structured JSON. Only separately
+	// recorded ACK text proves that it matches the model's visible response.
+	acknowledgedFinalText *string
 	// confirmed records a platform-acknowledged public send even when it has no
 	// speakable text (image, file, audio). It is separate from texts so media-only
 	// deliveries are not mistaken for silence.
@@ -71,7 +74,8 @@ func (p *PublicReplyLog) SetFinalMessage(message *core.ChatMessage) {
 // inherit reasoning/signatures bound to a different provider message.
 func (p *PublicReplyLog) finalMessageForText(text string) core.ChatMessage {
 	message := core.ChatMessage{Role: core.RoleAssistant, Content: text}
-	if p.finalMessage != nil && p.finalMessage.Content == text {
+	if p.finalMessage != nil && p.finalMessage.Content == text &&
+		p.acknowledgedFinalText != nil && *p.acknowledgedFinalText == text {
 		message.ProviderState = cloneProviderState(p.finalMessage.ProviderState)
 	}
 	return message
@@ -93,6 +97,7 @@ func (p *PublicReplyLog) RecordFinalProgress(text string, turn *SessionTurn) {
 		if p.finalAccepted {
 			return
 		}
+		p.acknowledgedFinalText = &text
 		p.session.mu.Lock()
 		defer p.session.unlockCheckpoint()
 		message := p.updateFinalLocked(text)
@@ -183,6 +188,7 @@ func (p *PublicReplyLog) CommitDelivered() {
 		defer p.mu.Unlock()
 		if !p.closed && p.finalID == 0 && len(p.texts) > 0 {
 			text := strings.Join(p.texts, "\n")
+			p.acknowledgedFinalText = &text
 			if p.commitFinalLocked(text, false) {
 				p.fallbackText = text
 			}

@@ -174,6 +174,7 @@ func TestFinalReasoningSourceIsImmutableAndExact(t *testing.T) {
 			if mode == "rewritten" {
 				text = "filtered"
 			}
+			log.RecordFinalProgress(text, nil)
 			if !log.CommitFinal(text, false) {
 				t.Fatal("final not committed")
 			}
@@ -184,6 +185,38 @@ func TestFinalReasoningSourceIsImmutableAndExact(t *testing.T) {
 				}
 			} else if got != nil {
 				t.Fatal("changed content/role/calls inherited reasoning")
+			}
+		})
+	}
+}
+
+func TestFinalReasoningRequiresAcknowledgedText(t *testing.T) {
+	for _, mode := range []string{"no ACK text", "different ACK text", "exact ACK text", "recorded fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			source := core.ChatMessage{Role: core.RoleAssistant, Content: "original"}
+			state.Remember(&source, "openai_chat_completions", "synthetic-model", "synthetic-reasoning", state.Origin{URL: "https://synthetic.invalid/chat/completions"})
+			session := NewSessionManager().GetOrCreate("private:synthetic-ack")
+			log := NewPublicReplyLog(session, session.Epoch())
+			log.SetFinalMessage(&source)
+			switch mode {
+			case "different ACK text":
+				log.RecordFinalProgress("rendered text", nil)
+			case "exact ACK text":
+				log.RecordFinalProgress("original", nil)
+			case "recorded fallback":
+				log.Record("original", nil)
+				log.CommitDelivered()
+			}
+			if !log.CommitFinal("original", false) {
+				t.Fatal("final not committed")
+			}
+			history := session.Snapshot()
+			if len(history) != 1 || history[0].Content != "original" {
+				t.Fatalf("committed history changed: %+v", history)
+			}
+			wantState := mode == "exact ACK text" || mode == "recorded fallback"
+			if (history[0].ProviderState != nil) != wantState {
+				t.Fatal("reasoning retention did not follow actual acknowledged text")
 			}
 		})
 	}
