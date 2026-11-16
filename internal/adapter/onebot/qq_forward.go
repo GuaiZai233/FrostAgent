@@ -36,6 +36,8 @@ type qqReadForwardNode struct {
 	Text          string `json:"text"`
 	TextTruncated bool   `json:"text_truncated,omitempty"`
 	ForwardCount  int    `json:"forward_count"`
+	ImageCount    int    `json:"image_count,omitempty"`
+	ImageRef      string `json:"image_ref,omitempty"`
 }
 
 type qqForwardRecord struct {
@@ -46,15 +48,23 @@ type qqForwardRecord struct {
 }
 
 func (c *wsConnection) readQQForward(ctx context.Context, event model.OneBotEvent, turn *llm.SessionTurn, a tools.QQArguments) (core.PlatformActionResult, error) {
+	raw, call, err := c.qqForwardSource(ctx, event, turn, &a)
+	if err != nil {
+		return core.PlatformActionResult{}, err
+	}
+	return readQQForwardPage(raw, a, call)
+}
+
+func (c *wsConnection) qqForwardSource(ctx context.Context, event model.OneBotEvent, turn *llm.SessionTurn, a *tools.QQArguments) (json.RawMessage, func(model.OneBotAction) (oneBotAPIResponse, error), error) {
 	if turn.Interrupted() {
-		return core.PlatformActionResult{}, context.Canceled
+		return nil, nil, context.Canceled
 	}
 	if event.MessageType != "group" && event.MessageType != "private" {
-		return core.PlatformActionResult{}, fmt.Errorf("读取转发记录需要群或私聊会话")
+		return nil, nil, fmt.Errorf("读取转发记录需要群或私聊会话")
 	}
 	mid, ok := numericMessageID(a.MessageID)
 	if !ok || !c.messageSessionMatches(mid, c.historyKey(event)) {
-		return core.PlatformActionResult{}, fmt.Errorf("message_id 不在当前连接、当前会话的可信上下文中")
+		return nil, nil, fmt.Errorf("message_id 不在当前连接、当前会话的可信上下文中")
 	}
 	a.MessageID = strconv.FormatInt(mid, 10)
 	call := func(action model.OneBotAction) (oneBotAPIResponse, error) {
@@ -67,27 +77,27 @@ func (c *wsConnection) readQQForward(ctx context.Context, event model.OneBotEven
 	if mid != int64(event.MessageID) {
 		response, err := call(model.OneBotAction{Action: "get_msg", Params: map[string]any{"message_id": mid}})
 		if err != nil {
-			return core.PlatformActionResult{}, err
+			return nil, nil, err
 		}
 		resolved := c.resolveReplyResponse(event, mid, response)
 		if resolved.MessageID == "" {
-			return core.PlatformActionResult{}, fmt.Errorf("无法读取当前会话的来源消息")
+			return nil, nil, fmt.Errorf("无法读取当前会话的来源消息")
 		}
 		var data oneBotMessageData
 		if err := json.Unmarshal(response.Data, &data); err != nil {
-			return core.PlatformActionResult{}, err
+			return nil, nil, err
 		}
 		raw = data.Message
 	}
 	if err := ctx.Err(); err != nil {
-		return core.PlatformActionResult{}, err
+		return nil, nil, err
 	}
-	return readQQForwardPage(raw, a, call)
+	return raw, call, nil
 }
 
 // Only resource IDs extracted from the trusted containing message or its
 // descendants reach the vendor API. Record IDs never grant live-message authority.
-func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model.OneBotAction) (oneBotAPIResponse, error)) (core.PlatformActionResult, error) {
+func loadQQForwardRecords(raw json.RawMessage, a tools.QQArguments, call func(model.OneBotAction) (oneBotAPIResponse, error)) ([]qqForwardRecord, error) {
 	load := func(raw json.RawMessage, index int) ([]qqForwardRecord, error) {
 		refs := qqForwardReferences(raw)
 		if index < 0 || index >= len(refs) {
@@ -126,16 +136,24 @@ func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model
 	}
 	records, err := load(raw, a.ForwardIndex)
 	if err != nil {
-		return core.PlatformActionResult{}, err
+		return nil, err
 	}
 	for _, step := range a.Path {
 		if step.NodeIndex < 0 || step.NodeIndex >= len(records) {
-			return core.PlatformActionResult{}, fmt.Errorf("嵌套 node_index %d 不存在", step.NodeIndex)
+			return nil, fmt.Errorf("嵌套 node_index %d 不存在", step.NodeIndex)
 		}
 		records, err = load(records[step.NodeIndex].content, step.ForwardIndex)
 		if err != nil {
-			return core.PlatformActionResult{}, err
+			return nil, err
 		}
+	}
+	return records, nil
+}
+
+func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model.OneBotAction) (oneBotAPIResponse, error)) (core.PlatformActionResult, error) {
+	records, err := loadQQForwardRecords(raw, a, call)
+	if err != nil {
+		return core.PlatformActionResult{}, err
 	}
 	if a.Offset < 0 || a.Offset > len(records) {
 		return core.PlatformActionResult{}, fmt.Errorf("offset 超出转发记录范围（共 %d 条）", len(records))
@@ -169,6 +187,10 @@ func readQQForwardPage(raw json.RawMessage, a tools.QQArguments, call func(model
 		node.Sender.Nickname, _ = qqForwardClip(record.name, 128)
 		text, _ := historyMessageText(record.content)
 		node.Text, node.TextTruncated = qqForwardClip(text, maxQQForwardText)
+		node.ImageCount = len(imageSourcesFromSegments(qqForwardImageSegments(record.content)))
+		if node.ImageCount > 0 {
+			node.ImageRef = qqForwardImageRef(a, index)
+		}
 		page.Nodes = append(page.Nodes, node)
 		page.NextOffset = index + 1
 		page.HasMore = page.NextOffset < len(records)
