@@ -153,6 +153,21 @@ func (s *Store) References(ctx context.Context, scope chathistory.Scope, message
 	return refs, rows.Err()
 }
 
+// ReadForInspection is for the authenticated instance management API. Model
+// tools must use Read, which additionally enforces their conversation scope.
+func (s *Store) ReadForInspection(ctx context.Context, ref string) (Record, error) {
+	var record Record
+	if !ValidRef(ref) {
+		return record, fmt.Errorf("invalid tool history reference")
+	}
+	var data string
+	if err := s.db.SQL.QueryRowContext(ctx, s.db.Bind(`SELECT record_json FROM tool_history WHERE instance_id=? AND ref_id=?`), s.instanceID, ref).Scan(&data); err != nil {
+		return record, err
+	}
+	err := json.Unmarshal([]byte(data), &record)
+	return record, err
+}
+
 func (s *Store) Export(ctx context.Context) ([]Record, error) {
 	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT record_json FROM tool_history WHERE instance_id=? ORDER BY occurred_at, ref_id`), s.instanceID)
 	if err != nil {

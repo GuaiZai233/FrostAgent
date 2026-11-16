@@ -1,0 +1,231 @@
+import { escapeHtml } from '../utils/formatters';
+import { icon } from './icons';
+
+export interface ToolActivityEntry {
+  tool: string;
+  refId?: string;
+  readTargetRefId?: string;
+  callId?: string;
+  arguments?: string;
+  result?: string;
+  phase?: 'call' | 'result';
+}
+
+export interface ToolActivity {
+  entries: ToolActivityEntry[];
+  sourceMessageId?: string;
+  raw?: string;
+}
+
+export type ToolArgumentsLoader = (refId: string) => Promise<{
+  refId: string;
+  tool: string;
+  argumentsRaw: string;
+  argumentsAvailable: boolean;
+  argumentsPending?: boolean;
+}>;
+
+const refPattern =
+  'fa_toolcall_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const entryPattern = new RegExp(
+  `^(?:- (工具调用|历史回查): )?([^\\s()]+) \\(ref_id: (${refPattern})\\)(?: \\(read_target_ref_id: (${refPattern})\\))?$`,
+);
+const headerPattern =
+  /^【(?:工具调用记录；原文可用 read_tool_history 回查|工具执行记录)】(?:[ \t]+来源消息: ("(?:\\.|[^"\\])*"))?$/;
+
+// Legacy notes have no API metadata. Recognize only the complete backend format;
+// ordinary messages mentioning a tool or a reference remain ordinary messages.
+export function parseToolHistoryNote(
+  content: string,
+): ToolActivity | undefined {
+  const lines = content.trim().split(/\r?\n/);
+  const header = lines.shift()?.match(headerPattern);
+  if (!header) return undefined;
+  let source = header[1];
+  if (lines[0]?.startsWith('来源消息: '))
+    source = lines.shift()!.slice('来源消息: '.length);
+  let sourceMessageId: string | undefined;
+  if (source) {
+    try {
+      const value: unknown = JSON.parse(source);
+      if (typeof value !== 'string') return undefined;
+      sourceMessageId = value;
+    } catch {
+      return undefined;
+    }
+  }
+  const entries: ToolActivityEntry[] = [];
+  for (const line of lines) {
+    const match = line.match(entryPattern);
+    if (
+      !match ||
+      (match[1] &&
+        (match[1] === '历史回查') !== (match[2] === 'read_tool_history'))
+    )
+      return undefined;
+    entries.push({
+      tool: match[2],
+      refId: match[3],
+      readTargetRefId: match[4],
+    });
+  }
+  return entries.length
+    ? { entries, sourceMessageId, raw: content }
+    : undefined;
+}
+
+export function readTargetFromArguments(
+  tool: string,
+  args: string,
+): string | undefined {
+  if (tool !== 'read_tool_history') return undefined;
+  try {
+    const parsed: unknown = JSON.parse(args);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      'read_target_ref_id' in parsed &&
+      typeof parsed.read_target_ref_id === 'string'
+    )
+      return parsed.read_target_ref_id;
+  } catch {
+    /* Invalid arguments are shown as supplied. */
+  }
+  return undefined;
+}
+
+export function refFromToolResult(content: string): string | undefined {
+  return content.match(new RegExp(`\\(ref_id: (${refPattern})\\)\\s*$`))?.[1];
+}
+
+export function renderToolActivity(activity: ToolActivity): string {
+  const reads = activity.entries.filter(
+    (entry) => entry.tool === 'read_tool_history',
+  ).length;
+  const results = activity.entries.filter(
+    (entry) => entry.phase === 'result',
+  ).length;
+  const calls = activity.entries.length - reads;
+  const counts = [
+    calls
+      ? `${calls} 次工具${results === activity.entries.length ? '返回' : '调用'}`
+      : '',
+    reads
+      ? `${reads} 次历史回查${results === activity.entries.length ? '返回' : ''}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const names = new Map<string, number>();
+  for (const entry of activity.entries)
+    names.set(entry.tool, (names.get(entry.tool) || 0) + 1);
+  return `<details class="tool-activity" data-tool-activity>
+    <summary class="tool-activity-summary">
+      <span class="tool-activity-heading">${icon('wrench', 'w-3.5 h-3.5')}<span>工具执行记录</span></span>
+      <span class="tool-activity-count">${escapeHtml(counts || '内部记录')}</span>
+      ${reads ? '<span class="tool-activity-read-badge">历史回查</span>' : ''}
+      <span class="tool-activity-chevron">${icon('chevron_down', 'w-3.5 h-3.5')}</span>
+      <span class="tool-activity-preview">${[...names].map(([name, count]) => escapeHtml(name) + (count > 1 ? ` ×${count}` : '')).join(' · ')}</span>
+    </summary>
+    <div class="tool-activity-body">
+      ${activity.sourceMessageId ? `<div class="tool-activity-source">来源消息 <code>${escapeHtml(activity.sourceMessageId)}</code></div>` : ''}
+      ${activity.entries
+        .map((entry, index) => {
+          const read = entry.tool === 'read_tool_history';
+          const label =
+            entry.phase === 'result'
+              ? read
+                ? '回查返回'
+                : '工具返回'
+              : read
+                ? '历史回查'
+                : '工具调用';
+          const id = entry.refId || entry.callId;
+          return `<div class="tool-activity-entry" data-kind="${read ? 'history-read' : 'tool-call'}">
+          <div class="tool-activity-entry-title"><span class="tool-activity-order">${index + 1}</span><span class="tool-activity-kind">${label}</span><code>${escapeHtml(entry.tool)}</code>${id ? `<code class="tool-activity-ref">(${escapeHtml(id)})</code>` : ''}</div>
+          ${
+            entry.phase === 'result'
+              ? `<details class="tool-activity-details"><summary>返回原文</summary><pre>${escapeHtml(entry.result || '')}</pre></details>`
+              : `
+          <details class="tool-activity-details" ${entry.refId ? `data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}"` : ''} data-arguments-state="${entry.arguments !== undefined ? 'loaded' : 'idle'}">
+            <summary>详细参数</summary>
+            <pre class="tool-activity-arguments">${escapeHtml(entry.arguments ?? '展开后加载参数')}</pre>
+            <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
+          </details>`
+          }
+        </div>`;
+        })
+        .join('')}
+      ${!activity.entries.length && activity.raw ? `<pre class="tool-activity-raw">${escapeHtml(activity.raw)}</pre>` : ''}
+    </div>
+  </details>`;
+}
+
+export function bindToolArguments(
+  container: HTMLElement,
+  load?: ToolArgumentsLoader,
+): () => void {
+  let active = true;
+  const requests = new Map<string, ReturnType<ToolArgumentsLoader>>();
+  for (const details of container.querySelectorAll?.<HTMLDetailsElement>(
+    'details[data-tool-ref]',
+  ) || []) {
+    const pre = details.querySelector<HTMLElement>('.tool-activity-arguments')!;
+    const retry = details.querySelector<HTMLButtonElement>(
+      '.tool-activity-retry',
+    )!;
+    const refId = details.dataset.toolRef!;
+    const fetchArguments = async () => {
+      if (!active || !details.isConnected) return;
+      if (
+        details.dataset.argumentsState === 'loaded' ||
+        details.dataset.argumentsState === 'loading'
+      )
+        return;
+      if (!load) {
+        pre.textContent = '当前视图无法加载历史参数';
+        return;
+      }
+      details.dataset.argumentsState = 'loading';
+      pre.textContent = '正在加载参数…';
+      retry.hidden = true;
+      try {
+        let request = requests.get(refId);
+        if (!request) {
+          request = load(refId);
+          requests.set(refId, request);
+        }
+        const result = await request;
+        if (!active || !details.isConnected) return;
+        if (result.refId !== refId || result.tool !== details.dataset.toolName)
+          throw new Error('工具记录不匹配');
+        if (result.argumentsPending) {
+          requests.delete(refId);
+          pre.textContent = '调用正在执行或审查中，请稍后重试';
+          details.dataset.argumentsState = 'pending';
+          retry.hidden = false;
+          return;
+        }
+        pre.textContent = result.argumentsAvailable
+          ? result.argumentsRaw
+          : '参数已隔离，无法展示';
+        details.dataset.argumentsState = 'loaded';
+      } catch {
+        requests.delete(refId);
+        if (!active || !details.isConnected) return;
+        details.dataset.argumentsState = 'error';
+        pre.textContent = '参数加载失败，请重试';
+        retry.hidden = false;
+      }
+    };
+    details.addEventListener('toggle', () => {
+      if (details.open) void fetchArguments();
+    });
+    retry.addEventListener('click', () => {
+      void fetchArguments();
+    });
+  }
+  return () => {
+    active = false;
+  };
+}

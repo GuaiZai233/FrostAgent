@@ -15,6 +15,7 @@ service BotStatusService {
   rpc ClearBalanceQueryConfig(ClearBalanceQueryConfigRequest) returns (BalanceQueryConfigResponse);
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
+  rpc GetToolHistoryEntry(GetToolHistoryEntryRequest) returns (GetToolHistoryEntryResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
 
@@ -136,6 +137,20 @@ message GetSessionContextRequest {
   int32 recent_limit = 2;
 }
 
+message GetToolHistoryEntryRequest {
+  string ref_id = 1;
+}
+
+// Read-only inspector details for an archived call in the selected instance.
+message GetToolHistoryEntryResponse {
+  string ref_id = 1;
+  string tool = 2;
+  string arguments_raw = 3;
+  bool arguments_available = 4;
+  // Execution or result review is incomplete; the inspector may retry later.
+  bool arguments_pending = 5;
+}
+
 message SummaryGroupInfoProto {
   string summary = 1;
   repeated string message_ids = 2;
@@ -154,11 +169,14 @@ message GroupMessageInfoProto {
   string content = 4;
   string message_id = 5;
   string time = 6;
+  // Internal tool timeline annotation, distinct from a delivered assistant reply.
+  string tool_history_run_id = 7;
 }
 
 message SessionHistoryMessageProto {
   string role = 1;
   string content = 2;
+  string tool_history_run_id = 3;
 }
 
 message GetSessionContextResponse {
