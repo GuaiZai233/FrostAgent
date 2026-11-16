@@ -38,6 +38,16 @@ func (m *Manager) InstanceZIP(id string) ([]byte, error) {
 	if err := safeTree(m.dir(i.id)); err != nil {
 		return nil, err
 	}
+	i.mu.RLock()
+	runtime := i.runtime
+	i.mu.RUnlock()
+	if runtime != nil && runtime.Engine.SessionManager.Checkpoints != nil {
+		records, err := runtime.Engine.SessionManager.Checkpoints.Records()
+		if err != nil {
+			return nil, err
+		}
+		return backup.BuildInstanceZIP(m.db, i.id, filepath.Join(m.dir(i.id), "sticker"), records)
+	}
 	return backup.BuildInstanceZIP(m.db, i.id, filepath.Join(m.dir(i.id), "sticker"))
 }
 
@@ -314,6 +324,16 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 			return Info{}, err
 		}
 	}
+	if decoded.Sessions != nil {
+		if err := backup.ImportSessionStates(m.db, info.ID, *decoded.Sessions); err != nil {
+			return Info{}, err
+		}
+	}
+	if decoded.ToolHistory != nil {
+		if err := backup.ImportToolHistory(m.db, info.ID, *decoded.ToolHistory); err != nil {
+			return Info{}, err
+		}
+	}
 	if err := backup.ImportStickers(m.db, info.ID, filepath.Join(m.dir(info.ID), "sticker"),
 		decoded.Stickers, decoded.Images); err != nil {
 		return Info{}, err
@@ -469,6 +489,10 @@ func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 		if err := i.mcp.Close(); err != nil {
 			return err
 		}
+	}
+	i.logger.StopPersistence()
+	if i.runtime != nil && i.runtime.Engine.SessionManager.Checkpoints != nil {
+		i.runtime.Engine.SessionManager.Checkpoints.Close()
 	}
 	stage, err := m.createDeletionStage(i.id)
 	if err != nil {

@@ -159,6 +159,9 @@ func (s *Store) ImageHandler(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	image, ok := s.imageCache[hash]
+	if !ok && s.disk != nil {
+		image, ok = s.disk.image(hash)
+	}
 	if ok {
 		image = &cachedImage{
 			contentType: image.contentType,

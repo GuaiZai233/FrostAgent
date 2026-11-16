@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
+	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
@@ -42,6 +44,18 @@ func (m *Manager) sqlRuntimeSnapshot() *Snapshot {
 				snapshot.err = err
 				m.loadErr = err
 			}
+		}
+	}
+	if snapshot.err == nil {
+		m.lastRuntimeSnapshot = snapshot
+	} else if m.runtimeFallback && m.lastRuntimeSnapshot != nil && !strings.Contains(snapshot.err.Error(), "another FrostAgent process") {
+		// A reachable database containing invalid configuration must still fail
+		// closed. Fallback applies only while the connection itself is unusable.
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		connectionErr := m.db.SQL.PingContext(ctx)
+		cancel()
+		if connectionErr != nil {
+			return m.lastRuntimeSnapshot
 		}
 	}
 	return snapshot

@@ -793,8 +793,8 @@ func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("stop did not finish")
 	}
-	if m.instances[a.ID].runtime.Engine.SessionManager.Count() != 0 || len(m.instances[a.ID].logger.Snapshot()) != 0 {
-		t.Fatal("transient state survived stop")
+	if m.instances[a.ID].runtime.Engine.SessionManager.Count() != 0 {
+		t.Fatal("mock session survived stop")
 	}
 	if err = deleteSQLInstance(m, a.ID); err != nil {
 		t.Fatal(err)

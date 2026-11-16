@@ -33,6 +33,7 @@ var resetHints = map[string]string{
 	"HTTP_ALLOWED_ORIGINS":                 "不额外放行跨域来源",
 	"WS_ALLOWED_ORIGINS":                   "不额外放行跨域来源",
 	"SECURITY_CONTROL_MODE":                "基础模式",
+	"LOG_STORAGE_MIB":                      "128",
 	"MAX_CONTEXT_MESSAGES":                 "50",
 	"ADMIN_QQ_IDS":                         "未配置管理员",
 	"ADMIN_COMMAND_PREFIX":                 "/",

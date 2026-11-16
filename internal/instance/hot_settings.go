@@ -3,6 +3,7 @@ package instance
 // These settings are read from the synchronized runtime scope at the point of
 // use. They can change without stopping an instance or its open connections.
 var hotInstanceSettings = map[string]bool{
+	"LOG_STORAGE_MIB":              true,
 	"CHAT_HISTORY_PRIVATE_ENABLED": true, "CHAT_HISTORY_GROUP_WHITELIST": true,
 	"QQ_EXTEND_MESSAGES_TARGET_GROUPS": true,
 	"SYSTEM_PROMPT":                    true, "BOT_NAME": true, "BOT_ALIASES": true,

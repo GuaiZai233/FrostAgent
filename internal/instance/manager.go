@@ -230,7 +230,7 @@ func newManager(root string, global *instanceconfig.Store, db *storage.DB, build
 	m.mcpGetenv = global.Get
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
-		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
+		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, logs.DefaultBufferSize)}
 		m.instances[info.ID] = i
 		if pathError != nil {
 			m.registry.Instances[index].Enabled = false
@@ -448,7 +448,7 @@ func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
 	}
 	m.registry.Instances = append(m.registry.Instances, info)
 	m.registry.NextNumber++
-	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	i := &managed{id: id, logger: logs.New(id, name, logs.DefaultBufferSize)}
 	m.instances[id] = i
 	if err := instanceconfig.InitializeInstanceSettings(m.db, id); err != nil {
 		info.Error = err.Error()
@@ -522,7 +522,6 @@ func (m *Manager) stop(id string, i *managed) error {
 		m.security.RemoveInstanceProvider(id)
 	}
 	i.logger.EndStreams()
-	i.logger.Clear()
 	err := m.update(id, func(info *Info) { info.Enabled = false })
 	if err != nil {
 		m.mu.Lock()
@@ -845,6 +844,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 					return
 				}
 			}
+			i.logger.SetPersistentBudget(logs.PersistentBudget(i.config.Get(logs.LogBudgetKey)))
 			for key, values := range buffered.Header() {
 				w.Header()[key] = append([]string(nil), values...)
 			}

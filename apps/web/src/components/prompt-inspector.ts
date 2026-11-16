@@ -311,6 +311,7 @@ export function buildInspectorDataFromSessionContext(context: {
     structuredMessages?: StructuredGroupMessage[];
   }>;
   promptText?: string;
+  actualRequestJson?: string;
   systemPrompt?: string;
   model?: string;
   recentStructuredMessages?: StructuredGroupMessage[];
@@ -363,7 +364,7 @@ export function buildInspectorDataFromSessionContext(context: {
   return {
     sessionKind: privateSession ? 'private' : 'group',
     botName: configuredBotName || undefined,
-    raw: context.promptText || '',
+    raw: context.actualRequestJson || context.promptText || '',
     model: context.model,
     systemPrompt: context.systemPrompt,
     runningSummary: context.runningSummary,

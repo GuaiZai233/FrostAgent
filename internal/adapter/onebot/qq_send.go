@@ -105,6 +105,9 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		if c.mock {
 			return core.PlatformActionResult{}, fmt.Errorf("QQ 操作不能在模拟会话中发送")
 		}
+		if request.Action == "read_forward" {
+			return c.readQQForward(ctx, event, turn, request.Arguments)
+		}
 		sourceSessionID := c.historyKey(event)
 		sessionID := sourceSessionID
 		destination := event
@@ -133,6 +136,9 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				return core.PlatformActionResult{}, fmt.Errorf("目标群会话不可用")
 			}
 			targetSession = engine.SessionManager.GetOrCreate(sessionID)
+			if err := targetSession.RecoveryError(); err != nil {
+				return core.PlatformActionResult{}, fmt.Errorf("目标群会话暂时无法恢复: %w", err)
+			}
 			targetEpoch = targetSession.Epoch()
 		}
 		resolve := func(messages []tools.Msg) error {
@@ -202,7 +208,7 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				}
 			},
 			decorate: func(segments []tools.OneBotSegment) []tools.OneBotSegment {
-				if !external && event.MessageType == "group" {
+				if !external && event.MessageType == "group" && (request.UseFrostAgentDecoration == nil || *request.UseFrostAgentDecoration) {
 					decorationEvent := event
 					if request.SuppressAutoMention {
 						decorationEvent.UserID = 0

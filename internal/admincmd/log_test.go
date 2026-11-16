@@ -28,7 +28,13 @@ func TestLogCommandPermissionsIsolationAndPrivateDelivery(t *testing.T) {
 	if !candidate || err != nil || cmd.Args[0] != id {
 		t.Fatalf("parse: %+v %v", cmd, err)
 	}
-	for _, bad := range []string{"/log", "/log invalid", "/log " + id + " extra"} {
+	for _, text := range []string{"/log", " /LOG \t"} {
+		parsed, candidate, err := ParseCandidate(text, "/")
+		if !candidate || err != nil || parsed.Type != CmdLog || len(parsed.Args) != 0 {
+			t.Fatalf("bare log parse: %+v %v", parsed, err)
+		}
+	}
+	for _, bad := range []string{"/log invalid", "/log " + id + " extra"} {
 		if _, candidate, err := ParseCandidate(bad, "/"); !candidate || err == nil {
 			t.Fatalf("accepted %s", bad)
 		}

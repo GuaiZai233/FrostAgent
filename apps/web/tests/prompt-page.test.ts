@@ -27,6 +27,9 @@ try {
   let deleteCalls = 0;
   let modelStateCalls = 0;
   const api = {
+    async getPersistenceHealth() {
+      return { sessions: { pending: 0, local_pending: 0 }, logs: { enabled: true, budget_bytes: 134217728, used_bytes: 0, entries: 0 } };
+    },
     async getOverview() {
       return { botName: 'Configured Bot' };
     },

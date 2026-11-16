@@ -68,6 +68,7 @@ var knownEnvVars = map[string]envEntry{
 	"WS_ALLOWED_ORIGINS":                   {"允许的 WebSocket Origin", false, true, false},
 	"SECURITY_CONTROL_MODE":                {"全局安全控制模式", false, false, false},
 	"SYSTEM_PROMPT":                        {"系统提示词", false, false, true},
+	"LOG_STORAGE_MIB":                      {"持久化日志预算（MiB，包含图片，超限删除最旧记录）", false, false, false},
 	"MAX_CONTEXT_MESSAGES":                 {"最多保留的消息数", false, false, false},
 	"ENABLE_AT_IN_GROUP_MSG":               {"是否开启群聊回复前艾特", false, false, false},
 	"GROUP_REPLY_ON_MENTION":               {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false, false},
@@ -807,6 +808,12 @@ func validateUpdate(key, value string) error {
 		seconds, err := strconv.Atoi(value)
 		if err != nil || seconds < 0 || seconds > 86400 || strconv.Itoa(seconds) != value {
 			return errors.New("戳一戳冷却时间必须是 0 到 86400 的整数秒")
+		}
+	}
+	if key == "LOG_STORAGE_MIB" && strings.TrimSpace(value) != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 65536 {
+			return fmt.Errorf("LOG_STORAGE_MIB 必须是 1 到 65536 之间的整数")
 		}
 	}
 	if key == "MAX_CONTEXT_MESSAGES" {

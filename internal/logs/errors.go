@@ -23,15 +23,12 @@ func (s *Store) FindError(value string) (LogEntry, bool) {
 	if !ok || s == nil {
 		return LogEntry{}, false
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	var found LogEntry
-	if s.buffer != nil {
-		s.buffer.Do(func(value any) {
-			if entry, ok := value.(LogEntry); ok && entry.Level == ERROR && entry.ErrorUUID == id {
-				found = entry
-			}
-		})
+	for _, entry := range s.Snapshot() {
+		if entry.Level == ERROR && entry.ErrorUUID == id {
+			found = entry
+			break
+		}
 	}
 	return found, found.ErrorUUID != ""
 }

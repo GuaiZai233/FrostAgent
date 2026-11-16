@@ -14,8 +14,14 @@ type contextualToolExecutor interface {
 // executeToolResult adapts legacy executors at one compatibility boundary.
 // Builtin tools implement StructuredToolExecutor and bypass text inference.
 func executeToolResult(ctx context.Context, tool ToolExecutor, call ToolCall) (core.ToolExecutionResult, error) {
+	var raw string
+	ctx = core.WithRawToolResultReceiver(ctx, func(value string) { raw = value })
 	if structured, ok := tool.(core.StructuredToolExecutor); ok {
-		return structured.ExecuteResult(ctx, call.Function.Arguments)
+		result, err := structured.ExecuteResult(ctx, call.Function.Arguments)
+		if raw != "" {
+			result.RawResult = raw
+		}
+		return result, err
 	}
 	var content string
 	var err error
@@ -24,7 +30,7 @@ func executeToolResult(ctx context.Context, tool ToolExecutor, call ToolCall) (c
 	} else {
 		content, err = tool.Execute(call.Function.Arguments)
 	}
-	result := core.ToolExecutionResult{Content: content}
+	result := core.ToolExecutionResult{Content: content, RawResult: raw}
 	if err == nil {
 		result.MemoryWritten = isMemoryWriteAction(call, content)
 		if looksLikeMessagePayload(content) {

@@ -14,6 +14,8 @@ import (
 const MaxInstanceZIPBytes = 512 << 20
 
 type DecodedInstance struct {
+	Sessions    *SessionStates
+	ToolHistory *ToolHistory
 	ChatHistory *ChatHistory
 	Manifest    Manifest
 	Settings    Settings
@@ -45,7 +47,7 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, fmt.Errorf("duplicate or invalid ZIP member %q", name)
 		}
 		if name != "manifest.json" && name != "setting.json" && name != "memory.json" &&
-			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" && name != "token_usage.json" && name != "computer_use.json" && name != "chat_history.json" {
+			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" && name != "token_usage.json" && name != "computer_use.json" && name != "chat_history.json" && name != "session_states.json" && name != "tool_history.json" {
 			if !strings.HasPrefix(name, "sticker/files/") || !validStickerFilename(strings.TrimPrefix(name, "sticker/files/")) {
 				return decoded, fmt.Errorf("unexpected ZIP member %q", name)
 			}
@@ -99,12 +101,30 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 		}
 		decoded.Skills = validated
 	}
+	if data, ok := files["tool_history.json"]; ok {
+		decoded.ToolHistory = &ToolHistory{}
+		if err := json.Unmarshal(data, decoded.ToolHistory); err != nil {
+			return decoded, fmt.Errorf("decode tool_history.json: %w", err)
+		}
+		if err := ValidateToolHistory(*decoded.ToolHistory); err != nil {
+			return decoded, err
+		}
+	}
 	if data, ok := files["chat_history.json"]; ok {
 		decoded.ChatHistory = &ChatHistory{}
 		if err := json.Unmarshal(data, decoded.ChatHistory); err != nil {
 			return decoded, fmt.Errorf("decode chat_history.json: %w", err)
 		}
 		if err := ValidateChatHistory(*decoded.ChatHistory); err != nil {
+			return decoded, err
+		}
+	}
+	if data, ok := files["session_states.json"]; ok {
+		decoded.Sessions = &SessionStates{}
+		if err := json.Unmarshal(data, decoded.Sessions); err != nil {
+			return decoded, err
+		}
+		if err := ValidateSessionStates(*decoded.Sessions); err != nil {
 			return decoded, err
 		}
 	}

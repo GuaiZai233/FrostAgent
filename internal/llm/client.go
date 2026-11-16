@@ -14,11 +14,13 @@ import (
 // openai 兼容协议结构体
 
 type ChatMessage struct {
-	Role          string              `json:"role"`
-	Content       any                 `json:"content"`
-	ToolCalls     []ToolCall          `json:"tool_calls,omitempty"`
-	ToolCallID    string              `json:"tool_call_id,omitempty"`
-	ProviderState *core.ProviderState `json:"provider_state,omitempty"`
+	ToolHistoryRefID string              `json:"tool_history_ref_id,omitempty"`
+	ToolHistoryRunID string              `json:"tool_history_run_id,omitempty"`
+	Role             string              `json:"role"`
+	Content          any                 `json:"content"`
+	ToolCalls        []ToolCall          `json:"tool_calls,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	ProviderState    *core.ProviderState `json:"provider_state,omitempty"`
 }
 
 type ToolCallFunction struct {

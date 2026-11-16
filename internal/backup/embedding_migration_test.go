@@ -51,7 +51,9 @@ func TestInstanceZIPAfterSkillsV12Migration(t *testing.T) {
 	}
 	// Reconstruct the other branch's v12 without replacing any user rows.
 	for _, statement := range []string{
+		`DROP TABLE session_states`,
 		`DROP TABLE chat_history`,
+		`DROP TABLE tool_history`,
 		`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
 		`ALTER TABLE memory_entries DROP COLUMN summary_dirty`,
