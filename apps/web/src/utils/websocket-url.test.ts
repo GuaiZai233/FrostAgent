@@ -20,12 +20,12 @@ test('dashboardWebSocketURL creates same-origin ws URL for http origin on defaul
   const url = dashboardWebSocketURL(
     'http://localhost:8080',
     'inst_test_2',
-    'astrbot',
+    'onebot',
     'mock=true',
   );
   assert.equal(
     url,
-    'ws://localhost:8080/instances/inst_test_2/ws/astrbot?mock=true',
+    'ws://localhost:8080/instances/inst_test_2/ws/onebot?mock=true',
   );
 });
 
@@ -46,12 +46,12 @@ test('dashboardWebSocketURL handles custom https port, trailing paths and hash f
   const url = dashboardWebSocketURL(
     'https://bot.example.com:8443/#/chat',
     'inst_test_4',
-    'astrbot',
+    'onebot',
     '?mock=true',
   );
   assert.equal(
     url,
-    'wss://bot.example.com:8443/instances/inst_test_4/ws/astrbot?mock=true',
+    'wss://bot.example.com:8443/instances/inst_test_4/ws/onebot?mock=true',
   );
 });
 
@@ -79,15 +79,15 @@ test('instanceWebSocketURL preserves external listen address formatting for over
     'ws://127.0.0.1:11023/instances/inst_test_1/ws/onebot',
   );
 
-  const astrbotURL = instanceWebSocketURL(
+  const otherURL = instanceWebSocketURL(
     '0.0.0.0:11023',
     'inst_test_1',
-    'astrbot',
+    'onebot',
     'http://dashboard.local:8080',
   );
   assert.equal(
-    astrbotURL,
-    'ws://dashboard.local:11023/instances/inst_test_1/ws/astrbot',
+    otherURL,
+    'ws://dashboard.local:11023/instances/inst_test_1/ws/onebot',
   );
 
   const defaultURL = instanceWebSocketURL(

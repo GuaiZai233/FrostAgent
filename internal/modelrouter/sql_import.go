@@ -99,7 +99,7 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 		oldID := incoming.ID
 		for _, existing := range catalog.Endpoints {
 			if existing.ID == incoming.ID && existing.DisplayName == incoming.DisplayName &&
-				existing.BaseURL == incoming.BaseURL && existing.Enabled == incoming.Enabled {
+				existing.BaseURL == incoming.BaseURL && existing.Enabled == incoming.Enabled && existing.APIFormat == incoming.APIFormat {
 				endpointMap[oldID] = existing.ID
 				break
 			}
@@ -181,14 +181,14 @@ func readCatalogTx(ctx context.Context, tx *sql.Tx) (Configuration, error) {
 	if err := tx.QueryRowContext(ctx, `SELECT revision FROM provider_revision WHERE id = 1`).Scan(&cfg.Revision); err != nil {
 		return cfg, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, display_name, base_url, api_key_source, api_key_ref, enabled FROM provider_endpoints ORDER BY position, id`)
+	rows, err := tx.QueryContext(ctx, `SELECT id, display_name, base_url, api_key_source, api_key_ref, enabled, api_format FROM provider_endpoints ORDER BY position, id`)
 	if err != nil {
 		return cfg, err
 	}
 	for rows.Next() {
 		var endpoint Endpoint
 		var enabled int
-		if err := rows.Scan(&endpoint.ID, &endpoint.DisplayName, &endpoint.BaseURL, &endpoint.APIKeySource, &endpoint.APIKeyRef, &enabled); err != nil {
+		if err := rows.Scan(&endpoint.ID, &endpoint.DisplayName, &endpoint.BaseURL, &endpoint.APIKeySource, &endpoint.APIKeyRef, &enabled, &endpoint.APIFormat); err != nil {
 			rows.Close()
 			return cfg, err
 		}

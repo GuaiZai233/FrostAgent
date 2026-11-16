@@ -13,8 +13,8 @@ const AliasWakeGuidance = "此为别名唤醒命中，请仔细核对用户语�
 // ContainsBotName matches literal names within one text segment. Matching
 // ignores ASCII letter case and Unicode spaces (including full-width spaces) on
 // both sides. Purely ASCII alphanumeric names only match at ASCII word
-// boundaries, so short aliases such as "Bot" do not wake on "AstrBot" or
-// "chatbot". Punctuation, tabs and line breaks are always literal.
+// boundaries, so short aliases such as "Bot" do not wake on "ChatBot" or
+// "robotics". Punctuation, tabs and line breaks are always literal.
 func ContainsBotName(text string, names []string) bool {
 	var normalizedText string
 	textNormalized := false

@@ -14,6 +14,8 @@ export type SettingField = {
 // Keep the interface labels here so internal configuration keys never become
 // the primary language of the settings page.
 export const settingFields: Record<string, SettingField> = {
+  CHAT_HISTORY_PRIVATE_ENABLED: { label: '保存私聊原文', group: '聊天记录', type: 'switch', hot: true, hint: '默认开启；关闭后保留已有档案，仍可在原私聊中检索' },
+  CHAT_HISTORY_GROUP_WHITELIST: { label: '群聊原文持久化白名单', group: '聊天记录', hot: true, hint: '默认不保存任何群。QQ 群号用英文逗号分隔；其他平台填写 platform:group:id。保存群内所有收到的消息，包括未触发回复的消息；移除后保留历史。仅关键词检索，按需返回原文片段。' },
   LISTEN_ADDR: { label: '管理页面监听地址', group: '网络与连接', hot: true },
   WS_LISTEN_ADDR: { label: '适配器监听地址', group: '网络与连接' },
   HTTP_ALLOWED_ORIGINS: { label: '管理页面允许的跨域来源', group: '网络与连接', hot: true },
@@ -21,15 +23,16 @@ export const settingFields: Record<string, SettingField> = {
   SECURITY_CONTROL_MODE: { label: '安全控制模式', group: '安全与权限', type: 'select', hot: true, options: [
     { value: 'off', label: '关闭' }, { value: 'simple', label: '基础' }, { value: 'aggressive', label: '严格' },
   ] },
+  LOG_STORAGE_MIB: { label: '持久化日志预算（MiB）', group: '日志与持久化', type: 'number', min: 1, max: 65536, step: 1, hot: true, hint: '默认每实例 128 MiB，包含日志及图片；超限删除最旧记录。会话和 Prompt 检查快照单独保存。' },
   MAX_CONTEXT_MESSAGES: { label: '保留消息条数', group: '对话与上下文', type: 'number', min: 4, step: 1, hot: true },
   ADMIN_QQ_IDS: { label: '管理员 QQ 号', group: '安全与权限', hint: '多个号码用英文逗号分隔', hot: true },
   ADMIN_COMMAND_PREFIX: { label: '管理员指令前缀', group: '安全与权限', hot: true },
-  GROUP_COMPACT_BUFFER_SIZE: { label: '群聊压缩每批消息数', group: '记忆与压缩', type: 'number', min: 1, step: 1, hint: '每批处理的原消息条数' },
+  GROUP_COMPACT_BUFFER_SIZE: { label: '上下文压缩每批消息数', group: '记忆与压缩', type: 'number', min: 1, step: 1, hint: '群聊和私聊自动压缩的消息条数阈值；私聊保留最近一轮' },
   GROUP_COMPACT_MAX_BUFFER_SIZE: { label: '群聊压缩最大积压消息数', group: '记忆与压缩', type: 'number', min: 1, step: 1, hint: '低于每批条数时自动抬高；积压溢出会淘汰消息' },
-  GROUP_COMPACT_MIN_INTERVAL: { label: '群聊压缩最短间隔', group: '记忆与压缩', hint: '同群两次自动压缩的最短间隔，例如 30s 或 2m' },
+  GROUP_COMPACT_MIN_INTERVAL: { label: '上下文压缩最短间隔', group: '记忆与压缩', hint: '同一群聊或私聊两次自动压缩的最短间隔，例如 30s 或 2m' },
   GROUP_RAW_CONTEXT_MAX_CHARS: { label: '未压缩群消息字符上限', group: '记忆与压缩', type: 'number', min: 1, step: 1, hot: true, hint: '只限制注入上下文的未压缩群消息部分，不限制整个请求或记忆' },
   MEMORY_EXTRACT_BATCH_MIN: { label: '记忆提取随机轮数下限', group: '记忆与压缩', type: 'number', min: 1, step: 1, hot: true, hint: '与上限共同形成随机触发区间，默认 3～5 个符合条件的对话轮次；不计每条群消息' },
-  MEMORY_EXTRACT_BATCH_MAX: { label: '记忆提取随机轮数上限', group: '记忆与压缩', type: 'number', min: 1, step: 1, hot: true, hint: '只控制记忆提取，不控制群聊压缩；低于下限时按下限处理' },
+  MEMORY_EXTRACT_BATCH_MAX: { label: '记忆提取随机轮数上限', group: '记忆与压缩', type: 'number', min: 1, step: 1, hot: true, hint: '只控制记忆提取，不控制上下文压缩；低于下限时按下限处理' },
   MEMORY_REFLECTION_TIMEOUT: { label: '记忆反思超时时间', group: '记忆与压缩', hint: '例如 30s 或 2m' },
   ONEBOT_ACTION_TIMEOUT: { label: 'OneBot 动作确认超时', group: '适配器', hint: '例如 10s', hot: true },
   BILLING_ENABLED: { label: '启用计费', group: '计费', type: 'switch' },
@@ -50,6 +53,7 @@ export const settingFields: Record<string, SettingField> = {
   SECURITY_GATEWAY_TIMEOUT: { label: '安全审查网关超时', group: '安全与权限', hint: '例如 15s；实例值优先于全局值，未配置时才使用兼容安全审查超时' },
   SECURITY_CLASSIFIER_TIMEOUT: { label: '兼容安全审查超时', group: '安全与权限', hint: '安全审查网关超时的旧名称，只有网关超时未配置时使用，并非独立超时' },
   AGENT_MAX_ITERATIONS: { label: '智能体基础迭代轮数', group: '模型与智能体', type: 'number', min: 1, step: 1, hint: '工具执行可能按运行逻辑追加迭代预算' },
+  TIME_SLEEP_TIMEOUT_SECONDS: { label: '挂起工具超时秒数', group: '模型与智能体', type: 'number', positive: true, step: 'any', hot: true, hint: '默认 60 秒；达到上限时工具返回 Timeout，保存后下次调用生效' },
   ACTIONSCAT_ENABLED: { label: '启用 ActionsCat', group: 'ActionsCat', type: 'switch', hot: true, hint: '默认开启；关闭后隐藏全部 ActionsCat 工具并拒绝调用' },
   ACTIONSCAT_ENDPOINT: { label: 'ActionsCat 服务地址', group: 'ActionsCat', hot: true },
   ACTIONSCAT_MANAGEMENT_TOKEN: { label: 'ActionsCat 管理 Token', group: 'ActionsCat', type: 'secret', hot: true },
@@ -57,13 +61,18 @@ export const settingFields: Record<string, SettingField> = {
 };
 
 export const dedicatedSettingKeys = new Set([
+	'ENABLE_PROACTIVE_AWARENESS', 'PROACTIVE_AWARENESS_INTERVAL',
+	'ENABLE_PROACTIVE_AWARENESS_QUIET_HOURS', 'PROACTIVE_AWARENESS_QUIET_HOURS_START', 'PROACTIVE_AWARENESS_QUIET_HOURS_END',
+	'ENABLE_PROACTIVE_AWARENESS_PRIVATE_WHITELIST', 'PROACTIVE_AWARENESS_PRIVATE_WHITELIST',
+	'ENABLE_PROACTIVE_AWARENESS_GROUP_WHITELIST', 'PROACTIVE_AWARENESS_GROUP_WHITELIST',
   'DISABLED_TOOLS',
   'BALANCE_QUERY_CONFIG',
+  'QQ_EXTEND_MESSAGES_TARGET_GROUPS',
   'ONEBOT_WS_ENABLED', 'ONEBOT_WS_MODE', 'ONEBOT_WS_URL', 'ONEBOT_WS_TOKEN',
-  'ASTRBOT_WS_ENABLED', 'ASTRBOT_WS_MODE', 'ASTRBOT_WS_URL', 'ASTRBOT_WS_TOKEN',
-  'ONEBOT_WS_INBOUND_TOKEN', 'ASTRBOT_WS_INBOUND_TOKEN',
+  'ONEBOT_WS_INBOUND_TOKEN',
   'ENABLE_RUNTIME_STATUS_COMMAND',
   'ENABLE_EMBEDDING',
+  'ENABLE_THINKING_STATUS',
   'ENABLE_POKE', 'POKE_CUSTOM_TEXT', 'POKE_COOLDOWN_SECONDS',
   'SYSTEM_PROMPT',
   'BOT_NAME', 'BOT_ALIASES',
@@ -74,6 +83,6 @@ export const dedicatedSettingKeys = new Set([
   'PROACTIVE_REPLY_GROUP_PROBABILITIES',
   'ENABLE_GROUP_COMPACT_WHITELIST', 'GROUP_COMPACT_WHITELIST',
   'STICKER_ACTIVITY', 'STICKER_ACTIVITY_MODE', 'ENABLE_STICKER_CONFIRM',
-  'BOT_LOOP_USER_IDS', 'BOT_LOOP_MAX_TURNS', 'BOT_LOOP_MODE',
+  'BOT_LOOP_ENABLED', 'BOT_LOOP_USER_IDS', 'BOT_LOOP_MAX_TURNS', 'BOT_LOOP_MODE',
   'ENABLE_QUOTE_TRACE', 'QUOTE_TRACE_DEPTH',
 ]);

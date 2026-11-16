@@ -25,7 +25,7 @@ class WebSocketSmokeTests(unittest.TestCase):
                     check_real_websocket_auth(Mock(side_effect=[{'status': code} for code in broken]), '/ws', token, required)
 
     def test_adapter_accepts_real_connection_and_rejects_both_mock_markers(self):
-        for adapter in ('onebot', 'astrbot'):
+        for adapter in ('onebot',):
             endpoint = '/instances/synthetic-instance/ws/' + adapter
             read = Mock(side_effect=[{'status': status} for status in (101, 403, 403, 403, 403)])
             check_adapter_websocket(read, endpoint)

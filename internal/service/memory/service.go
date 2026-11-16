@@ -57,11 +57,7 @@ func (s *Service) ListMemories(
 		if gErr != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get group store: %w", gErr))
 		}
-		if owner == "" {
-			entries, err = groupStore.ListAll()
-		} else {
-			entries, err = groupStore.ListByOwner(owner)
-		}
+		entries, err = groupStore.ListAll()
 	} else {
 		if owner == "" {
 			entries, err = s.store.ListAll()
@@ -161,10 +157,7 @@ func (s *Service) AddMemory(
 		if err != nil {
 			return connect.NewResponse(&v1.AddMemoryResponse{Error: err.Error()}), nil
 		}
-		owner := req.Msg.GetOwner()
-		if owner == "" {
-			owner = memory.GroupOwnerExplicit
-		}
+		owner := memory.GroupOwnerExplicit
 		entry := memory.MemoryEntry{
 			ID:        fmt.Sprintf("mem_%d", now.UnixNano()),
 			Owner:     owner,
@@ -727,7 +720,6 @@ func toProtoEntry(e memory.MemoryEntry) *v1.MemoryEntry {
 		Content:         e.Content,
 		Tags:            e.Tags,
 		Source:          string(e.Source),
-		Visibility:      string(e.Visibility),
 		CreatedAt:       e.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       e.UpdatedAt.Format(time.RFC3339),
 		AccessCount:     int32(e.AccessCount),

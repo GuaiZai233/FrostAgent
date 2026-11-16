@@ -130,29 +130,36 @@ type disablingActionsCatProvider struct {
 func (p *disablingActionsCatProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	p.round++
 	if p.round == 1 {
-		if len(req.Tools) != 1 || req.Tools[0].Name != "actionscat_list_actions" {
+		if len(req.Tools) != 1 || req.Tools[0].Name != "actionscat" {
 			p.t.Fatalf("initial tools = %v", req.Tools)
 		}
 		if err := p.scope.Config.Update("ACTIONSCAT_ENABLED", "false", false); err != nil {
 			p.t.Fatal(err)
 		}
 		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
-			ID: "stale-call", Type: "function", Function: core.ToolCallFunction{Name: "actionscat_list_actions", Arguments: "{}"},
+			ID: "stale-call", Type: "function", Function: core.ToolCallFunction{Name: "actionscat", Arguments: `{"action":"list_actions"}`},
 		}}}}, nil
 	}
 	if len(req.Tools) != 0 {
 		p.t.Fatalf("tools remain exposed after disabling: %v", req.Tools)
 	}
 	last := req.Messages[len(req.Messages)-1]
-	if last.Role != core.RoleTool || last.Content != "ActionsCat已被FrostAgent管理员禁用。" {
-		p.t.Fatalf("stale call response = %+v", last)
+	content, _ := last.Content.(string)
+	prefix := "[FrostAgent 错误] 工具调用失败：ActionsCat 已被管理员禁用 (Ref_ID: "
+	if last.Role != core.RoleTool || !strings.HasPrefix(content, prefix) {
+		p.t.Errorf("stale call response = %+v", last)
+	} else {
+		id := strings.TrimSuffix(strings.TrimPrefix(content, prefix), ")")
+		if _, found := p.scope.Log().FindError(id); !found {
+			p.t.Errorf("missing stale-call diagnostics: %q", content)
+		}
 	}
 	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "disabled"}}, nil
 }
 
 func TestActionsCatDisableDuringModelCallRejectsStaleCall(t *testing.T) {
 	scope := newTestScope(t, map[string]string{"ACTIONSCAT_ENDPOINT": "http://actionscat.example"})
-	tool := ActionsCatListActionsTool(actionscat.New(scope.Getenv))
+	tool := ActionsCatTool(actionscat.New(scope.Getenv), scope)
 	provider := &disablingActionsCatProvider{t: t, scope: scope}
 	engine := &llm.Engine{
 		Scope: scope, MaxIterations: 3, Provider: provider,

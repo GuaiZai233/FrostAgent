@@ -129,9 +129,6 @@ func (s *Store) SaveEntriesConditionallyContext(
 		if entries[i].CreatedAt.IsZero() {
 			entries[i].CreatedAt = now
 		}
-		if entries[i].Visibility == "" {
-			entries[i].Visibility = VisibilityPrivate
-		}
 		if entries[i].OwnerType == "" {
 			entries[i].OwnerType = OwnerUser
 		}
@@ -501,7 +498,6 @@ func sameMergeSource(current MemoryEntry, snapshot MemoryEntry) bool {
 		slices.Equal(current.Tags, snapshot.Tags) &&
 		current.Source == snapshot.Source &&
 		current.SourceMedia == snapshot.SourceMedia &&
-		current.Visibility == snapshot.Visibility &&
 		current.CreatedAt.Equal(snapshot.CreatedAt) &&
 		current.UpdatedAt.Equal(snapshot.UpdatedAt) &&
 		current.AccessCount == snapshot.AccessCount &&
@@ -515,7 +511,6 @@ func buildMergedEntry(
 	sources []MemoryEntry,
 	now time.Time,
 ) MemoryEntry {
-	visibility := VisibilityPublic
 	accessCount := 0
 	mergedFrom := make([]string, 0, len(sources))
 	sourceMedia := ""
@@ -524,9 +519,6 @@ func buildMergedEntry(
 			sourceMedia = SourceMediaImage
 		}
 		mergedFrom = append(mergedFrom, source.ID)
-		if source.Visibility != VisibilityPublic {
-			visibility = VisibilityPrivate
-		}
 		if source.AccessCount > accessCount {
 			accessCount = source.AccessCount
 		}
@@ -540,7 +532,6 @@ func buildMergedEntry(
 		Tags:        slices.Clone(merge.Tags),
 		Source:      SourceReflect,
 		SourceMedia: sourceMedia,
-		Visibility:  visibility,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		AccessCount: accessCount,
@@ -577,7 +568,6 @@ func (s *Store) UpdateEntry(updated MemoryEntry) error {
 			updated.SourceMessageID = entry.SourceMessageID
 			updated.SourceSenderID = entry.SourceSenderID
 			updated.Source = entry.Source
-			updated.Visibility = entry.Visibility
 			updated.CreatedAt = entry.CreatedAt
 			updated.AccessCount = entry.AccessCount
 			updated.MergedFrom = slices.Clone(entry.MergedFrom)

@@ -65,6 +65,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">会话与 Prompt 检查</h1>
+<p id="session-persistence-health" class="text-xs text-muted" role="status">会话快照跨重启恢复；历史原文不会自动补入上下文。</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           ${instanceID ? `<a class="btn btn-outline btn-sm" href="/api/instances/${escapeHtml(instanceID)}/backup/summaries" download="group_summaries.json">下载群摘要备份</a>` : ''}
@@ -149,6 +150,17 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       </div>
     </div>
   `;
+
+  void api.getPersistenceHealth().then(health => {
+    const status = container.querySelector<HTMLElement>('#session-persistence-health');
+    if (!status) return;
+    status.textContent = health.sessions.error || (health.sessions.pending > 0
+      ? `会话已保存本地快照，${health.sessions.pending} 个会话等待提交数据库。`
+      : '会话快照跨重启恢复；历史原文不会自动补入上下文。');
+  }).catch(() => {
+    const status = container.querySelector<HTMLElement>('#session-persistence-health');
+    if (status) status.textContent = '会话持久化状态暂时无法读取';
+  });
 
   const mountEl = container.querySelector<HTMLElement>('#prompt-inspector-mount')!;
   const sessionListEl = container.querySelector<HTMLElement>('#prompt-session-list')!;
@@ -421,6 +433,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       showRawToggle: true,
       title,
       botName,
+      loadToolArguments: typeof api.getToolHistoryEntry === 'function' ? refId => api.getToolHistoryEntry(refId) : undefined,
       modelConfigHref: session && !groupId ? '#/model-router' : undefined,
       onConfigureModel: session && groupId
         ? () => {

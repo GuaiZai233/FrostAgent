@@ -172,7 +172,6 @@ func TestGatewayRechecksSelectedDatabaseAuthorization(t *testing.T) {
 		"/api/instances/global/extra-env", "/api/instances/global/backup/settings",
 		"/instances/" + info.ID + "/frostagent.v1.SettingsService/ListEnvVars",
 		"/instances/" + info.ID + "/ws/onebot?mock=true",
-		"/instances/" + info.ID + "/ws/astrbot?mock=true",
 		"/api/storage", "/api/security/locked",
 	} {
 		gateway.mu.Lock()

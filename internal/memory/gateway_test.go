@@ -25,7 +25,7 @@ func TestGateway_FormatGroupMemoryEvidence_XMLEscapingAndContainerDelimitation(t
 	if !strings.HasSuffix(raw, "</group_memory_evidence>") {
 		t.Fatalf("expected group_memory_evidence container closing, got: %s", raw)
 	}
-	if !strings.Contains(raw, "<memory_entry id=\"mem_01\" owner=\"syn_u_12345\" sender_id=\"syn_u_12345\" source_msg_id=\"msg_101\">") {
+	if !strings.Contains(raw, "<memory_entry id=\"mem_01\" sender_id=\"syn_u_12345\" source_msg_id=\"msg_101\">") {
 		t.Errorf("expected memory_entry attributes to be formatted properly, got: %s", raw)
 	}
 	if !strings.Contains(raw, "<quote>普通群记忆内容</quote>") {
@@ -167,4 +167,3 @@ func TestGateway_FormatForGroupContext_MaliciousNicknameEscaped(t *testing.T) {
 		t.Errorf("expected nickname to be quoted with %%q in output rules, got:\n%s", result)
 	}
 }
-

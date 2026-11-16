@@ -580,7 +580,7 @@ func TestVendorParity_SendFailure_LuckyLilliaErrorModel(t *testing.T) {
 		},
 	}
 	engine := newTestEngine(provider)
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -647,7 +647,7 @@ func TestVendorParity_SendSuccess_NapCatPartialModel(t *testing.T) {
 		},
 	}
 	engine := newTestEngine(provider)
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

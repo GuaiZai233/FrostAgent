@@ -37,8 +37,8 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 const a = { id: 'a1b2c3d4', name: 'a', enabled: false, created_at: '' };
 const b = { id: 'b1c2d3e4', name: 'b', enabled: false, created_at: '' };
 assert.equal(
-  instanceWebSocketURL(':11023', a.id, 'astrbot', 'http://localhost:8080'),
-  'ws://localhost:11023/instances/a1b2c3d4/ws/astrbot',
+  instanceWebSocketURL(':11023', a.id, 'onebot', 'http://localhost:8080'),
+  'ws://localhost:11023/instances/a1b2c3d4/ws/onebot',
   'adapter URL used the management HTTP port instead of WS_LISTEN_ADDR',
 );
 assert.equal(

@@ -1,4 +1,5 @@
 import { icon } from './icons';
+import { raiseToastContainer } from './toast';
 import { escapeHtml } from '../utils/formatters';
 
 export interface DialogOptions<T = unknown> {
@@ -50,6 +51,7 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
         // Dialog already closed or not in DOM
       }
       dialog.remove();
+      raiseToastContainer();
       options.onClose?.(result);
       resolve(result);
     };
@@ -82,6 +84,7 @@ export function openDialog<T = unknown>(options: DialogOptions<T>): Promise<T | 
     });
 
     dialog.showModal();
+    raiseToastContainer();
 
     if (options.onMount) {
       options.onMount(dialog, finish);

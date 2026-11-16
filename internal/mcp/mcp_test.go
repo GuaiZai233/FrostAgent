@@ -286,7 +286,7 @@ func TestServerRuntimeLifecycleAndDoubleCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call tool returned error: %v", err)
 	}
-	if !strings.Contains(resDisabled, "Tool \"delete_repo\" is currently disabled.") {
+	if !strings.Contains(resDisabled, "[FrostAgent 错误] MCP 工具调用失败：工具已禁用 (Ref_ID: ") {
 		t.Fatalf("expected graceful disabled message, got %q", resDisabled)
 	}
 
@@ -296,7 +296,7 @@ func TestServerRuntimeLifecycleAndDoubleCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call tool returned error: %v", err)
 	}
-	if !strings.Contains(resServerDisabled, "Tool \"get_issue\" is currently disabled because MCP server \"github\" has been disabled.") {
+	if !strings.Contains(resServerDisabled, "[FrostAgent 错误] MCP 工具调用失败：服务器已禁用 (Ref_ID: ") {
 		t.Fatalf("expected graceful server disabled message, got %q", resServerDisabled)
 	}
 }
@@ -536,7 +536,7 @@ func TestSanitizeExposedToolNameAndBidirectionalMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected execution error for disabled tool: %v", err)
 	}
-	if !strings.Contains(outDisabled, "currently disabled") {
+	if !strings.Contains(outDisabled, "[FrostAgent 错误] MCP 工具调用失败：工具已禁用 (Ref_ID: ") {
 		t.Fatalf("expected graceful disabled message for sanitized tool, got: %q", outDisabled)
 	}
 }

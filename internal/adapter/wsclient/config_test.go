@@ -16,9 +16,8 @@ func TestLoadConnectionConfigDefaultsAndIsolation(t *testing.T) {
 	if err != nil || onebot.Disabled || onebot.Mode != Forward || onebot.URL != values["ONEBOT_WS_URL"] || onebot.Token != values["ONEBOT_WS_TOKEN"] || onebot.InboundToken != values["ONEBOT_WS_INBOUND_TOKEN"] {
 		t.Fatalf("forward config did not round trip: %v", err)
 	}
-	astrbot, err := Load(getenv, "ASTRBOT")
-	if err != nil || astrbot.Disabled || astrbot.Mode != Reverse || astrbot.URL != "" || astrbot.Token != "" || astrbot.InboundToken != "" {
-		t.Fatalf("adapter config leaked: %#v %v", astrbot, err)
+	if _, err := Load(func(string) string { t.Fatal("retired adapter settings were read"); return "" }, "ASTRBOT"); err == nil {
+		t.Fatal("retired adapter was accepted")
 	}
 	defaults, err := Load(nil, "ONEBOT")
 	if err != nil || defaults.Disabled || defaults.Mode != Reverse {
@@ -27,7 +26,7 @@ func TestLoadConnectionConfigDefaultsAndIsolation(t *testing.T) {
 }
 
 func TestInboundTokenValidation(t *testing.T) {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		for _, invalid := range []string{"synthetic-secret\n", "synthetic-secret\t", "synthetic-secret ", "\x00synthetic-secret", "synthetic-secret\u00a0"} {
 			_, err := Load(func(key string) string {
 				if key == adapter+"_WS_INBOUND_TOKEN" {
@@ -43,7 +42,7 @@ func TestInboundTokenValidation(t *testing.T) {
 }
 
 func TestLoadConnectionEnabledFlag(t *testing.T) {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		values := map[string]string{adapter + "_WS_ENABLED": "false", adapter + "_WS_MODE": Forward}
 		get := func(key string) string { return values[key] }
 		config, err := Load(get, adapter)

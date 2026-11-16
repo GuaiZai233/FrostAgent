@@ -31,18 +31,23 @@ type BillingRunState struct {
 // RunContext contains request-local state that tools must not read from the
 // shared Engine, otherwise concurrent sessions can cross-send or mix owners.
 type RunContext struct {
-	Turn                *SessionTurn // Sender-local execution authority; SessionID remains the shared sandbox key.
-	SkillState          *SessionContext
-	Context             context.Context // Optional request-local cancellation context (falls back to Engine.Context)
-	SessionID           string
-	Owner               string
-	OwnerType           memory.OwnerType
-	ActorUserID         string              // Trusted sender ID supplied by the platform adapter.
-	MemorySource        memory.GroupMessage // Current message text and vision output supplied by the adapter.
-	ActorPlatform       string              // Trusted platform namespace; never populated from model content.
-	AdapterID           string              // Trusted transport adapter used for later delivery.
-	InstanceID          string              // Runtime instance used for audit/evaluation attribution.
-	SendHook            func(toolResultJSON string) error
+	ToolHistoryRunID string
+	Turn             *SessionTurn // Sender-local execution authority; SessionID remains the shared sandbox key.
+	SkillState       *SessionContext
+	Context          context.Context // Optional request-local cancellation context (falls back to Engine.Context)
+	SessionID        string
+	Owner            string
+	OwnerType        memory.OwnerType
+	ActorUserID      string              // Trusted sender ID supplied by the platform adapter.
+	MemorySource     memory.GroupMessage // Current message text and vision output supplied by the adapter.
+	ActorPlatform    string              // Trusted platform namespace; never populated from model content.
+	AdapterID        string              // Trusted transport adapter used for later delivery.
+	InstanceID       string              // Runtime instance used for audit/evaluation attribution.
+	SendHook         func(toolResultJSON string) error
+	// RefreshPrompt rebuilds the current adapter-owned input after time_sleep.
+	// The callback retains original user text, quotes, metadata and image parts.
+	RefreshPrompt       func(context.Context) (PromptRefresh, error)
+	PlatformActionHook  func(context.Context, string) (core.PlatformActionResult, error)
 	LoadObservedSticker func(context.Context, string, int) ([]byte, error)
 	// LoadObservedImage resolves a trusted image attachment from a message that
 	// the adapter observed in the current session. The adapter enforces message
@@ -56,6 +61,7 @@ type RunContext struct {
 	SecurityNotice       string // Temporary security notice injected into main LLM prompt for current turn; does not pollute session history.
 	Mock                 bool   // Mock / ephemeral session: do not write to persistent memory or group summary
 	Proactive            bool   // Trusted unaddressed turn: only narrow current-session text replies may send; unsolicited errors remain suppressed.
+	Awareness            bool   // Trusted timer trigger; text and native mentions are restricted to the current conversation.
 	ProactiveStickerOnly bool   // Adapter-classified current message; backend supplies stay_silent only when Proactive is also true.
 	Epoch                uint64
 
@@ -66,6 +72,11 @@ type RunContext struct {
 	// FinalReplyText returns the adapter's rendered text for a text-only final
 	// message. False retains the original output, including media and rich content.
 	FinalReplyText func(string) (string, bool)
+}
+
+type PromptRefresh struct {
+	Content        any
+	SecurityNotice string
 }
 
 type runContextKey struct{}

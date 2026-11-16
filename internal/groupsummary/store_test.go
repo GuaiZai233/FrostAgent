@@ -8,6 +8,32 @@ import (
 	"time"
 )
 
+func TestRetiredSessionSummariesStaySeparate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "group_summary.json")
+	store, err := NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"aiocqhttp:group:synthetic-group", "astrbot:group:synthetic-group", "group:synthetic-group"} {
+		if ok, err := store.Upsert(id, id, 0); err != nil || !ok {
+			t.Fatalf("persist %q: ok=%v, err=%v", id, ok, err)
+		}
+	}
+	store, err = NewStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("onebot:group:synthetic-group"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"aiocqhttp:group:synthetic-group", "astrbot:group:synthetic-group"} {
+		record, found, err := store.Get(id)
+		if err != nil || !found || record.Summary != id {
+			t.Fatalf("QQ deletion affected retired summary %q: %+v, found=%v, err=%v", id, record, found, err)
+		}
+	}
+}
+
 func TestStoreAliasLookup(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "group_summary.json")
@@ -17,8 +43,8 @@ func TestStoreAliasLookup(t *testing.T) {
 		t.Fatalf("NewStore failed: %v", err)
 	}
 
-	// Persist under legacy AstrBot format
-	ok, err := store.Upsert("aiocqhttp:group:test_grp_101", "running summary for test group", 0)
+	// Persist under QQ alias format
+	ok, err := store.Upsert("qq:group:test_grp_101", "running summary for test group", 0)
 	if err != nil || !ok {
 		t.Fatalf("Upsert failed: ok=%v err=%v", ok, err)
 	}
@@ -41,10 +67,10 @@ func TestStoreAliasLookup(t *testing.T) {
 		t.Fatalf("Upsert failed: ok=%v err=%v", ok, err)
 	}
 
-	// Query under legacy AstrBot format
-	rec2, found2, err := store.Get("aiocqhttp:group:test_grp_202")
+	// Query under QQ alias format
+	rec2, found2, err := store.Get("qq:group:test_grp_202")
 	if err != nil || !found2 {
-		t.Fatalf("expected to find summary via aiocqhttp alias: found=%v err=%v", found2, err)
+		t.Fatalf("expected to find summary via qq alias: found=%v err=%v", found2, err)
 	}
 	if rec2.Summary != "canonical summary" {
 		t.Errorf("summary mismatch: got %q", rec2.Summary)
@@ -62,8 +88,8 @@ func TestStoreLegacyMigrationAndDeduplication(t *testing.T) {
 		"version": 1,
 		"summaries": [
 			{
-				"session_id": "aiocqhttp:group:test_grp_dedup",
-				"summary": "older summary from astrbot",
+				"session_id": "qq:group:test_grp_dedup",
+				"summary": "older summary from qq",
 				"created_at": "%s",
 				"updated_at": "%s"
 			},
@@ -101,7 +127,7 @@ func TestStoreLegacyMigrationAndDeduplication(t *testing.T) {
 	}
 
 	// 3. Upsert via legacy alias should update the canonical record and clean up any alias
-	ok, err := store.Upsert("aiocqhttp:group:test_grp_dedup", "updated summary via alias", 0)
+	ok, err := store.Upsert("qq:group:test_grp_dedup", "updated summary via alias", 0)
 	if err != nil || !ok {
 		t.Fatalf("Upsert via alias failed: ok=%v err=%v", ok, err)
 	}
@@ -131,7 +157,7 @@ func TestStoreCrossAliasDeleteAndResurrection(t *testing.T) {
 	}
 
 	// Persist via legacy alias
-	ok, err := store.Upsert("aiocqhttp:group:test_grp_resurrect", "initial summary", 0)
+	ok, err := store.Upsert("qq:group:test_grp_resurrect", "initial summary", 0)
 	if err != nil || !ok {
 		t.Fatalf("Upsert failed: ok=%v err=%v", ok, err)
 	}
@@ -148,7 +174,7 @@ func TestStoreCrossAliasDeleteAndResurrection(t *testing.T) {
 	}
 
 	// Must NOT resurrect when querying via legacy alias
-	_, foundLegacy, err := store.Get("aiocqhttp:group:test_grp_resurrect")
+	_, foundLegacy, err := store.Get("qq:group:test_grp_resurrect")
 	if err != nil {
 		t.Fatalf("Get via legacy alias failed: %v", err)
 	}
@@ -176,7 +202,7 @@ func TestStoreCrossAliasStaleWrite(t *testing.T) {
 	}
 
 	// Generation on legacy alias should report 0 initially
-	gen := store.Generation("aiocqhttp:group:test_grp_stale")
+	gen := store.Generation("qq:group:test_grp_stale")
 	if gen != 0 {
 		t.Fatalf("expected initial generation 0, got %d", gen)
 	}
@@ -187,13 +213,13 @@ func TestStoreCrossAliasStaleWrite(t *testing.T) {
 	}
 
 	// Generation on legacy alias must reflect the deletion epoch
-	genAfter := store.Generation("aiocqhttp:group:test_grp_stale")
+	genAfter := store.Generation("qq:group:test_grp_stale")
 	if genAfter == 0 {
 		t.Fatalf("expected generation to advance after canonical delete, got %d", genAfter)
 	}
 
 	// Attempt stale write with generation 0 via legacy alias -> must be rejected
-	ok, err := store.Upsert("aiocqhttp:group:test_grp_stale", "stale summary write", 0)
+	ok, err := store.Upsert("qq:group:test_grp_stale", "stale summary write", 0)
 	if err != nil {
 		t.Fatalf("Upsert returned error: %v", err)
 	}

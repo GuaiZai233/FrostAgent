@@ -28,7 +28,7 @@ type OutgoingMessageInput struct {
 	Attachments []core.Attachment `json:"attachments,omitempty"`
 	Metadata    map[string]any    `json:"metadata,omitempty"`
 
-	// Element compatibility fields (ActionsCat SDK MessageItem, OneBot/AstrBot segments)
+	// Element compatibility fields (ActionsCat SDK MessageItem, OneBot segments)
 	Type          string `json:"type,omitempty"` // "plain", "text", "image", "file", "video", "audio"
 	Text          string `json:"text,omitempty"`
 	MentionUserID string `json:"mention_user_id,omitempty"`
@@ -41,7 +41,7 @@ type OutgoingMessageInput struct {
 // SendMessageRequest defines the payload accepted by the message delivery endpoint.
 type SendMessageRequest struct {
 	Session     string                 `json:"session,omitempty"`      // e.g. "platform:message_type:target_id"
-	Platform    string                 `json:"platform,omitempty"`     // e.g. "qq", "onebot", "astrbot"
+	Platform    string                 `json:"platform,omitempty"`     // e.g. "qq", "onebot"
 	MessageType string                 `json:"message_type,omitempty"` // "private" or "group"
 	TargetID    string                 `json:"target_id,omitempty"`    // target user ID or group ID
 	Content     string                 `json:"content,omitempty"`      // direct message text

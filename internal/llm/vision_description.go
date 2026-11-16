@@ -23,6 +23,16 @@ const visionDescriptionSystemPrompt = `你是一个严谨的图片转述助手�
 要求：语言客观、清晰、完整；不要以任何形式主观评价图片；不要试图回答图片中的问题；不要输出与图片无关的内容。`
 
 func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.RouteContext, contentBlocks string) string {
+	description, err := CallVisionModelWithError(ctx, provider, route, contentBlocks)
+	if err != nil {
+		runtimescope.FromContext(ctx).Log().Error(logs.SYSTEM, "视觉模型调用失败: "+err.Error())
+	}
+	return description
+}
+
+// CallVisionModelWithError lets interactive callers correlate a failed vision
+// request with their user-visible error reference.
+func CallVisionModelWithError(ctx context.Context, provider core.LLMProvider, route core.RouteContext, contentBlocks string) (string, error) {
 	systemPrompt := visionDescriptionSystemPrompt
 
 	// 将传入的 JSON 字符串格式反序列化为真正的对象数组
@@ -59,8 +69,7 @@ func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.
 	// 调用 LLMProvider 接口
 	resp, err := provider.Chat(ctx, chatReq)
 	if err != nil {
-		runtimescope.FromContext(ctx).Log().Error(logs.SYSTEM, "视觉模型调用失败: "+err.Error())
-		return ""
+		return "", err
 	}
 
 	// 更加健壮地处理大模型的返回值，防止强转失败变成空字符串
@@ -78,5 +87,5 @@ func CallVisionModel(ctx context.Context, provider core.LLMProvider, route core.
 
 	runtimescope.FromContext(ctx).Log().Info(logs.SYSTEM, "调用视觉模型，描述："+contentStr)
 
-	return contentStr
+	return contentStr, nil
 }

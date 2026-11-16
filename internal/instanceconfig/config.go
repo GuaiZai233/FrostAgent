@@ -25,10 +25,9 @@ var GlobalKeys = map[string]bool{
 	"SECURITY_CONTROL_MODE":     true,
 }
 var InstanceRestartKeys = map[string]bool{
-	"ONEBOT_WS_ENABLED": true, "ASTRBOT_WS_ENABLED": true,
-	"ONEBOT_WS_MODE": true, "ONEBOT_WS_URL": true, "ONEBOT_WS_TOKEN": true,
-	"ASTRBOT_WS_MODE": true, "ASTRBOT_WS_URL": true, "ASTRBOT_WS_TOKEN": true,
-	"ONEBOT_WS_INBOUND_TOKEN": true, "ASTRBOT_WS_INBOUND_TOKEN": true,
+	"ONEBOT_WS_ENABLED": true,
+	"ONEBOT_WS_MODE":    true, "ONEBOT_WS_URL": true, "ONEBOT_WS_TOKEN": true,
+	"ONEBOT_WS_INBOUND_TOKEN":   true,
 	"MEMORY_REFLECTION_TIMEOUT": true, "GROUP_COMPACT_BUFFER_SIZE": true, "GROUP_COMPACT_MAX_BUFFER_SIZE": true, "GROUP_COMPACT_MIN_INTERVAL": true,
 	"BILLING_ENABLED": true, "BILLING_MAX_OUTPUT_TOKENS": true, "BILLING_SAFETY_MULTIPLIER": true, "BILLING_PROMPT_PRICE_PER_MILLION": true, "BILLING_COMPLETION_PRICE_PER_MILLION": true,
 	"SECURITY_GATEWAY_TIMEOUT": true, "SECURITY_CLASSIFIER_TIMEOUT": true,
@@ -178,7 +177,7 @@ func (s *Store) BotLoopRevision() uint64 {
 }
 
 func botLoopSetting(key string) bool {
-	return key == "BOT_LOOP_USER_IDS" || key == "BOT_LOOP_MAX_TURNS" || key == "BOT_LOOP_MODE"
+	return key == "BOT_LOOP_ENABLED" || key == "BOT_LOOP_USER_IDS" || key == "BOT_LOOP_MAX_TURNS" || key == "BOT_LOOP_MODE"
 }
 
 func allowed(k string, global bool) bool {
@@ -191,7 +190,7 @@ func allowed(k string, global bool) bool {
 	if global {
 		return GlobalKeys[k]
 	}
-	return !GlobalKeys[k] && k != "BRAIN_PATH" && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH" && k != "ASTRBOT_WS_PATH"
+	return !GlobalKeys[k] && k != "BRAIN_PATH" && k != "DIALOGUE_PATH" && k != "ONEBOT_WS_PATH"
 }
 func (s *Store) Get(k string) string {
 	s.mu.RLock()
@@ -236,6 +235,31 @@ func (s *Store) Update(k, v string, remove bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.updateLocked(k, v, remove)
+}
+
+// Transform serializes a read-modify-write with all other writes to this store.
+// The callback must not call back into the store.
+func (s *Store) Transform(ctx context.Context, key string, transform func(string) (string, error)) error {
+	if !allowed(key, s.global) {
+		return fmt.Errorf("字段 %s 不属于此配置", key)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, overridden := s.overrides[key]; overridden {
+		return fmt.Errorf("字段 %s 已由进程环境覆盖", key)
+	}
+	value, err := transform(s.values[key])
+	if err != nil {
+		return err
+	}
+	return s.updateLocked(key, value, false)
+}
+
+func (s *Store) updateLocked(k, v string, remove bool) error {
 	if s.db != nil {
 		if strings.ContainsRune(v, 0) {
 			return fmt.Errorf("setting %s contains NUL", k)
@@ -371,7 +395,7 @@ func (s *Store) Replace(raw string) error {
 	if err := WriteAtomic(s.path, []byte(raw), 0600); err != nil {
 		return err
 	}
-	for _, key := range []string{"BOT_LOOP_USER_IDS", "BOT_LOOP_MAX_TURNS", "BOT_LOOP_MODE"} {
+	for _, key := range []string{"BOT_LOOP_ENABLED", "BOT_LOOP_USER_IDS", "BOT_LOOP_MAX_TURNS", "BOT_LOOP_MODE"} {
 		if s.values[key] != next[key] {
 			s.botLoopRevision++
 			break
@@ -439,19 +463,34 @@ BOT_ALIASES=Assistant,Bot
 ADMIN_QQ_IDS=
 SYSTEM_PROMPT=你是一个乐于助人的助手。
 MAX_CONTEXT_MESSAGES=20
+# Per-instance persistent log budget (MiB), oldest entries are removed first.
+LOG_STORAGE_MIB=128
 MEMORY_REFLECTION_TIMEOUT=10m
 ENABLE_AT_IN_GROUP_MSG=true
 GROUP_REPLY_ON_MENTION=true
 ENABLE_REPLY_IN_GROUP_MSG=false
+ENABLE_THINKING_STATUS=true
 ENABLE_MULTI_SEGMENT_REPLY=false
 MULTI_SEGMENT_REPLY_MAX_SEGMENTS=0
 ENABLE_QUOTE_TRACE=true
 QUOTE_TRACE_DEPTH=5
 BOT_LOOP_USER_IDS=
+BOT_LOOP_ENABLED=true
 BOT_LOOP_MAX_TURNS=3
 BOT_LOOP_MODE=soft
+ENABLE_PROACTIVE_AWARENESS=false
+PROACTIVE_AWARENESS_INTERVAL=30m - 2h
+ENABLE_PROACTIVE_AWARENESS_QUIET_HOURS=true
+PROACTIVE_AWARENESS_QUIET_HOURS_START=23:00
+PROACTIVE_AWARENESS_QUIET_HOURS_END=07:00
+ENABLE_PROACTIVE_AWARENESS_PRIVATE_WHITELIST=false
+PROACTIVE_AWARENESS_PRIVATE_WHITELIST=
+ENABLE_PROACTIVE_AWARENESS_GROUP_WHITELIST=false
+PROACTIVE_AWARENESS_GROUP_WHITELIST=
 GROUP_COMPACT_BUFFER_SIZE=20
 GROUP_COMPACT_MIN_INTERVAL=30s
+CHAT_HISTORY_PRIVATE_ENABLED=true
+CHAT_HISTORY_GROUP_WHITELIST=
 GROUP_RAW_CONTEXT_MAX_CHARS=12000
 MEMORY_EXTRACT_BATCH_MIN=3
 MEMORY_EXTRACT_BATCH_MAX=5

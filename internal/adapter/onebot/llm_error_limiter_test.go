@@ -122,7 +122,7 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 					engine.BillingClient = billing.NewClient(billingServer.URL, "test-token", 2*time.Second)
 					engine.BillingConfig = billing.Config{Enabled: true, Timeout: 2 * time.Second, MaxOutputTokens: 2048, SafetyMultiplier: 1.2, ModelName: "test-model"}
 				}
-				server, url := startWSTestServer(engine)
+				server, url := startReplyWSTestServer(t, engine)
 				defer server.Close()
 				dial := func() *websocket.Conn {
 					t.Helper()
@@ -205,7 +205,7 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				}
 				for i := 0; i < 4; i++ {
 					send(second, 104, "blocked")
-					read(second, "Request rejected by security gateway")
+					read(second, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ")
 				}
 			})
 		}
@@ -237,6 +237,7 @@ func TestWSLLMErrorLimitPreservesSettledReceipt(t *testing.T) {
 				engine.ToolRegistry[tool.name] = tool
 				engine.BillingClient = billing.NewClient(billingServer.URL, "test-token", 2*time.Second)
 				engine.BillingConfig = billing.Config{Enabled: true, Timeout: 2 * time.Second, MaxOutputTokens: 2048, SafetyMultiplier: 1.2, ModelName: "test-model"}
+				disableTestThinkingStatus(t, engine)
 				adapter := NewAdapter(engine)
 				if exhausted {
 					for i := 0; i < 3; i++ {

@@ -51,7 +51,7 @@ func TestOneBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 		"BOT_LOOP_USER_IDS": "onebot:11", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "soft",
 	})
 	engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -73,13 +73,13 @@ func TestOneBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 	provider.mu.Unlock()
 	firstText, _ := first.Messages[len(first.Messages)-1].Content.(string)
 	secondText, _ := second.Messages[len(second.Messages)-1].Content.(string)
-	if strings.Contains(firstText, botloop.PromptPrefix) || !strings.HasPrefix(secondText, botloop.PromptPrefix) {
+	if strings.Contains(firstText, botloop.PromptPrefix) || !strings.HasPrefix(secondText, llm.WrapRuntimeGuidance(botloop.PromptPrefix)+"\n\nUser Message:") {
 		t.Fatalf("soft prompt must start only the over-limit request: first=%q second=%q", firstText, secondText)
 	}
 	history := engine.SessionManager.GetOrCreate("private:11").Snapshot()
 	for _, message := range history {
 		content, _ := message.Content.(string)
-		if strings.Contains(content, botloop.PromptPrefix) {
+		if strings.Contains(content, botloop.PromptPrefix) || strings.Contains(content, "<frostagent_runtime_guidance>") {
 			t.Fatal("soft prompt leaked into session history")
 		}
 	}
@@ -269,7 +269,7 @@ func TestOneBotBotLoopHardDropSuppressesSecurityRejection(t *testing.T) {
 		return security.ClassificationResult{Category: security.RiskCategoryNone,
 			RiskLevel: security.RiskLevelNone, Reason: "clean"}, nil
 	}})
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -323,7 +323,7 @@ func TestOneBotBotLoopDisableAndRestoreSameSettingsResetsStreak(t *testing.T) {
 		"BOT_LOOP_USER_IDS": "onebot:11", "BOT_LOOP_MAX_TURNS": "1", "BOT_LOOP_MODE": "hard",
 	})
 	engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {

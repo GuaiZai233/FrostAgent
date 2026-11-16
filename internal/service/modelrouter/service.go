@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
+	"github.com/GuaiZai233/FrostAgent/internal/modelcatalog"
 	router "github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 
 	"connectrpc.com/connect"
@@ -173,6 +174,19 @@ func (s *Service) ListUpstreamModels(
 	return connect.NewResponse(&v1.ListUpstreamModelsResponse{Models: models}), nil
 }
 
+// InferModelCapabilities reads the models.dev snapshot that is refreshed at
+// startup and every 48 hours. It never calls the upstream endpoint.
+func (s *Service) InferModelCapabilities(
+	_ context.Context,
+	req *connect.Request[v1.InferModelCapabilitiesRequest],
+) (*connect.Response[v1.InferModelCapabilitiesResponse], error) {
+	capabilities, found := modelcatalog.Infer(req.Msg.GetModelName())
+	return connect.NewResponse(&v1.InferModelCapabilitiesResponse{
+		Found:        found,
+		Capabilities: capabilities,
+	}), nil
+}
+
 func (s *Service) TestModel(
 	_ context.Context,
 	req *connect.Request[v1.TestModelRequest],
@@ -202,6 +216,7 @@ func configurationToProto(cfg router.Configuration) *v1.ModelRouterConfiguration
 			Id:               endpoint.ID,
 			DisplayName:      endpoint.DisplayName,
 			BaseUrl:          endpoint.BaseURL,
+			ApiFormat:        endpoint.APIFormat,
 			Enabled:          endpoint.Enabled,
 			ApiKeySource:     apiKeyStorageToProto(endpoint.APIKeySource),
 			ApiKeyRef:        endpoint.APIKeyRef,
@@ -246,6 +261,7 @@ func configurationFromProto(cfg *v1.ModelRouterConfiguration) router.Configurati
 			ID:               endpoint.GetId(),
 			DisplayName:      endpoint.GetDisplayName(),
 			BaseURL:          endpoint.GetBaseUrl(),
+			APIFormat:        endpoint.GetApiFormat(),
 			APIKeySource:     apiKeyStorageFromProto(endpoint.GetApiKeySource()),
 			APIKeyRef:        endpoint.GetApiKeyRef(),
 			APIKeyConfigured: endpoint.GetApiKeyConfigured(),

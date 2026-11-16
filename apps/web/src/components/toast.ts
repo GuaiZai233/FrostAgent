@@ -10,6 +10,27 @@ export interface ToastOptions {
 
 let container: HTMLElement | null = null;
 
+// The container is a popover so it lives in the top layer. Top-layer order is
+// insertion order, so any modal opened after the last raise sits above toasts.
+// Re-showing the popover moves it back to the top; dialogs call this when they
+// open or close so toasts stay visible over them.
+// Only raises a container that already exists, so dialogs never create DOM.
+export function raiseToastContainer(): void {
+  if (container) showContainer(container);
+}
+
+function showContainer(el: HTMLElement): void {
+  el.setAttribute('popover', 'manual');
+  if ('showPopover' in el) {
+    try {
+      if (el.matches(':popover-open')) el.hidePopover();
+      el.showPopover();
+    } catch {
+      // Older browsers keep the fixed-position fallback.
+    }
+  }
+}
+
 function getContainer(): HTMLElement {
   if (!container) {
     container = document.getElementById('toast-container');
@@ -19,15 +40,7 @@ function getContainer(): HTMLElement {
       document.body.appendChild(container);
     }
   }
-  container.setAttribute('popover', 'manual');
-  if ('showPopover' in container) {
-    try {
-      if (container.matches(':popover-open')) container.hidePopover();
-      container.showPopover();
-    } catch {
-      // Older browsers keep the fixed-position fallback.
-    }
-  }
+  showContainer(container);
   return container;
 }
 

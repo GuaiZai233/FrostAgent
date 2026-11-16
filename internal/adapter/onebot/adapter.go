@@ -34,6 +34,7 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
+	fileHTTPClient     *http.Client
 	engine             *llm.Engine
 	stealer            *sticker.Stealer
 	mu                 sync.RWMutex
@@ -225,6 +226,8 @@ func (a *Adapter) Send(ctx context.Context, msg core.OutgoingMessage) error {
 				a.engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot Adapter Send 失败: %v", err))
 			}
 			errs = append(errs, err)
+		} else {
+			c.recordHistoryAction(botAction, oneBotAPIResponse{}, "sent")
 		}
 	}
 	return errors.Join(errs...)
@@ -312,6 +315,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		wsConn = newWSConnection(conn)
 	}
 	wsConn.stealer = a.stealer
+	wsConn.fileHTTPClient = a.fileHTTPClient
 	wsConn.llmErrorReplies = &a.llmErrorReplies
 	wsConn.mock = mock
 	stopCancellation := context.AfterFunc(ctx, func() { _ = wsConn.Close() })
@@ -383,6 +387,9 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if event.MetaEventType == "heartbeat" {
 			continue
 		}
+		wsConn.rememberInboundFileNotice(event)
+		previousError := wsConn.takePreviousError(event)
+		wsConn.recordIncomingHistory(event)
 
 		if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
 			groupIDStr := strconv.FormatInt(event.GroupID, 10)
@@ -390,7 +397,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			if groupIDStr != "" && userIDStr != "" {
 				gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
 				if err != nil {
-					a.engine.PauseOnStorageError(err)
+					a.engine.ContinueAfterMemoryStorageError(err)
 					continue
 				}
 				if gStore != nil {
@@ -403,7 +410,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 						}
 					}
 					if err != nil {
-						a.engine.PauseOnStorageError(err)
+						a.engine.ContinueAfterMemoryStorageError(err)
 						continue
 					}
 				}
@@ -461,7 +468,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					)
 				}
 			}
-			if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine) {
+			if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine, previousError) {
 				botLoopObservation.Finish(false, botLoopConfig.Limit())
 				continue
 			}
@@ -469,7 +476,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 			event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 		if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-			(isWoken(event, a.engine, routing) || canDispatch) {
+			(isWoken(event, a.engine, routing) || canDispatch || hasInboundFiles(event)) {
 			secPlatform := "onebot"
 			if wsConn.mock {
 				secPlatform = "mock"
@@ -503,7 +510,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					}
 				}
 				if directReply {
-					msg := a.engine.Security.RejectMessage(principal, decision)
+					summary := a.engine.Security.RejectMessage(principal, decision)
+					msg := security.ReportRejection(a.engine.Log(), summary, decision)
 					action := "send_private_msg"
 					type1 := "user_id"
 					id := strconv.FormatInt(event.UserID, 10)
@@ -535,6 +543,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				warningNotice = decision.WarningNotice
 			}
 		}
+
+		wsConn.rememberInboundFiles(event)
 
 		var routeSnapshot *modelrouter.Snapshot
 		if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
@@ -634,8 +644,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
 						}
 					}
-					if err != nil {
-						a.engine.PauseOnStorageError(err)
+					if err != nil && !a.engine.ContinueAfterMemoryStorageError(err) {
 						if turn != nil {
 							turn.Done()
 						}
@@ -654,6 +663,15 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 
 		if !wsConn.mock {
+			if a.engine != nil && a.engine.Awareness != nil && event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private") {
+				id := strconv.FormatInt(event.UserID, 10)
+				if event.MessageType == "group" {
+					id = strconv.FormatInt(event.GroupID, 10)
+				}
+				target := llm.AwarenessTargetFor("qq", event.MessageType, id)
+				target.AdapterID = "onebot"
+				a.engine.Awareness.Observe(target)
+			}
 			wsConn.observeStickers(event)
 		}
 		wsConn.inFlight.Add(1)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/sessionstate"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
@@ -19,7 +20,7 @@ import (
 
 // BuildInstanceZIP returns a self-contained backup without creating a server
 // side archive. Sticker bytes are separate members, never embedded in JSON.
-func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error) {
+func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string, checkpoints ...[]sessionstate.Record) ([]byte, error) {
 	if err := db.RequireNativeSchema(context.Background(), "export a complete instance backup"); err != nil {
 		return nil, err
 	}
@@ -49,13 +50,35 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		return nil, err
 	}
 
+	computerUse, err := ExportComputerUse(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
 	usageStore, _ := tokenusage.New(db, instanceID, "")
 	usage, err := usageStore.Snapshot(context.Background())
 	if err != nil {
 		return nil, err
 	}
 	var buffer bytes.Buffer
+	history, err := ExportChatHistory(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	toolHistory, err := ExportToolHistory(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
 	writer := zip.NewWriter(&buffer)
+	sessions, err := ExportSessionStates(db, instanceID)
+	if err != nil {
+		return nil, err
+	}
+	if len(checkpoints) > 0 {
+		sessions.Records = checkpoints[0]
+	}
+	if err := ValidateSessionStates(sessions); err != nil {
+		return nil, err
+	}
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
 	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
 	for _, file := range []struct {
@@ -65,8 +88,12 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string) ([]byte, erro
 		{"manifest.json", manifest},
 		{"setting.json", settings},
 		{"skills.json", skillPackages},
+		{"computer_use.json", computerUse},
 		{"token_usage.json", usage},
 		{"memory.json", memories},
+		{"chat_history.json", history},
+		{"session_states.json", sessions},
+		{"tool_history.json", toolHistory},
 		{"group_summaries.json", summaries},
 		{"sticker/metadata.json", stickers},
 	} {

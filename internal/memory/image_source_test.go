@@ -62,7 +62,7 @@ func TestGroupExtractionSeparatesImageEvidenceFromUserText(t *testing.T) {
 						entry.SourceSenderID != messages[0].SenderID || entry.SourceMessageID != "image-msg" {
 						t.Fatalf("vision output attributed as user speech: %+v", entry)
 					}
-				} else if entry.SourceMedia != "" || entry.Owner == GroupOwnerExplicit {
+				} else if entry.SourceMedia != "" || entry.Owner != GroupOwnerExplicit {
 					t.Fatalf("text evidence was incorrectly classified as an image: %+v", entry)
 				}
 			}

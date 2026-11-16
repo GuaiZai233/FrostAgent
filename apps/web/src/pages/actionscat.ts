@@ -61,12 +61,12 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </span>
         </div>
         <p class="text-xs text-muted-foreground leading-relaxed mb-4">
-          ActionsCat 深度集成于 FrostAgent 智能体核心工具链。当 Agent 进行对话推理时，可自动按需自主调用下列工具发现动作、执行任务并检查输出：
+          ActionsCat 通过 actionscat 单一入口提供以下能力。Agent 先用 action=discover 发现能力，再用 capability 查看参数，最后通过 action 和 arguments 执行任务并检查输出：
         </p>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_actions</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=list_actions</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询可用 Actions 清单，包含 ID、名称、功能描述、启用状态及 runnable（是否具备有效构建）状态。
@@ -74,7 +74,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_action</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=create_action</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -83,7 +83,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_version</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=create_version</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -92,7 +92,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_build_version</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=build_version</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -101,7 +101,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_activate_build</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=activate_build</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -110,7 +110,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_deploy_action</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=deploy_action</span>
               <span class="badge badge-primary text-[10px] py-0 px-1">All-in-One</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -119,7 +119,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_run_action</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=run_action</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               触发已激活构建的 Action 执行，支持注入环境变量；支持同步等待完成或异步返回 run_id。
@@ -127,7 +127,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_get_run</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=get_run</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询执行记录状态、退出码、耗时及 stdout/stderr 日志，敏感环境变量已脱敏保护。
@@ -135,7 +135,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_get_build</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=get_build</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询构建任务状态、制品哈希及详细编译输出日志，用于超时排查或分析编译错误。
@@ -143,7 +143,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_builds</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=list_builds</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询 Action 的历史构建列表，支持过滤指定版本；用于构建超时或未决状态的幂等恢复与发现。
@@ -151,7 +151,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_schedule</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=create_schedule</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -160,7 +160,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_schedules</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=list_schedules</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询 Action 绑定的定时调度规则列表及下次计划执行时间 (next_run_at)。
@@ -168,7 +168,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_delete_schedule</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=delete_schedule</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -177,7 +177,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_create_matcher</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=create_matcher</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
@@ -186,7 +186,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_list_matchers</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=list_matchers</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">
               查询 Action 绑定的事件模式规则清单、匹配方式与优先级 (priority) 评估顺序。
@@ -194,7 +194,7 @@ export function mountActionsCatPage(container: HTMLElement): () => void {
           </div>
           <div class="p-3.5 rounded-md border border-border bg-secondary/40 flex flex-col gap-1.5">
             <div class="flex items-center gap-1.5">
-              <span class="font-mono font-bold text-xs text-foreground">actionscat_delete_matcher</span>
+              <span class="font-mono font-bold text-xs text-foreground">action=delete_matcher</span>
               <span class="badge badge-outline text-[10px] py-0 px-1">Admin</span>
             </div>
             <p class="text-xs text-muted-foreground leading-relaxed">

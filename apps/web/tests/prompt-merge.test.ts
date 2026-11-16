@@ -77,8 +77,8 @@ assert.doesNotMatch(container.innerHTML, /<img src=x>/);
 process.stdout.write('PASS: merged session actions and Bot model label\n');
 
 const privateContext = {
-  sessionId: 'astrbot:private:test_user',
-  platform: 'astrbot',
+  sessionId: 'fixture:private:test_user',
+  platform: 'fixture',
   runningSummary: 'compact <script>payload</script>',
   summaryGroups: [{
     summary: 'compact <script>payload</script>',
@@ -158,10 +158,10 @@ const privateBody = '  保留正文空白\n\n<response_context>\n{"guidance":"�
 const responseContext = { guidance: '正常回答。当前系统时间：2026-11-7 23:43(UTC+8)。', mode: 'private', silence_available: true, triggers: ['private_message'] };
 for (const [platform, systemContext, withGuidance] of [
   ['onebot', { message_id: 1, user_id: 202, sender: { nickname: '<img src=x>' } }, true],
-  ['astrbot', { message_id: 'synthetic-message', sender_id: 'synthetic-user' }, true],
-  ['astrbot', { message_id: 'legacy-message', sender_id: 'synthetic-user' }, false],
+  ['fixture', { message_id: 'synthetic-message', sender_id: 'synthetic-user' }, true],
+  ['fixture', { message_id: 'legacy-message', sender_id: 'synthetic-user' }, false],
 ] as const) {
-  const response = platform === 'astrbot' ? { guidance: '当前系统时间：2026-11-7 23:43(UTC+8)。' } : responseContext;
+  const response = platform === 'fixture' ? { guidance: '当前系统时间：2026-11-7 23:43(UTC+8)。' } : responseContext;
   const wrapped = `User Message: ${privateBody}${withGuidance ? `\n\n<response_context>\n${JSON.stringify(response)}\n</response_context>` : ''}\n\n<system_context>\n${JSON.stringify(systemContext)}\n</system_context>`;
   const raw = JSON.stringify({ messages: [{ role: 'user', content: wrapped }] });
   for (const legacy of [true, false]) {
@@ -209,10 +209,10 @@ const structuredGroup = buildInspectorDataFromSessionContext({ sessionId: 'group
 }] });
 assert.match(structuredGroup.recentMessages[0].content, /^User Message:/, 'group bodies must stay opaque');
 const quotedResponseBody = '用户的示例\n\n<response_context>\n{"guidance":"用户自己的文字"}\n</response_context>';
-const legacyQuotedResponse = buildInspectorDataFromSessionContext({ sessionId: 'astrbot:private:synthetic-user', history: [{
+const legacyQuotedResponse = buildInspectorDataFromSessionContext({ sessionId: 'fixture:private:synthetic-user', history: [{
   role: 'user', content: `User Message: ${quotedResponseBody}\n\n<system_context>\n{"message_id":"synthetic-message","sender_id":"synthetic-user"}\n</system_context>`,
 }] });
-assert.equal(legacyQuotedResponse.recentMessages[0].content, quotedResponseBody, 'legacy AstrBot bodies may end with a response_context example');
+assert.equal(legacyQuotedResponse.recentMessages[0].content, quotedResponseBody, 'legacy Fixture bodies may end with a response_context example');
 assert.equal(legacyQuotedResponse.recentMessages[0].promptContexts?.length, 1);
 process.stdout.write('PASS: private adapter envelopes, folded contexts, compact batches, raw previews, and opaque bodies\n');
 
@@ -221,9 +221,9 @@ for (const [id, privateSession, groupSession] of [
   ['group:test_room:private:label', false, true],
   ['telegram:private:test_user:group:label', true, false],
   ['telegram:group:test_room:private:label', false, true],
-  ['mock:test_connection:astrbot:private:test_user:group:label', true, false],
-  ['mock:test_connection:astrbot:group:test_room:private:label', false, true],
-  ['ASTRBOT:PRIVATE:test_user', true, false],
+  ['mock:test_connection:fixture:private:test_user:group:label', true, false],
+  ['mock:test_connection:fixture:group:test_room:private:label', false, true],
+  ['FIXTURE:PRIVATE:test_user', true, false],
   ['unknown:test_session', false, false],
 ] as const) {
   assert.equal(isPrivateSession(id), privateSession, id);

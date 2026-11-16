@@ -42,6 +42,10 @@ func TestDatabaseStartupClearsRecoveredDisabledError(t *testing.T) {
 	// Reproduce a failed startup on the other branch's v12. Startup must
 	// reconcile the columns and the old instance error, without enabling it.
 	for _, statement := range []string{
+		`DROP TABLE session_states`,
+		`DROP TABLE chat_history`,
+		`DROP TABLE tool_history`,
+		`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
 		`ALTER TABLE memory_entries DROP COLUMN summary_dirty`,
 		`UPDATE schema_meta SET version=12, min_compatible_version=12 WHERE id=1`,
@@ -91,8 +95,8 @@ func TestDatabaseStartupRetainsCurrentDisabledFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := errors.New("synthetic current initialization failure")
-	manager, err := newManager(root, global, "", db,
-		func(_ *Manager, _ *managed, _ *instanceconfig.Store, _ string, enabled bool) (*Runtime, error) {
+	manager, err := newManager(root, global, db,
+		func(_ *Manager, _ *managed, _ *instanceconfig.Store, enabled bool) (*Runtime, error) {
 			if enabled {
 				t.Fatal("recovery attempted to enable the instance")
 			}

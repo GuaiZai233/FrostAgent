@@ -53,7 +53,7 @@ func TestGroupProbabilityOverridesAndPlatformIsolation(t *testing.T) {
 		want         float64
 	}{
 		{"synthetic-group", "onebot", 0.25}, {"synthetic-group", "QQ", 0.25},
-		{"synthetic-group", "aiocqhttp", 0.25}, {"qq:synthetic-group", "", 0.25},
+		{"synthetic-group", "aiocqhttp", 0.5}, {"qq:synthetic-group", "", 0.25},
 		{"synthetic-group", "telegram", 0.38}, {"synthetic-group", "discord", 0.5},
 		{"room:synthetic", "discord", 0.75}, {"telegram:synthetic-group", "discord", 0.5},
 		{"telegram:synthetic-group", "qq", 0.5}, {"missing", "qq", 0.5}, {"zero", "qq", 0},

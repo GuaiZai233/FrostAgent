@@ -112,6 +112,7 @@ type Client interface {
 ### 3.3 本地快速分词与 Token 估算器（`internal/billing/tokenizer.go`）
 
 - 专为 CJK（中文/日文/韩文）、英文单词、数字、标点符号与 Emoji 设计的高性能轻量分词估算器。
+- Chat Completions 的 assistant 消息保存的 `reasoning_content` 按解码后的文本计入上下文与预扣 Token 估算，涵盖工具调用回复和普通最终回复。估算发生在路由前，因此即使后续切换端点或模型而不再回放旧状态，仍保守计入保存的思考内容；不直接计入其他协议的整个 `ProviderState`，避免重复计算其正文与工具调用。
 - 结合 ChatML 结构开销（消息头 `<|im_start|>`、工具调用元数据）进行预占 Token 量估算：
   $$\text{ReservePromptTokens} = \lceil \text{EstimatedPromptTokens} \times \text{SafetyMultiplier} \rceil$$
   $$\text{ReserveTokens} = \text{ReservePromptTokens} + \text{MaxOutputTokens}$$

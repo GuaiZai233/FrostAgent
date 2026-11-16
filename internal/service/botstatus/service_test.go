@@ -83,12 +83,10 @@ func TestDerivePlatform(t *testing.T) {
 		sessionID string
 		want      string
 	}{
-		{"astrbot:group:123", "astrbot"},
+		{"fixture:group:123", "fixture"},
 		{"onebot:group:123", "onebot"},
 		{"qq:group:123", "onebot"},
 		{"QQ:group:123", "onebot"},
-		{"aiocqhttp:group:100001", "aiocqhttp"},
-		{"AIOCQHTTP:group:100001", "aiocqhttp"},
 		{"telegram:group:999", "telegram"},
 		{"group:12345", "onebot"},
 		{"GROUP:12345", "onebot"},
@@ -114,16 +112,16 @@ func TestIsGroupSession(t *testing.T) {
 	}{
 		{"group:12345", true},
 		{"GROUP:12345", true},
-		{"aiocqhttp:group:100001", true},
-		{"AIOCQHTTP:GROUP:100001", true},
-		{"astrbot:group:12345", true},
-		{"AstrBot:Group:12345", true},
+		{"qq:group:100001", true},
+		{"QQ:GROUP:100001", true},
+		{"fixture:group:12345", true},
+		{"Fixture:Group:12345", true},
 		{"onebot:group:12345", true},
 		{"private:12345", false},
 		{"PRIVATE:12345", false},
-		{"astrbot:private:12345", false},
+		{"fixture:private:12345", false},
 		{"onebot:private:12345", false},
-		{"aiocqhttp:private:12345", false},
+		{"qq:private:12345", false},
 		{"some_random_id", false},
 		{"", false},
 	}
@@ -157,13 +155,13 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	svc := New(engine, "test-v1", "")
 
 	// 1. Add active session in sessionManager
-	activeSession := sessionManager.GetOrCreate("aiocqhttp:group:100001")
+	activeSession := sessionManager.GetOrCreate("qq:group:100001")
 	activeSession.SetGroupName("王源粉丝群")
 	activeSession.AppendGroupCompactMessage("User (123): hello", 20)
 
 	// 2. Add durable group summary and cached group name
-	sessionManager.SetGroupName("astrbot:group:999999", "AstrBot测试群")
-	if _, err := store.Upsert("astrbot:group:999999", "persisted summary for astrbot", 0); err != nil {
+	sessionManager.SetGroupName("fixture:group:999999", "Fixture测试群")
+	if _, err := store.Upsert("fixture:group:999999", "persisted summary for fixture", 0); err != nil {
 		t.Fatalf("failed to upsert summary: %v", err)
 	}
 
@@ -182,36 +180,36 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 		sessionMap[s.SessionId] = s
 	}
 
-	// Verify aiocqhttp group session
-	aiocqhttpSession, ok := sessionMap["aiocqhttp:group:100001"]
+	// Verify qq group session
+	qqSession, ok := sessionMap["qq:group:100001"]
 	if !ok {
-		t.Fatalf("missing aiocqhttp session")
+		t.Fatalf("missing qq session")
 	}
-	if aiocqhttpSession.Platform != "aiocqhttp" {
-		t.Errorf("expected platform 'aiocqhttp', got %q", aiocqhttpSession.Platform)
+	if qqSession.Platform != "onebot" {
+		t.Errorf("expected platform 'onebot', got %q", qqSession.Platform)
 	}
-	if aiocqhttpSession.GroupName != "王源粉丝群" {
-		t.Errorf("expected group name '王源粉丝群', got %q", aiocqhttpSession.GroupName)
+	if qqSession.GroupName != "王源粉丝群" {
+		t.Errorf("expected group name '王源粉丝群', got %q", qqSession.GroupName)
 	}
 
-	// Verify astrbot persisted group session
-	astrbotSession, ok := sessionMap["astrbot:group:999999"]
+	// Verify fixture persisted group session
+	fixtureSession, ok := sessionMap["fixture:group:999999"]
 	if !ok {
-		t.Fatalf("missing astrbot session")
+		t.Fatalf("missing fixture session")
 	}
-	if astrbotSession.Platform != "astrbot" {
-		t.Errorf("expected platform 'astrbot', got %q", astrbotSession.Platform)
+	if fixtureSession.Platform != "fixture" {
+		t.Errorf("expected platform 'fixture', got %q", fixtureSession.Platform)
 	}
-	if astrbotSession.GroupName != "AstrBot测试群" {
-		t.Errorf("expected group name 'AstrBot测试群', got %q", astrbotSession.GroupName)
+	if fixtureSession.GroupName != "Fixture测试群" {
+		t.Errorf("expected group name 'Fixture测试群', got %q", fixtureSession.GroupName)
 	}
-	if astrbotSession.GroupSummary != "persisted summary for astrbot" {
-		t.Errorf("expected group summary 'persisted summary for astrbot', got %q", astrbotSession.GroupSummary)
+	if fixtureSession.GroupSummary != "persisted summary for fixture" {
+		t.Errorf("expected group summary 'persisted summary for fixture', got %q", fixtureSession.GroupSummary)
 	}
 
 	// 4. Delete group summary
 	delResp, err := svc.DeleteGroupSummary(context.Background(), connect.NewRequest(&v1.DeleteGroupSummaryRequest{
-		SessionId: "astrbot:group:999999",
+		SessionId: "fixture:group:999999",
 	}))
 	if err != nil {
 		t.Fatalf("DeleteGroupSummary failed: %v", err)
@@ -221,9 +219,9 @@ func TestGetSessionsAndGroupSummary(t *testing.T) {
 	}
 
 	// Verify it was deleted from store
-	_, exists, _ := store.Get("astrbot:group:999999")
+	_, exists, _ := store.Get("fixture:group:999999")
 	if exists {
-		t.Errorf("expected summary for astrbot:group:999999 to be deleted")
+		t.Errorf("expected summary for fixture:group:999999 to be deleted")
 	}
 }
 

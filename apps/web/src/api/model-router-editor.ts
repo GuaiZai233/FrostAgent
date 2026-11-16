@@ -6,7 +6,8 @@ import { randomUUID } from '../utils/random-id';
 
 type RouterAPI = Pick<ReturnType<typeof createInstanceAPI>,
   'getModelRouterState' | 'saveModelRouterDraft' | 'publishModelRouter' | 'discardModelRouterDraft'
-  | 'resetSharedCatalogDraft' | 'setDraftEndpointSecret' | 'clearDraftEndpointSecret' | 'listUpstreamModels' | 'testModel'>;
+  | 'resetSharedCatalogDraft' | 'setDraftEndpointSecret' | 'clearDraftEndpointSecret' | 'listUpstreamModels' | 'testModel'
+  | 'inferModelCapabilities'>;
 
 const emptyConfiguration = () => create(ModelRouterConfigurationSchema, { version: 1 });
 const fingerprint = (config: ModelRouterConfiguration) => toJsonString(ModelRouterConfigurationSchema, config);
@@ -196,5 +197,6 @@ export function createModelRouterEditorAPI(
     },
     listUpstreamModels: catalog.listUpstreamModels,
     testModel: catalog.testModel,
+    inferModelCapabilities: catalog.inferModelCapabilities,
   };
 }

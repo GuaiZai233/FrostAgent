@@ -10,6 +10,8 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"sort"
 	"strings"
@@ -73,8 +75,26 @@ func (s *Service) GetOverview(
 			Description:  t.Description(),
 			Enabled:      s.engine.ToolEnabled(t.Name()),
 			Available:    available,
-			Configurable: t.Name() == balancequery.ToolName,
+			Configurable: t.Name() == balancequery.ToolName || t.Name() == qqextend.ToolName || t.Name() == timesleep.ToolName,
 		})
+	}
+	// Show existing retired switches so the console can clear them. These are
+	// recovery controls only and never enter the engine's model tool catalog.
+	if s.engine.Scope != nil && s.engine.Config != nil {
+		var disabled []string
+		if json.Unmarshal([]byte(s.engine.Config.Get(llm.DisabledToolsKey)), &disabled) == nil {
+			legacy := s.legacyToolSettings()
+			for _, name := range disabled {
+				if description, ok := legacy[name]; ok {
+					toolInfos = append(toolInfos, &v1.ToolInfo{
+						Name:        name,
+						Description: "历史禁用项：启用可解除此限制，此卡片随后消失。实际调用仍通过合并后的路由入口。 " + description,
+						Enabled:     false, Available: true,
+					})
+					delete(legacy, name)
+				}
+			}
+		}
 	}
 
 	// Sort by name to ensure deterministic order, with a stable tiebreaker for robustness.
@@ -206,6 +226,9 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
+				if s.engine.SessionManager.HasCheckpoint(record.SessionID) {
+					continue
+				}
 				// Persisted summaries are subject to the same group compact whitelist as live ones.
 				recordSummary := record.Summary
 				if !llm.GroupCompactAllowed(s.engine.Getenv, record.SessionID) {
@@ -261,6 +284,38 @@ func (s *Service) GetSessions(
 		}
 	}
 
+	// Group profiles retain observed names independently of live sessions and
+	// compact summaries, including groups that never reached a compact batch.
+	if s.engine.GroupManager != nil {
+		groups, err := s.engine.GroupManager.ListGroups()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		for _, group := range groups {
+			id := "group:" + group.GroupID
+			if !memory.IsQQPlatform(group.Platform) {
+				id = group.Platform + ":" + id
+			}
+			canonical := memory.CanonicalSessionKey(id)
+			matched := false
+			for key, view := range viewsByID {
+				if memory.CanonicalSessionKey(key) != canonical {
+					continue
+				}
+				if view.info.GroupName == "" {
+					view.info.GroupName = group.GroupName
+				}
+				viewsByID[key] = view
+				matched = true
+				break
+			}
+			if !matched {
+				viewsByID[id] = sessionView{info: &v1.SessionInfo{SessionId: id, Platform: derivePlatform(id), GroupName: group.GroupName,
+					CreatedAt: group.UpdatedAt.Format(time.RFC3339), LastActive: group.UpdatedAt.Format(time.RFC3339)},
+					createdAt: group.UpdatedAt, updatedAt: group.UpdatedAt}
+			}
+		}
+	}
 	views := make([]sessionView, 0, len(viewsByID))
 	for _, view := range viewsByID {
 		views = append(views, view)
@@ -325,6 +380,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	var runningSummary string
+	var lastUserPrompt string
 	var summaryGroups []llm.SummaryGroup
 	var recentMessages []string
 	var recentStructuredMessages []llm.GroupCompactMessage
@@ -338,6 +394,9 @@ func (s *Service) GetSessionContext(
 	if s.engine.SessionManager != nil {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && !sess.IsMock() {
+				if err := sess.RecoveryError(); err != nil {
+					return nil, connect.NewError(connect.CodeUnavailable, err)
+				}
 				snap := sess.SnapshotGroupContext(limit, 100000, "")
 				var history []llm.ChatMessage
 				if isPrivateSession(sessionID) {
@@ -356,12 +415,19 @@ func (s *Service) GetSessionContext(
 				lastSysPrompt, lastModel := sess.LastPromptTrace()
 				resp.SystemPrompt = lastSysPrompt
 				resp.Model = lastModel
+				lastUserPrompt = sess.LastUserPrompt()
+				actualRequest, requestAt := sess.LastActualRequest()
+				resp.ActualRequestJson = actualRequest
+				if !requestAt.IsZero() {
+					resp.RequestAt = requestAt.Format(time.RFC3339Nano)
+				}
 
 				for _, h := range history {
-					contentStr := fmt.Sprintf("%v", h.Content)
+					contentStr := llm.InspectionContent(h.Content)
 					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
-						Role:    h.Role,
-						Content: contentStr,
+						Role:             h.Role,
+						Content:          contentStr,
+						ToolHistoryRunId: h.ToolHistoryRunID,
 					})
 				}
 			}
@@ -369,7 +435,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	// Fallback to durable summary store if active summary is empty
-	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil {
+	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil && !s.engine.SessionManager.HasCheckpoint(sessionID) {
 		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
 			runningSummary = rec.Summary
 		}
@@ -402,11 +468,16 @@ func (s *Service) GetSessionContext(
 	if isPrivateSession(sessionID) {
 		// Private compaction is injected into ordinary history, not group XML.
 		// This is a context preview, not a reconstruction of the last LLM request.
-		messages := make([]*v1.SessionHistoryMessageProto, 0, len(historyMsgs)+1)
+		messages := make([]*v1.SessionHistoryMessageProto, 0, len(historyMsgs)+2)
 		if resp.SystemPrompt != "" {
 			messages = append(messages, &v1.SessionHistoryMessageProto{Role: "system", Content: resp.SystemPrompt})
 		}
 		messages = append(messages, historyMsgs...)
+		if lastUserPrompt != "" {
+			// The exact user-role segment of the latest request, including the
+			// adapter's <response_context> guidance that durable history strips.
+			messages = append(messages, &v1.SessionHistoryMessageProto{Role: "user", Content: "[最近一次实际请求的用户段]\n" + lastUserPrompt})
+		}
 		preview, _ := json.MarshalIndent(struct {
 			Model    string                           `json:"model,omitempty"`
 			Messages []*v1.SessionHistoryMessageProto `json:"messages"`
@@ -426,6 +497,11 @@ func (s *Service) GetSessionContext(
 		promptBuilder.WriteString(llm.FormatRecentGroupMessagesContext(recentStructuredMessages))
 		promptBuilder.WriteString("\n\n")
 	}
+	if lastUserPrompt != "" {
+		promptBuilder.WriteString("[最近一次实际请求的用户段]\n")
+		promptBuilder.WriteString(lastUserPrompt)
+		promptBuilder.WriteString("\n\n")
+	}
 	promptBuilder.WriteString(fmt.Sprintf("<response_context>\n当前会话: %s\n平台: %s\n</response_context>", sessionID, platform))
 	resp.PromptText = promptBuilder.String()
 
@@ -434,12 +510,13 @@ func (s *Service) GetSessionContext(
 
 func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoProto {
 	return &v1.GroupMessageInfoProto{
-		Role:      message.Role,
-		Sender:    message.Sender,
-		SenderId:  message.SenderID,
-		Content:   message.Content,
-		MessageId: message.MessageID,
-		Time:      message.Time,
+		Role:             message.Role,
+		Sender:           message.Sender,
+		SenderId:         message.SenderID,
+		Content:          message.Content,
+		MessageId:        message.MessageID,
+		Time:             message.Time,
+		ToolHistoryRunId: message.ToolHistoryRunID,
 	}
 }
 
@@ -488,9 +565,6 @@ func isPrivateSession(sessionID string) bool {
 // derivePlatform infers the platform from the session ID prefix.
 func derivePlatform(sessionID string) string {
 	s := strings.ToLower(sessionID)
-	if strings.HasPrefix(s, "astrbot:") {
-		return "astrbot"
-	}
 	if strings.HasPrefix(s, "onebot:") || strings.HasPrefix(s, "qq:") {
 		return "onebot"
 	}
@@ -505,7 +579,7 @@ func derivePlatform(sessionID string) string {
 	}
 	// 兼容已知使用下划线作为前缀分隔的历史/外部会话格式（如 discord_group_123）。
 	// 针对已知平台前缀白名单匹配，避免将包含下划线的普通 ID（如 some_random_id）误判为平台名。
-	for _, knownPrefix := range []string{"discord_", "telegram_", "onebot_", "astrbot_", "aiocqhttp_"} {
+	for _, knownPrefix := range []string{"discord_", "telegram_", "onebot_"} {
 		if strings.HasPrefix(s, knownPrefix) {
 			return strings.TrimSuffix(knownPrefix, "_")
 		}

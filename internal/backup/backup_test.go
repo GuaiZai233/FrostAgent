@@ -64,11 +64,9 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		"BOT_NAME": "Test Bot", "UPSTREAM_API_KEY": "synthetic-private-key",
 		"CUSTOM_TOKEN":   "synthetic-custom-token",
 		"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://onebot.example/ws?access_token=synthetic-onebot-query-key",
-		"ONEBOT_WS_TOKEN": "synthetic-onebot-token",
-		"ASTRBOT_WS_MODE": "reverse", "ASTRBOT_WS_URL": "ws://astrbot.example:1244/?token=synthetic-astrbot-query-key",
-		"ASTRBOT_WS_TOKEN":  "synthetic-astrbot-token",
-		"ONEBOT_WS_ENABLED": "true", "ASTRBOT_WS_ENABLED": "false",
-		"ONEBOT_WS_INBOUND_TOKEN": "synthetic-inbound-onebot", "ASTRBOT_WS_INBOUND_TOKEN": "synthetic-inbound-astrbot",
+		"ONEBOT_WS_TOKEN":         "synthetic-onebot-token",
+		"ONEBOT_WS_ENABLED":       "true",
+		"ONEBOT_WS_INBOUND_TOKEN": "synthetic-inbound-onebot",
 	} {
 		if err := settings.Update(key, value, false); err != nil {
 			t.Fatal(err)
@@ -97,9 +95,8 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		t.Helper()
 		for key, want := range map[string]string{
 			"ONEBOT_WS_MODE": "forward", "ONEBOT_WS_URL": "wss://onebot.example/ws", "ONEBOT_WS_TOKEN": "",
-			"ASTRBOT_WS_MODE": "reverse", "ASTRBOT_WS_URL": "ws://astrbot.example:1244/", "ASTRBOT_WS_TOKEN": "",
-			"ONEBOT_WS_ENABLED": "true", "ASTRBOT_WS_ENABLED": "false",
-			"ONEBOT_WS_INBOUND_TOKEN": "", "ASTRBOT_WS_INBOUND_TOKEN": "",
+			"ONEBOT_WS_ENABLED":       "true",
+			"ONEBOT_WS_INBOUND_TOKEN": "",
 		} {
 			if got := exported.Values[key]; got != want {
 				t.Errorf("exported %s = %q, want %q", key, got, want)
@@ -111,7 +108,7 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertConnectionSettings(exportedSettings)
-	for _, mode := range []string{"ONEBOT_WS_MODE", "ASTRBOT_WS_MODE"} {
+	for _, mode := range []string{"ONEBOT_WS_MODE"} {
 		if err := ImportSettings(db, id, Settings{FormatVersion: FormatVersion, Values: map[string]string{
 			mode: "forward", "BOT_NAME": "must-not-import",
 		}}); err == nil {
@@ -151,7 +148,7 @@ func TestInstanceZIPSeparatesImagesAndBlanksSecrets(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, secret := range []string{"synthetic-onebot-query-key", "synthetic-onebot-token", "synthetic-astrbot-query-key", "synthetic-astrbot-token"} {
+		for _, secret := range []string{"synthetic-onebot-query-key", "synthetic-onebot-token"} {
 			if bytes.Contains(data, []byte(secret)) {
 				t.Errorf("ZIP member %s contains secret %q", member.Name, secret)
 			}

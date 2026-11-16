@@ -13,7 +13,7 @@ import (
 // FormatVersion identifies the structure of exported instance backups.
 const FormatVersion = 1
 
-const SecretNotice = "密钥、凭据及其来源不包含在导出文件中；还原后请重新配置。"
+const SecretNotice = "独立保存的 API Key、凭据引用不包含在导出文件中；还原后请重新配置。端点完整 URL 原样保留，可能包含查询参数或内嵌凭据，请妥善保管备份。"
 
 type Manifest struct {
 	FormatVersion int       `json:"format_version"`

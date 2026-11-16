@@ -4,6 +4,7 @@ import { escapeHtml, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
+import { bindToolArguments, parseToolHistoryNote, readTargetFromArguments, refFromToolResult, renderToolActivity, type ToolActivity, type ToolActivityEntry, type ToolArgumentsLoader } from './tool-activity';
 
 export interface GroupMessageItem {
   id?: string;
@@ -13,6 +14,8 @@ export interface GroupMessageItem {
   role?: 'user' | 'assistant';
   content: string;
   rawText: string;
+  toolHistoryRunId?: string;
+  toolActivity?: ToolActivity;
   isSummarized?: boolean;
   promptContexts?: Array<{ name: string; content: string }>;
 }
@@ -36,6 +39,7 @@ export interface StructuredGroupMessage {
   content: string;
   messageId: string;
   time: string;
+  toolHistoryRunId?: string;
 }
 
 export interface PromptImage {
@@ -105,6 +109,8 @@ export interface ParsedPrompt {
   /** Group compact is disabled for this group (outside the group compact whitelist). */
   compactDisabled?: boolean;
   recentMessages: GroupMessageItem[];
+  requestMessages?: GroupMessageItem[];
+  groupToolMessages?: GroupMessageItem[];
   summaryGroups: SummaryGroupInfo[];
   responseContext?: string;
   systemContext?: string;
@@ -230,6 +236,7 @@ function parseStructuredMessageJSONLine(line: string): GroupMessageItem | null {
       time: typeof record.time === 'string' ? record.time : undefined,
       content: record.content,
       rawText: line,
+      toolHistoryRunId: typeof record.tool_history_run_id === 'string' ? record.tool_history_run_id : undefined,
     };
   } catch {
     return null;
@@ -245,6 +252,7 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
     time: record.time || undefined,
     content: record.content,
     rawText: JSON.stringify(record),
+    toolHistoryRunId: record.toolHistoryRunId,
   };
 }
 
@@ -311,10 +319,11 @@ export function buildInspectorDataFromSessionContext(context: {
     structuredMessages?: StructuredGroupMessage[];
   }>;
   promptText?: string;
+  actualRequestJson?: string;
   systemPrompt?: string;
   model?: string;
   recentStructuredMessages?: StructuredGroupMessage[];
-  history?: Array<{ role: string; content: string }>;
+  history?: Array<{ role: string; content: string; toolHistoryRunId?: string }>;
 }, instanceBotName?: string): ParsedPrompt {
   const privateSession = isPrivateSession(context.sessionId);
   const configuredBotName = (instanceBotName || context.botName || '').trim();
@@ -350,6 +359,7 @@ export function buildInspectorDataFromSessionContext(context: {
       content: message.content,
       rawText: message.content,
       isSummarized: false,
+      toolHistoryRunId: message.toolHistoryRunId,
     }));
   }
 
@@ -360,15 +370,22 @@ export function buildInspectorDataFromSessionContext(context: {
     }
   }
 
+  // Group chat history is sourced from the compact buffer. Internal tool notes
+  // live in ordinary history and need their own projection, never public replies.
+  const groupToolMessages: GroupMessageItem[] = privateSession ? [] : (context.history || [])
+    .filter((message) => message.role === 'assistant' && (message.toolHistoryRunId || parseToolHistoryNote(message.content)))
+    .map((message) => ({ role: 'assistant', content: message.content, rawText: message.content, toolHistoryRunId: message.toolHistoryRunId }));
+
   return {
     sessionKind: privateSession ? 'private' : 'group',
     botName: configuredBotName || undefined,
-    raw: context.promptText || '',
+    raw: context.actualRequestJson || context.promptText || '',
     model: context.model,
     systemPrompt: context.systemPrompt,
     runningSummary: context.runningSummary,
     compactDisabled: !privateSession && !!context.groupCompactDisabled,
     recentMessages,
+    groupToolMessages,
     summaryGroups,
     images: [],
     hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.parsedMessages?.length ?? 0) > 0),
@@ -411,7 +428,9 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
 
       if (Array.isArray(json.messages)) {
         let lastUserContent: string | undefined;
-        for (const m of json.messages as Array<{ role?: string; content?: unknown }>) {
+        const requestMessages: GroupMessageItem[] = [];
+        const callsById = new Map<string, ToolActivityEntry>();
+        for (const m of json.messages as Array<{ role?: string; content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; tool_call_id?: string; tool_history_run_id?: string }>) {
           const role = m.role || 'unknown';
           let contentStr = '';
           if (typeof m.content === 'string') {
@@ -438,6 +457,33 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
           } else if (role === 'user') {
             lastUserContent = contentStr;
           }
+          if ((role === 'user' || role === 'assistant') && contentStr) {
+            requestMessages.push({ role, content: contentStr, rawText: contentStr, toolHistoryRunId: m.tool_history_run_id });
+          }
+          if (role === 'assistant' && Array.isArray(m.tool_calls)) {
+            const entries: ToolActivityEntry[] = [];
+            for (const call of m.tool_calls) {
+              if (typeof call?.function?.name !== 'string') continue;
+              const args = typeof call.function.arguments === 'string' ? call.function.arguments : '';
+              const entry: ToolActivityEntry = { tool: call.function.name, arguments: args, callId: call.id,
+                readTargetRefId: readTargetFromArguments(call.function.name, args), phase: 'call' };
+              entries.push(entry);
+              if (call.id) callsById.set(call.id, entry);
+            }
+            if (entries.length) requestMessages.push({ content: '', rawText: JSON.stringify(m), toolActivity: { entries } });
+          }
+          if (role === 'tool') {
+            const call = callsById.get(m.tool_call_id || '');
+            const refId = refFromToolResult(contentStr);
+            if (call && refId) call.refId = refId;
+            requestMessages.push({ content: '', rawText: contentStr, toolActivity: { entries: [{
+              tool: call?.tool || '未知工具', callId: m.tool_call_id, readTargetRefId: call?.readTargetRefId,
+              result: contentStr, phase: 'result', refId,
+            }] } });
+          }
+        }
+        if (requestMessages.some((m) => m.toolActivity || (m.role === 'assistant' && (m.toolHistoryRunId || parseToolHistoryNote(m.content))))) {
+          result.requestMessages = requestMessages.map(privateHistoryMessage);
         }
         textToParse = lastUserContent ?? '';
       }
@@ -572,6 +618,7 @@ export function renderPromptInspector(
     onViewSummary?: () => void;
     onConfigureModel?: () => void;
     modelConfigHref?: string;
+    loadToolArguments?: ToolArgumentsLoader;
   } = {},
 ): () => void {
   const parsed = typeof dataOrRaw === 'string' ? parsePrompt(dataOrRaw, options.botName) : dataOrRaw;
@@ -579,8 +626,10 @@ export function renderPromptInspector(
   const privateSession = parsed.sessionKind === 'private';
   const chatLabel = privateSession ? '私聊' : '群聊';
   let viewMode: 'visual' | 'raw' = 'visual';
+  let argumentsCleanup = () => {};
 
   function render() {
+    argumentsCleanup();
     if (viewMode === 'raw') {
       container.innerHTML = `
         <div class="prompt-inspector-card">
@@ -684,7 +733,7 @@ export function renderPromptInspector(
 
         <!-- Trigger User Message -->
         ${
-          parsed.userMessage
+          parsed.userMessage && !parsed.requestMessages?.length
             ? `
           <div class="prompt-section">
             <div class="prompt-section-header">
@@ -777,6 +826,14 @@ export function renderPromptInspector(
             : ''
         }
 
+        ${parsed.requestMessages?.length ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header"><div class="prompt-section-title">${icon('code', 'w-3.5 h-3.5')}<span>实际请求对话与工具记录</span></div></div>
+            <div class="prompt-section-body"><div class="group-messages-container">
+              ${parsed.requestMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model, botName)).join('')}
+            </div></div>
+          </div>` : ''}
+
         <!-- Section 3: Pending / Uncompacted Recent Group Messages -->
         ${
           parsed.recentMessages.length > 0
@@ -798,6 +855,17 @@ export function renderPromptInspector(
         `
             : ''
         }
+
+        ${parsed.groupToolMessages?.length ? `
+          <section class="prompt-section" data-group-tool-records>
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">${icon('wrench', 'w-3.5 h-3.5')}<span>群聊工具执行记录</span></div>
+              <span class="text-xs text-muted">${parsed.groupToolMessages.length} 组 · 来源消息见各记录</span>
+            </div>
+            <div class="prompt-section-body"><div class="group-messages-container">
+              ${parsed.groupToolMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model, botName)).join('')}
+            </div></div>
+          </section>` : ''}
 
         <!-- Delivery Context (if previous assistant message failed to deliver) -->
         ${
@@ -914,6 +982,7 @@ export function renderPromptInspector(
   }
 
   function bindInteractiveEvents() {
+    argumentsCleanup = bindToolArguments(container, options.loadToolArguments);
     container.querySelector<HTMLButtonElement>('#pi-view-summary-btn')
       ?.addEventListener('click', () => options.onViewSummary?.());
 
@@ -938,7 +1007,7 @@ export function renderPromptInspector(
   render();
 
   return () => {
-    // Cleanup if needed
+    argumentsCleanup();
   };
 }
 
@@ -1006,6 +1075,10 @@ function renderSingleMessageRow(
   model?: string,
   botName = DEFAULT_BOT_NAME,
 ): string {
+  if (msg.role === 'assistant' || msg.toolActivity) {
+    const activity = msg.toolActivity || parseToolHistoryNote(msg.content) || (msg.toolHistoryRunId ? { entries: [], raw: msg.content } : undefined);
+    if (activity) return renderToolActivity(activity);
+  }
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
   const isAssistant = msg.role === 'assistant';
   const roleClass = isAssistant ? 'is-assistant' : 'is-user';
@@ -1138,7 +1211,9 @@ export function openPromptInspectorDialog(
   raw: string,
   title = 'Prompt Inspector',
   botName = DEFAULT_BOT_NAME,
+  loadToolArguments?: ToolArgumentsLoader,
 ): void {
+  let cleanup: (() => void) | undefined;
   openDialog({
     title,
     description: '查看发送给 LLM 的结构化上下文、群消息历史与摘要分组',
@@ -1152,9 +1227,10 @@ export function openPromptInspectorDialog(
     onMount: (dialogEl, close) => {
       const mountEl = dialogEl.querySelector<HTMLElement>('#dialog-prompt-inspector-mount');
       if (mountEl) {
-        renderPromptInspector(mountEl, raw, { showRawToggle: true, title, botName });
+        cleanup = renderPromptInspector(mountEl, raw, { showRawToggle: true, title, botName, loadToolArguments });
       }
       dialogEl.querySelector('#pi-dialog-close-btn')?.addEventListener('click', close);
     },
+    onClose: () => cleanup?.(),
   });
 }

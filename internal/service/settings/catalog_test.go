@@ -14,6 +14,7 @@ import (
 func TestSettingsCatalogExcludesRetiredEntries(t *testing.T) {
 	for _, key := range []string{
 		"CODER_API_KEY", "UPSTREAM_API_KEY", "MAX_CONTEXT_CHARS", "ALLOW_REMOTE_MCP_MANAGEMENT",
+		"ASTRBOT_WS_ENABLED", "ASTRBOT_WS_MODE", "ASTRBOT_WS_URL", "ASTRBOT_WS_TOKEN", "ASTRBOT_WS_INBOUND_TOKEN",
 		"ENABLE_ONEBOT_ADAPTER", "ENABLE_ASTRBOT_ADAPTER", "BRAIN_PATH", "DIALOGUE_PATH", "ONEBOT_WS_PATH", "ASTRBOT_WS_PATH",
 	} {
 		if _, exists := knownEnvVars[key]; exists {

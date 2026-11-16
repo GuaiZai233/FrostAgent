@@ -29,7 +29,7 @@ type Config struct {
 
 // Load preserves the existing inbound listener when no mode was configured.
 func Load(getenv func(string) string, adapter string) (Config, error) {
-	if adapter != "ONEBOT" && adapter != "ASTRBOT" {
+	if adapter != "ONEBOT" {
 		return Config{}, fmt.Errorf("unknown WebSocket adapter")
 	}
 	config := Config{Mode: Reverse}

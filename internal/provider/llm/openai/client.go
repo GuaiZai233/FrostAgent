@@ -12,6 +12,7 @@ import (
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/state"
 )
 
 // OpenAI-compatible structures for API communication.
@@ -22,10 +23,11 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"`
+	Content          any        `json:"content"`
+	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	ReasoningContent *string    `json:"reasoning_content,omitempty"`
 }
 
 type toolCall struct {
@@ -49,17 +51,19 @@ type chatResponse struct {
 
 // Client implements the core.LLMProvider interface for OpenAI-compatible APIs.
 type Client struct {
-	Logger     *logs.Store
-	BaseURL    string
-	APIKey     string
-	HTTPClient *http.Client
+	Logger       *logs.Store
+	RequestURL   string
+	EndpointID   string
+	EmbeddingURL string
+	BaseURL      string
+	APIKey       string
+	HTTPClient   *http.Client
 	// ObserveUsage is called once for each decoded successful API response,
 	// even if its content cannot be used by the caller.
 	ObserveUsage func(*core.Usage)
 }
 
-// HTTPError preserves the upstream response body so the agent can relay the
-// provider's original error text according to the current product contract.
+// HTTPError preserves the upstream response body for administrator diagnostics.
 type HTTPError struct {
 	Status     string
 	StatusCode int
@@ -77,6 +81,8 @@ func (e *HTTPError) Error() string {
 }
 
 const defaultHTTPTimeout = 120 * time.Second
+
+const reasoningStateFormat = "openai_chat_completions"
 
 const (
 	staySilentFallbackToolName   = "stay_silent"
@@ -105,6 +111,15 @@ func NewClientWithTimeout(baseURL, apiKey string, timeout time.Duration) *Client
 
 // Chat sends a request to the LLM and returns the response message.
 func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+	fullURL := c.RequestURL
+	if fullURL == "" {
+		var err error
+		fullURL, err = url.JoinPath(c.BaseURL, "chat/completions")
+		if err != nil {
+			return nil, fmt.Errorf("failed to join url path: %w", err)
+		}
+	}
+	origin := state.Origin{EndpointID: c.EndpointID, URL: fullURL}
 	// Convert core request to OpenAI format
 	openAIReq := chatRequest{
 		Model: req.Model,
@@ -127,6 +142,20 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 			Role:       string(msg.Role),
 			Content:    msg.Content,
 			ToolCallID: msg.ToolCallID,
+		}
+		if msg.Role == core.RoleAssistant {
+			if state.Matches(msg, reasoningStateFormat, req.Model, origin) {
+				if err := json.Unmarshal(msg.ProviderState.Content, &cm.ReasoningContent); err != nil {
+					return nil, fmt.Errorf("decode Chat Completions reasoning state: %w", err)
+				}
+			}
+			// Tool-enabled thinking APIs require this field on every assistant
+			// turn, including synthetic, rewritten, and pre-upgrade history.
+			// An empty wire-only placeholder never replays mismatched state.
+			if cm.ReasoningContent == nil && len(req.Tools) > 0 {
+				empty := ""
+				cm.ReasoningContent = &empty
+			}
 		}
 		for _, tc := range msg.ToolCalls {
 			cm.ToolCalls = append(cm.ToolCalls, toolCall{
@@ -156,10 +185,6 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		c.log().LLMRequest(string(jsonData), req.TraceID)
 	}
 
-	fullURL, err := url.JoinPath(c.BaseURL, "chat/completions")
-	if err != nil {
-		return nil, fmt.Errorf("failed to join url path: %w", err)
-	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -247,6 +272,9 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 				Arguments: tc.Function.Arguments,
 			},
 		})
+	}
+	if coreMsg.Role == core.RoleAssistant && choice.ReasoningContent != nil {
+		state.Remember(&coreMsg, reasoningStateFormat, req.Model, *choice.ReasoningContent, origin)
 	}
 	return &core.ChatResponse{
 		Message: coreMsg,

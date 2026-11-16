@@ -70,36 +70,28 @@ type managed struct {
 	mcp     *mcp.Manager
 }
 
-type runtimeBuilder func(*Manager, *managed, *instanceconfig.Store, string, bool) (*Runtime, error)
+type runtimeBuilder func(*Manager, *managed, *instanceconfig.Store, bool) (*Runtime, error)
 
 type Manager struct {
-	mu                 sync.RWMutex
-	root               string
-	global             *instanceconfig.Store
-	legacyWSListenAddr string
-	registry           registry
-	instances          map[string]*managed
-	templateDialogue   string
-	billing            atomic.Pointer[billing.Client]
-	globalApplyMu      sync.Mutex
-	settingsWriteMu    sync.Mutex
-	appliedGlobal      map[string]string
-	globalApplyHook    func() error
-	mcpGetenv          func(string) string
-	sandbox            *sandbox.ConfigManager
-	security           *security.Controller
-	endpointMu         sync.Mutex
-	endpointOwners     map[string]string
-	general            http.Handler
-	shutdown           context.Context
-	shutdownCancel     context.CancelFunc
-	closeOnce          sync.Once
-	db                 *storage.DB
-	buildRuntime       runtimeBuilder
-}
-
-func New(root string, global *instanceconfig.Store, dialoguePath string) (*Manager, error) {
-	return newManager(root, global, dialoguePath, nil, buildManagedRuntime)
+	mu              sync.RWMutex
+	root            string
+	global          *instanceconfig.Store
+	registry        registry
+	instances       map[string]*managed
+	billing         atomic.Pointer[billing.Client]
+	globalApplyMu   sync.Mutex
+	settingsWriteMu settingsWriteLock
+	appliedGlobal   map[string]string
+	globalApplyHook func() error
+	mcpGetenv       func(string) string
+	sandbox         *sandbox.ConfigManager
+	security        *security.Controller
+	general         http.Handler
+	shutdown        context.Context
+	shutdownCancel  context.CancelFunc
+	closeOnce       sync.Once
+	db              *storage.DB
+	buildRuntime    runtimeBuilder
 }
 
 // NewDatabase starts the control plane with SQL as its only runtime state
@@ -114,12 +106,15 @@ func NewDatabase(root string) (*Manager, error) {
 
 // NewDatabaseWithDB adopts an already connected database for a control plane.
 func NewDatabaseWithDB(root string, db *storage.DB) (*Manager, error) {
+	if db == nil {
+		return nil, fmt.Errorf("instance manager requires SQL storage")
+	}
 	global, err := instanceconfig.OpenDatabase(db, "", true)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	m, err := newManager(root, global, "", db, buildManagedRuntime)
+	m, err := newManager(root, global, db, buildManagedRuntime)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -127,17 +122,15 @@ func NewDatabaseWithDB(root string, db *storage.DB) (*Manager, error) {
 	return m, nil
 }
 
-func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, configDir string, enabled bool) (*Runtime, error) {
+func buildManagedRuntime(m *Manager, i *managed, config *instanceconfig.Store, enabled bool) (*Runtime, error) {
 	wsListenAddr := strings.TrimSpace(m.global.Get("WS_LISTEN_ADDR"))
-	if m.db == nil {
-		wsListenAddr = m.legacyWSListenAddr
-	} else if wsListenAddr == "" {
+	if wsListenAddr == "" {
 		wsListenAddr = instanceconfig.DefaultWSListenAddr
 	}
-	return buildRuntime(m.dir(i.id), configDir, "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.templateDialogue, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db)
+	return buildRuntime(m.dir(i.id), "/instances/"+i.id, wsListenAddr, config, m.global, i.logger, m.billing.Load(), i.mcp, m.mcpGetenv, m.sandbox, i.id, enabled, m.security, m.db, &m.settingsWriteMu)
 }
 
-func newManager(root string, global *instanceconfig.Store, dialoguePath string, db *storage.DB, builder runtimeBuilder) (*Manager, error) {
+func newManager(root string, global *instanceconfig.Store, db *storage.DB, builder runtimeBuilder) (*Manager, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -146,20 +139,9 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		return nil, err
 	}
 	shutdown, shutdownCancel := context.WithCancel(context.Background())
-	if dialoguePath == "" {
-		dialoguePath = "eval/dialogue/dialogue.yml"
-	}
-	legacyWSListenAddr := strings.TrimSpace(global.Get("WS_LISTEN_ADDR"))
-	if legacyWSListenAddr == "" {
-		legacyWSListenAddr = instanceconfig.DefaultWSListenAddr
-	}
-	m := &Manager{root: abs, global: global, legacyWSListenAddr: legacyWSListenAddr, instances: map[string]*managed{}, endpointOwners: map[string]string{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, templateDialogue: dialoguePath, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db, buildRuntime: builder}
-	if db != nil {
-		m.appliedGlobal = global.Snapshot()
-		m.security = security.NewControllerSQL(db)
-	} else {
-		m.security = security.NewController(abs)
-	}
+	m := &Manager{root: abs, global: global, instances: map[string]*managed{}, registry: registry{Version: 1, NextNumber: 1, Instances: []Info{}}, shutdown: shutdown, shutdownCancel: shutdownCancel, db: db, buildRuntime: builder}
+	m.appliedGlobal = global.Snapshot()
+	m.security = security.NewControllerSQL(db)
 	if global != nil {
 		rawTimeout := strings.TrimSpace(global.Get("SECURITY_GATEWAY_TIMEOUT"))
 		if rawTimeout == "" {
@@ -176,45 +158,23 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		mode := security.ParseControlMode(rawMode)
 		m.security.SetMode(mode)
 	}
-	if db != nil {
-		records, nextNumber, err := db.LoadInstances(context.Background())
-		if err != nil {
-			return nil, err
-		}
-		m.registry.NextNumber = nextNumber
-		for _, record := range records {
-			m.registry.Instances = append(m.registry.Instances, Info{ID: record.ID, Name: record.Name,
-				CreatedAt: record.CreatedAt, Enabled: record.Enabled, Deleting: record.Deleting,
-				Error: record.Error, CredentialTargets: record.CredentialTargets})
-		}
-	} else {
-		data, err := os.ReadFile(filepath.Join(abs, "instances.json"))
-		if err == nil {
-			if err = json.Unmarshal(data, &m.registry); err != nil {
-				return nil, err
-			}
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
+	records, nextNumber, err := db.LoadInstances(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	m.registry.NextNumber = nextNumber
+	for _, record := range records {
+		m.registry.Instances = append(m.registry.Instances, Info{ID: record.ID, Name: record.Name,
+			CreatedAt: record.CreatedAt, Enabled: record.Enabled, Deleting: record.Deleting,
+			Error: record.Error, CredentialTargets: record.CredentialTargets})
 	}
 	if m.registry.Version != 1 || m.registry.NextNumber < 1 {
 		return nil, fmt.Errorf("无效的实例注册表")
 	}
-	if db != nil {
-		if err := m.recoverDeletionStages(); err != nil {
-			return nil, fmt.Errorf("recover interrupted instance deletion: %w", err)
-		}
+	if err := m.recoverDeletionStages(); err != nil {
+		return nil, fmt.Errorf("recover interrupted instance deletion: %w", err)
 	}
-	if db == nil {
-		data, err := os.ReadFile(filepath.Join(abs, "endpoint_ids.json"))
-		if err == nil {
-			if err = json.Unmarshal(data, &m.endpointOwners); err != nil {
-				return nil, err
-			}
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
+
 	recoveryErrors := make(map[string]error)
 	for index, info := range m.registry.Instances {
 		if !idPattern.MatchString(info.ID) {
@@ -229,11 +189,6 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 			recoveryErrors[info.ID] = err
 			continue
 		}
-		if db == nil {
-			if err := m.recoverCopyTransaction(info.ID); err != nil {
-				recoveryErrors[info.ID] = err
-			}
-		}
 	}
 	cfg := billing.LoadConfig(global.Get)
 	base := cfg.BaseURL
@@ -242,10 +197,8 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	}
 	m.billing.Store(billing.NewClient(base, cfg.ServiceToken, cfg.Timeout))
 	mux := http.NewServeMux()
-	if db != nil {
-		path, handler := pbconnect.NewModelRouterServiceHandler(routersvc.New(modelrouter.NewSQL(db, "")))
-		mux.Handle(path, handler)
-	}
+	path, handler := pbconnect.NewModelRouterServiceHandler(routersvc.New(modelrouter.NewSQL(db, "")))
+	mux.Handle(path, handler)
 	p, h := pbconnect.NewLogServiceHandler(logsvc.New(logs.General))
 	mux.Handle(p, h)
 	mux.HandleFunc(logs.LogImagePathPrefix, logs.General.ImageHandler)
@@ -255,38 +208,6 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	mux.HandleFunc("/api/v1/actionscat/", m.handleDefaultActionsCat)
 	mux.HandleFunc("/api/v1/actionscat", m.handleDefaultActionsCat)
 	m.general = mux
-	// Retained data directories reserve their endpoint IDs too.
-	paths := []string{}
-	if db == nil {
-		paths, err = filepath.Glob(filepath.Join(abs, "instance_*", "model_router.json"))
-	}
-	if err != nil {
-		return nil, err
-	}
-	for _, path := range paths {
-		dir := filepath.Dir(path)
-		owner := strings.TrimPrefix(filepath.Base(dir), "instance_")
-		if recoveryErrors[owner] != nil {
-			continue
-		}
-		if err := safeTree(dir); err != nil {
-			continue
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		var c modelrouter.Configuration
-		if err = json.Unmarshal(raw, &c); err != nil {
-			continue
-		}
-		for _, e := range c.Endpoints {
-			if old, ok := m.endpointOwners[e.ID]; ok && old != owner {
-				return nil, fmt.Errorf("Endpoint ID 冲突: %s", e.ID)
-			}
-			m.endpointOwners[e.ID] = owner
-		}
-	}
 	sandboxCfg := sandbox.LoadConfig(global.Get)
 	m.sandbox = sandbox.NewConfigManager(sandboxCfg)
 	if sandboxCfg.Enabled {
@@ -306,20 +227,10 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 	} else {
 		logs.General.Info(logs.SYSTEM, "沙箱命令执行已注册（当前未启用，可在管理面板中开启）")
 	}
-	if db != nil {
-		m.mcpGetenv = global.Get
-	} else {
-		mcpEnvironment := map[string]string{
-			"MCP_CONTROL_TOKEN":           global.Get("MCP_CONTROL_TOKEN"),
-			"ADMIN_TOKEN":                 global.Get("ADMIN_TOKEN"),
-			"ALLOW_REMOTE_MCP_MANAGEMENT": global.Get("ALLOW_REMOTE_MCP_MANAGEMENT"),
-			"MCP_ENFORCE_LOCAL_TOKEN":     global.Get("MCP_ENFORCE_LOCAL_TOKEN"),
-		}
-		m.mcpGetenv = func(key string) string { return mcpEnvironment[key] }
-	}
+	m.mcpGetenv = global.Get
 	for index, info := range m.registry.Instances {
 		pathError := recoveryErrors[info.ID]
-		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, 5000)}
+		i := &managed{id: info.ID, logger: logs.New(info.ID, info.Name, logs.DefaultBufferSize)}
 		m.instances[info.ID] = i
 		if pathError != nil {
 			m.registry.Instances[index].Enabled = false
@@ -329,7 +240,7 @@ func newManager(root string, global *instanceconfig.Store, dialoguePath string, 
 		if info.Deleting || info.Enabled {
 			continue
 		}
-		r, c, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
+		r, c, err := m.buildFresh(info.ID, i, false)
 		i.config = c
 		i.runtime = r
 		if err != nil {
@@ -363,12 +274,7 @@ func (m *Manager) ensureInstanceMCP(i *managed) {
 	if i.mcp != nil {
 		return
 	}
-	var configStore *mcp.ConfigStore
-	if m.db != nil {
-		configStore = mcp.NewSQLConfigStore(m.db, i.id)
-	} else {
-		configStore = mcp.NewConfigStore(filepath.Join(m.dir(i.id), "mcp_servers.json"))
-	}
+	configStore := mcp.NewSQLConfigStore(m.db, i.id)
 	manager := mcp.NewInactiveManager(configStore, mcpBuiltinNames)
 	if err := manager.Load(); err != nil {
 		i.logger.Warn(logs.SYSTEM, fmt.Sprintf("加载实例 MCP 配置失败: %v", err))
@@ -376,23 +282,12 @@ func (m *Manager) ensureInstanceMCP(i *managed) {
 	i.mcp = manager
 }
 
-func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir string) (*Runtime, *instanceconfig.Store, error) {
+func (m *Manager) buildFresh(id string, i *managed, enabled bool) (*Runtime, *instanceconfig.Store, error) {
 	id = i.id
 	if err := safeTree(m.dir(id)); err != nil {
 		return nil, nil, err
 	}
-	if configDir != m.dir(id) {
-		if err := safeTree(configDir); err != nil {
-			return nil, nil, err
-		}
-	}
-	var c *instanceconfig.Store
-	var openErr error
-	if m.db != nil {
-		c, openErr = instanceconfig.OpenDatabase(m.db, id, false)
-	} else {
-		c, openErr = instanceconfig.Open(filepath.Join(configDir, ".env"), false)
-	}
+	c, openErr := instanceconfig.OpenDatabase(m.db, id, false)
 	if c == nil {
 		return nil, nil, openErr
 	}
@@ -400,78 +295,11 @@ func (m *Manager) buildFresh(id string, i *managed, enabled bool, configDir stri
 		return nil, c, openErr
 	}
 	m.ensureInstanceMCP(i)
-	r, err := m.buildRuntime(m, i, c, configDir, enabled)
-	if err == nil && m.db == nil {
-		r.Engine.ModelRouter.ReserveEndpoints = func(endpoints []modelrouter.Endpoint) error { return m.reserveEndpoints(id, endpoints) }
-	}
+	r, err := m.buildRuntime(m, i, c, enabled)
 	return r, c, errors.Join(openErr, err)
-}
-func (m *Manager) reserveEndpoints(owner string, endpoints []modelrouter.Endpoint) error {
-	if err := modelrouter.PersistentRefs(endpoints); err != nil {
-		return err
-	}
-	m.endpointMu.Lock()
-	defer m.endpointMu.Unlock()
-	return m.reserveEndpointsLocked(owner, endpoints)
-}
-func (m *Manager) reserveEndpointsLocked(owner string, endpoints []modelrouter.Endpoint) error {
-	next, err := m.nextEndpointOwnersLocked(owner, endpoints)
-	if err != nil {
-		return err
-	}
-	{
-		data, err := json.Marshal(next)
-		if err != nil {
-			return err
-		}
-		if err = instanceconfig.WriteAtomic(filepath.Join(m.root, "endpoint_ids.json"), data, 0600); err != nil {
-			return err
-		}
-	}
-	m.endpointOwners = next
-	return nil
-}
-func (m *Manager) nextEndpointOwnersLocked(owner string, endpoints []modelrouter.Endpoint) (map[string]string, error) {
-	if err := modelrouter.PersistentRefs(endpoints); err != nil {
-		return nil, err
-	}
-	next := map[string]string{}
-	for id, v := range m.endpointOwners {
-		next[id] = v
-	}
-	for _, e := range endpoints {
-		if existing, ok := next[e.ID]; ok {
-			if existing != owner {
-				return nil, fmt.Errorf("Endpoint ID 已被占用: %s", e.ID)
-			}
-		} else {
-			exists, err := modelrouter.CredentialExists(e.ID)
-			if err != nil {
-				return nil, err
-			}
-			if exists {
-				return nil, fmt.Errorf("Endpoint 凭据已存在: %s", e.ID)
-			}
-			next[e.ID] = owner
-		}
-	}
-	return next, nil
-}
-func (m *Manager) saveLocked() error {
-	if m.db != nil {
-		return fmt.Errorf("SQL instance registry requires an explicit row operation")
-	}
-	data, err := json.MarshalIndent(m.registry, "", "  ")
-	if err != nil {
-		return err
-	}
-	return instanceconfig.WriteAtomic(filepath.Join(m.root, "instances.json"), data, 0600)
 }
 
 func (m *Manager) persistInfoLocked(info Info) error {
-	if m.db == nil {
-		return m.saveLocked()
-	}
 	return m.db.UpdateInstance(context.Background(), storage.InstanceRecord{
 		ID: info.ID, Name: info.Name, CreatedAt: info.CreatedAt,
 		Enabled: info.Enabled, Deleting: info.Deleting, Error: info.Error,
@@ -572,7 +400,7 @@ func validateName(name string) (string, error) {
 	}
 	return name, nil
 }
-func (m *Manager) Create(name string) (result Info, resultErr error) {
+func (m *Manager) Create(name string) (Info, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.shutdown.Err() != nil {
@@ -605,66 +433,7 @@ func (m *Manager) Create(name string) (result Info, resultErr error) {
 			return Info{}, err
 		}
 	}
-	if m.db != nil {
-		return m.createDatabaseInstanceLocked(id, name)
-	}
-	if err = os.Mkdir(m.dir(id), 0700); err != nil {
-		return Info{}, err
-	}
-	committed := false
-	var partialRuntime *Runtime
-	var partialMCP *mcp.Manager
-	defer func() {
-		if committed {
-			return
-		}
-		if partialRuntime != nil {
-			partialRuntime.Stop()
-		}
-		if partialMCP != nil {
-			_ = partialMCP.Close()
-		}
-		cleanupErr := safeTree(m.dir(id))
-		if cleanupErr == nil {
-			cleanupErr = os.RemoveAll(m.dir(id))
-		}
-		resultErr = errors.Join(resultErr, cleanupErr)
-	}()
-	if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(id), ".env"), []byte(instanceconfig.Template), 0600); err != nil {
-		return Info{}, err
-	}
-	var dialogueContent []byte
-	if m.templateDialogue != "" {
-		dialogueContent, _ = os.ReadFile(m.templateDialogue)
-	}
-	if len(dialogueContent) == 0 {
-		dialogueContent = []byte("[]\n")
-	}
-	if err = instanceconfig.WriteAtomic(filepath.Join(m.dir(id), "dialogue.yml"), dialogueContent, 0600); err != nil {
-		return Info{}, err
-	}
-	i := &managed{id: id, logger: logs.New(id, name, 5000)}
-	r, c, err := m.buildFresh(id, i, false, m.dir(id))
-	partialMCP = i.mcp
-	if err != nil {
-		return Info{}, err
-	}
-	partialRuntime = r
-	i.config = c
-	i.runtime = r
-	info := Info{ID: id, Name: name, CreatedAt: time.Now().UTC()}
-	m.registry.Instances = append(m.registry.Instances, info)
-	m.registry.NextNumber++
-	if err = m.saveLocked(); err != nil {
-		m.registry.Instances = m.registry.Instances[:len(m.registry.Instances)-1]
-		m.registry.NextNumber--
-		return Info{}, err
-	}
-	m.instances[id] = i
-	committed = true
-	createdLog := "创建实例: " + name
-	logs.General.InfoWithConsoleSummary(logs.SYSTEM, createdLog, createdLog)
-	return info, nil
+	return m.createDatabaseInstanceLocked(id, name)
 }
 
 func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
@@ -679,7 +448,7 @@ func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
 	}
 	m.registry.Instances = append(m.registry.Instances, info)
 	m.registry.NextNumber++
-	i := &managed{id: id, logger: logs.New(id, name, 5000)}
+	i := &managed{id: id, logger: logs.New(id, name, logs.DefaultBufferSize)}
 	m.instances[id] = i
 	if err := instanceconfig.InitializeInstanceSettings(m.db, id); err != nil {
 		info.Error = err.Error()
@@ -687,7 +456,7 @@ func (m *Manager) createDatabaseInstanceLocked(id, name string) (Info, error) {
 		_ = m.persistInfoLocked(info)
 		return info, nil
 	}
-	r, c, err := m.buildFresh(id, i, false, m.dir(id))
+	r, c, err := m.buildFresh(id, i, false)
 	i.runtime, i.config = r, c
 	if err != nil {
 		info.Error = err.Error()
@@ -753,7 +522,6 @@ func (m *Manager) stop(id string, i *managed) error {
 		m.security.RemoveInstanceProvider(id)
 	}
 	i.logger.EndStreams()
-	i.logger.Clear()
 	err := m.update(id, func(info *Info) { info.Enabled = false })
 	if err != nil {
 		m.mu.Lock()
@@ -786,22 +554,11 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if err = m.rejectDeleting(id); err != nil {
 		return err
 	}
-	hadTransaction := false
-	if m.db == nil {
-		_, transactionErr := os.Stat(transactionPath(m.dir(id)))
-		hadTransaction = transactionErr == nil
-		if transactionErr != nil && !os.IsNotExist(transactionErr) {
-			return transactionErr
-		}
-		if err = m.recoverCopyTransaction(id); err != nil {
-			_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-			return err
-		}
-	}
+
 	list, _ := m.List()
 	for _, info := range list {
 		if info.ID == id {
-			if !hadTransaction && info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
+			if info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
 				return nil
 			}
 		}
@@ -809,14 +566,13 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	if err = m.stop(id, i); err != nil {
 		return err
 	}
-	r, c, err := m.buildFresh(id, i, enabled, m.dir(id))
+	r, c, err := m.buildFresh(id, i, enabled)
 	if err != nil {
 		if r != nil {
 			r.Stop()
 		}
-		// Keep a stopped management runtime over the newly read file when possible,
-		// so a malformed .env can still be repaired without reviving stale values.
-		fallback, fallbackConfig, fallbackErr := m.buildFresh(id, i, false, m.dir(id))
+		// Retain a stopped management runtime so invalid settings remain repairable.
+		fallback, fallbackConfig, fallbackErr := m.buildFresh(id, i, false)
 		i.mu.Lock()
 		i.runtime = fallback
 		i.config = fallbackConfig
@@ -882,359 +638,11 @@ func safeTree(dir string) error {
 	})
 }
 func (m *Manager) Delete(id string, all bool) error {
-	if m.db != nil {
-		return fmt.Errorf("use prepare, backup, and confirm to delete a SQL instance")
-	}
-	i, err := m.lookup(id)
-	if err != nil {
-		return err
-	}
-	id = i.id
-	if !i.op.TryLock() {
-		return ErrBusy
-	}
-	defer i.op.Unlock()
-	if _, err = m.lookup(id); err != nil {
-		return err
-	}
-	if m.shutdown.Err() != nil {
-		return ErrClosing
-	}
-	if err = m.recoverCopyTransaction(id); err != nil {
-		return err
-	}
-	if err = m.stop(id, i); err != nil {
-		return err
-	}
-	fail := func(err error) error {
-		_ = m.update(id, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-		return err
-	}
-	if err = safeTree(m.dir(id)); err != nil {
-		return fail(err)
-	}
-
-	var changes []modelrouter.CredentialChange
-	list, _ := m.List()
-	for _, info := range list {
-		if info.ID == id {
-			for _, target := range info.CredentialTargets {
-				changes = append(changes, modelrouter.CredentialChange{Target: target})
-			}
-		}
-	}
-	if i.runtime != nil {
-		owned, e := i.runtime.Engine.ModelRouter.DeleteCredentials()
-		if e != nil {
-			return fail(e)
-		}
-		changes = append(changes, owned...)
-	}
-
-	m.endpointMu.Lock()
-	ownedIDs := []string{}
-	for eid, owner := range m.endpointOwners {
-		if owner == id {
-			ownedIDs = append(ownedIDs, eid)
-		}
-	}
-	m.endpointMu.Unlock()
-	for _, eid := range ownedIDs {
-		exists, e := modelrouter.CredentialExists(eid)
-		if e != nil {
-			return fail(e)
-		}
-		if exists {
-			changes = append(changes, modelrouter.CredentialChange{Target: modelrouter.CredentialTarget(eid)})
-		}
-	}
-	seenTargets := map[string]bool{}
-	unique := []modelrouter.CredentialChange{}
-	for _, change := range changes {
-		if !seenTargets[change.Target] {
-			seenTargets[change.Target] = true
-			unique = append(unique, change)
-		}
-	}
-	changes = unique
-	targets := []string{}
-	for _, change := range changes {
-		targets = append(targets, change.Target)
-	}
-	if err = m.update(id, func(info *Info) { info.Deleting = true; info.CredentialTargets = targets }); err != nil {
-		return fail(err)
-	}
-	if i.mcp != nil {
-		_ = i.mcp.Close()
-	}
-	// A failed deletion remains manageable only through retry-delete; stale stores
-	// cannot recreate files or expose a half-deleted configuration.
-	i.mu.Lock()
-	i.runtime = nil
-	i.mu.Unlock()
-	_, err = modelrouter.ApplyCredentials(changes)
-	if err != nil {
-		return fail(err)
-	}
-
-	if all {
-		err = os.RemoveAll(m.dir(id))
-	} else {
-		for _, name := range []string{".env", "model_router.json", "model_router_secrets.json", "mcp_servers.json", "dialogue.yml"} {
-			e := os.Remove(filepath.Join(m.dir(id), name))
-			if e != nil && !os.IsNotExist(e) {
-				err = e
-				break
-			}
-		}
-	}
-	if err != nil {
-		return fail(err)
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	old := m.registry.Instances
-	m.registry.Instances = []Info{}
-	for _, info := range old {
-		if info.ID != id {
-			m.registry.Instances = append(m.registry.Instances, info)
-		}
-	}
-	if err = m.saveLocked(); err != nil {
-		m.registry.Instances = old
-		for index := range m.registry.Instances {
-			if m.registry.Instances[index].ID == id {
-				m.registry.Instances[index].Enabled = false
-				m.registry.Instances[index].Error = err.Error()
-			}
-		}
-		return err
-	}
-	delete(m.instances, id)
-	if m.security != nil {
-		m.security.RemoveInstanceProvider(id)
-	}
-	return nil
+	return fmt.Errorf("use prepare, backup, and confirm to delete a SQL instance")
 }
 
 func (m *Manager) Copy(target, source string) error {
-	if m.db != nil {
-		if target == source {
-			return fmt.Errorf("不能复用自身")
-		}
-		data, _, _, err := m.InstancePart(source, "settings")
-		if err != nil {
-			return err
-		}
-		var settings backup.Settings
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return err
-		}
-		return m.ImportSettings(target, settings)
-	}
-	if target == source {
-		return fmt.Errorf("不能复用自身")
-	}
-	dst, err := m.lookup(target)
-	if err != nil {
-		return err
-	}
-	src, err := m.lookup(source)
-	if err != nil {
-		return err
-	}
-	target, source = dst.id, src.id
-	if !dst.op.TryLock() {
-		return ErrBusy
-	}
-	defer dst.op.Unlock()
-	if !src.op.TryLock() {
-		return ErrBusy
-	}
-	defer src.op.Unlock()
-	if _, err = m.lookup(target); err != nil {
-		return err
-	}
-	if _, err = m.lookup(source); err != nil {
-		return err
-	}
-	if m.shutdown.Err() != nil {
-		return ErrClosing
-	}
-	if err = m.rejectDeleting(target, source); err != nil {
-		return err
-	}
-	if err = m.recoverCopyTransaction(target); err != nil {
-		return err
-	}
-	if err = m.recoverCopyTransaction(source); err != nil {
-		return err
-	}
-	list, _ := m.List()
-	targetEnabled := false
-	sourceEnabled := false
-	for _, info := range list {
-		if info.ID == target {
-			targetEnabled = info.Enabled
-		}
-		if info.ID == source {
-			sourceEnabled = info.Enabled
-		}
-	}
-	if targetEnabled {
-		return fmt.Errorf("被覆盖的实例必须处于非活跃状态")
-	}
-	for id, item := range map[string]*managed{target: dst, source: src} {
-		if item.runtime != nil {
-			continue
-		}
-		enabled := sourceEnabled && id == source
-		r, c, buildErr := m.buildFresh(id, item, enabled, m.dir(id))
-		if buildErr != nil {
-			if r != nil {
-				r.Stop()
-			}
-			return buildErr
-		}
-		item.mu.Lock()
-		item.runtime = r
-		item.config = c
-		item.mu.Unlock()
-		r.StartBackground()
-	}
-	if dst.runtime == nil || src.runtime == nil {
-		return fmt.Errorf("实例配置不可用")
-	}
-	if err = safeTree(m.dir(target)); err != nil {
-		return err
-	}
-	raw, err := src.config.Raw()
-	if err != nil {
-		return err
-	}
-	m.endpointMu.Lock()
-	endpointLocked := true
-	defer func() {
-		if endpointLocked {
-			m.endpointMu.Unlock()
-		}
-	}()
-	pendingEndpoints := []modelrouter.Endpoint{}
-	cfg, secrets, newCreds, err := src.runtime.Engine.ModelRouter.CopyPublished(func(e []modelrouter.Endpoint) error {
-		next := append(append([]modelrouter.Endpoint{}, pendingEndpoints...), e...)
-		if _, reserveErr := m.nextEndpointOwnersLocked(target, next); reserveErr != nil {
-			return reserveErr
-		}
-		pendingEndpoints = next
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	oldCreds, err := dst.runtime.Engine.ModelRouter.DeleteCredentials()
-	if err != nil {
-		return err
-	}
-	transaction, err := newCopyTransaction(target, newCreds, oldCreds)
-	if err != nil {
-		return err
-	}
-	targetDir := m.dir(target)
-	abort := func(cause error) error {
-		return errors.Join(cause, abortCopyTransaction(targetDir, transaction))
-	}
-	committed, writeErr := writeCopyTransaction(targetDir, transaction)
-	if writeErr != nil {
-		if committed {
-			return errors.Join(writeErr, abortCopyTransaction(targetDir, transaction))
-		}
-		return writeErr
-	}
-	stageDir := filepath.Join(targetDir, transaction.Stage)
-	if err = os.Mkdir(stageDir, 0700); err != nil {
-		return abort(err)
-	}
-	if err = instanceconfig.SyncDirectory(targetDir); err != nil {
-		return abort(err)
-	}
-	for name, data := range map[string][]byte{".env": []byte(raw), "model_router.json": cfg, "model_router_secrets.json": secrets} {
-		if _, err = writeCopyFile(filepath.Join(stageDir, name), data, 0600); err != nil {
-			return abort(err)
-		}
-	}
-	sourceDialogue, err := os.ReadFile(filepath.Join(m.dir(source), "dialogue.yml"))
-	if err != nil && !os.IsNotExist(err) {
-		return abort(err)
-	}
-	if os.IsNotExist(err) && m.templateDialogue != "" {
-		sourceDialogue, _ = os.ReadFile(m.templateDialogue)
-	}
-	if len(sourceDialogue) == 0 {
-		sourceDialogue = []byte("[]\n")
-	}
-	if _, err = writeCopyFile(filepath.Join(stageDir, "dialogue.yml"), sourceDialogue, 0600); err != nil {
-		return abort(err)
-	}
-	if _, err = llm.ParseDialogueYAML(sourceDialogue); err != nil {
-		return abort(fmt.Errorf("来源实例 dialogue.yml 无效: %w", err))
-	}
-	if err = modelrouter.StageCredentialPromotions(transaction.Credentials, newCreds); err != nil {
-		return abort(err)
-	}
-	candidate, _, err := m.buildFresh(target, dst, false, stageDir)
-	if err == nil {
-		err = candidate.Engine.ModelRouter.LoadError()
-	}
-	if err != nil {
-		if candidate != nil {
-			candidate.Stop()
-		}
-		return abort(err)
-	}
-	candidate.Stop()
-	transaction.Phase = copyCommitting
-	committed, writeErr = writeCopyTransaction(targetDir, transaction)
-	if writeErr != nil && !committed {
-		return abort(writeErr)
-	}
-	// Once the committing rename is visible, preserve recovery-forward state.
-	// A directory-sync failure keeps the target unavailable until a later retry
-	// durably re-establishes the marker; never expose partially installed files.
-	dst.mu.Lock()
-	previous := dst.runtime
-	dst.runtime = nil
-	dst.config = nil
-	dst.mu.Unlock()
-	if previous != nil {
-		previous.Stop()
-	}
-	if writeErr != nil {
-		updateErr := m.update(target, func(info *Info) { info.Enabled = false; info.Error = writeErr.Error() })
-		return errors.Join(writeErr, updateErr)
-	}
-	if err = m.reserveEndpointsLocked(target, pendingEndpoints); err != nil {
-		updateErr := m.update(target, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-		return errors.Join(err, updateErr)
-	}
-	m.endpointMu.Unlock()
-	endpointLocked = false
-	if err = m.recoverCopyTransaction(target); err != nil {
-		_ = m.update(target, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-		return err
-	}
-	r, c, err := m.buildFresh(target, dst, false, targetDir)
-	if err != nil {
-		_ = m.update(target, func(info *Info) { info.Enabled = false; info.Error = err.Error() })
-		return err
-	}
-	dst.mu.Lock()
-	dst.runtime = r
-	dst.config = c
-	dst.mu.Unlock()
-	if err = m.update(target, func(info *Info) { info.Error = ""; info.RestartRequired = false }); err != nil {
-		return err
-	}
-	return nil
+	return m.copySQLInstanceSettings(target, source)
 }
 func (m *Manager) Close() {
 	m.closeOnce.Do(func() {
@@ -1265,9 +673,7 @@ func (m *Manager) Close() {
 			i.mu.Unlock()
 			i.op.Unlock()
 		}
-		if m.db != nil {
-			_ = m.db.Close()
-		}
+		_ = m.db.Close()
 	})
 }
 func (m *Manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1326,7 +732,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 			readOnly = true
 		}
 	}
-	settingsWrite := m.db != nil && !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
+	settingsWrite := !readOnly && strings.HasPrefix(path, "/frostagent.v1.SettingsService/")
 	if settingsWrite {
 		m.settingsWriteMu.Lock()
 		defer m.settingsWriteMu.Unlock()
@@ -1405,57 +811,47 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	rt.Handler.ServeHTTP(response, req)
 	if !ws && !stream {
 		after := i.config.Snapshot()
-		if m.db != nil {
-			globalAfter := m.global.Snapshot()
-			instanceReload := !readOnly && !equalSettings(before, after) && !onlyHotInstanceChanges(before, after)
-			if instanceReload {
-				if err := m.reloadSQLRuntimeLocked(i, wasRunning, before); err != nil {
-					i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
-					if settingsWrite {
-						if settingsDraft {
-							opUnlock()
-							opUnlock = nil
-							err = errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, true))
-						}
-						writeError(w, err)
+		globalAfter := m.global.Snapshot()
+		instanceReload := !readOnly && !equalSettings(before, after) && !onlyHotInstanceChanges(before, after)
+		if instanceReload {
+			if err := m.reloadSQLRuntimeLocked(i, wasRunning, before); err != nil {
+				i.logger.Error(logs.SYSTEM, fmt.Sprintf("应用数据库设置失败: %v", err))
+				if settingsWrite {
+					if settingsDraft {
+						opUnlock()
+						opUnlock = nil
+						err = errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, true))
 					}
+					writeError(w, err)
+				}
+				return
+			}
+		}
+		if settingsWrite {
+			if !equalSettings(globalBefore, m.global.Snapshot()) {
+				opUnlock()
+				opUnlock = nil
+				if err := m.applyGlobalSettings(); err != nil {
+					if settingsDraft {
+						writeError(w, errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
+						return
+					}
+					rollbackErr := m.restoreGlobalSnapshot(globalBefore)
+					if rollbackErr == nil {
+						rollbackErr = m.applyGlobalSettings()
+					}
+					writeError(w, errors.Join(err, rollbackErr))
 					return
 				}
 			}
-			if settingsWrite {
-				if !equalSettings(globalBefore, m.global.Snapshot()) {
-					opUnlock()
-					opUnlock = nil
-					if err := m.applyGlobalSettings(); err != nil {
-						if settingsDraft {
-							writeError(w, errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
-							return
-						}
-						rollbackErr := m.restoreGlobalSnapshot(globalBefore)
-						if rollbackErr == nil {
-							rollbackErr = m.applyGlobalSettings()
-						}
-						writeError(w, errors.Join(err, rollbackErr))
-						return
-					}
-				}
-				for key, values := range buffered.Header() {
-					w.Header()[key] = append([]string(nil), values...)
-				}
-				w.WriteHeader(buffered.Code)
-				_, _ = w.Write(buffered.Body.Bytes())
+			i.logger.SetPersistentBudget(logs.PersistentBudget(i.config.Get(logs.LogBudgetKey)))
+			for key, values := range buffered.Header() {
+				w.Header()[key] = append([]string(nil), values...)
 			}
-			return
+			w.WriteHeader(buffered.Code)
+			_, _ = w.Write(buffered.Body.Bytes())
 		}
-		pending := false
-		for k := range instanceconfig.InstanceRestartKeys {
-			if before[k] != after[k] {
-				pending = true
-			}
-		}
-		if pending && rt.Scope.Context().Err() == nil {
-			_ = m.update(id, func(info *Info) { info.RestartRequired = true })
-		}
+		return
 	}
 }
 
@@ -1626,199 +1022,197 @@ func isBlobDownloadRequest(r *http.Request) bool {
 
 func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/instances"), "/")
-	if m.db != nil && path == "global/import/settings" && r.Method == http.MethodPost {
+	if path == "global/import/settings" && r.Method == http.MethodPost {
 		m.settingsWriteMu.Lock()
 		defer m.settingsWriteMu.Unlock()
 	}
-	if m.db != nil {
-		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
-			path == "global/backup/settings" || path == "global/import/settings" {
-			w.Header().Set("Cache-Control", "no-store")
-			if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") {
-			m.serveExtraEnv(w, r, path)
+	if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
+		path == "global/backup/settings" || path == "global/import/settings" {
+		w.Header().Set("Cache-Control", "no-store")
+		if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if path == "global/backup/security" && r.Method == http.MethodGet {
-			var state backup.GlobalSecurity
-			err := m.security.WithStateLock(func() error {
-				var exportErr error
-				state, exportErr = backup.ExportGlobalSecurity(m.db)
-				return exportErr
-			})
-			if err != nil {
-				writeError(w, err)
-				return
-			}
-			data, err := json.MarshalIndent(state, "", "  ")
-			if err != nil {
-				writeError(w, err)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Content-Disposition", `attachment; filename="global-security.json"`)
-			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write(append(data, '\n'))
+	}
+	if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") {
+		m.serveExtraEnv(w, r, path)
+		return
+	}
+	if path == "global/backup/security" && r.Method == http.MethodGet {
+		var state backup.GlobalSecurity
+		err := m.security.WithStateLock(func() error {
+			var exportErr error
+			state, exportErr = backup.ExportGlobalSecurity(m.db)
+			return exportErr
+		})
+		if err != nil {
+			writeError(w, err)
 			return
 		}
-		if path == "global/import/security" && r.Method == http.MethodPost {
-			var state backup.GlobalSecurity
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&state); err != nil {
-				writeError(w, err)
-				return
-			}
-			if err := m.security.WithStateLock(func() error {
-				return backup.ImportGlobalSecurity(m.db, state)
-			}); err != nil {
-				writeError(w, err)
-				return
-			}
-			writeJSON(w, map[string]bool{"success": true})
+		data, err := json.MarshalIndent(state, "", "  ")
+		if err != nil {
+			writeError(w, err)
 			return
 		}
-		if path == "global/backup/settings" && r.Method == http.MethodGet {
-			settings := backup.ExportGlobalSettings(m.global)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="global-security.json"`)
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(append(data, '\n'))
+		return
+	}
+	if path == "global/import/security" && r.Method == http.MethodPost {
+		var state backup.GlobalSecurity
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&state); err != nil {
+			writeError(w, err)
+			return
+		}
+		if err := m.security.WithStateLock(func() error {
+			return backup.ImportGlobalSecurity(m.db, state)
+		}); err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"success": true})
+		return
+	}
+	if path == "global/backup/settings" && r.Method == http.MethodGet {
+		settings := backup.ExportGlobalSettings(m.global)
+		entries, err := envinject.List(r.Context(), m.db)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		extra := make(map[string]string, len(entries))
+		for _, entry := range entries {
+			extra[entry.Key] = entry.Value
+		}
+		settings.ExtraEnv = &extra
+		data, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="global-setting.json"`)
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(append(data, '\n'))
+		return
+	}
+	if path == "global/import/settings" && r.Method == http.MethodPost {
+		before := m.global.Snapshot()
+		var data backup.GlobalSettings
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&data); err != nil {
+			writeError(w, err)
+			return
+		}
+		var previousExtra map[string]string
+		if data.ExtraEnv != nil {
+			for key, value := range *data.ExtraEnv {
+				if settingssvc.IsManagedKey(key) {
+					writeError(w, fmt.Errorf("%s belongs to managed settings", key))
+					return
+				}
+				if err := envinject.Validate(key, value); err != nil {
+					writeError(w, err)
+					return
+				}
+			}
 			entries, err := envinject.List(r.Context(), m.db)
 			if err != nil {
 				writeError(w, err)
 				return
 			}
-			extra := make(map[string]string, len(entries))
+			previousExtra = make(map[string]string, len(entries))
 			for _, entry := range entries {
-				extra[entry.Key] = entry.Value
+				previousExtra[entry.Key] = entry.Value
 			}
-			settings.ExtraEnv = &extra
-			data, err := json.MarshalIndent(settings, "", "  ")
-			if err != nil {
-				writeError(w, err)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Content-Disposition", `attachment; filename="global-setting.json"`)
-			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write(append(data, '\n'))
+		}
+		if err := backup.ImportGlobalSettings(m.global, data); err != nil {
+			writeError(w, err)
 			return
 		}
-		if path == "global/import/settings" && r.Method == http.MethodPost {
-			before := m.global.Snapshot()
-			var data backup.GlobalSettings
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20)).Decode(&data); err != nil {
-				writeError(w, err)
+		if data.ExtraEnv != nil {
+			if err := envinject.Replace(r.Context(), m.db, *data.ExtraEnv); err != nil {
+				writeError(w, errors.Join(err, m.restoreGlobalSnapshot(before)))
 				return
 			}
-			var previousExtra map[string]string
+		}
+		if err := m.applyGlobalSettings(); err != nil {
+			rollbackErr := m.restoreGlobalSnapshot(before)
 			if data.ExtraEnv != nil {
-				for key, value := range *data.ExtraEnv {
-					if settingssvc.IsManagedKey(key) {
-						writeError(w, fmt.Errorf("%s belongs to managed settings", key))
-						return
-					}
-					if err := envinject.Validate(key, value); err != nil {
-						writeError(w, err)
-						return
-					}
-				}
-				entries, err := envinject.List(r.Context(), m.db)
-				if err != nil {
-					writeError(w, err)
-					return
-				}
-				previousExtra = make(map[string]string, len(entries))
-				for _, entry := range entries {
-					previousExtra[entry.Key] = entry.Value
-				}
+				rollbackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				rollbackErr = errors.Join(rollbackErr, envinject.Replace(rollbackCtx, m.db, previousExtra))
+				cancel()
 			}
-			if err := backup.ImportGlobalSettings(m.global, data); err != nil {
-				writeError(w, err)
-				return
+			if rollbackErr == nil {
+				rollbackErr = m.applyGlobalSettings()
 			}
-			if data.ExtraEnv != nil {
-				if err := envinject.Replace(r.Context(), m.db, *data.ExtraEnv); err != nil {
-					writeError(w, errors.Join(err, m.restoreGlobalSnapshot(before)))
-					return
-				}
-			}
-			if err := m.applyGlobalSettings(); err != nil {
-				rollbackErr := m.restoreGlobalSnapshot(before)
-				if data.ExtraEnv != nil {
-					rollbackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					rollbackErr = errors.Join(rollbackErr, envinject.Replace(rollbackCtx, m.db, previousExtra))
-					cancel()
-				}
-				if rollbackErr == nil {
-					rollbackErr = m.applyGlobalSettings()
-				}
-				writeError(w, errors.Join(err, rollbackErr))
-				return
-			}
-			writeJSON(w, map[string]bool{"success": true})
+			writeError(w, errors.Join(err, rollbackErr))
 			return
 		}
-		if path == "restore" && r.Method == http.MethodPost {
-			m.handleInstanceRestore(w, r)
+		writeJSON(w, map[string]bool{"success": true})
+		return
+	}
+	if path == "restore" && r.Method == http.MethodPost {
+		m.handleInstanceRestore(w, r)
+		return
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) == 3 && parts[1] == "import" && parts[2] == "settings" && r.Method == http.MethodPost {
+		m.handleSettingsImport(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "import" && parts[2] == "memories" && r.Method == http.MethodPost {
+		m.handleMemoryImport(w, r, parts[0])
+		return
+	}
+	if len(parts) == 3 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
+		data, mediaType, fileName, err := m.InstancePart(parts[0], parts[2])
+		if err != nil {
+			writeError(w, err)
 			return
 		}
-		parts := strings.Split(path, "/")
-		if len(parts) == 3 && parts[1] == "import" && parts[2] == "settings" && r.Method == http.MethodPost {
-			m.handleSettingsImport(w, r, parts[0])
+		w.Header().Set("Content-Type", mediaType)
+		if !isBlobDownloadRequest(r) {
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
+		data, err := m.InstanceZIP(parts[0])
+		if err != nil {
+			writeError(w, err)
 			return
 		}
-		if len(parts) == 3 && parts[1] == "import" && parts[2] == "memories" && r.Method == http.MethodPost {
-			m.handleMemoryImport(w, r, parts[0])
+		w.Header().Set("Content-Type", "application/zip")
+		if !isBlobDownloadRequest(r) {
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frostagent-%s.zip"`, parts[0]))
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write(data)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "delete" && r.Method == http.MethodPost {
+		var err error
+		switch parts[2] {
+		case "prepare":
+			err = m.PrepareDeletion(parts[0])
+		case "cancel":
+			err = m.CancelDeletion(parts[0])
+		case "confirm":
+			err = m.ConfirmDeletion(parts[0])
+		default:
+			http.NotFound(w, r)
 			return
 		}
-		if len(parts) == 3 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
-			data, mediaType, fileName, err := m.InstancePart(parts[0], parts[2])
-			if err != nil {
-				writeError(w, err)
-				return
-			}
-			w.Header().Set("Content-Type", mediaType)
-			if !isBlobDownloadRequest(r) {
-				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
-			}
-			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write(data)
+		if err != nil {
+			writeError(w, err)
 			return
 		}
-		if len(parts) == 2 && parts[1] == "backup" && (r.Method == http.MethodGet || isBlobDownloadRequest(r)) {
-			data, err := m.InstanceZIP(parts[0])
-			if err != nil {
-				writeError(w, err)
-				return
-			}
-			w.Header().Set("Content-Type", "application/zip")
-			if !isBlobDownloadRequest(r) {
-				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="frostagent-%s.zip"`, parts[0]))
-			}
-			w.Header().Set("Cache-Control", "no-store")
-			_, _ = w.Write(data)
-			return
-		}
-		if len(parts) == 3 && parts[1] == "delete" && r.Method == http.MethodPost {
-			var err error
-			switch parts[2] {
-			case "prepare":
-				err = m.PrepareDeletion(parts[0])
-			case "cancel":
-				err = m.CancelDeletion(parts[0])
-			case "confirm":
-				err = m.ConfirmDeletion(parts[0])
-			default:
-				http.NotFound(w, r)
-				return
-			}
-			if err != nil {
-				writeError(w, err)
-				return
-			}
-			writeJSON(w, map[string]bool{"success": true})
-			return
-		}
+		writeJSON(w, map[string]bool{"success": true})
+		return
 	}
 	if path == "" && r.Method == "GET" {
 		items, next := m.List()
@@ -1849,7 +1243,6 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, info)
 		return
 	}
-	parts := strings.Split(path, "/")
 	if len(parts) != 2 {
 		http.NotFound(w, r)
 		return

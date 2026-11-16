@@ -93,6 +93,7 @@ func TestOneBotQueuedPokeStartsIndependentTask(t *testing.T) {
 			engine.BillingClient = billing.NewClient(billingServer.URL, "synthetic-token", time.Second)
 			engine.BillingConfig = billing.Config{Enabled: true, Timeout: time.Second, MaxOutputTokens: 100, SafetyMultiplier: 1.2}
 			observer := &injectionAdmissionObserver{marker: make(chan struct{})}
+			disableTestThinkingStatus(t, engine)
 			adapter := NewAdapter(engine)
 			adapter.SetIncomingDispatcher(observer)
 			server := httptest.NewServer(adapter.Handler())
@@ -193,7 +194,7 @@ func TestOneBotInjectionEarlyRejectionRetainsBillingReceipt(t *testing.T) {
 					json.NewEncoder(w).Encode(map[string]any{"data": billing.BalanceResult{Exists: true, BalanceMinor: 0}})
 				}
 			}
-			srv, url := startWSTestServer(engine)
+			srv, url := startReplyWSTestServer(t, engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {
@@ -298,6 +299,7 @@ func TestOneBotInjectionDoesNotWaitForBlockedSocketWrite(t *testing.T) {
 				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "new-answer"}}, nil
 			}))
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
+			disableTestThinkingStatus(t, engine)
 			gate := &injectionWriteGate{started: make(chan struct{}), release: make(chan struct{})}
 			var releaseOnce sync.Once
 			srv := httptest.NewUnstartedServer(NewAdapter(engine).Handler())
@@ -379,7 +381,7 @@ func TestOneBotInjectionDoesNotWaitForOldToolACK(t *testing.T) {
 		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "resumed-without-ack"}}, nil
 	}))
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
-	srv, url := startWSTestServer(engine)
+	srv, url := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
@@ -441,7 +443,7 @@ func TestOneBotRuntimeInjectionAtAliasAndPrivate(t *testing.T) {
 			})
 			engine := newTestEngine(provider)
 			engine.Scope = newTestScopeWithEnv(t, map[string]string{"BOT_ALIASES": "synthetic-bot", "ENABLE_PROACTIVE_REPLY": "false"})
-			srv, url := startWSTestServer(engine)
+			srv, url := startReplyWSTestServer(t, engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {

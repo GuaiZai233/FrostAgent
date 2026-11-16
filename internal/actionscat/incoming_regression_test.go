@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
-	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 )
 
@@ -33,7 +32,7 @@ func (c *ingressCountingClassifier) Classify(_ context.Context, input security.C
 }
 
 func TestDisabledDispatchSkipsOnlyUnaddressedIngressClassification(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		t.Run(name, func(t *testing.T) {
 			var disabled atomic.Bool
 			var groupDispatches atomic.Int32
@@ -99,7 +98,7 @@ func TestDisabledDispatchSkipsOnlyUnaddressedIngressClassification(t *testing.T)
 }
 
 func TestIngressCarriesTrustedTransportAdapter(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		for _, messageType := range []string{"group", "private"} {
 			t.Run(name+"/"+messageType, func(t *testing.T) {
 				captured := make(chan map[string]any, 1)
@@ -113,10 +112,6 @@ func TestIngressCarriesTrustedTransportAdapter(t *testing.T) {
 				}))
 				defer backend.Close()
 				adapter, _, event := ingressCase(name, messageType, "fixture routing text")
-				if incoming, ok := event.(astrbot.Event); ok {
-					incoming.Metadata = map[string]any{"adapter_id": "attacker-adapter"}
-					event = incoming
-				}
 				adapter.SetIncomingDispatcher(dispatchClient(backend.URL))
 				connection := startIngress(t, adapter, false)
 				if err := connection.WriteJSON(event); err != nil {
@@ -128,9 +123,6 @@ func TestIngressCarriesTrustedTransportAdapter(t *testing.T) {
 						t.Fatalf("untrusted or missing adapter: %+v", payload)
 					}
 					wantPlatform := name
-					if name == "astrbot" {
-						wantPlatform = "test-platform"
-					}
 					if payload["platform"] != wantPlatform {
 						t.Fatalf("upstream platform lost: %+v", payload)
 					}

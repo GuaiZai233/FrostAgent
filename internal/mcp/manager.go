@@ -488,7 +488,7 @@ func (m *Manager) SetRuntimeActive(active bool) error {
 func (m *Manager) CallTool(ctx context.Context, serverID, remoteName string, args string) (string, error) {
 	srv, exists := m.GetServer(serverID)
 	if !exists {
-		return fmt.Sprintf("Tool %q is currently unavailable because MCP server %q is not registered.", remoteName, serverID), nil
+		return reportToolError(ctx, "MCP 工具调用失败：服务器未注册", fmt.Errorf("server=%s tool=%s", serverID, remoteName)), nil
 	}
 	return srv.CallTool(ctx, remoteName, args)
 }

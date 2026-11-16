@@ -17,6 +17,7 @@ type OneBotSender struct {
 }
 
 type OneBotEvent struct {
+	Time          int64           `json:"time,omitempty"`
 	TargetID      int64           `json:"target_id,omitempty"`
 	PokeID        string          `json:"-"` // Assigned only after validating an inbound poke notice.
 	SelfID        int64           `json:"self_id"`
@@ -30,6 +31,7 @@ type OneBotEvent struct {
 	UserID        int64           `json:"user_id,omitempty"`
 	Sender        *OneBotSender   `json:"sender,omitempty"`
 	Message       json.RawMessage `json:"message,omitempty"`
+	File          json.RawMessage `json:"file,omitempty"` // group_upload / offline_file notice metadata.
 	// Messages is an optional extension used by FrostAgent adapters to pass
 	// continuous user message contexts in one event. Each item may be a OneBot
 	// message segment array or a plain string.

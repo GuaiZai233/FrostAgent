@@ -21,7 +21,7 @@ func (m *Manager) loadSQL() error {
 		return err
 	}
 	rows, err := m.db.SQL.QueryContext(ctx, m.db.Bind(`SELECT id, display_name, base_url,
-		api_key_source, api_key_ref, enabled FROM provider_endpoints ORDER BY position, id`))
+		api_key_source, api_key_ref, enabled, api_format FROM provider_endpoints ORDER BY position, id`))
 	if err != nil {
 		return err
 	}
@@ -30,7 +30,7 @@ func (m *Manager) loadSQL() error {
 		var source string
 		var enabled int
 		if err := rows.Scan(&endpoint.ID, &endpoint.DisplayName, &endpoint.BaseURL,
-			&source, &endpoint.APIKeyRef, &enabled); err != nil {
+			&source, &endpoint.APIKeyRef, &enabled, &endpoint.APIFormat); err != nil {
 			rows.Close()
 			return err
 		}

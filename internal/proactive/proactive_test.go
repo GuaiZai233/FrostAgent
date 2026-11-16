@@ -98,7 +98,7 @@ func TestRoll(t *testing.T) {
 }
 
 func TestPromptPrefix(t *testing.T) {
-	expected := "此为触发主动回复逻辑的消息，如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。请根据上下文分析对话主体是谁，不要默认每句话都在喊自己。本轮禁止发送表情包，普通图片不受此限制。触发主动回复逻辑的消息可能不与中心事件直接相关。请调用send_message工具的mention_specific子类，找到对应的message id并引用它，避免莫名其妙。"
+	expected := "此为触发主动回复逻辑的消息，**一般情况下，并没有在说你，不要自以为是**。请根据上下文、参与对话的成员，分析对话主体是谁。如果你认为值得插嘴，请回复；反之，对于你不感兴趣的话题/领域、说了一半的话、模棱两可的话等，请调用stay_silent工具静默。请尽量顺着人类的话来说，不要令人莫名其妙。不要默认人类在讲自己。触发主动回复逻辑的具体消息，可能不与中心事件直接相关，请调用send_message工具的mention_specific子类，精准找到对应的message id并引用它，避免莫名其妙和答非所问。\n如果你认为有必要看图以获得更完整的上下文，调用 inspect_message_image 工具获取图片内容。如果触发主动回复逻辑的消息上面一条正好有图片，**必须查看它**。\n请把本轮需要表达的正文和补充内容一次性放入send_message，发送经平台确认成功后，后端会自动结束本轮，不再请求最终回复；不要输出“已回复”“已发送”“完成”等状态确认，也无需再调用stay_silent。"
 	if PromptPrefix != expected {
 		t.Errorf("PromptPrefix mismatch:\ngot:  %q\nwant: %q", PromptPrefix, expected)
 	}
@@ -144,7 +144,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 3. Explicitly false even if groups exist
 		if IsWhitelistEnabled(mockEnv(map[string]string{
 			EnvWhitelistEnabled: "false",
-			EnvGroupWhitelist:    "123456,34567",
+			EnvGroupWhitelist:   "123456,34567",
 		})) {
 			t.Errorf("expected disabled when explicitly false")
 		}
@@ -161,7 +161,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Whitelist disabled -> all groups allowed
 		envDisabled := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "false",
-			EnvGroupWhitelist:    "123456",
+			EnvGroupWhitelist:   "123456",
 		})
 		if !IsGroupAllowed(envDisabled, "99999") {
 			t.Errorf("expected all groups allowed when whitelist disabled")
@@ -170,7 +170,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Whitelist enabled with groups
 		envEnabled := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456, 34567",
+			EnvGroupWhitelist:   "123456, 34567",
 		})
 		if !IsGroupAllowed(envEnabled, "123456") {
 			t.Errorf("expected 123456 allowed")
@@ -188,7 +188,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Whitelist enabled but list is empty -> no groups allowed
 		envEmpty := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "",
+			EnvGroupWhitelist:   "",
 		})
 		if IsGroupAllowed(envEmpty, "123456") {
 			t.Errorf("expected group NOT allowed when whitelist is empty")
@@ -200,7 +200,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// Non-QQ platforms (Telegram, Discord, etc.) must NOT match bare ID whitelist entries.
 		envQQBare := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456",
+			EnvGroupWhitelist:   "123456",
 		})
 
 		// 1. QQ family matches bare ID
@@ -213,8 +213,17 @@ func TestGroupWhitelist(t *testing.T) {
 		if !IsGroupAllowed(envQQBare, "123456", "onebot") {
 			t.Errorf("expected OneBot group 123456 allowed")
 		}
-		if !IsGroupAllowed(envQQBare, "123456", "aiocqhttp") {
-			t.Errorf("expected aiocqhttp group 123456 allowed")
+		for _, platform := range []string{"aiocqhttp", "astrbot"} {
+			if IsGroupAllowed(envQQBare, "123456", platform) {
+				t.Fatalf("retired platform %q matched a bare QQ entry", platform)
+			}
+			envRetired := mockEnv(map[string]string{
+				EnvWhitelistEnabled: "true",
+				EnvGroupWhitelist:   platform + ":123456",
+			})
+			if IsGroupAllowed(envRetired, "123456", "onebot") {
+				t.Fatalf("retired platform %q entry matched OneBot", platform)
+			}
 		}
 		if !IsGroupAllowed(envQQBare, "qq:123456") {
 			t.Errorf("expected qq:123456 allowed")
@@ -237,7 +246,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 3. Platform-qualified Telegram entry
 		envTG := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "telegram:123456",
+			EnvGroupWhitelist:   "telegram:123456",
 		})
 		if !IsGroupAllowed(envTG, "123456", "telegram") {
 			t.Errorf("expected Telegram group allowed with platform-qualified entry")
@@ -259,7 +268,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 4. Multi-platform coexist with same numeric ID
 		envMulti := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456, telegram:123456, discord:123456",
+			EnvGroupWhitelist:   "123456, telegram:123456, discord:123456",
 		})
 		if !IsGroupAllowed(envMulti, "123456", "qq") {
 			t.Errorf("QQ group 123456 should be allowed")
@@ -277,7 +286,7 @@ func TestGroupWhitelist(t *testing.T) {
 		// 5. R2: Colon-containing raw group IDs and mismatched prefix/explicit-platform pair
 		envColon := mockEnv(map[string]string{
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "telegram:room:42, telegram:12345",
+			EnvGroupWhitelist:   "telegram:room:42, telegram:12345",
 		})
 		// Colon-containing raw group ID matches when explicit platform is supplied
 		if !IsGroupAllowed(envColon, "room:42", "telegram") {
@@ -299,9 +308,9 @@ func TestGroupWhitelist(t *testing.T) {
 
 	t.Run("RollGroupWithRand", func(t *testing.T) {
 		env := mockEnv(map[string]string{
-			EnvProbability:       "0.50",
+			EnvProbability:      "0.50",
 			EnvWhitelistEnabled: "true",
-			EnvGroupWhitelist:    "123456, 34567",
+			EnvGroupWhitelist:   "123456, 34567",
 		})
 
 		hitRng := func() float64 { return 0.1 }

@@ -86,20 +86,12 @@ func (s *GroupStore) setSQLObservedMemberPreferredName(userID, preferredName str
 		if err != nil {
 			return false, err
 		}
-		owners := OwnerAliases(source.Owner)
-		if len(owners) == 0 {
-			owners = []string{source.Owner}
-		}
 		query += ` AND EXISTS (SELECT 1 FROM memory_entries WHERE
 			instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? AND id = ?
-			AND owner IN (` + strings.TrimSuffix(strings.Repeat("?,", len(owners)), ",") + `)
-			AND content = ? AND source = ? AND source_media = ? AND visibility = ?
+			AND content = ? AND source = ? AND source_media = ?
 			AND created_at = ? AND updated_at = ? AND access_count = ? AND merged_from_json = ?)`
 		args = append(args, b.instanceID, b.scope, b.platform, b.groupID, source.ID)
-		for _, owner := range owners {
-			args = append(args, owner)
-		}
-		args = append(args, source.Content, source.Source, source.SourceMedia, source.Visibility,
+		args = append(args, source.Content, source.Source, source.SourceMedia,
 			source.CreatedAt.UTC().Format(time.RFC3339Nano), source.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			source.AccessCount, string(merged))
 		query += ` AND (SELECT COUNT(*) FROM memory_tags WHERE instance_id = ? AND scope_type = ?

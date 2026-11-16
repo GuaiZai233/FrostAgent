@@ -31,6 +31,7 @@ import {
   isWhitelistEnabled,
 } from './proactive-whitelist';
 import { mountGroupCompactWhitelist } from './group-compact-whitelist';
+import { mountAwarenessSettings } from './awareness-settings';
 import {
   groupProbabilitiesKey,
   groupProbabilityIdentity,
@@ -48,6 +49,8 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   let draft: SettingsDraft | null = null;
   const controller = new AbortController();
   const sessionGroupMap = new Map<string, string>();
+  let sessionPrivateIDs: string[] = [];
+  let flushAwarenessInputs: (() => boolean) | undefined;
   let closeGroupProbabilityDialog: (() => void) | null = null;
 
   container.innerHTML = `
@@ -98,12 +101,20 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
           </div>
 
           <div class="mb-4 pb-4 border-b border-border">
+            <div class="flex items-center gap-2.5 mb-2">
+              <label class="toggle-switch"><input type="checkbox" id="thinking-status-cb" role="switch" aria-label="展示思考状态" aria-describedby="thinking-status-description" /><span aria-hidden="true"></span></label>
+              <label for="thinking-status-cb" class="text-xs font-semibold text-foreground">展示思考状态</label>
+            </div>
+            <p id="thinking-status-description" class="text-[11px] text-muted">当Bot开始思考轮次时，展示正在输入的标识。（QQ：对方正在输入……; Telegram：Typing…）</p>
+          </div>
+
+          <div class="mb-4 pb-4 border-b border-border">
             <div class="flex items-center gap-2.5 mb-3">
               <label class="toggle-switch"><input type="checkbox" id="multi-segment-reply-cb" role="switch" aria-label="允许多段回复" /><span aria-hidden="true"></span></label>
               <label for="multi-segment-reply-cb" class="text-xs font-semibold text-foreground">允许多段回复</label>
             </div>
             <label class="flex flex-col gap-1.5">
-              <span class="text-xs font-medium">分段消息上限（0 或留空为不限制；超出时随机保留上限数量的分段，其余丢弃）</span>
+              <span class="text-xs font-medium">分段消息上限（2～20 段；0 或留空为不限制；超出时随机保留上限数量的分段，其余丢弃）</span>
               <input id="multi-segment-max-segments" type="number" class="input input-sm settings-default-input font-mono text-xs w-28" min="0" max="20" step="1" placeholder="0" />
             </label>
           </div>
@@ -238,7 +249,13 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
 
           <!-- Bot loop guard -->
           <div class="mb-4 pb-4 border-b border-border">
-            <h3 class="text-xs font-semibold text-foreground mb-2.5">Bot 连续对话防循环</h3>
+            <div class="flex items-center justify-between mb-2.5">
+              <h3 class="text-xs font-semibold text-foreground">Bot 连续对话防循环</h3>
+              <label class="toggle-switch" title="启用 Bot 连续对话防循环">
+                <input type="checkbox" id="bot-loop-enabled" role="switch" aria-label="启用 Bot 连续对话防循环" />
+                <span aria-hidden="true"></span>
+              </label>
+            </div>
             <p class="text-[11px] text-muted mb-3">按会话分别累计各标记 Bot 的轮数；仅未标记用户明确唤醒（@、名称/别名或戳一戳）后恢复额度，普通闲聊不会重置。</p>
             <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
               <div class="flex flex-col gap-1.5 min-w-0">
@@ -263,7 +280,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
             </div>
             <div id="bot-loop-user-tags" class="flex flex-wrap gap-1.5 mt-2" aria-live="polite"></div>
             <div class="flex items-center justify-between gap-2 mt-2">
-              <span class="text-[11px] text-muted">列表为空即关闭。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
+                <span class="text-[11px] text-muted">关闭开关后保留 BotID；列表为空时不限制。可用 platform:ID 只标记指定平台；裸 ID 对所有平台生效。</span>
             </div>
           </div>
 
@@ -405,6 +422,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     embeddingWarning.hidden = !(embeddingToggle.checked && storageBackend === 'sqlite');
   }
   const numericControls: Record<string, HTMLInputElement> = {
+    MULTI_SEGMENT_REPLY_MAX_SEGMENTS: element<HTMLInputElement>('multi-segment-max-segments'),
     POKE_COOLDOWN_SECONDS: pokeCooldown,
     PROACTIVE_REPLY_PROBABILITY: probability, STICKER_ACTIVITY: stickerNumber,
     QUOTE_TRACE_DEPTH: quoteDepth, BOT_LOOP_MAX_TURNS: element<HTMLInputElement>('bot-loop-max-turns'),
@@ -413,7 +431,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   function invalidNumbers(): HTMLInputElement[] {
     return [...container.querySelectorAll<HTMLInputElement>('input[type="number"]')].filter((input) => input.validity?.badInput);
   }
-  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || !!settingsRoot.querySelector<HTMLInputElement>('#compact-whitelist-input')?.value || invalidNumbers().length > 0; }
+  function dirty(): boolean { return !!draft?.dirty || !!extraKey.value || !!extraValue.value || !!groupInput.value || !!botUserInput.value || !!settingsRoot.querySelector<HTMLInputElement>('#compact-whitelist-input')?.value || [...settingsRoot.querySelectorAll<HTMLInputElement>('[data-awareness-input]')].some((input) => !!input.value) || invalidNumbers().length > 0; }
   function updateBanner(): void {
     banner.hidden = !dirty();
     saveBtn.disabled = saving || loading || !draft;
@@ -434,6 +452,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       return;
     }
     renderBackendSettingsForm(settingsRoot, draft.values(), (key) => globalKeys.has(key), change);
+    const awarenessRoot = document.createElement('div');
+    settingsRoot.prepend(awarenessRoot);
+    flushAwarenessInputs = mountAwarenessSettings(awarenessRoot, { get: (key) => draft?.get(key), change,
+      canEdit: () => !!draft && !saving && !loading, groups: sessionGroupMap, privateIDs: sessionPrivateIDs, dirty: updateBanner });
     mountCompactWhitelistCard();
   }
 
@@ -635,15 +657,17 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       'group-reply-cb': 'ENABLE_REPLY_IN_GROUP_MSG',
       'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
       'multi-segment-reply-cb': 'ENABLE_MULTI_SEGMENT_REPLY',
+      'thinking-status-cb': 'ENABLE_THINKING_STATUS',
     };
     for (const [id, key] of Object.entries(toggles)) {
-      element<HTMLInputElement>(id).checked = key === 'GROUP_REPLY_ON_MENTION' ? value(key) !== 'false' : value(key) === 'true';
+      element<HTMLInputElement>(id).checked = (key === 'GROUP_REPLY_ON_MENTION' || key === 'ENABLE_THINKING_STATUS') ? value(key) !== 'false' : value(key) === 'true';
     }
     quote.checked = value('ENABLE_QUOTE_TRACE') !== 'false';
     quoteDepth.value = value('QUOTE_TRACE_DEPTH');
     quoteDepth.disabled = !quote.checked;
     renderBotUsers();
     element<HTMLInputElement>('bot-loop-max-turns').value = value('BOT_LOOP_MAX_TURNS');
+    element<HTMLInputElement>('bot-loop-enabled').checked = value('BOT_LOOP_ENABLED') !== 'false';
     element<HTMLInputElement>('multi-segment-max-segments').value = value('MULTI_SEGMENT_REPLY_MAX_SEGMENTS');
     const loopMode = element<HTMLSelectElement>('bot-loop-mode');
     loopMode.value = value('BOT_LOOP_MODE');
@@ -661,7 +685,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     if (key.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error('请填写有效的环境变量名');
     const upper = key.toUpperCase();
     if (settingFields[upper] || dedicatedSettingKeys.has(upper) || draft?.values().some((item) => item.key === upper) ||
-      ['BRAIN_PATH', 'DIALOGUE_PATH', 'ONEBOT_WS_PATH', 'ASTRBOT_WS_PATH'].includes(upper)) {
+      ['BRAIN_PATH', 'DIALOGUE_PATH', 'ONEBOT_WS_PATH'].includes(upper)) {
       throw new Error('此项应在常规设置中修改');
     }
     if (new TextEncoder().encode(value).length > 16 * 1024 || /[\r\n\0]/.test(value)) {
@@ -733,9 +757,15 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
       storageBackend = memorySettings.storageBackend;
       draft = new SettingsDraft(memorySettings.envVars, extra);
       sessionGroupMap.clear();
+      sessionPrivateIDs = [];
       for (const session of sessions.sessions ?? []) {
         const id = groupIdFromSessionId(session.sessionId);
         if (id) sessionGroupMap.set(id, session.groupName || '');
+        const privateID = session.sessionId.replace(/(^|:)private:/, '$1group:');
+        if (privateID !== session.sessionId) {
+          const id = groupIdFromSessionId(privateID);
+          if (id) sessionPrivateIDs.push(id);
+        }
       }
       groupSelect.innerHTML = '<option value="">-- 从最近会话选择群聊 --</option>' +
         [...sessionGroupMap].map(([id, name]) => `<option value="${escapeHtml(id)}">${escapeHtml(formatGroupOption(id, name))}</option>`).join('');
@@ -748,6 +778,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
 
   async function saveDraft(): Promise<void> {
     if (!draft || saving || loading) return;
+    if (flushAwarenessInputs && !flushAwarenessInputs()) return;
     if (botUserInput.value && !addBotUser()) return;
     if (groupInput.value) addGroup();
     if ((extraKey.value || extraValue.value) && !addExtra()) return;
@@ -760,6 +791,10 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     }
     for (const { key, value } of draft.pending()) {
       if (value === null) continue;
+      if (key === 'MULTI_SEGMENT_REPLY_MAX_SEGMENTS' && Number(value) === 1) {
+        toast.error('分段消息上限不能为 1；如需单条回复，请关闭“允许多段回复”');
+        return;
+      }
       const input = numericControls[key] ?? container.querySelector<HTMLInputElement>(`input[type="number"][data-setting-input="${key}"]`);
       if (!input) continue;
       const disabled = input.disabled;
@@ -809,6 +844,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
   }
 
   const binds: Record<string, string> = {
+    'bot-loop-enabled': 'BOT_LOOP_ENABLED',
     'poke-enabled': 'ENABLE_POKE',
     'embedding-enabled': 'ENABLE_EMBEDDING',
     'group-mention-cb': 'GROUP_REPLY_ON_MENTION', 'group-at-cb': 'ENABLE_AT_IN_GROUP_MSG',
@@ -816,6 +852,7 @@ export function mountBackendSettingsPage(container: HTMLElement, api = createIns
     'proactive-whitelist-cb': 'ENABLE_PROACTIVE_REPLY_WHITELIST',
     'sticker-confirm-cb': 'ENABLE_STICKER_CONFIRM',
     'multi-segment-reply-cb': 'ENABLE_MULTI_SEGMENT_REPLY',
+    'thinking-status-cb': 'ENABLE_THINKING_STATUS',
   };
   for (const [id, key] of Object.entries(binds)) {
     const input = element<HTMLInputElement>(id);

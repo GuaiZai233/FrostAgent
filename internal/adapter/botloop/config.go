@@ -23,9 +23,13 @@ func Parse(getenv func(string) string, revision ...uint64) Config {
 	users := getenv("BOT_LOOP_USER_IDS")
 	maxTurns := getenv("BOT_LOOP_MAX_TURNS")
 	mode := getenv("BOT_LOOP_MODE")
-	cfg.revision = users + "\x00" + maxTurns + "\x00" + mode
+	enabled := getenv("BOT_LOOP_ENABLED")
+	cfg.revision = users + "\x00" + maxTurns + "\x00" + mode + "\x00" + enabled
 	if len(revision) > 0 {
 		cfg.revision += "\x00" + strconv.FormatUint(revision[0], 10)
+	}
+	if strings.EqualFold(strings.TrimSpace(enabled), "false") {
+		return cfg
 	}
 	for _, user := range strings.FieldsFunc(users, func(r rune) bool {
 		return r == ',' || r == ';' || unicode.IsSpace(r)

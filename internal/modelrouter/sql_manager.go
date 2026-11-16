@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
+	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
@@ -42,6 +44,18 @@ func (m *Manager) sqlRuntimeSnapshot() *Snapshot {
 				snapshot.err = err
 				m.loadErr = err
 			}
+		}
+	}
+	if snapshot.err == nil {
+		m.lastRuntimeSnapshot = snapshot
+	} else if m.runtimeFallback && m.lastRuntimeSnapshot != nil && !strings.Contains(snapshot.err.Error(), "another FrostAgent process") {
+		// A reachable database containing invalid configuration must still fail
+		// closed. Fallback applies only while the connection itself is unusable.
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		connectionErr := m.db.SQL.PingContext(ctx)
+		cancel()
+		if connectionErr != nil {
+			return m.lastRuntimeSnapshot
 		}
 	}
 	return snapshot
@@ -286,8 +300,8 @@ func writeCatalogTx(ctx context.Context, db *storage.DB, tx *sql.Tx, cfg Configu
 			enabled = 1
 		}
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO provider_endpoints
-   (id, display_name, base_url, api_key_source, api_key_ref, enabled, position) VALUES (?, ?, ?, ?, ?, ?, ?)`),
-			endpoint.ID, endpoint.DisplayName, endpoint.BaseURL, endpoint.APIKeySource, endpoint.APIKeyRef, enabled, pos); err != nil {
+   (id, display_name, base_url, api_key_source, api_key_ref, enabled, position, api_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`),
+			endpoint.ID, endpoint.DisplayName, endpoint.BaseURL, endpoint.APIKeySource, endpoint.APIKeyRef, enabled, pos, endpoint.APIFormat); err != nil {
 			return err
 		}
 	}

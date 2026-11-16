@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
@@ -13,21 +13,6 @@ import (
 	"strings"
 	"time"
 )
-
-const privateCompactPrompt = `你是当前私聊上下文压缩器，而不是聊天历史记录器。
-
-你的输出是一份短暂的工作记忆，只用于帮助模型理解接下来几轮对话。它不是对话档案，不需要保留完整历史，信息允许被遗忘。
-你会收到对话历史记录。请根据对话记录重新生成一份新的当前总结。
-
-核心原则：
-- 优先保留当前仍在进行、尚未结束、很可能在接下来几轮继续被引用的内容。
-- 已经结束、解决、过时或明显离开当前话题的信息应主动删除。
-- 对话的连续性最重要。话题已经转移时，积极遗忘旧话题。
-- 控制在约 300～600 个中文字符。
-- 只输出新的对话总结正文，不要 Markdown 标题或额外解释。
-
-[对话记录]
-{conversation}`
 
 // CommandContext carries caller and session context for command execution.
 type CommandContext struct {
@@ -37,6 +22,7 @@ type CommandContext struct {
 	CallerUserID string
 	RouteScope   modelrouter.Scope
 	Reply        func(ctx context.Context, text string, isIntermediate bool) error
+	ReplyPrivate func(ctx context.Context, text string) error
 	// BanQuotedSticker resolves the sticker quoted by the command message and
 	// marks it inappropriate, returning the sticker ID. Nil when the platform
 	// adapter cannot resolve quoted stickers.
@@ -73,7 +59,7 @@ func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd Parse
 		}
 		if err := e.Engine.Security.CheckAccess(principal); err != nil {
 			if errors.Is(err, security.ErrLocked) {
-				_ = cmdCtx.Reply(ctx, security.RejectGatewayMsg, false)
+				_ = cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, security.RejectGatewayMsg, err, cmdCtx.SessionID), false)
 				return security.ErrLocked
 			}
 			return fmt.Errorf("安全访问检查失败: %w", err)
@@ -81,6 +67,8 @@ func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd Parse
 	}
 
 	switch cmd.Type {
+	case CmdLog:
+		return e.executeLog(ctx, cmdCtx, cmd)
 	case CmdReset:
 		return e.executeReset(ctx, cmdCtx)
 	case CmdBan:
@@ -96,6 +84,35 @@ func (e *Executor) Execute(ctx context.Context, cmdCtx CommandContext, cmd Parse
 	default:
 		return fmt.Errorf("未知指令：%s", cmd.Type)
 	}
+}
+
+func (e *Executor) executeLog(ctx context.Context, cmdCtx CommandContext, cmd ParsedCommand) error {
+	if e == nil || e.Engine == nil || !IsAdmin(cmdCtx.CallerUserID, e.scope()) {
+		return errors.New("log 指令仅允许管理员使用")
+	}
+	if len(cmd.Args) != 1 {
+		return errors.New("log 指令格式错误：log <uuidv4>")
+	}
+	id, ok := logs.NormalizeErrorUUID(cmd.Args[0])
+	if !ok {
+		return errors.New("错误 UUID 必须为完整的 UUIDv4")
+	}
+	entry, found := e.Engine.Log().FindError(id)
+	if !found {
+		return cmdCtx.Reply(ctx, "未找到当前实例的错误日志，可能已清理、覆盖或重启。", false)
+	}
+	detail := fmt.Sprintf("Bot 错误信息\n错误 UUID：%s\n时间：%s\n类型：%s\n%s",
+		entry.ErrorUUID, entry.Timestamp.Format(time.RFC3339), entry.Category, entry.Content)
+	if !cmdCtx.IsGroup {
+		return cmdCtx.Reply(ctx, detail, false)
+	}
+	if cmdCtx.ReplyPrivate == nil {
+		return cmdCtx.Reply(ctx, "无法发送私聊日志，请私聊 Bot 后使用 log 指令查询。", false)
+	}
+	if err := cmdCtx.ReplyPrivate(ctx, detail); err != nil {
+		return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.WEBSOCKET, "私聊日志发送失败或未确认送达，请私聊 Bot 后使用 log 指令查询", err, cmdCtx.SessionID), false)
+	}
+	return cmdCtx.Reply(ctx, "错误日志已私聊发送。", false)
 }
 
 func (e *Executor) executeReset(ctx context.Context, cmdCtx CommandContext) error {
@@ -123,7 +140,7 @@ func (e *Executor) executeReset(ctx context.Context, cmdCtx CommandContext) erro
 		}
 	}
 	if len(errs) > 0 {
-		return cmdCtx.Reply(ctx, fmt.Sprintf("当前会话已重置，但持久化总结清理失败：%v", errors.Join(errs...)), false)
+		return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, "持久化总结清理失败：当前会话已重置", errors.Join(errs...), cmdCtx.SessionID), false)
 	}
 	return cmdCtx.Reply(ctx, "当前会话已重置。", false)
 }
@@ -212,6 +229,9 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		return cmdCtx.Reply(ctx, "上下文压缩功能已被禁用。", false)
 	}
 	session := e.Engine.SessionManager.GetOrCreate(cmdCtx.SessionID)
+	if err := session.RecoveryError(); err != nil {
+		return err
+	}
 
 	if cmdCtx.IsGroup {
 		if e.Engine.GroupCompactor == nil {
@@ -228,7 +248,7 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 				if compErr == nil {
 					_ = cmdCtx.Reply(bgCtx, "群聊上下文压缩总结完成。", false)
 				} else {
-					_ = cmdCtx.Reply(bgCtx, fmt.Sprintf("群聊上下文压缩总结失败：%v", compErr), false)
+					_ = cmdCtx.Reply(bgCtx, e.Engine.Log().ReportError(logs.SYSTEM, "群聊上下文压缩总结失败", compErr, cmdCtx.SessionID), false)
 				}
 			},
 		)
@@ -242,7 +262,7 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		}
 		if err != nil {
 			close(startSent)
-			return cmdCtx.Reply(ctx, fmt.Sprintf("触发群聊上下文压缩失败：%v", err), false)
+			return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, "触发群聊上下文压缩失败", err, cmdCtx.SessionID), false)
 		}
 		replyErr := cmdCtx.Reply(ctx, "已开始群聊上下文压缩总结...", true)
 		close(startSent)
@@ -257,7 +277,7 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		return cmdCtx.Reply(ctx, "当前会话没有需要压缩的内容。", false)
 	}
 	if err != nil {
-		return cmdCtx.Reply(ctx, fmt.Sprintf("触发私聊上下文压缩失败：%v", err), false)
+		return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, "触发私聊上下文压缩失败", err, cmdCtx.SessionID), false)
 	}
 
 	startSent := make(chan struct{})
@@ -266,8 +286,8 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 		e.runPrivateCompact(session, snapshot, cmdCtx)
 	}) {
 		close(startSent)
-		session.CancelPrivateCompact()
-		return cmdCtx.Reply(ctx, "实例未就绪，无法执行私聊压缩。", false)
+		session.CancelPrivateCompact(snapshot)
+		return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, "私聊上下文压缩失败：实例未就绪", nil, cmdCtx.SessionID), false)
 	}
 	replyErr := cmdCtx.Reply(ctx, "已开始私聊上下文压缩总结...", true)
 	close(startSent)
@@ -275,60 +295,8 @@ func (e *Executor) executeCompact(ctx context.Context, cmdCtx CommandContext) er
 }
 
 func (e *Executor) runPrivateCompact(session *llm.SessionContext, snapshot llm.PrivateCompactSnapshot, cmdCtx CommandContext) {
-	bgCtx := e.Engine.Context()
-	provider := e.Engine.Provider
-	model := e.Engine.ModelName
-	if e.Engine.GroupCompactor != nil && e.Engine.GroupCompactor.Provider() != nil {
-		provider = e.Engine.GroupCompactor.Provider()
-		if m := e.Engine.GroupCompactor.Model(); m != "" {
-			model = m
-		}
-	} else if e.Engine.ModelRouter != nil {
-		provider = e.Engine.ModelRouter.Provider(modelrouter.WorkloadGroupCompact, false, 120*time.Second)
-	}
-	if e.Engine.ModelRouter != nil {
-		if target, err := e.Engine.ModelRouter.Snapshot().Resolve(modelrouter.WorkloadGroupCompact, cmdCtx.RouteScope); err == nil {
-			model = target.UpstreamModel
-		}
-	}
-	if provider == nil {
-		session.CancelPrivateCompact()
-		_ = cmdCtx.Reply(context.Background(), "私聊上下文压缩总结失败：未配置可用的压缩模型 Provider", false)
-		return
-	}
-	var b strings.Builder
-	for _, msg := range snapshot.Messages {
-		fmt.Fprintf(&b, "[%s]: %v\n", msg.Role, msg.Content)
-	}
-	conversation := b.String()
-	request := core.ChatRequest{
-		Model: model,
-		Messages: []core.ChatMessage{{
-			Role:    core.RoleUser,
-			Content: strings.Replace(privateCompactPrompt, "{conversation}", conversation, 1),
-		}},
-		MaxTokens:   1024,
-		Temperature: 0.2,
-		Route: core.RouteContext{
-			Platform: cmdCtx.RouteScope.Platform,
-			GroupID:  cmdCtx.RouteScope.GroupID,
-		},
-	}
-	response, err := provider.Chat(bgCtx, request)
-	if err != nil {
-		session.CancelPrivateCompact()
-		_ = cmdCtx.Reply(context.Background(), fmt.Sprintf("私聊上下文压缩总结失败：%v", err), false)
-		return
-	}
-	summary, ok := response.Message.Content.(string)
-	summary = strings.TrimSpace(summary)
-	if !ok || summary == "" {
-		session.CancelPrivateCompact()
-		_ = cmdCtx.Reply(context.Background(), "私聊上下文压缩总结失败：模型返回了空总结", false)
-		return
-	}
-	if !session.CommitPrivateCompact(snapshot, summary) {
-		_ = cmdCtx.Reply(context.Background(), "已丢弃失效的私聊上下文压缩总结（会话已被重置或变更）。", false)
+	if err := e.Engine.CompactPrivateSnapshot(session, snapshot, cmdCtx.RouteScope); err != nil {
+		_ = cmdCtx.Reply(context.Background(), e.Engine.Log().ReportError(logs.SYSTEM, "私聊上下文压缩总结失败", err, cmdCtx.SessionID), false)
 		return
 	}
 	_ = cmdCtx.Reply(context.Background(), "私聊上下文压缩总结完成。", false)
@@ -348,7 +316,7 @@ func (e *Executor) executeReflect(ctx context.Context, cmdCtx CommandContext) er
 			if reflectErr == nil {
 				_ = cmdCtx.Reply(bgCtx, "记忆反思任务已完成。", false)
 			} else {
-				_ = cmdCtx.Reply(bgCtx, fmt.Sprintf("记忆反思任务失败：%v", reflectErr), false)
+				_ = cmdCtx.Reply(bgCtx, e.Engine.Log().ReportError(logs.SYSTEM, "记忆反思任务失败", reflectErr, cmdCtx.SessionID), false)
 			}
 		},
 	)
@@ -358,7 +326,7 @@ func (e *Executor) executeReflect(ctx context.Context, cmdCtx CommandContext) er
 	}
 	if err != nil {
 		close(startSent)
-		return cmdCtx.Reply(ctx, fmt.Sprintf("触发记忆反思失败：%v", err), false)
+		return cmdCtx.Reply(ctx, e.Engine.Log().ReportError(logs.SYSTEM, "触发记忆反思失败", err, cmdCtx.SessionID), false)
 	}
 	replyErr := cmdCtx.Reply(ctx, "已开始记忆反思任务...", true)
 	close(startSent)

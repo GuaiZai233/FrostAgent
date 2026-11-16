@@ -66,7 +66,7 @@ func TestRealAdapterInboundAuthenticationAcrossListeners(t *testing.T) {
 					t.Fatalf("configure adapters: %v %v", res, err)
 				}
 			}
-			save([]*v1.EnvVar{{Key: "ONEBOT_WS_TOKEN", Value: outbound}, {Key: "ASTRBOT_WS_TOKEN", Value: outbound}})
+			save([]*v1.EnvVar{{Key: "ONEBOT_WS_TOKEN", Value: outbound}})
 			if err := manager.Enable(info.ID, true); err != nil {
 				t.Fatal(err)
 			}
@@ -97,7 +97,7 @@ func TestRealAdapterInboundAuthenticationAcrossListeners(t *testing.T) {
 			if build.container == "true" && build.loopback != "true" {
 				managementUnset = http.StatusUnauthorized
 			}
-			for _, adapter := range []string{"onebot", "astrbot"} {
+			for _, adapter := range []string{"onebot"} {
 				path := "/instances/" + info.ID + "/ws/" + adapter
 				assertHandshake(dedicated.URL, path, "", http.StatusSwitchingProtocols)
 				for _, base := range []string{management.URL, localManagement.URL} {
@@ -109,17 +109,12 @@ func TestRealAdapterInboundAuthenticationAcrossListeners(t *testing.T) {
 			for _, generation := range []string{"initial", "rotated"} {
 				save([]*v1.EnvVar{
 					{Key: "ONEBOT_WS_INBOUND_TOKEN", Value: "synthetic-onebot-" + generation},
-					{Key: "ASTRBOT_WS_INBOUND_TOKEN", Value: "synthetic-astrbot-" + generation},
 				})
-				for _, adapter := range []string{"onebot", "astrbot"} {
+				for _, adapter := range []string{"onebot"} {
 					path := "/instances/" + info.ID + "/ws/" + adapter
 					token := "synthetic-" + adapter + "-" + generation
-					other := "onebot"
-					if adapter == "onebot" {
-						other = "astrbot"
-					}
 					for _, base := range []string{dedicated.URL, management.URL, localManagement.URL} {
-						for _, invalid := range []string{"", "synthetic-incorrect", control, outbound, "synthetic-" + other + "-" + generation} {
+						for _, invalid := range []string{"", "synthetic-incorrect", control, outbound} {
 							assertHandshake(base, path, invalid, http.StatusUnauthorized)
 						}
 						assertHandshake(base, path+"?access_token="+token, "", http.StatusUnauthorized)
@@ -133,8 +128,8 @@ func TestRealAdapterInboundAuthenticationAcrossListeners(t *testing.T) {
 					assertHandshake(dedicated.URL, path+"?mock=true", token, http.StatusForbidden)
 				}
 			}
-			save(nil, "ONEBOT_WS_INBOUND_TOKEN", "ASTRBOT_WS_INBOUND_TOKEN")
-			for _, adapter := range []string{"onebot", "astrbot"} {
+			save(nil, "ONEBOT_WS_INBOUND_TOKEN")
+			for _, adapter := range []string{"onebot"} {
 				path := "/instances/" + info.ID + "/ws/" + adapter
 				assertHandshake(dedicated.URL, path, "", http.StatusSwitchingProtocols)
 				assertHandshake(management.URL, path, "", managementUnset)

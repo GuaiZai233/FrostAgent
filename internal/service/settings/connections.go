@@ -11,7 +11,7 @@ import (
 // In particular, a draft may set the mode and its required URL together, but
 // clearing the active client's URL alone must not stop a working runtime.
 func (s *Service) validateConnectionChanges(changes map[string]*string) error {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		affected := false
 		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN", "_WS_INBOUND_TOKEN"} {
 			if _, ok := changes[adapter+suffix]; ok {

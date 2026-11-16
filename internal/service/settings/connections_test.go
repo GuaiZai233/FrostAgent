@@ -12,7 +12,7 @@ import (
 )
 
 func TestConnectionSettingsValidateFinalDraftBeforeWriting(t *testing.T) {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		t.Run(adapter, func(t *testing.T) {
 			db, err := storage.Open(context.Background(), t.TempDir())
 			if err != nil {
@@ -123,7 +123,7 @@ func TestConnectionSettingMetadataAndIsolation(t *testing.T) {
 	for _, entry := range listed.Msg.EnvVars {
 		entries[entry.Key] = entry
 	}
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		for _, suffix := range []string{"_WS_ENABLED", "_WS_MODE", "_WS_URL", "_WS_TOKEN", "_WS_INBOUND_TOKEN"} {
 			key := adapter + suffix
 			entry := entries[key]

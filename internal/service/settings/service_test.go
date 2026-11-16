@@ -30,10 +30,40 @@ func TestSQLExportableSettingsIncludeCompactAndBillingPrices(t *testing.T) {
 	for _, key := range []string{
 		"GROUP_COMPACT_MAX_BUFFER_SIZE", "BILLING_PROMPT_PRICE_PER_MILLION",
 		"BILLING_COMPLETION_PRICE_PER_MILLION",
+		"QQ_EXTEND_MESSAGES_TARGET_GROUPS",
 	} {
 		if !keys[key] {
 			t.Fatalf("non-secret SQL setting %s is not exportable", key)
 		}
+	}
+}
+
+func TestQQTargetWhitelistValidation(t *testing.T) {
+	for _, value := range []string{"", "42,43", "42\n43"} {
+		if err := validateUpdate("QQ_EXTEND_MESSAGES_TARGET_GROUPS", value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{"42,broken", "0", "group:42", "+42", "042", "9223372036854775808"} {
+		if err := validateUpdate("QQ_EXTEND_MESSAGES_TARGET_GROUPS", value); err == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+}
+
+func TestTimeSleepTimeoutValidation(t *testing.T) {
+	for _, value := range []string{"", "60", "0.01", "120"} {
+		if err := validateUpdate("TIME_SLEEP_TIMEOUT_SECONDS", value); err != nil {
+			t.Fatalf("%q: %v", value, err)
+		}
+	}
+	for _, value := range []string{"0", "-1", "NaN", "+Inf", "invalid", "1e100"} {
+		if err := validateUpdate("TIME_SLEEP_TIMEOUT_SECONDS", value); err == nil {
+			t.Errorf("accepted %q", value)
+		}
+	}
+	if !ExportableValueKeys()["TIME_SLEEP_TIMEOUT_SECONDS"] {
+		t.Fatal("sleep timeout missing from settings export")
 	}
 }
 

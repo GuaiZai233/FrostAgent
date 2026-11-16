@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 )
 
 func TestPostgresEmbeddingCleanupAfterDisabledRestart(t *testing.T) {
-	for _, action := range []string{"private-edit", "private-delete", "group-edit", "group-delete", "restore"} {
+	for _, action := range []string{"private-edit", "private-delete", "group-edit", "group-delete", "legacy-group-edit", "legacy-group-delete", "restore"} {
 		t.Run(action, func(t *testing.T) {
 			ctx := context.Background()
 			db, config := newEmbeddingPostgresDBWithConfig(t)
@@ -43,6 +44,9 @@ func TestPostgresEmbeddingCleanupAfterDisabledRestart(t *testing.T) {
 				vectors := map[string]embeddedMemory{}
 				for _, id := range []string{"target", "keep"} {
 					entry := MemoryEntry{ID: id, Owner: "synthetic-owner", Content: id, Source: SourceManual, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+					if f.scope.Type == ScopeGroup && !strings.HasPrefix(action, "legacy-") {
+						entry.Owner, entry.OwnerType = GroupOwnerExplicit, OwnerGroup
+					}
 					if err := brain.appendEntries([]MemoryEntry{entry}); err != nil {
 						t.Fatal(err)
 					}
@@ -68,7 +72,7 @@ func TestPostgresEmbeddingCleanupAfterDisabledRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 			changed := MemoryEntry{ID: "target", Content: "edited content"}
-			switch action {
+			switch strings.TrimPrefix(action, "legacy-") {
 			case "private-edit":
 				err = private.UpdateEntry(changed)
 			case "private-delete":
@@ -90,12 +94,31 @@ func TestPostgresEmbeddingCleanupAfterDisabledRestart(t *testing.T) {
 				} else if (index == 0 && (action == "private-edit" || action == "private-delete")) ||
 					(index == 1 && (action == "group-edit" || action == "group-delete")) {
 					want = 1
+				} else if index == 1 && strings.HasPrefix(action, "legacy-") {
+					// Retiring the legacy owner changes both hashes. Derived vectors
+					// are discarded while the kept source record stays in this group.
+					want = 0
 				}
 				var count int
 				if err := db.SQL.QueryRow(db.Bind(`SELECT count(*) FROM memory_embeddings
 					WHERE instance_id=? AND scope_type=? AND platform=? AND group_id=?`),
 					f.instance, f.scope.Type, f.scope.Platform, f.scope.GroupID).Scan(&count); err != nil || count != want {
 					t.Fatalf("fixture %d vectors after %s: got %d, want %d: %v", index, action, count, want, err)
+				}
+			}
+			if strings.HasPrefix(action, "legacy-") {
+				entries, err := group.ListAll()
+				want := 2
+				if action == "legacy-group-delete" {
+					want = 1
+				}
+				if err != nil || len(entries) != want {
+					t.Fatalf("legacy source records lost: %#v %v", entries, err)
+				}
+				for _, entry := range entries {
+					if entry.Owner != GroupOwnerExplicit || entry.ScopeType != ScopeGroup || entry.GroupID != "synthetic-group" {
+						t.Fatalf("legacy scope changed: %#v", entry)
+					}
 				}
 			}
 		})

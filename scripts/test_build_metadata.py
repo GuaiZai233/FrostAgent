@@ -100,7 +100,7 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertIn('internal/buildinfo.Commit=${FROSTAGENT_COMMIT}', docker)
         self.assertIn('internal/buildinfo.Commit=$(BUILD_COMMIT)', make)
         self.assertNotIn('git describe', make)
-        self.assertEqual(make.count('-ldflags="$(BUILD_LDFLAGS)"'), 5)
+        self.assertEqual(make.count('-ldflags="$(BUILD_LDFLAGS)"'), 3)
 
 
 if __name__ == '__main__':

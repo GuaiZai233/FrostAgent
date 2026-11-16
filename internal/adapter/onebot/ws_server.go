@@ -100,17 +100,26 @@ type wsConnection struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	writeMu             sync.Mutex
+	previousErrorMu     sync.Mutex
+	previousErrors      map[string]*previousErrorReply // Protected by previousErrorMu; no message text is retained.
+	outgoingErrorEchoes map[outgoingErrorEcho]struct{} // Protected by previousErrorMu; independent of lookup candidates.
+	errorEchoOrder      []outgoingErrorEcho
+	nextErrorEcho       int
 	messageMu           sync.Mutex
 	pendingMessage      map[string]chan oneBotAPIResponse
 	nextMessageEcho     uint64
 	messageSessionMu    sync.Mutex
 	messageSessions     map[int64]string
+	ownMessageSessions  map[int64]string
 	messageSessionOrder []int64
 	groupMu             sync.Mutex
 	groupCache          map[int64]cachedGroupInfo
 	pendingGroupByEcho  map[string]pendingGroupInfo
 	pendingGroupByID    map[int64]string
 	nextGroupEcho       uint64
+	inboundFileMu       sync.Mutex
+	inboundFiles        []*inboundFile
+	fileHTTPClient      *http.Client
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
@@ -132,6 +141,7 @@ func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsCon
 		cancel:             cancel,
 		pendingMessage:     make(map[string]chan oneBotAPIResponse),
 		messageSessions:    make(map[int64]string),
+		ownMessageSessions: make(map[int64]string),
 		groupCache:         make(map[int64]cachedGroupInfo),
 		pendingGroupByEcho: make(map[string]pendingGroupInfo),
 		pendingGroupByID:   make(map[int64]string),
@@ -157,18 +167,61 @@ func (c *wsConnection) WriteMessage(messageType int, data []byte) error {
 }
 
 func (c *wsConnection) writeTurnMessage(messageType int, data []byte, turn *llm.SessionTurn) error {
+	var action map[string]json.RawMessage
+	var actionName string
+	if messageType != websocket.TextMessage || c.mock || json.Unmarshal(data, &action) != nil ||
+		json.Unmarshal(action["action"], &actionName) != nil || !isMessageSendAction(actionName) {
+		_, _, err := c.writeTurnMessagePending(messageType, data, turn)
+		return err
+	}
+	// Raw sends return after the socket write, including sends from the reader
+	// itself. Track their ACK asynchronously so the reader can dispatch it.
+	echo, responses := c.registerActionRequest(actionName, "")
+	action["echo"], _ = json.Marshal(echo)
+	data, err := json.Marshal(action)
+	if err != nil {
+		c.clearMessageRequest(echo, responses)
+		return err
+	}
+	key, reply, err := c.writeTurnMessagePending(messageType, data, turn)
+	if err != nil || reply == nil {
+		c.clearMessageRequest(echo, responses)
+		c.finishOutgoingError(key, reply, err)
+		return err
+	}
+	timeout := actionACKTimeout(c.Scope)
+	if !c.Scope.Go(func() {
+		_, ackErr := c.waitActionACK(actionName, echo, responses, timeout, c.Scope.Context())
+		c.finishOutgoingError(key, reply, ackErr)
+		if ackErr != nil {
+			c.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("确认直接消息送达失败: %v", ackErr))
+		}
+	}) {
+		c.clearMessageRequest(echo, responses)
+		c.finishOutgoingError(key, reply, context.Canceled)
+	}
+	return err
+}
+
+// writeTurnMessagePending leaves delivery completion to the caller, allowing
+// ACK-backed actions to publish their platform result instead of the socket write.
+func (c *wsConnection) writeTurnMessagePending(messageType int, data []byte, turn *llm.SessionTurn) (key string, reply *previousErrorReply, err error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	if c.conn == nil || c.isClosed() {
-		return fmt.Errorf("websocket connection is closed")
+		return "", nil, fmt.Errorf("websocket connection is closed")
 	}
-	return turn.WithAuthority(func() error {
+	err = turn.WithAuthority(func() error {
 		if err := c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
 			return err
 		}
 		defer c.conn.SetWriteDeadline(time.Time{})
+		if messageType == websocket.TextMessage {
+			key, reply = c.beginOutgoingError(data)
+		}
 		return c.conn.WriteMessage(messageType, data)
 	})
+	return key, reply, err
 }
 
 func (c *wsConnection) Close() error {
@@ -400,16 +453,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err != nil {
 			if errors.Is(err, billing.ErrInsufficientFunds) {
 				engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足，拒绝视觉处理", event.UserID))
-				sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(0), turn)
+				sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(0), billing.ErrInsufficientFunds), turn)
 				return
 			}
-			engine.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务不可用 (fail-closed, vision): %v", err))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatBillingUnavailableMessage(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务不可用 (fail-closed, vision): %w", err)), turn)
 			return
 		}
 		if bal != nil && bal.Exists && bal.BalanceMinor <= 0 {
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("用户 [%d] 雪花余额不足 (%d minor)，拒绝视觉处理", event.UserID, bal.BalanceMinor))
-			sendDirectReply(action, type1, id, echo, event, conn, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, billing.FormatInsufficientFundsMessage(bal.BalanceMinor), billing.ErrInsufficientFunds), turn)
 			return
 		}
 	}
@@ -493,7 +545,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if wakeSignals.Proactive {
 			return
 		}
-		sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent错误：单条消息长度过长，超出处理限制。", turn)
+		sendDirectReply(action, type1, id, echo, event, conn, engine.Log().ReportError(logs.SYSTEM, "消息处理失败：单条消息长度过长，超出处理限制", nil, conn.historyKey(event)), turn)
 		return
 	}
 
@@ -653,6 +705,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
+	groupContextStart := len(requestPrompt)
 	var vettedSummary string
 	if groupSnapshot.RunningSummary != "" {
 		vettedSummary = groupSnapshot.RunningSummary
@@ -708,12 +761,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			requestPrompt += "\n\n" + vettedRecent
 		}
 	}
+	groupContextEnd := len(requestPrompt)
 	if responseContext != "" {
 		requestPrompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
+	var fileQuotes []*resolvedReplyContext
 	if replyContext.Prompt != "" {
 		vettedReply := replyContext.promptWithAncestors()
+		originalReply := vettedReply
 		if engine != nil && engine.Security != nil {
 			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
@@ -733,6 +789,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 		if vettedReply != "" {
+			if vettedReply == originalReply {
+				fileQuotes = quoteNodes
+			}
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
 			if directVision {
 				for _, quote := range quoteNodes {
@@ -741,15 +800,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
+	requestPrompt += conn.prepareInboundFiles(turn.Context(), event, session, fileQuotes)
 
 	if wakeSignals.Proactive {
 		if engine != nil {
 			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
 		}
-		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
+		guidance := llm.WrapRuntimeGuidance(proactive.PromptPrefix)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", guidance, requestPrompt)
+		groupContextStart += len(guidance) + 2
+		groupContextEnd += len(guidance) + 2
 	}
 	if botLoopSoft {
-		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
+		guidance := llm.WrapRuntimeGuidance(botloop.PromptPrefix)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", guidance, requestPrompt)
+		groupContextStart += len(guidance) + 2
+		groupContextEnd += len(guidance) + 2
 	}
 
 	// 4. Call the agent engine with history
@@ -796,10 +862,34 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			deliveries.Finish(turn.Interrupted())
 		}()
+		recordDelivery := func(messages []tools.Msg) {
+			deliveries.NoteConfirmed()
+			if deliveredReply := qqDeliveredText(messages); strings.TrimSpace(deliveredReply) != "" {
+				deliveries.Record(deliveredReply, func(live bool) {
+					if event.MessageType == "group" {
+						botName := engine.Getenv("BOT_NAME")
+						if botName == "" {
+							botName = defaultBotName
+						}
+						var maxBufferSize int
+						if engine.GroupCompactor != nil {
+							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
+						}
+						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
+						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
+							turn.StagedGuard().AddSequence(seq)
+						} else {
+							session.PromoteGroupCompactSlot(seq, "")
+						}
+					}
+				})
+			}
+		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages            []tools.Msg `json:"messages"`
-				SuppressAutoMention bool        `json:"suppress_auto_mention"`
+				Messages                []tools.Msg `json:"messages"`
+				SuppressAutoMention     bool        `json:"suppress_auto_mention"`
+				UseFrostAgentDecoration *bool       `json:"use_frostagent_decoration"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
@@ -816,7 +906,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if len(oneBotSegments) == 0 {
 				return fmt.Errorf("消息内容为空")
 			}
-			if event.MessageType == "group" {
+			if event.MessageType == "group" && (toolOutput.UseFrostAgentDecoration == nil || *toolOutput.UseFrostAgentDecoration) {
 				decorationEvent := event
 				if toolOutput.SuppressAutoMention {
 					decorationEvent.UserID = 0
@@ -853,27 +943,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("%s", reason)
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
-			deliveries.NoteConfirmed()
-			if deliveredReply := extractBotReplyText(toolResultJSON); strings.TrimSpace(deliveredReply) != "" {
-				deliveries.Record(deliveredReply, func(live bool) {
-					if event.MessageType == "group" {
-						botName := engine.Getenv("BOT_NAME")
-						if botName == "" {
-							botName = defaultBotName
-						}
-						var maxBufferSize int
-						if engine.GroupCompactor != nil {
-							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
-						}
-						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
-						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
-							turn.StagedGuard().AddSequence(seq)
-						} else {
-							session.PromoteGroupCompactSlot(seq, "")
-						}
-					}
-				})
-			}
+			recordDelivery(toolOutput.Messages)
 			return nil
 		}
 
@@ -883,14 +953,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			session.WithEpochCommit(startEpoch, func() {
 				if strings.TrimSpace(replyText) == "" {
-					engine.TrimSession(session)
+					engine.TrimSession(session, routeScope)
 					return
 				}
 
 				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
 					return
 				}
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 
 				if event.MessageType == "group" {
 					var msgID string
@@ -989,6 +1059,17 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if conn != nil && conn.mock {
 			runCtx = conn.Context()
 		}
+		stopThinking := conn.startThinkingStatus(event, engine, turn)
+		defer stopThinking()
+		var refreshPrompt func(context.Context) (llm.PromptRefresh, error)
+		if event.MessageType == "group" && session != nil {
+			refreshPrompt = func(ctx context.Context) (llm.PromptRefresh, error) {
+				snapshot := session.SnapshotGroupContext(engine.GroupRawLimit(), engine.GroupRawMaxChars(), strconv.FormatInt(int64(event.MessageID), 10))
+				groupContext, notice, err := engine.GroupContextPrompt(ctx, llm.RunContext{SessionID: conn.historyKey(event), ActorPlatform: securityPlatform, ActorUserID: strconv.FormatInt(event.UserID, 10), Mock: conn.mock}, snapshot)
+				prompt := requestPrompt[:groupContextStart] + groupContext + requestPrompt[groupContextEnd:]
+				return llm.PromptRefresh{Content: promptContentWithImages(prompt, directImageParts), SecurityNotice: notice}, err
+			}
+		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Turn:        turn,
 			Context:     runCtx,
@@ -999,11 +1080,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ActorUserID: strconv.FormatInt(event.UserID, 10),
 			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
-			ActorPlatform:  securityPlatform,
-			AdapterID:      "onebot",
-			InstanceID:     engine.InstanceID,
-			SendHook:       sendHook,
-			FinalReplyText: plainFinalReplyText,
+			ActorPlatform:      securityPlatform,
+			AdapterID:          "onebot",
+			InstanceID:         engine.InstanceID,
+			SendHook:           sendHook,
+			RefreshPrompt:      refreshPrompt,
+			PlatformActionHook: conn.qqActionHook(event, turn, recordDelivery, engine),
+			FinalReplyText:     plainFinalReplyText,
 			CanReplyToMessage: func(messageID string) bool {
 				mid, ok := numericMessageID(messageID)
 				return ok && conn.messageSessionMatches(mid, conn.historyKey(event))
@@ -1023,15 +1106,18 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Proactive:            wakeSignals.Proactive,
 			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
+		stopThinking()
+		deliveries.SetFinalMessage(runResult.FinalMessage)
 		replyText = runResult.Content
-		if engine.Getenv(replyformat.EnvKey) != "true" {
+		multiSegment := replyformat.Enabled(engine.Getenv)
+		if !multiSegment {
 			replyText = filterStructuredSegmentMarks(replyText)
 		}
 		if wakeSignals.Proactive {
 			replyText = filterProactiveStickerCQ(replyText)
 		}
 		if structured, _ := parseFinalMessages(replyText); len(structured) == 0 {
-			replyParts = replyformat.SplitLimited(replyText, engine.Getenv(replyformat.EnvKey) == "true", replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey)))
+			replyParts = replyformat.SplitLimited(replyText, multiSegment, replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey)))
 			replyText = strings.Join(replyParts, "\n\n")
 		}
 		if turn.Interrupted() {
@@ -1086,13 +1172,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		if wakeSignals.Proactive && (runResult.Error != nil || runResult.OutputBlocked) {
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
 			return
 		}
 
 		if !conn.allowLLMErrorReply(runResult) {
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			if receiptText == "" {
 				return
 			}
@@ -1111,7 +1197,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveries.Text() != "" {
 				deliveries.CommitDelivered()
 			}
-			engine.TrimSession(session)
+			engine.TrimSession(session, routeScope)
 			if event.MessageType == "group" && !runResult.Banned {
 				var msgID string
 				if event.MessageID != 0 {
@@ -1207,7 +1293,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveredText := deliveries.Text(); deliveredText != "" {
 				commitAssistantHistory(deliveredText, true)
 			} else {
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 				if event.MessageType == "group" && !runResult.Banned {
 					var msgID string
 					if event.MessageID != 0 {
@@ -1229,8 +1315,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	} else {
-		replyText = "系统出错，引擎未初始化"
-		engine.Log().Warn(logs.SYSTEM, "警告：未设置处理消息的 engine")
+		replyText = conn.Scope.Log().ReportError(logs.SYSTEM, "消息处理失败：引擎未初始化", nil)
+		sendDirectReply(action, type1, id, echo, event, conn, replyText, turn)
+		return
 	}
 
 	// 5. Prepare the final message for OneBot by parsing the engine's response.
@@ -1240,37 +1327,84 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	finalMessages, parseErr := parseFinalMessages(replyText)
 	if parseErr == nil {
 		for _, message := range finalMessages {
-			if message.IsSticker && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
+			if (message.IsSticker || message.Type == "mface") && sticker.ActivityLevel(engine.Getenv(sticker.ActivityEnvKey)) == 0 {
 				replyText = "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。"
 				finalMessages = nil
 				break
 			}
-			if message.Type == "image" && message.IsSticker {
+			if message.Type == "image" && message.IsSticker || message.Type == "mface" {
 				finalSticker = true
 			}
 		}
+	}
+	if !conn.mock && !wakeSignals.Proactive && nativeQQFinal(finalMessages) {
+		if receiptText != "" {
+			finalMessages = append(finalMessages, tools.Msg{Type: "plain", Text: receiptText})
+		}
+		request, _ := json.Marshal(tools.QQRequest{Action: "send", Arguments: tools.QQArguments{Messages: finalMessages}})
+		turn.AwaitDelivery(func() {
+			var acknowledged []tools.Msg
+			result, err := conn.qqActionHook(event, turn, func(messages []tools.Msg) {
+				stickerSent := false
+				for _, m := range messages {
+					stickerSent = stickerSent || m.IsSticker || m.Type == "mface"
+					if receiptText != "" && m.Type == "plain" && m.Text == receiptText {
+						billingReported.Store(true)
+						continue
+					}
+					acknowledged = append(acknowledged, m)
+				}
+				engine.RecordBotMessage(stickerSent)
+				deliveries.RecordFinalProgress(qqDeliveredText(acknowledged), turn)
+			}, engine)(turn.Context(), string(request))
+			var status struct {
+				OK bool `json:"ok"`
+			}
+			_ = json.Unmarshal([]byte(result.Content), &status)
+			if err == nil && status.OK {
+				commitAssistantHistory(replyText, false)
+				return
+			}
+			if err != nil && len(acknowledged) == 0 {
+				errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", err, conn.historyKey(event))
+				sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
+				return
+			}
+			if len(acknowledged) > 0 {
+				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged))
+			}
+			if session != nil {
+				reason := result.Content
+				if err != nil {
+					reason = err.Error()
+				}
+				session.SetDeliveryFailure(llm.DeliveryFailure{Platform: "onebot", Action: "qq.send", Wording: reason})
+				engine.TrimSession(session)
+			}
+		})
+		return
 	}
 
 	if len(finalMessages) > 0 {
 		// A. It's a tool call JSON
 		engine.Log().Debug(logs.WEBSOCKET, "解析工具调用 JSON 成功，准备组装富文本消息")
 		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
-			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("引用消息校验失败: %v", err))
+			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "引用消息校验失败", err, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：引用消息校验失败："+err.Error(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 			return
 		}
 		oneBotSegments, buildErr := tools.BuildOneBotMessage(finalMessages)
 		if buildErr != nil {
-			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("组装 OneBot 消息失败: %v", buildErr))
+			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", buildErr, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session)
+				engine.TrimSession(session, routeScope)
 				return
 			}
-			sendDirectReply(action, type1, id, echo, event, conn, "FrostAgent 错误：组装消息失败："+buildErr.Error(), turn)
+			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 			return
 		}
 		if len(oneBotSegments) > 0 {
@@ -1395,7 +1529,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Wording:  reason,
 				})
 				if engine != nil {
-					engine.TrimSession(session)
+					engine.TrimSession(session, routeScope)
 				}
 			}
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
@@ -1458,6 +1592,8 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
+	} else {
+		conn.recordHistoryAction(botAction, oneBotAPIResponse{}, "sent")
 	}
 }
 

@@ -13,7 +13,7 @@ import (
 )
 
 func TestConnectionSettingsImportRejectsInvalidBeforeRuntimeStop(t *testing.T) {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		for _, enabled := range []bool{false, true} {
 			t.Run(adapter+map[bool]string{false: "/disabled", true: "/enabled"}[enabled], func(t *testing.T) {
 				m, err := NewDatabase(t.TempDir())
@@ -58,7 +58,7 @@ func TestConnectionSettingsImportRejectsInvalidBeforeRuntimeStop(t *testing.T) {
 }
 
 func TestConnectionSettingsImportSwitchesModeAndRepairsDisabledInstance(t *testing.T) {
-	for _, adapter := range []string{"ONEBOT", "ASTRBOT"} {
+	for _, adapter := range []string{"ONEBOT"} {
 		t.Run(adapter, func(t *testing.T) {
 			connected := make(chan string, 4)
 			disconnected := make(chan struct{}, 4)

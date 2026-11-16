@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -9,7 +11,9 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
+	"github.com/GuaiZai233/FrostAgent/internal/sessionstate"
 	"math/rand/v2"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -21,14 +25,15 @@ import (
 
 // GroupCompactMessage represents a structured group chat message for compaction and prompt inspection.
 type GroupCompactMessage struct {
-	Role             string `json:"role"`                        // "user" | "assistant"
-	Sender           string `json:"sender,omitempty"`            // Display name or nick
-	SenderID         string `json:"sender_id,omitempty"`         // User ID or bot ID
-	Content          string `json:"content"`                     // Message body (opaque payload)
-	ImageDescription string `json:"image_description,omitempty"` // Vision output kept separate from user text.
-	MessageID        string `json:"message_id,omitempty"`        // Message ID for deduplication
-	Time             string `json:"time,omitempty"`              // Timestamp string e.g. "15:04:05"
-	raw              string `json:"-"`                           // Preserved raw string if ingested from text
+	ToolHistoryRunID string `json:"tool_history_run_id,omitempty"` // Internal tool timeline, not a public bot reply.
+	Role             string `json:"role"`                          // "user" | "assistant"
+	Sender           string `json:"sender,omitempty"`              // Display name or nick
+	SenderID         string `json:"sender_id,omitempty"`           // User ID or bot ID
+	Content          string `json:"content"`                       // Message body (opaque payload)
+	ImageDescription string `json:"image_description,omitempty"`   // Vision output kept separate from user text.
+	MessageID        string `json:"message_id,omitempty"`          // Message ID for deduplication
+	Time             string `json:"time,omitempty"`                // Timestamp string e.g. "15:04:05"
+	raw              string `json:"-"`                             // Preserved raw string if ingested from text
 }
 
 // FormatDisplay renders the message as a single-line display string.
@@ -267,16 +272,21 @@ func (f *DeliveryFailure) FormatDeliveryContext() string {
 
 // SessionContext 管理单个会话的上下文历史
 type SessionContext struct {
-	mock           atomic.Bool // set only by trusted Direct Chat (mock) runs
-	activeSkills   map[string]activeSkill
-	ConversationID string
-	History        []ChatMessage
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	mu             sync.Mutex // 保护单个会话的并发访问
-	turnMu         sync.Mutex
-	turnTail       chan struct{}
-	resetMu        sync.Mutex // 串行化会话重置与在途屏障等待
+	checkpoints        *sessionstate.Store
+	checkpointRevision int64
+	checkpointHash     [32]byte
+	checkpointDeleted  bool
+	checkpointReadErr  error
+	mock               atomic.Bool // set only by trusted Direct Chat (mock) runs
+	activeSkills       map[string]activeSkill
+	ConversationID     string
+	History            []ChatMessage
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	mu                 sync.Mutex // 保护单个会话的并发访问
+	turnMu             sync.Mutex
+	turnTail           chan struct{}
+	resetMu            sync.Mutex // 串行化会话重置与在途屏障等待
 
 	activeCancel       context.CancelFunc
 	activeRunID        uint64
@@ -288,6 +298,7 @@ type SessionContext struct {
 	historySeq         []uint64
 	nextMsgSeq         uint64
 	privateCompacting  bool
+	privateCompactID   uint64
 	privateCompact     *privateCompactInspection
 
 	groupCompactSummary     string
@@ -316,9 +327,14 @@ type SessionContext struct {
 	// lastSystemPrompt records the dynamically-assembled system prompt from the
 	// most recent real LLM call (time label + dialogue + memory catalog + recalled
 	// memories). Empty until the first LLM request for this session.
-	lastSystemPrompt string
-	lastModelName    string
-	groupName        string
+	lastSystemPrompt  string
+	lastActualRequest json.RawMessage
+	lastRequestAt     time.Time
+	// lastUserPrompt is the user-role content actually sent in the most recent
+	// request, including adapter-injected <response_context> guidance.
+	lastUserPrompt string
+	lastModelName  string
+	groupName      string
 }
 
 // GroupName returns the cached group name for this session, if any.
@@ -334,7 +350,7 @@ func (s *SessionContext) GroupName() string {
 		return ""
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.groupName
 }
 
@@ -345,7 +361,7 @@ func (s *SessionContext) SetGroupName(name string) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.groupName = name
 }
 
@@ -371,7 +387,7 @@ func (s *SessionContext) BeginBotLoop(senderID string, marked bool, config strin
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	observation := &BotLoopObservation{
 		session: s, senderID: senderID, marked: marked, config: config,
 		epoch: s.botLoopEpoch, previous: s.botLoopTail, done: make(chan struct{}),
@@ -425,7 +441,7 @@ func (o *BotLoopObservation) FinishWithAdmission(eligible bool, limit int, admit
 				s.botLoopConfig, s.botLoopTurns = o.config, turns
 			}
 		}
-		s.mu.Unlock()
+		s.unlockCheckpoint()
 		close(o.done)
 	})
 	return o.exceeded, o.admitted
@@ -442,7 +458,7 @@ func (s *SessionContext) SetDeliveryFailure(failure DeliveryFailure) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.deliveryFailure = &failure
 }
 
@@ -452,7 +468,7 @@ func (s *SessionContext) TakeDeliveryFailure() *DeliveryFailure {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if s.deliveryFailure == nil {
 		return nil
 	}
@@ -464,16 +480,36 @@ func (s *SessionContext) TakeDeliveryFailure() *DeliveryFailure {
 // SetLastPromptTrace records the system prompt and model used in the most recent LLM call.
 func (s *SessionContext) SetLastPromptTrace(systemPrompt, modelName string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.lastSystemPrompt = systemPrompt
 	s.lastModelName = modelName
+}
+
+// SetLastUserPrompt records the user-role segment of the most recent request.
+// SetLastUserPromptAtEpoch records the request user segment only while the run
+// still belongs to the session epoch, so a run that crosses /reset cannot
+// repopulate the inspector with stale content. Epoch 0 skips the check.
+func (s *SessionContext) SetLastUserPromptAtEpoch(epoch uint64, userPrompt string) {
+	s.mu.Lock()
+	defer s.unlockCheckpoint()
+	if epoch != 0 && s.epoch != epoch {
+		return
+	}
+	s.lastUserPrompt = userPrompt
+}
+
+// LastUserPrompt returns the user-role segment of the most recent request.
+func (s *SessionContext) LastUserPrompt() string {
+	s.mu.Lock()
+	defer s.unlockCheckpoint()
+	return s.lastUserPrompt
 }
 
 // LastPromptTrace returns the system prompt and model from the most recent LLM call.
 // Returns empty strings if no request has been made yet.
 func (s *SessionContext) LastPromptTrace() (systemPrompt, modelName string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.lastSystemPrompt, s.lastModelName
 }
 
@@ -483,6 +519,11 @@ func (s *SessionContext) ReserveTurn() *SessionTurn {
 	defer s.turnMu.Unlock()
 
 	turn := &SessionTurn{wait: s.turnTail, done: make(chan struct{}), epoch: s.Epoch()}
+	if s.RecoveryError() != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		turn.ctx, turn.cancel = ctx, cancel
+	}
 	s.turnTail = turn.done
 	return turn
 }
@@ -493,7 +534,7 @@ func (s *SessionContext) Epoch() uint64 {
 		return 0
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if s.epoch == 0 {
 		s.epoch = 1
 	}
@@ -507,8 +548,13 @@ func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, u
 	if s == nil {
 		return parentCtx, 0, func() {}
 	}
+	if s.RecoveryError() != nil {
+		ctx, cancel := context.WithCancel(parentCtx)
+		cancel()
+		return ctx, 0, cancel
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	if s.activeCancel != nil {
 		s.activeCancel()
@@ -528,7 +574,7 @@ func (s *SessionContext) BeginRun(parentCtx context.Context) (context.Context, u
 	cleanup := func() {
 		once.Do(func() {
 			s.mu.Lock()
-			defer s.mu.Unlock()
+			defer s.unlockCheckpoint()
 			cancel()
 			if s.activeRunID == runID {
 				s.activeCancel = nil
@@ -545,7 +591,7 @@ func (s *SessionContext) CancelActiveRun() {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.cancelSequencesLocked()
 	if s.activeCancel != nil {
 		s.activeCancel()
@@ -799,7 +845,7 @@ func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snaps
 		return parentCtx, nil, func() {}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	// Validate snapshot against session-owned committed source state.
 	// 1. Snapshot must have been committed via CommitGroupCompact.
@@ -866,7 +912,7 @@ func (s *SessionContext) BeginGroupDistillation(parentCtx context.Context, snaps
 			s.mu.Lock()
 			delete(s.groupDistillBarriers, id)
 			delete(s.validCommittedSources, snapshot.ThroughSequence)
-			s.mu.Unlock()
+			s.unlockCheckpoint()
 		})
 	}
 	return ctxWithBarrier, barrier, cleanup
@@ -878,7 +924,7 @@ func (s *SessionContext) SetGroupStore(store *memory.GroupStore) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.groupStore = store
 }
 
@@ -888,7 +934,7 @@ func (s *SessionContext) GroupStore() *memory.GroupStore {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.groupStore
 }
 
@@ -898,7 +944,7 @@ func (s *SessionContext) SetScope(scope *runtimescope.Scope) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.scope = scope
 }
 
@@ -908,7 +954,7 @@ func (s *SessionContext) Scope() *runtimescope.Scope {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.scope
 }
 
@@ -919,7 +965,7 @@ func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Con
 		return parentCtx, 0, func() {}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	if s.epoch == 0 {
 		s.epoch = 1
@@ -953,7 +999,7 @@ func (s *SessionContext) BeginExtraction(parentCtx context.Context) (context.Con
 			barrier.Close()
 			cancel()
 			s.mu.Lock()
-			defer s.mu.Unlock()
+			defer s.unlockCheckpoint()
 			delete(s.extractionCancels, id)
 			delete(s.extractionBarriers, id)
 		})
@@ -983,7 +1029,7 @@ func (s *SessionContext) CancelExtractions() {
 	for id, b := range s.extractionBarriers {
 		barriersToWait = append(barriersToWait, barrierEntry{id: id, b: b})
 	}
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 
 	for _, entry := range barriersToWait {
 		entry.b.AbortAndWait()
@@ -995,7 +1041,7 @@ func (s *SessionContext) CancelExtractions() {
 			delete(s.extractionBarriers, entry.id)
 		}
 	}
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 }
 
 // ResetSession completely resets this session's state:
@@ -1007,6 +1053,9 @@ func (s *SessionContext) CancelExtractions() {
 func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) error {
 	if s == nil {
 		return nil
+	}
+	if err := s.RecoveryError(); err != nil {
+		return err
 	}
 	s.resetMu.Lock()
 	defer s.resetMu.Unlock()
@@ -1059,11 +1108,15 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 	s.botLoopTail = nil
 	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
+	s.lastActualRequest = nil
+	s.lastRequestAt = time.Time{}
 	s.lastModelName = ""
+	s.lastUserPrompt = ""
 	s.privateCompacting = false
+	s.privateCompactID++
 	s.UpdatedAt = time.Now()
 	conversationID := s.ConversationID
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 
 	for _, entry := range barriersToWait {
 		entry.b.AbortAndWait()
@@ -1078,7 +1131,7 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 			delete(s.extractionBarriers, entry.id)
 		}
 	}
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 
 	if groupSummaryStore != nil && conversationID != "" {
 		return groupSummaryStore.Delete(conversationID)
@@ -1088,10 +1141,12 @@ func (s *SessionContext) ResetSession(groupSummaryStore *groupsummary.Store) err
 
 // PrivateCompactSnapshot captures messages to be summarized in private chat.
 type PrivateCompactSnapshot struct {
-	Messages []ChatMessage
-	Count    int
-	Epoch    uint64
-	LastSeq  uint64
+	Messages  []ChatMessage
+	Count     int
+	Epoch     uint64
+	LastSeq   uint64
+	sequences []uint64
+	id        uint64
 }
 
 var (
@@ -1105,7 +1160,7 @@ func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error
 		return PrivateCompactSnapshot{}, errors.New("会话不可用")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	if s.privateCompacting {
 		return PrivateCompactSnapshot{}, ErrAlreadyCompacting
@@ -1122,20 +1177,26 @@ func (s *SessionContext) SnapshotPrivateCompact() (PrivateCompactSnapshot, error
 		}
 	}
 
+	return s.snapshotPrivateCompactLocked(len(s.History)), nil
+}
+
+func (s *SessionContext) snapshotPrivateCompactLocked(count int) PrivateCompactSnapshot {
 	s.privateCompacting = true
-	snapshotMsgs := make([]ChatMessage, len(s.History))
-	copy(snapshotMsgs, s.History)
+	s.privateCompactID++
+	snapshotMsgs := cloneMessages(s.History[:count])
 	var lastSeq uint64
-	if len(s.historySeq) > 0 {
-		lastSeq = s.historySeq[len(s.historySeq)-1]
+	if count > 0 {
+		lastSeq = s.historySeq[count-1]
 	}
 
 	return PrivateCompactSnapshot{
-		Messages: snapshotMsgs,
-		Count:    len(s.History),
-		Epoch:    s.epoch,
-		LastSeq:  lastSeq,
-	}, nil
+		Messages:  snapshotMsgs,
+		Count:     count,
+		Epoch:     s.epoch,
+		LastSeq:   lastSeq,
+		sequences: slices.Clone(s.historySeq[:count]),
+		id:        s.privateCompactID,
+	}
 }
 
 // CommitPrivateCompact commits a private chat summary, replacing the summarized messages
@@ -1146,7 +1207,10 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 	}
 	summary = strings.TrimSpace(summary)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
+	if snapshot.id != s.privateCompactID || !s.privateCompacting {
+		return false
+	}
 	defer func() { s.privateCompacting = false }()
 
 	if s.epoch != snapshot.Epoch {
@@ -1166,8 +1230,18 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 
 	var remaining []ChatMessage
 	var remainingSeq []uint64
+	covered := make(map[uint64]ChatMessage, len(snapshot.sequences))
+	for i, seq := range snapshot.sequences {
+		covered[seq] = snapshot.Messages[i]
+	}
 	for i, seq := range s.historySeq {
-		if seq > snapshot.LastSeq {
+		if source, exists := covered[seq]; exists {
+			// Late delivery acknowledgements can extend an existing public reply.
+			// Do not replace newer confirmed content with an older snapshot.
+			if !reflect.DeepEqual(source, s.History[i]) {
+				return false
+			}
+		} else {
 			remaining = append(remaining, s.History[i])
 			remainingSeq = append(remainingSeq, seq)
 		}
@@ -1180,11 +1254,14 @@ func (s *SessionContext) CommitPrivateCompact(snapshot PrivateCompactSnapshot, s
 	)
 	newHistory = append(newHistory, remaining...)
 
-	newSeq := make([]uint64, len(newHistory))
+	newSeq := make([]uint64, 2, len(newHistory))
 	for i := range newSeq {
 		s.nextMsgSeq++
 		newSeq[i] = s.nextMsgSeq
 	}
+	// Retained inputs still belong to live execution lanes and delivery logs.
+	// Their sequence handles must survive asynchronous compaction unchanged.
+	newSeq = append(newSeq, remainingSeq...)
 
 	s.History = newHistory
 	s.historySeq = newSeq
@@ -1219,7 +1296,7 @@ func (s *SessionContext) hasPrivateCompactLocked() bool {
 // PrivateRunningSummary returns a committed summary still present in history.
 func (s *SessionContext) PrivateRunningSummary() string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if s.hasPrivateCompactLocked() {
 		return s.privateCompact.batch.Summary
 	}
@@ -1230,7 +1307,7 @@ func (s *SessionContext) PrivateRunningSummary() string {
 // history. It does not change compaction, persistence, or prompt assembly.
 func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot, []ChatMessage) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	var result GroupContextSnapshot
 	compacted := s.hasPrivateCompactLocked()
@@ -1257,16 +1334,19 @@ func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot
 }
 
 func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
-	return GroupCompactMessage{Role: msg.Role, Content: fmt.Sprint(msg.Content)}
+	return GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID}
 }
 
 // CancelPrivateCompact releases the private compaction lock if compaction fails.
-func (s *SessionContext) CancelPrivateCompact() {
+func (s *SessionContext) CancelPrivateCompact(snapshots ...PrivateCompactSnapshot) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
+	if len(snapshots) > 0 && snapshots[0].id != s.privateCompactID {
+		return
+	}
 	s.privateCompacting = false
 }
 
@@ -1276,7 +1356,7 @@ func (s *SessionContext) IsPrivateCompacting() bool {
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.privateCompacting
 }
 
@@ -1287,13 +1367,13 @@ func (s *SessionContext) Lock() {
 
 // Unlock 解锁会话
 func (s *SessionContext) Unlock() {
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 }
 
 // Snapshot returns a copy of the messages while holding the session lock.
 func (s *SessionContext) Snapshot() []ChatMessage {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	snapshot := make([]ChatMessage, len(s.History))
 	for i, msg := range s.History {
@@ -1327,7 +1407,7 @@ func (s *SessionContext) Snapshot() []ChatMessage {
 // ReplaceMessages atomically replaces a session history with deep copy.
 func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	newMessages := make([]ChatMessage, len(messages))
 	for i, msg := range messages {
@@ -1351,6 +1431,8 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 	}
 
 	s.History = newMessages
+	s.privateCompacting = false
+	s.privateCompactID++
 	s.historySeq = make([]uint64, len(newMessages))
 	for i := range s.historySeq {
 		s.nextMsgSeq++
@@ -1362,7 +1444,7 @@ func (s *SessionContext) ReplaceMessages(messages []ChatMessage) {
 // TrimHistory 只保留最近的 max 条消息，从头部丢弃更早的历史。
 func (s *SessionContext) TrimHistory(max int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	if max <= 0 || len(s.History) <= max {
 		return
@@ -1392,7 +1474,7 @@ func (s *SessionContext) DropLastMessage() {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if len(s.History) == 0 {
 		return
 	}
@@ -1464,7 +1546,7 @@ func (s *SessionContext) appendGroupCompactInternal(item any, staged bool, maxBu
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	s.groupCompactSequence++
 	seq := s.groupCompactSequence
@@ -1678,7 +1760,7 @@ func (s *SessionContext) PromoteGroupCompactSlot(sequence uint64, messageID stri
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	msgID := strings.TrimSpace(messageID)
 	if sequence == 0 && msgID == "" {
@@ -1747,7 +1829,7 @@ func (s *SessionContext) DropGroupCompactSlotChecked(sequence uint64, messageID,
 
 	msgID := strings.TrimSpace(messageID)
 	if sequence == 0 && msgID == "" {
-		s.mu.Unlock()
+		s.unlockCheckpoint()
 		return false, nil
 	}
 
@@ -1838,7 +1920,7 @@ func (s *SessionContext) DropGroupCompactSlotChecked(sequence uint64, messageID,
 	s.groupCompactGeneration++
 	s.UpdatedAt = time.Now()
 	store := s.groupStore
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 
 	// Coordinate with commit boundary outside session lock: abort affected barriers and wait
 	// if any barrier is actively writing, guaranteeing no stale quote writes persist.
@@ -1872,7 +1954,7 @@ func (s *SessionContext) DropGroupCompactMessageChecked(messageID, senderID stri
 // from the same session state while holding the session lock.
 func (s *SessionContext) SnapshotGroupContext(limit int, maxChars int, excludeMessageID string) GroupContextSnapshot {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	recentMessages := s.recentPendingGroupMessagesLocked(limit, maxChars, excludeMessageID)
 
 	return GroupContextSnapshot{
@@ -2012,7 +2094,7 @@ func (s *SessionContext) recentPendingGroupMessagesLocked(limit int, maxChars in
 // replacement after the asynchronous summary succeeds.
 func (s *SessionContext) SnapshotGroupCompact(bufferSize int) (GroupCompactSnapshot, bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	if bufferSize <= 0 || len(s.groupCompactBuffer) < bufferSize {
 		return GroupCompactSnapshot{}, false
@@ -2063,7 +2145,7 @@ func (s *SessionContext) CommitGroupCompactWithPersistence(
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if snapshot.Generation != s.groupCompactGeneration {
 		return false, nil
 	}
@@ -2147,14 +2229,14 @@ func (s *SessionContext) CommitGroupCompactWithPersistence(
 // GroupRunningSummary returns the latest completed group summary.
 func (s *SessionContext) GroupRunningSummary() string {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.groupCompactSummary
 }
 
 // SummaryGroups returns a copy of the current summary groups mappings.
 func (s *SessionContext) SummaryGroups() []SummaryGroup {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if len(s.groupSummaryGroups) == 0 {
 		return nil
 	}
@@ -2166,7 +2248,7 @@ func (s *SessionContext) SummaryGroups() []SummaryGroup {
 // SetGroupRunningSummary sets the running summary for this session under the lock.
 func (s *SessionContext) SetGroupRunningSummary(summary string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	s.groupCompactSummary = summary
 }
 
@@ -2193,7 +2275,7 @@ func (s *SessionContext) ResetGroupCompact() {
 	s.validCommittedSources = nil
 	s.revokedMessageIDs = nil
 	s.UpdatedAt = time.Now()
-	s.mu.Unlock()
+	s.unlockCheckpoint()
 
 	for _, b := range barriersToWait {
 		b.AbortAndWait()
@@ -2206,7 +2288,7 @@ func (s *SessionContext) GroupCompactGeneration() uint64 {
 		return 0
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return s.groupCompactGeneration
 }
 
@@ -2214,7 +2296,7 @@ func (s *SessionContext) GroupCompactGeneration() uint64 {
 // Only committed (unstaged) messages count toward compaction readiness.
 func (s *SessionContext) GroupCompactReady(bufferSize int) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if bufferSize <= 0 {
 		return false
 	}
@@ -2231,7 +2313,7 @@ func (s *SessionContext) GroupCompactReady(bufferSize int) bool {
 // GroupCompactBufferCount returns the number of raw messages currently buffered.
 func (s *SessionContext) GroupCompactBufferCount() int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return len(s.groupCompactBuffer)
 }
 
@@ -2241,7 +2323,7 @@ func (s *SessionContext) GroupCompactBufferMessages() []GroupCompactMessage {
 		return nil
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	res := make([]GroupCompactMessage, len(s.groupCompactBuffer))
 	for i, item := range s.groupCompactBuffer {
 		res[i] = item.message
@@ -2275,7 +2357,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	if s.extractionThreshold < minTurns || s.extractionThreshold > maxTurns {
 		s.extractionThreshold = minTurns
@@ -2312,7 +2394,7 @@ func (s *SessionContext) EnqueuePendingTurn(
 
 func (s *SessionContext) PendingTurnCount() int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	return len(s.pendingTurns)
 }
 
@@ -2321,8 +2403,10 @@ const minHistory = 4
 
 // SessionManager 管理多个会话上下文，支持多用户/多群聊隔离
 type SessionManager struct {
+	Checkpoints *sessionstate.Store
 	*runtimescope.Scope
 	sessions          map[string]*SessionContext
+	cold              map[string]time.Time
 	groupNames        map[string]string
 	mu                sync.RWMutex
 	groupSummaryStore *groupsummary.Store
@@ -2336,6 +2420,7 @@ func NewSessionManager(scopes ...*runtimescope.Scope) *SessionManager {
 	sm := &SessionManager{
 		Scope:      scope,
 		sessions:   make(map[string]*SessionContext),
+		cold:       make(map[string]time.Time),
 		groupNames: make(map[string]string),
 		MaxHistory: 50,
 		TTL:        24 * time.Hour,
@@ -2371,18 +2456,31 @@ func (sm *SessionManager) TransferSessionsTo(next *SessionManager) {
 	defer sm.mu.Unlock()
 	next.mu.Lock()
 	defer next.mu.Unlock()
+	if sm.Checkpoints != nil {
+		next.Checkpoints = sm.Checkpoints
+	}
 	for id, session := range sm.sessions {
 		session.SetScope(next.Scope)
+		session.mu.Lock()
+		session.checkpoints = next.Checkpoints
+		delete(next.cold, id)
+		session.mu.Unlock()
 		next.sessions[id] = session
 	}
 	for id, name := range sm.groupNames {
 		next.groupNames[id] = name
 	}
+	for id, updated := range sm.cold {
+		if _, live := next.sessions[id]; !live {
+			next.cold[id] = updated
+		}
+	}
+	sm.cold = make(map[string]time.Time)
 	sm.sessions = make(map[string]*SessionContext)
 	sm.groupNames = make(map[string]string)
 }
 
-// GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 aiocqhttp:group:xxx ↔ group:xxx）。
+// GetOrCreate 获取或创建会话，支持跨适配器别名解析（例如 onebot:group:xxx ↔ group:xxx）。
 func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	sessionID = strings.TrimSpace(sessionID)
 	canonicalID := memory.CanonicalSessionKey(sessionID)
@@ -2410,6 +2508,9 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	if session, ok := sm.restoreColdLocked(canonicalID); ok {
+		return session
+	}
 	// 双重检查
 	if session, exists := sm.sessions[canonicalID]; exists {
 		return session
@@ -2430,7 +2531,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 	summary := ""
 	s := strings.ToLower(canonicalID)
 	isGroupSession := strings.HasPrefix(s, "group:") || strings.Contains(s, ":group:")
-	if sm.groupSummaryStore != nil && isGroupSession {
+	if sm.groupSummaryStore != nil && isGroupSession && (sm.Checkpoints == nil || sm.Checkpoints.Revision(canonicalID) == 0) {
 		record, ok, err := sm.groupSummaryStore.Get(canonicalID)
 		if err != nil {
 			sm.Log().Warn(logs.SYSTEM, "恢复群聊总结失败 ("+canonicalID+"): "+err.Error())
@@ -2443,6 +2544,7 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		gName = sm.groupNames[sessionID]
 	}
 	session := &SessionContext{
+		checkpoints:         sm.Checkpoints,
 		ConversationID:      sessionID,
 		History:             make([]ChatMessage, 0),
 		CreatedAt:           time.Now(),
@@ -2452,7 +2554,13 @@ func (sm *SessionManager) GetOrCreate(sessionID string) *SessionContext {
 		scope:               sm.Scope,
 		groupName:           gName,
 	}
+	if sm.Checkpoints != nil {
+		session.checkpointRevision = sm.Checkpoints.Revision(canonicalID)
+	}
 	sm.sessions[canonicalID] = session
+	if data, err := json.Marshal(session.checkpointLocked()); err == nil {
+		session.checkpointHash = sha256.Sum256(data)
+	}
 	return session
 }
 
@@ -2533,9 +2641,13 @@ func (sm *SessionManager) Cleanup() {
 	now := time.Now()
 	for id, s := range sm.sessions {
 		s.mu.Lock()
-		expired := now.Sub(s.UpdatedAt) > sm.TTL
-		s.mu.Unlock()
+		expired := now.Sub(s.UpdatedAt) > sm.TTL && s.activeCancel == nil && !s.hasLiveSequencesLocked()
+		updatedAt := s.UpdatedAt
+		s.unlockCheckpoint()
 		if expired {
+			if sm.Checkpoints != nil && !s.IsMock() && sm.Checkpoints.Revision(id) > 0 {
+				sm.cold[id] = updatedAt
+			}
 			delete(sm.sessions, id)
 		}
 	}
@@ -2561,7 +2673,7 @@ func (s *SessionContext) AddMessageTracked(msg core.ChatMessage) uint64 {
 // AddMessageAtEpoch records confirmed delivery without reviving reset history.
 func (s *SessionContext) AddMessageAtEpoch(msg core.ChatMessage, epoch uint64) uint64 {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if epoch != 0 && s.epoch != epoch {
 		return 0
 	}
@@ -2569,10 +2681,15 @@ func (s *SessionContext) AddMessageAtEpoch(msg core.ChatMessage, epoch uint64) u
 }
 
 func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
+	if s.RecoveryError() != nil {
+		return 0
+	}
 	// 转换 core.ChatMessage -> llm.ChatMessage
 	llmMsg := ChatMessage{
-		Role:    string(msg.Role),
-		Content: msg.Content,
+		Role:          string(msg.Role),
+		Content:       msg.Content,
+		ToolCallID:    msg.ToolCallID,
+		ProviderState: msg.ProviderState,
 	}
 	if len(msg.ToolCalls) > 0 {
 		llmMsg.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
@@ -2604,7 +2721,7 @@ func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
 // Messages 以 core.ChatMessage 切片形式返回会话历史
 func (s *SessionContext) Messages() []core.ChatMessage {
 	s.mu.Lock() // 用写锁，因为 convertToCoreMessages 会读取整个切片
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	return convertToCoreMessages(s.History)
 }
@@ -2612,12 +2729,14 @@ func (s *SessionContext) Messages() []core.ChatMessage {
 // Clear 清空当前会话的所有消息
 func (s *SessionContext) Clear() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 
 	s.History = nil
 	s.activeSkills = nil
 	s.historySeq = nil
 	s.privateCompact = nil
+	s.privateCompacting = false
+	s.privateCompactID++
 	s.groupCompactSummary = ""
 	s.groupCompactBuffer = nil
 	s.groupSummaryGroups = nil
@@ -2630,7 +2749,10 @@ func (s *SessionContext) Clear() {
 	s.botLoopTail = nil
 	s.botLoopEpoch++
 	s.lastSystemPrompt = ""
+	s.lastActualRequest = nil
+	s.lastRequestAt = time.Time{}
 	s.lastModelName = ""
+	s.lastUserPrompt = ""
 	s.UpdatedAt = time.Now()
 }
 
@@ -2640,6 +2762,7 @@ func (sm *SessionManager) ResetGroupCompact(sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	canonicalID := memory.CanonicalSessionKey(sessionID)
 	aliases := memory.SessionKeyAliases(sessionID)
+	_, _ = sm.Get(canonicalID)
 
 	sm.mu.RLock()
 	session, ok := sm.sessions[canonicalID]
@@ -2676,6 +2799,11 @@ func (sm *SessionManager) ResetSession(sessionID string) error {
 		canonicalID = sessionID
 	}
 	aliases := memory.SessionKeyAliases(sessionID)
+	if session, ok := sm.Get(canonicalID); ok {
+		if err := session.(*SessionContext).RecoveryError(); err != nil {
+			return err
+		}
+	}
 
 	sm.mu.RLock()
 	session, ok := sm.sessions[canonicalID]
@@ -2711,8 +2839,8 @@ func (sm *SessionManager) Get(sessionID string) (core.Session, bool) {
 	if canonicalID == "" {
 		canonicalID = sessionID
 	}
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	if s, ok := sm.sessions[canonicalID]; ok {
 		return s, true
 	}
@@ -2724,6 +2852,9 @@ func (sm *SessionManager) Get(sessionID string) (core.Session, bool) {
 			return s, true
 		}
 	}
+	if session, ok := sm.restoreColdLocked(canonicalID); ok {
+		return session, true
+	}
 	return nil, false
 }
 
@@ -2734,18 +2865,27 @@ func (sm *SessionManager) Create(sessionID string) core.Session {
 
 // Delete 删除指定会话
 func (sm *SessionManager) Delete(sessionID string) {
-	sessionID = strings.TrimSpace(sessionID)
-	canonicalID := memory.CanonicalSessionKey(sessionID)
-	aliases := memory.SessionKeyAliases(sessionID)
-
+	canonicalID := memory.CanonicalSessionKey(strings.TrimSpace(sessionID))
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	if canonicalID != "" {
-		delete(sm.sessions, canonicalID)
+	session, ok := sm.sessions[canonicalID]
+	if !ok {
+		session, ok = sm.restoreColdLocked(canonicalID)
 	}
-	delete(sm.sessions, sessionID)
-	for _, alias := range aliases {
-		delete(sm.sessions, alias)
+	if ok && session.RecoveryError() != nil {
+		// The ID must remain recoverable if neither copy can currently be read.
+		return
+	}
+	if ok {
+		session.CancelActiveRun()
+		session.mu.Lock()
+		session.checkpointDeleted = true
+		session.unlockCheckpoint()
+	}
+	keys := append(memory.SessionKeyAliases(sessionID), canonicalID, sessionID)
+	for _, key := range keys {
+		delete(sm.sessions, key)
+		delete(sm.cold, key)
 	}
 }
 
@@ -2757,7 +2897,7 @@ func (sm *SessionManager) Count() int {
 }
 
 // ListSessions returns a paginated slice of session contexts.
-// CountVisible returns the number of sessions that are not Direct Chat (mock)
+// CountVisible returns the number of live sessions that are not Direct Chat (mock)
 // sessions. It only reads the trusted atomic flag, without sorting or locking
 // individual sessions, so it is cheap enough for the overview poll.
 func (sm *SessionManager) CountVisible() int {
@@ -2780,7 +2920,7 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 		offset = 0
 	}
 	if limit <= 0 {
-		limit = len(sm.sessions)
+		limit = len(sm.sessions) + len(sm.cold)
 	}
 
 	type sessionEntry struct {
@@ -2798,6 +2938,16 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 			updatedAt: session.UpdatedAt,
 		})
 		session.mu.Unlock()
+	}
+	for id, updated := range sm.cold {
+		record, err := sm.Checkpoints.Read(id)
+		if err != nil {
+			continue
+		}
+		session, err := sm.restoreCheckpoint(record)
+		if err == nil {
+			entries = append(entries, sessionEntry{context: session, id: session.ConversationID, updatedAt: updated})
+		}
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {

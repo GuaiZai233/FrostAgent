@@ -17,14 +17,14 @@ func NormalizeOwnerType(t OwnerType) OwnerType {
 }
 
 // IsQQPlatform reports whether a platform identifier refers to QQ.
-// Native OneBot, AstrBot aiocqhttp adapter, and canonical "qq" all represent the QQ ecosystem.
+// Native OneBot and canonical "qq" both represent the QQ ecosystem.
 func IsQQPlatform(platform string) bool {
 	p := strings.ToLower(strings.TrimSpace(platform))
-	return p == "" || p == "qq" || p == "onebot" || p == "aiocqhttp"
+	return p == "" || p == "qq" || p == "onebot"
 }
 
 // CanonicalPlatform returns the normalized platform identifier.
-// QQ family platforms (onebot, aiocqhttp, qq, "") map to "qq".
+// QQ family platforms (onebot, qq, "") map to "qq".
 func CanonicalPlatform(platform string) string {
 	if IsQQPlatform(platform) {
 		return "qq"
@@ -51,7 +51,7 @@ func OwnerForGroup(groupID int64) (string, OwnerType) {
 }
 
 // OwnerForPlatformPrivate 生成带平台前缀的私聊 owner。
-// 当 platform 为空、"onebot"、"qq" 或 "aiocqhttp" 时保持与历史一致（即直接使用 userID 作为 owner）。
+// 当 platform 为空、"onebot" 或 "qq" 时保持与历史一致（即直接使用 userID 作为 owner）。
 func OwnerForPlatformPrivate(platform, userID string) (string, OwnerType) {
 	if userID == "" {
 		return "", OwnerUser
@@ -63,7 +63,7 @@ func OwnerForPlatformPrivate(platform, userID string) (string, OwnerType) {
 }
 
 // OwnerForPlatformGroup 生成带平台前缀的群聊 owner。
-// 当 platform 为空、"onebot"、"qq" 或 "aiocqhttp" 时保持与历史一致（形如 "group:123456"）。
+// 当 platform 为空、"onebot" 或 "qq" 时保持与历史一致（形如 "group:123456"）。
 func OwnerForPlatformGroup(platform, groupID string) (string, OwnerType) {
 	if groupID == "" {
 		return "", OwnerGroup
@@ -75,20 +75,20 @@ func OwnerForPlatformGroup(platform, groupID string) (string, OwnerType) {
 }
 
 // CanonicalOwner normalizes legacy platform-prefixed QQ owners to the canonical format:
-// - "aiocqhttp:user:<id>", "qq:user:<id>", "onebot:user:<id>" -> "<id>"
-// - "aiocqhttp:group:<id>", "qq:group:<id>", "onebot:group:<id>" -> "group:<id>"
+// - "qq:user:<id>", "onebot:user:<id>" -> "<id>"
+// - "qq:group:<id>", "onebot:group:<id>" -> "group:<id>"
 // Other platform owners are preserved.
 func CanonicalOwner(owner string) string {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
 		return ""
 	}
-	for _, prefix := range []string{"aiocqhttp:user:", "qq:user:", "onebot:user:"} {
+	for _, prefix := range []string{"qq:user:", "onebot:user:"} {
 		if cut, ok := strings.CutPrefix(owner, prefix); ok {
 			return cut
 		}
 	}
-	for _, prefix := range []string{"aiocqhttp:group:", "qq:group:", "onebot:group:"} {
+	for _, prefix := range []string{"qq:group:", "onebot:group:"} {
 		if cut, ok := strings.CutPrefix(owner, prefix); ok {
 			return "group:" + cut
 		}
@@ -114,7 +114,6 @@ func OwnerAliases(owner string) []string {
 	if groupID, ok := strings.CutPrefix(canonical, "group:"); ok {
 		return []string{
 			canonical,
-			fmt.Sprintf("aiocqhttp:group:%s", groupID),
 			fmt.Sprintf("qq:group:%s", groupID),
 			fmt.Sprintf("onebot:group:%s", groupID),
 		}
@@ -123,7 +122,6 @@ func OwnerAliases(owner string) []string {
 	if !strings.Contains(canonical, ":") {
 		return []string{
 			canonical,
-			fmt.Sprintf("aiocqhttp:user:%s", canonical),
 			fmt.Sprintf("qq:user:%s", canonical),
 			fmt.Sprintf("onebot:user:%s", canonical),
 		}
@@ -138,12 +136,12 @@ func CanonicalSessionKey(sessionID string) string {
 	if sessionID == "" {
 		return ""
 	}
-	for _, prefix := range []string{"aiocqhttp:group:", "qq:group:", "onebot:group:"} {
+	for _, prefix := range []string{"qq:group:", "onebot:group:"} {
 		if cut, ok := strings.CutPrefix(sessionID, prefix); ok {
 			return "group:" + cut
 		}
 	}
-	for _, prefix := range []string{"aiocqhttp:private:", "qq:private:", "onebot:private:"} {
+	for _, prefix := range []string{"qq:private:", "onebot:private:"} {
 		if cut, ok := strings.CutPrefix(sessionID, prefix); ok {
 			return "private:" + cut
 		}
@@ -160,7 +158,6 @@ func SessionKeyAliases(sessionID string) []string {
 	if id, ok := strings.CutPrefix(canonical, "group:"); ok {
 		return []string{
 			canonical,
-			fmt.Sprintf("aiocqhttp:group:%s", id),
 			fmt.Sprintf("qq:group:%s", id),
 			fmt.Sprintf("onebot:group:%s", id),
 		}
@@ -168,7 +165,6 @@ func SessionKeyAliases(sessionID string) []string {
 	if id, ok := strings.CutPrefix(canonical, "private:"); ok {
 		return []string{
 			canonical,
-			fmt.Sprintf("aiocqhttp:private:%s", id),
 			fmt.Sprintf("qq:private:%s", id),
 			fmt.Sprintf("onebot:private:%s", id),
 		}
@@ -186,9 +182,6 @@ func CanonicalSessionID(platform, messageType, id string) string {
 		return fmt.Sprintf("private:%s", id)
 	}
 	p := strings.ToLower(strings.TrimSpace(platform))
-	if p == "" {
-		p = "astrbot"
-	}
 	if messageType == "group" {
 		return fmt.Sprintf("%s:group:%s", p, id)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/api"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
@@ -36,18 +37,30 @@ type snapshotCredential struct {
 
 type Manager struct {
 	*runtimescope.Scope
-	mu               sync.RWMutex
-	path             string
-	active           Configuration
-	draft            Configuration
-	secrets          *SecretBackend
-	loadErr          error
-	usage            *tokenusage.Store
-	ReserveEndpoints func([]Endpoint) error
-	db               *storage.DB
-	instanceID       string
-	draftOwner       string
-	draftPending     bool
+	mu                  sync.RWMutex
+	path                string
+	active              Configuration
+	draft               Configuration
+	secrets             *SecretBackend
+	loadErr             error
+	usage               *tokenusage.Store
+	ReserveEndpoints    func([]Endpoint) error
+	db                  *storage.DB
+	instanceID          string
+	draftOwner          string
+	draftPending        bool
+	runtimeFallback     bool
+	lastRuntimeSnapshot *Snapshot
+}
+
+// EnableRuntimeFallback allows an already configured instance to keep using
+// its last coherent route/credential snapshot during a connection outage.
+// Configuration management continues to report SQL errors.
+func (m *Manager) EnableRuntimeFallback() {
+	m.mu.Lock()
+	m.runtimeFallback = true
+	m.mu.Unlock()
+	_ = m.Snapshot()
 }
 
 func NewSQL(db *storage.DB, instanceID string, scopes ...*runtimescope.Scope) *Manager {
@@ -562,6 +575,7 @@ func resolveConfiguration(cfg Configuration, workload Workload, scope Scope) (Ta
 		ModelID:             model.ID,
 		ModelDisplayName:    model.DisplayName,
 		BaseURL:             endpoint.BaseURL,
+		APIFormat:           endpoint.APIFormat,
 		UpstreamModel:       model.UpstreamModel,
 		MaxInputTokens:      model.MaxInputTokens,
 		Capabilities:        append([]string(nil), model.Capabilities...),
@@ -605,7 +619,7 @@ func platformsMatch(a, b string) bool {
 }
 
 func isQQPlatform(p string) bool {
-	return p == "" || p == "qq" || p == "onebot" || p == "aiocqhttp"
+	return p == "" || p == "qq" || p == "onebot"
 }
 
 func canonicalPlatform(p string) string {
@@ -699,11 +713,14 @@ func validateConfiguration(cfg Configuration) error {
 		if _, exists := endpointIDs[endpoint.ID]; exists {
 			return fmt.Errorf("endpoint id %q is duplicated", endpoint.ID)
 		}
+		if !api.Format(endpoint.APIFormat).Valid() {
+			return fmt.Errorf("endpoint %q has unknown API format", endpoint.DisplayName)
+		}
 		parsed, err := url.Parse(endpoint.BaseURL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			return fmt.Errorf("endpoint %q has an invalid http/https base url", endpoint.DisplayName)
 		}
-		if parsed.RawQuery != "" || parsed.Fragment != "" {
+		if (parsed.RawQuery != "" && api.Format(endpoint.APIFormat) != api.Custom) || parsed.Fragment != "" {
 			return fmt.Errorf("endpoint %q must not contain query or fragment", endpoint.DisplayName)
 		}
 		switch endpoint.APIKeySource {

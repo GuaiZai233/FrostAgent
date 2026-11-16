@@ -60,24 +60,6 @@ interface OneBotActionFrame {
   [key: string]: unknown;
 }
 
-interface AstrBotMessageItem {
-  type: string;
-  text?: string;
-  mention_user_id?: string;
-  url?: string;
-  path?: string;
-  [key: string]: unknown;
-}
-
-interface AstrBotActionFrame {
-  action?: string;
-  content?: string;
-  messages?: AstrBotMessageItem[];
-  is_intermediate?: boolean;
-  echo?: string;
-  [key: string]: unknown;
-}
-
 interface RetainedChat {
   element: HTMLElement;
   dispose: () => void;
@@ -123,8 +105,7 @@ function createChatPage(container: HTMLElement): () => void {
   let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
 
   // Config state
-  let adapter: 'onebot' | 'astrbot' = 'onebot';
-  let astrbotPlatform = 'aiocqhttp';
+  const adapter = 'onebot';
   let chatType: 'private' | 'group' = 'private';
   // Each debug session starts with a fresh random identity so simulated
   // senders do not collide with each other across page visits.
@@ -178,21 +159,13 @@ function createChatPage(container: HTMLElement): () => void {
         <div class="flex items-center justify-between gap-2 border-b border-border pb-2.5">
           <div class="flex items-center gap-2 text-xs font-semibold text-foreground">
             ${icon('sliders', 'w-3.5 h-3.5 text-primary')}
-            <span>模拟协议与发送者配置</span>
+            <span>OneBot 模拟发送者配置</span>
           </div>
           <span class="text-xs text-muted">修改参数后自动更新后续数据包</span>
         </div>
 
-        <!-- Row 1: Adapter, Chat Type, User ID, Nickname -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="form-group">
-            <label class="form-label text-xs" for="chat-adapter-select">模拟适配器</label>
-            <select id="chat-adapter-select" class="select text-xs">
-              <option value="onebot" selected>OneBot (v11 直连)</option>
-              <option value="astrbot">AstrBot</option>
-            </select>
-          </div>
-
+        <!-- Row 1: Chat Type, User ID, Nickname -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
           <div class="form-group">
             <label class="form-label text-xs" for="chat-type-select">会话场景</label>
             <select id="chat-type-select" class="select text-xs">
@@ -209,21 +182,6 @@ function createChatPage(container: HTMLElement): () => void {
           <div class="form-group">
             <label class="form-label text-xs" for="chat-nickname-input">发送者昵称</label>
             <input type="text" id="chat-nickname-input" class="input text-xs" value="${escapeHtml(defaultNickname)}" placeholder="例如: aB3dE9f" />
-          </div>
-        </div>
-
-        <!-- Row 2: AstrBot platform config (hidden when OneBot is selected) -->
-        <div id="astrbot-config-row" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1 border-t border-border" style="display: none;">
-          <div class="form-group">
-            <label class="form-label text-xs" for="chat-astrbot-platform-select">AstrBot 平台标识 (Platform)</label>
-            <select id="chat-astrbot-platform-select" class="select text-xs">
-              <option value="aiocqhttp" selected>aiocqhttp (QQ / NapCat, 推荐)</option>
-              <option value="qq_official">qq_official (QQ 官方机器人)</option>
-              <option value="telegram">telegram</option>
-              <option value="discord">discord</option>
-              <option value="wechat">wechat</option>
-              <option value="astrbot">astrbot (通用默认)</option>
-            </select>
           </div>
         </div>
 
@@ -261,7 +219,7 @@ function createChatPage(container: HTMLElement): () => void {
           <div class="card p-8 text-center text-muted text-xs flex flex-col items-center justify-center gap-2 m-auto" id="chat-empty-state">
             <span class="text-primary flex items-center">${icon('bot', 'w-8 h-8')}</span>
             <span class="font-medium text-foreground">直接对话模拟器已就绪</span>
-            <span>选择上方适配器与场景后，在下方输入框发送消息即可与当前实例对话。</span>
+            <span>选择上方会话场景后，在下方输入框发送消息即可与当前实例对话。</span>
           </div>
         </div>
 
@@ -303,9 +261,6 @@ function createChatPage(container: HTMLElement): () => void {
   const btnClearChat = container.querySelector<HTMLButtonElement>('#btn-clear-chat')!;
   const btnResetSession = container.querySelector<HTMLButtonElement>('#btn-reset-session')!;
 
-  const adapterSelect = container.querySelector<HTMLSelectElement>('#chat-adapter-select')!;
-  const astrbotConfigRow = container.querySelector<HTMLElement>('#astrbot-config-row')!;
-  const astrbotPlatformSelect = container.querySelector<HTMLSelectElement>('#chat-astrbot-platform-select')!;
   const typeSelect = container.querySelector<HTMLSelectElement>('#chat-type-select')!;
   const uidInput = container.querySelector<HTMLInputElement>('#chat-uid-input')!;
   const nicknameInput = container.querySelector<HTMLInputElement>('#chat-nickname-input')!;
@@ -539,11 +494,7 @@ function createChatPage(container: HTMLElement): () => void {
       return;
     }
 
-    if (adapter === 'onebot') {
-      handleOneBotFrame(payload as OneBotActionFrame);
-    } else if (adapter === 'astrbot') {
-      handleAstrBotFrame(payload as AstrBotActionFrame);
-    }
+    handleOneBotFrame(payload as OneBotActionFrame);
   }
 
   function handleOneBotFrame(action: OneBotActionFrame) {
@@ -598,33 +549,6 @@ function createChatPage(container: HTMLElement): () => void {
     }
   }
 
-  function handleAstrBotFrame(action: AstrBotActionFrame) {
-    if (action.action === 'send_message') {
-      let replyText = action.content || '';
-      if (!replyText && Array.isArray(action.messages)) {
-        replyText = action.messages
-          .map((m: AstrBotMessageItem) => {
-            if (m.type === 'plain') return m.text || '';
-            if (m.type === 'mention_user') return `@${m.mention_user_id || ''} `;
-            if (m.type === 'image') return `[图片: ${m.url || m.path || 'image'}]`;
-            return m.text || `[${m.type}]`;
-          })
-          .join('');
-      }
-
-      if (replyText.trim()) {
-        appendMessage({
-          id: `bot_${Date.now()}_${++msgSeq}`,
-          role: 'bot',
-          sender: botName,
-          content: replyText,
-          time: new Date().toLocaleTimeString(),
-          intermediate: action.is_intermediate,
-        });
-      }
-    }
-  }
-
   function sendMessage() {
     const text = inputTextarea.value.trim();
     if (!text) return;
@@ -646,11 +570,7 @@ function createChatPage(container: HTMLElement): () => void {
     inputTextarea.value = '';
 
     // Dispatch protocol frame
-    if (adapter === 'onebot') {
-      sendOneBotMessage(text);
-    } else if (adapter === 'astrbot') {
-      sendAstrBotMessage(text);
-    }
+    sendOneBotMessage(text);
   }
 
   function sendOneBotMessage(text: string) {
@@ -712,37 +632,6 @@ function createChatPage(container: HTMLElement): () => void {
     }
   }
 
-  function sendAstrBotMessage(text: string) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    const currentUid = String(userId || defaultUid);
-    const currentGid = String(groupId || '100001');
-    const senderName = nickname || defaultNickname;
-    const currentPlatform = astrbotPlatform || 'aiocqhttp';
-
-    const eventPayload = {
-      type: 'event',
-      event_type: 'message',
-      message_id: `msg_${Date.now()}_${++msgSeq}`,
-      session_id:
-        chatType === 'group'
-          ? `${currentPlatform}:group:${currentGid}`
-          : `${currentPlatform}:private:${currentUid}`,
-      platform: currentPlatform,
-      message_type: chatType,
-      user_id: currentUid,
-      sender_name: senderName,
-      sender_card: card || senderName,
-      group_id: chatType === 'group' ? currentGid : '',
-      group_name: chatType === 'group' ? groupName || '调试群' : '',
-      content: text,
-      is_wake: isWake,
-      is_at: isWake,
-      timestamp: Math.floor(Date.now() / 1000),
-    };
-    ws.send(JSON.stringify(eventPayload));
-  }
-
   // Event Listeners
   btnReconnect.addEventListener('click', () => {
     connect();
@@ -766,20 +655,6 @@ function createChatPage(container: HTMLElement): () => void {
   btnResetSession.addEventListener('click', () => {
     clearMessages();
     connect();
-  });
-
-  adapterSelect.addEventListener('change', () => {
-    clearMessages();
-    adapter = adapterSelect.value as 'onebot' | 'astrbot';
-    if (astrbotConfigRow) {
-      astrbotConfigRow.style.display = adapter === 'astrbot' ? 'grid' : 'none';
-    }
-    updateEndpointDisplay();
-    connect();
-  });
-
-  astrbotPlatformSelect?.addEventListener('change', () => {
-    astrbotPlatform = astrbotPlatformSelect.value;
   });
 
   typeSelect.addEventListener('change', () => {

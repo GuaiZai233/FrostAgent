@@ -41,13 +41,15 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 		name: InspectMessageImageToolName,
 		description: "Use this tool when a relevant message in recent_group_messages, reply_context, or system_context contains a placeholder such as [图片], " +
 			"but its visual content is unavailable. Provide the exact message_id from the conversation context. " +
-			"If the message contains multiple images, use image_index (zero-based) to select the specific image.",
+			"For images inside QQ forwarded chat records, first call read_forward and pass the node's exact image_ref as message_id. " +
+			"If the message or forwarded node contains multiple images, use image_index (zero-based) to select the specific image. " +
+			"Forward image references only support image inspection; never use them for replies, forwarding, reactions, or recalls.",
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"message_id": map[string]any{
 					"type":        "string",
-					"description": "Exact message_id from recent_group_messages, reply_context, or system_context.",
+					"description": "Exact message_id from trusted conversation context, or exact image_ref returned by QQ read_forward.",
 				},
 				"image_index": map[string]any{
 					"type":        "integer",
@@ -59,7 +61,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 			"additionalProperties": false,
 		},
 		enabled: func() bool {
-			return engine != nil && engine.VisionProvider != nil
+			return engine != nil && (engine.VisionProvider != nil || engine.Provider != nil)
 		},
 		disabledError:    fmt.Errorf("图片识别功能未启用"),
 		proactiveAllowed: true,
@@ -88,11 +90,14 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 				return textResult("当前会话无法回溯消息图片。"), nil
 			}
 
-			provider, modelSource, visionDisabled := inspectImageProvider(engine, runContext)
-			if provider == nil {
-				if visionDisabled {
-					return textResult("当前会话已禁用视觉模型，无法识别图片。"), nil
+			if engine.ModelRouter != nil {
+				if runContext.RouteSnapshot == nil {
+					runContext.RouteSnapshot = engine.ModelRouter.Snapshot()
 				}
+				ctx = engine.ModelRouter.WithSnapshot(ctx, runContext.RouteSnapshot)
+			}
+			provider, modelSource := inspectImageProvider(engine, runContext)
+			if provider == nil {
 				return textResult("图片识别模型不可用。"), nil
 			}
 			if inspectImageQuotaExceeded(engine, runContext) {
@@ -104,12 +109,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 
 			data, err := runContext.LoadObservedImage(ctx, messageID, payload.ImageIndex)
 			if err != nil {
-				return textResult(fmt.Sprintf(
-					"无法读取消息 %s 的第 %d 张图片: %v",
-					messageID,
-					payload.ImageIndex,
-					err,
-				)), nil
+				return textResult(engine.Log().ReportError(logs.TOOL, "图片读取失败", fmt.Errorf("message=%s index=%d: %w", messageID, payload.ImageIndex, err), runContext.SessionID)), nil
 			}
 			if len(data) == 0 {
 				return textResult(fmt.Sprintf("消息 %s 的第 %d 张图片内容为空。", messageID, payload.ImageIndex)), nil
@@ -134,10 +134,14 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 				return textResult(""), fmt.Errorf("序列化图片识别请求失败: %w", err)
 			}
 
-			description := strings.TrimSpace(llm.CallVisionModel(ctx, provider, core.RouteContext{
+			description, visionErr := llm.CallVisionModelWithError(ctx, provider, core.RouteContext{
 				Platform: runContext.RouteScope.Platform,
 				GroupID:  runContext.RouteScope.GroupID,
-			}, string(encoded)))
+			}, string(encoded))
+			if visionErr != nil {
+				return textResult(engine.Log().ReportError(logs.TOOL, "图片识别失败：视觉模型调用失败", visionErr, runContext.SessionID)), nil
+			}
+			description = strings.TrimSpace(description)
 			if description == "" {
 				engine.Log().Warn(logs.TOOL, fmt.Sprintf(
 					"inspect_message_image: 模型未返回图片描述 message=%s index=%d source=%s",
@@ -145,7 +149,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 					payload.ImageIndex,
 					modelSource,
 				))
-				return textResult("图片识别失败：模型未返回可用内容。"), nil
+				return textResult(engine.Log().ReportError(logs.TOOL, "图片识别失败：模型未返回可用内容", nil, runContext.SessionID)), nil
 			}
 
 			description, blocked := vetInspectedImageDescription(engine, runContext, description)
@@ -155,7 +159,7 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 					messageID,
 					payload.ImageIndex,
 				))
-				return textResult("图片内容未通过安全审查，已隔离。"), nil
+				return textResult(engine.Log().ReportError(logs.TOOL, "安全审查拦截：图片内容未通过安全审查，已隔离", nil, runContext.SessionID)), nil
 			}
 
 			engine.Log().Info(logs.TOOL, fmt.Sprintf(
@@ -175,23 +179,30 @@ func InspectMessageImageTool(engine *llm.Engine) Tool {
 	}
 }
 
-// inspectImageProvider uses the configured vision workload. A vision workload
-// that is explicitly disabled is a hard opt-out and is never bypassed through
-// the dialogue workload. Deployments that want the dialogue model to inspect
-// images must bind the vision workload to follow_dialogue, which is resolved
-// through engine.VisionProvider rather than this tool.
-func inspectImageProvider(engine *llm.Engine, runContext llm.RunContext) (core.LLMProvider, string, bool) {
-	if engine == nil || engine.VisionProvider == nil {
-		return nil, "", false
+// inspectImageProvider prefers the configured image-description workload and
+// otherwise uses the current dialogue model. Disabling the dedicated workload
+// only disables that preprocessing route, not the dialogue model's image access.
+func inspectImageProvider(engine *llm.Engine, runContext llm.RunContext) (core.LLMProvider, string) {
+	if engine == nil {
+		return nil, ""
 	}
-	snapshot := runContext.RouteSnapshot
-	if snapshot == nil && engine.ModelRouter != nil {
-		snapshot = engine.ModelRouter.Snapshot()
+	if snapshot := runContext.RouteSnapshot; snapshot != nil {
+		_, err := snapshot.Resolve(modelrouter.WorkloadVision, runContext.RouteScope)
+		if err == nil {
+			return engine.VisionProvider, "vision"
+		}
+		// A configured route that cannot be resolved must report failure rather
+		// than silently selecting a different model.
+		if !errors.Is(err, modelrouter.ErrDisabled) {
+			return nil, ""
+		}
+		if _, err := snapshot.Resolve(modelrouter.WorkloadDialogue, runContext.RouteScope); err != nil {
+			return nil, ""
+		}
+	} else if engine.VisionProvider != nil {
+		return engine.VisionProvider, "vision"
 	}
-	if snapshot != nil && snapshot.IsDisabled(modelrouter.WorkloadVision, runContext.RouteScope) {
-		return nil, "", true
-	}
-	return engine.VisionProvider, "vision", false
+	return engine.Provider, "dialogue"
 }
 
 func inspectImageQuotaLimit(engine *llm.Engine) int {
@@ -238,7 +249,7 @@ func inspectImageBillingBlocked(ctx context.Context, engine *llm.Engine, runCont
 		externalID = strings.TrimSpace(runContext.ActorUserID)
 	}
 	if externalID == "" {
-		return "计费身份不可用，无法识别图片。", true
+		return engine.Log().ReportError(logs.TOOL, "计费失败：计费身份不可用，无法识别图片", nil, runContext.SessionID), true
 	}
 
 	balanceCtx, cancel := context.WithTimeout(ctx, engine.BillingConfig.Timeout)
@@ -246,13 +257,12 @@ func inspectImageBillingBlocked(ctx context.Context, engine *llm.Engine, runCont
 	cancel()
 	if err != nil {
 		if errors.Is(err, billing.ErrInsufficientFunds) {
-			return "余额不足，无法识别图片。", true
+			return engine.Log().ReportError(logs.TOOL, "计费失败：余额不足，无法识别图片", err, runContext.SessionID), true
 		}
-		engine.Log().Warn(logs.TOOL, fmt.Sprintf("inspect_message_image: 余额查询失败: %v", err))
-		return "计费服务不可用，无法识别图片。", true
+		return engine.Log().ReportError(logs.TOOL, "计费失败：计费服务不可用，无法识别图片", err, runContext.SessionID), true
 	}
 	if balance != nil && balance.Exists && balance.BalanceMinor <= 0 {
-		return "余额不足，无法识别图片。", true
+		return engine.Log().ReportError(logs.TOOL, "计费失败：余额不足，无法识别图片", billing.ErrInsufficientFunds, runContext.SessionID), true
 	}
 	return "", false
 }

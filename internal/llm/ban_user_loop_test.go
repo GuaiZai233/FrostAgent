@@ -112,7 +112,7 @@ func TestBanUserToolLoopShortCircuitAndCancelBatch(t *testing.T) {
 			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "do bad thing"}}, runCtx)
 
 			// 1. Result content must match exact user-facing notice
-			if result.Content != security.RejectGatewayMsg {
+			if !strings.HasPrefix(result.Content, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 				t.Fatalf("expected result %q, got %q", security.RejectGatewayMsg, result.Content)
 			}
 
@@ -486,8 +486,8 @@ func TestProactiveTurnMaxIterationsReachedIsSilent(t *testing.T) {
 		if result.Silent {
 			t.Fatal("expected result.Silent to be false for explicit turn reaching max iterations")
 		}
-		expectedErrMsg := "FrostAgent错误：达到最大迭代次数，未能得出最终答案"
-		if result.Content != expectedErrMsg {
+		expectedErrMsg := "智能体运行失败：达到最大迭代次数，未能得出最终答案"
+		if !strings.HasPrefix(result.Content, "[FrostAgent 错误] "+expectedErrMsg+" (Ref_ID: ") {
 			t.Fatalf("expected %q, got %q", expectedErrMsg, result.Content)
 		}
 	})

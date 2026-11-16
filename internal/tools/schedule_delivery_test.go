@@ -21,9 +21,9 @@ func TestCreateScheduleUsesTrustedConversationDelivery(t *testing.T) {
 		drop                           bool
 	}{
 		{"onebot private", "onebot", "onebot", "", false},
-		{"astrbot group", "fixture-platform", "astrbot", "fixture-group", false},
+		{"fixture group", "fixture-platform", "fixture", "fixture-group", false},
 		{"legacy nonchat", "", "", "", false},
-		{"older server", "fixture-platform", "astrbot", "fixture-group", true},
+		{"older server", "fixture-platform", "fixture", "fixture-group", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			captured := make(chan actionscat.CreateScheduleReq, 1)
@@ -56,7 +56,7 @@ func TestCreateScheduleUsesTrustedConversationDelivery(t *testing.T) {
 				return ""
 			})
 			ctx := llm.WithRunContext(context.Background(), llm.RunContext{ActorUserID: "fixture-user", ActorPlatform: tc.platform, AdapterID: tc.adapter, SessionID: "fixture-session", RouteScope: modelrouter.Scope{GroupID: tc.group}})
-			out, err := ActionsCatCreateScheduleTool(client, scope).ExecuteContext(ctx, `{"action_id":"fixture-action","cron_expr":"* * * * *","delivery_context":{"platform":"attacker-platform","target_id":"attacker-target"}}`)
+			out, err := routedActionsCatTestTool(client, "create_schedule", scope).ExecuteContext(ctx, `{"action_id":"fixture-action","cron_expr":"* * * * *","delivery_context":{"platform":"attacker-platform","target_id":"attacker-target"}}`)
 			if err != nil {
 				t.Fatal(err)
 			}

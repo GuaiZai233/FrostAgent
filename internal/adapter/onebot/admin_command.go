@@ -19,7 +19,8 @@ import (
 )
 
 // extractOneBotAdminCommand parses a OneBot event to see if it is an administrator command candidate.
-// It strictly requires a real @ targeting the bot (matching event.SelfID) in the current message only.
+// Private commands need no mention. Group commands require a real @ targeting
+// event.SelfID, except the log lookup command.
 func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *runtimescope.Scope) (cmd admincmd.ParsedCommand, isCandidate bool, err error) {
 	_ = scope
 	selfIDStr := strconv.FormatInt(event.SelfID, 10)
@@ -58,10 +59,6 @@ func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *ru
 		remainingSegments = append(remainingSegments, seg)
 	}
 
-	if !hasRealAt {
-		return cmd, false, nil
-	}
-
 	var b strings.Builder
 	for _, seg := range remainingSegments {
 		switch seg.Type {
@@ -96,7 +93,11 @@ func extractOneBotAdminCommand(event model.OneBotEvent, prefix string, scope *ru
 		}
 	}
 	text := strings.TrimSpace(b.String())
-	return admincmd.ParseCandidate(text, prefix)
+	cmd, isCandidate, err = admincmd.ParseCandidate(text, prefix)
+	if event.MessageType != "private" && !hasRealAt && cmd.Type != admincmd.CmdLog {
+		return admincmd.ParsedCommand{}, false, nil
+	}
+	return cmd, isCandidate, err
 }
 
 func sendOneBotReply(event model.OneBotEvent, conn *wsConnection, text string) {
@@ -143,7 +144,7 @@ func (c *wsConnection) banQuotedSticker(ctx context.Context, event model.OneBotE
 	return c.stealer.MarkInappropriate(data)
 }
 
-func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine) bool {
+func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm.Engine, previousError *previousErrorReply) bool {
 	if conn != nil && conn.mock {
 		return false
 	}
@@ -169,7 +170,7 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 		}
 		if err := engine.Security.CheckAccess(principal); err != nil {
 			if errors.Is(err, security.ErrLocked) {
-				sendOneBotReply(event, conn, security.RejectGatewayMsg)
+				sendOneBotReply(event, conn, engine.Log().ReportError(logs.SYSTEM, security.RejectGatewayMsg, err))
 			}
 			return true // Fail-closed: locked or security error
 		}
@@ -191,6 +192,17 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 	routeScope := oneBotRouteScope(event)
 
 	if !engine.Go(func() {
+		if cmd.Type == admincmd.CmdLog && len(cmd.Args) == 0 {
+			id, active := previousError.resolve(engine.Context(), conn.Context())
+			if !active {
+				return
+			}
+			if id == "" {
+				sendOneBotReply(event, conn, admincmd.FormatUsage(prefix))
+				return
+			}
+			cmd.Args = []string{id}
+		}
 		exec := admincmd.NewExecutor(engine)
 		cmdCtx := admincmd.CommandContext{
 			SessionID:    sessionID,
@@ -205,14 +217,24 @@ func handleAdminCommand(conn *wsConnection, event model.OneBotEvent, engine *llm
 			BanQuotedSticker: func(ctx context.Context) (string, error) {
 				return conn.banQuotedSticker(ctx, event)
 			},
+			ReplyPrivate: func(ctx context.Context, text string) error {
+				_, err := conn.SendActionAndWait(model.OneBotAction{
+					Action: "send_private_msg",
+					Params: map[string]any{
+						"user_id": event.UserID,
+						"message": []map[string]any{{"type": "text", "data": map[string]any{"text": text}}},
+					},
+				}, actionACKTimeout(conn.Scope))
+				return err
+			},
 		}
 		if err := exec.Execute(context.Background(), cmdCtx, cmd); err != nil {
 			if !errors.Is(err, security.ErrLocked) {
-				sendOneBotReply(event, conn, fmt.Sprintf("执行指令失败：%v", err))
+				sendOneBotReply(event, conn, engine.Log().ReportError(logs.SYSTEM, "管理员指令执行失败", err, sessionID))
 			}
 		}
 	}) {
-		sendOneBotReply(event, conn, "实例未就绪，无法执行指令。")
+		sendOneBotReply(event, conn, engine.Log().ReportError(logs.SYSTEM, "管理员指令执行失败：实例未就绪", nil, sessionID))
 	}
 
 	return true

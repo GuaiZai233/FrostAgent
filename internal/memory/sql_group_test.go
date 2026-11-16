@@ -28,9 +28,15 @@ func TestSQLGroupsIsolatePlatformsAndShareQQAliases(t *testing.T) {
 	if err != nil || alias != qq {
 		t.Fatalf("QQ aliases did not share a store: %v", err)
 	}
-	astrbot, err := manager.GetGroupStoreForPlatform("aiocqhttp", "test-group")
-	if err != nil || astrbot != qq {
-		t.Fatalf("AstrBot QQ alias did not share a store: %v", err)
+	onebot, err := manager.GetGroupStoreForPlatform("onebot", "test-group")
+	if err != nil || onebot != qq {
+		t.Fatalf("OneBot QQ alias did not share a store: %v", err)
+	}
+	for _, platform := range []string{"aiocqhttp", "astrbot"} {
+		retired, err := manager.GetGroupStoreForPlatform(platform, "test-group")
+		if err != nil || retired == qq {
+			t.Fatalf("retired platform %q shared the QQ store: %v", platform, err)
+		}
 	}
 	other, err := manager.GetGroupStoreForPlatform("discord", "test-group")
 	if err != nil || other == qq {
@@ -123,8 +129,8 @@ func TestSQLObservedMemberNamePreservesAliasesAndRejectsStaleEdit(t *testing.T) 
 		t.Fatal(err)
 	}
 	current = "Fresh"
-	if changed, err := group.SetObservedMemberPreferredName("user-one", "WrongOwner", &current, entries[0]); err != nil || changed {
-		t.Fatalf("changed evidence owner did not block name: changed=%t err=%v", changed, err)
+	if changed, err := group.SetObservedMemberPreferredName("user-one", "Fresh", &current, entries[0]); err != nil || !changed {
+		t.Fatalf("retired member owner affected group evidence: changed=%t err=%v", changed, err)
 	}
 	if _, err := db.SQL.Exec(`UPDATE memory_entries SET owner = 'user-one'
 		WHERE instance_id = 'test-instance' AND scope_type = 'group' AND platform = 'qq'

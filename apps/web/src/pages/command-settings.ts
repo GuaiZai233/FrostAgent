@@ -98,7 +98,7 @@ export function mountCommandSettingsPage(container: HTMLElement, api = createIns
               ${icon('terminal', 'w-4 h-4 text-primary')}
               <span>动态指令语法与使用示例</span>
             </h2>
-            <span class="text-xs text-muted">必须在真实 @ 机器人的消息中触发</span>
+            <span class="text-xs text-muted">除 log 外，必须在真实 @ 机器人的消息中触发</span>
           </div>
 
           <div class="flex flex-col gap-2.5 mt-1" id="cmd-examples-list">
@@ -131,6 +131,12 @@ export function mountCommandSettingsPage(container: HTMLElement, api = createIns
     const { prefix: p, sep } = getPrefixParts(prefix);
 
     const commands = [
+      {
+        name: 'log',
+        usage: `${p}${sep}log <uuidv4>`,
+        desc: '查询当前实例错误日志',
+        detail: '仅限管理员，无需 @。群聊执行时将详细错误私聊发送给管理员，群内仅提示结果。日志清理、覆盖或实例重启后无法查询。',
+      },
       {
         name: 'reset',
         usage: `${p}${sep}reset`,

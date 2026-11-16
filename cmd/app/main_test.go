@@ -113,7 +113,7 @@ func TestAdapterListenerDoesNotExposeManagement(t *testing.T) {
 		status int
 	}{
 		{"/instances/a1b2c3d4/ws/onebot", 204},
-		{"/instances/a1b2c3d4/ws/astrbot", 204},
+		{"/instances/a1b2c3d4/ws/astrbot", 404},
 		{"/instances/a1b2c3d4/frostagent.v1.SettingsService/GetEnvVars", 404},
 		{"/instances/a1b2c3d4/api/sticker/example/image", 404},
 		{"/api/instances", 404},

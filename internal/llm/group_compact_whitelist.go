@@ -45,7 +45,7 @@ func WithoutCompactSummary(snap GroupContextSnapshot) GroupContextSnapshot {
 
 // groupIdentityFromConversationID converts a session conversation ID into the identity used by
 // whitelist entries. It mirrors the frontend groupIdFromSessionId: "group:<id>" and
-// "<onebot|qq|aiocqhttp>:group:<id>" normalize to the bare QQ id, other platforms keep their prefix.
+// "<onebot|qq>:group:<id>" normalize to the bare QQ id, other platforms keep their prefix.
 // The second result reports whether the conversation is a group conversation at all.
 func groupIdentityFromConversationID(conversationID string) (string, bool) {
 	id := strings.TrimSpace(conversationID)
@@ -61,7 +61,7 @@ func groupIdentityFromConversationID(conversationID string) (string, bool) {
 	prefix := strings.ToLower(strings.TrimSpace(id[:index]))
 	raw := strings.TrimSpace(id[index+len(marker):])
 	switch prefix {
-	case "", "onebot", "qq", "aiocqhttp":
+	case "", "onebot", "qq":
 		return raw, true
 	default:
 		if raw == "" {

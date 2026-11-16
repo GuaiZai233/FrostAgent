@@ -22,7 +22,7 @@ type sqlBrainStore struct {
 func (b sqlBrainStore) load() (*BrainData, error) {
 	ctx := context.Background()
 	rows, err := b.db.SQL.QueryContext(ctx, b.db.Bind(`SELECT id, owner, owner_type, content, summary, evidence,
-		source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at,
+		source_message_id, source_sender_id, source_media, source, created_at, updated_at,
 		access_count, merged_from_json, summary_dirty FROM memory_entries
 		WHERE instance_id = ? AND scope_type = ? AND platform = ? AND group_id = ? ORDER BY created_at, id`),
 		b.instanceID, b.scope, b.platform, b.groupID)
@@ -32,15 +32,15 @@ func (b sqlBrainStore) load() (*BrainData, error) {
 	brain := &BrainData{Entries: []MemoryEntry{}}
 	for rows.Next() {
 		var entry MemoryEntry
-		var ownerType, source, visibility, createdAt, updatedAt, merged string
+		var ownerType, source, createdAt, updatedAt, merged string
 		if err := rows.Scan(&entry.ID, &entry.Owner, &ownerType, &entry.Content, &entry.Summary,
-			&entry.Evidence, &entry.SourceMessageID, &entry.SourceSenderID, &entry.SourceMedia, &source, &visibility,
+			&entry.Evidence, &entry.SourceMessageID, &entry.SourceSenderID, &entry.SourceMedia, &source,
 			&createdAt, &updatedAt, &entry.AccessCount, &merged, &entry.SummaryNeedsRefresh); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		entry.ScopeType, entry.GroupID = b.scope, b.groupID
-		entry.OwnerType, entry.Source, entry.Visibility = OwnerType(ownerType), Source(source), Visibility(visibility)
+		entry.OwnerType, entry.Source = OwnerType(ownerType), Source(source)
 		entry.Owner = CanonicalOwner(entry.Owner)
 		if entry.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 			rows.Close()
@@ -190,20 +190,20 @@ func (b sqlBrainStore) writeEntries(entries []MemoryEntry, update bool) error {
 		}
 		query := `INSERT INTO memory_entries (
 			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
-			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json, summary_dirty
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			source_message_id, source_sender_id, source_media, source, created_at, updated_at, access_count, merged_from_json, summary_dirty
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if update {
 			query += ` ON CONFLICT (instance_id, scope_type, platform, group_id, id) DO UPDATE SET
 				owner = excluded.owner, owner_type = excluded.owner_type, content = excluded.content,
 				summary = excluded.summary, evidence = excluded.evidence,
 				source_message_id = excluded.source_message_id, source_sender_id = excluded.source_sender_id,
-				source_media = excluded.source_media, source = excluded.source, visibility = excluded.visibility,
+				source_media = excluded.source_media, source = excluded.source,
 				created_at = excluded.created_at, updated_at = excluded.updated_at,
 				access_count = excluded.access_count, merged_from_json = excluded.merged_from_json, summary_dirty = excluded.summary_dirty`
 		}
 		if _, err = tx.ExecContext(ctx, b.db.Bind(query), b.instanceID, b.scope, b.platform, b.groupID,
 			entry.ID, entry.Owner, entry.OwnerType, entry.Content, entry.Summary, entry.Evidence,
-			entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia, entry.Source, entry.Visibility,
+			entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia, entry.Source,
 			entry.CreatedAt.UTC().Format(time.RFC3339Nano), entry.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			entry.AccessCount, string(merged), boolInteger(entry.SummaryNeedsRefresh)); err != nil {
 			return err
@@ -269,11 +269,11 @@ func (b sqlBrainStore) saveTx(ctx context.Context, tx *sql.Tx, brain *BrainData)
 		}
 		if _, err := tx.ExecContext(ctx, b.db.Bind(`INSERT INTO memory_entries (
 			instance_id, scope_type, platform, group_id, id, owner, owner_type, content, summary, evidence,
-			source_message_id, source_sender_id, source_media, source, visibility, created_at, updated_at, access_count, merged_from_json, summary_dirty
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			source_message_id, source_sender_id, source_media, source, created_at, updated_at, access_count, merged_from_json, summary_dirty
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 			b.instanceID, b.scope, b.platform, b.groupID, entry.ID, entry.Owner, entry.OwnerType,
 			entry.Content, entry.Summary, entry.Evidence, entry.SourceMessageID, entry.SourceSenderID, entry.SourceMedia,
-			entry.Source, entry.Visibility, entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+			entry.Source, entry.CreatedAt.UTC().Format(time.RFC3339Nano),
 			entry.UpdatedAt.UTC().Format(time.RFC3339Nano), entry.AccessCount, string(merged), boolInteger(entry.SummaryNeedsRefresh)); err != nil {
 			return err
 		}

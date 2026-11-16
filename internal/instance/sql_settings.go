@@ -157,7 +157,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 	if old != nil {
 		old.Stop()
 	}
-	r, c, err := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	r, c, err := m.buildFresh(i.id, i, enabled)
 	if err == nil && enabled && i.mcp != nil {
 		err = i.mcp.SetRuntimeActive(true)
 	}
@@ -166,6 +166,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 			r.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
 			r.Engine.MemoryEmbeddings.CarryIndexesFrom(old.Engine.MemoryEmbeddings)
 			old.Engine.SessionManager.TransferSessionsTo(r.Engine.SessionManager)
+			r.Engine.Awareness.CarryFrom(old.Engine.Awareness)
 		}
 		i.mu.Lock()
 		i.runtime, i.config = r, c
@@ -188,7 +189,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 			applyErr = errors.Join(applyErr, currentConfig.Update(key, value, false))
 		}
 	}
-	fallback, fallbackConfig, fallbackErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	fallback, fallbackConfig, fallbackErr := m.buildFresh(i.id, i, enabled)
 	if fallbackErr == nil && enabled && i.mcp != nil {
 		fallbackErr = i.mcp.SetRuntimeActive(true)
 	}
@@ -200,6 +201,7 @@ func (m *Manager) reloadSQLRuntimeLocked(i *managed, enabled bool, previous map[
 		fallback.Engine.GroupManager.CarrySQLStoresFrom(old.Engine.GroupManager)
 		fallback.Engine.MemoryEmbeddings.CarryIndexesFrom(old.Engine.MemoryEmbeddings)
 		old.Engine.SessionManager.TransferSessionsTo(fallback.Engine.SessionManager)
+		fallback.Engine.Awareness.CarryFrom(old.Engine.Awareness)
 	}
 	i.mu.Lock()
 	i.runtime, i.config = fallback, fallbackConfig

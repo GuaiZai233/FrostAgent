@@ -12,7 +12,7 @@ export function groupProbabilityIdentity(id: string): string {
   const colon = id.indexOf(':');
   const platform = colon < 0 ? 'qq' : id.slice(0, colon).toLowerCase();
   const group = colon < 0 ? id : id.slice(colon + 1);
-  return `${['onebot', 'aiocqhttp'].includes(platform) ? 'qq' : platform}:${group}`;
+  return `${['onebot'].includes(platform) ? 'qq' : platform}:${group}`;
 }
 
 export function parseGroupProbabilities(raw: string): Map<string, number> {

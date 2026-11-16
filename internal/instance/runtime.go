@@ -2,13 +2,15 @@ package instance
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
-	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
+	"github.com/GuaiZai233/FrostAgent/internal/balancequery"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
@@ -32,10 +34,12 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/service/settings"
 	skillservice "github.com/GuaiZai233/FrostAgent/internal/service/skills"
 	stickersvc "github.com/GuaiZai233/FrostAgent/internal/service/sticker"
+	"github.com/GuaiZai233/FrostAgent/internal/sessionstate"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
+	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"os"
@@ -53,13 +57,17 @@ type Runtime struct {
 	Engine         *llm.Engine
 	Handler        http.Handler
 	Onebot         *onebot.Adapter
-	Astrbot        *astrbot.Adapter
 	backgroundOnce sync.Once
 	onebotClient   bool
-	astrbotClient  bool
 }
 
-func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, templateDialogue string, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB) (*Runtime, error) {
+func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconfig.Store, logger *logs.Store, billingClient *billing.Client, mcpManager *mcp.Manager, mcpGetenv func(string) string, sandboxManager *sandbox.ConfigManager, instanceID string, enabled bool, securityController *security.Controller, db *storage.DB, settingsWriteMu tools.ConfigWriteLock) (*Runtime, error) {
+	if err := safeTree(dir); err != nil {
+		return nil, err
+	}
+	if err := logger.EnablePersistence(filepath.Join(dir, "logs"), logs.PersistentBudget(config.Get(logs.LogBudgetKey))); err != nil {
+		logger.Warn(logs.SYSTEM, "部分历史日志无法恢复，请检查实例持久化状态")
+	}
 	if config.AccessError() != nil {
 		return nil, config.AccessError()
 	}
@@ -67,17 +75,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		return nil, config.Error()
 	}
 	onebotConnection, onebotError := wsclient.Load(config.Get, "ONEBOT")
-	astrbotConnection, astrbotError := wsclient.Load(config.Get, "ASTRBOT")
 	if enabled {
 		if onebotError != nil {
 			return nil, fmt.Errorf("OneBot connection: %w", onebotError)
 		}
-		if astrbotError != nil {
-			return nil, fmt.Errorf("AstrBot connection: %w", astrbotError)
-		}
-	}
-	if err := safeTree(dir); err != nil {
-		return nil, err
 	}
 	scope := runtimescope.New(config, global, logger)
 	scope.SetInstanceID(instanceID)
@@ -91,19 +92,15 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			scope.Wait()
 		}
 	}()
-	var routerManager *modelrouter.Manager
-	if db != nil {
-		routerManager = modelrouter.NewSQL(db, instanceID, scope)
-	} else {
-		routerManager = modelrouter.New(filepath.Join(configDir, "model_router.json"), scope)
-	}
+	routerManager := modelrouter.NewSQL(db, instanceID, scope)
+	routerManager.EnableRuntimeFallback()
 	if err := routerManager.LoadError(); err != nil {
 		if enabled {
 			return nil, err
 		}
 		scope.Log().Error(logs.SYSTEM, fmt.Sprintf("模型路由配置不可用，已进入未配置状态: %v", err))
 	}
-	tokenUsage, usageErr := tokenusage.New(db, instanceID, filepath.Join(dir, "token_usage.json"))
+	tokenUsage, usageErr := tokenusage.New(db, instanceID, "")
 	if usageErr != nil {
 		scope.Log().Error(logs.SYSTEM, fmt.Sprintf("Token 用量无法读取，统计暂不可用: %v", usageErr))
 	}
@@ -129,35 +126,24 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 
 	// Initialize memory system
-	var store *memory.Store
-	var groupManager *memory.GroupManager
-	if db != nil {
-		store = memory.NewSQLStore(db, instanceID)
-		groupManager = memory.NewSQLGroupManager(db, instanceID, scope)
-	} else {
-		store = memory.NewStore(filepath.Join(dir, "brain.json"))
-		groupManager = memory.NewGroupManager(dir, scope)
-		if err := memory.MigrateLegacyGroupMemories(dir, store, groupManager, scope); err != nil {
-			return nil, fmt.Errorf("migrate legacy group memories: %w", err)
-		}
-	}
+	store := memory.NewSQLStore(db, instanceID)
+	groupManager := memory.NewSQLGroupManager(db, instanceID, scope)
 	reader := memory.NewReader(store, 20)
 	writer := memory.NewWriter(store)
 	writer.Scope = scope
 	writer.SetGroupManager(groupManager)
 	writer.SetLLM(memoryProvider, "model-router-memory-extract")
-	var groupSummaryStore *groupsummary.Store
-	var err error
-	if db != nil {
-		groupSummaryStore, err = groupsummary.NewSQLStore(db, instanceID)
-	} else {
-		groupSummaryStore, err = groupsummary.NewStore(filepath.Join(dir, "group_summaries.json"))
-	}
+	groupSummaryStore, err := groupsummary.NewSQLStore(db, instanceID)
 	if err != nil {
 		return nil, err
 	}
 	sessionManager := llm.NewSessionManager(scope)
 	sessionManager.SetGroupSummaryStore(groupSummaryStore)
+	checkpoints := sessionstate.New(db, instanceID, filepath.Join(dir, "session-checkpoints"),
+		func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
+	if err := sessionManager.EnablePersistence(checkpoints); err != nil {
+		scope.Log().Warn(logs.SYSTEM, "会话快照恢复不完整，已恢复可读取的记录；请检查存储状态")
+	}
 	groupCompactBufferSize := positiveIntFromEnv(scope, "GROUP_COMPACT_BUFFER_SIZE", 20)
 	groupCompactMaxBufferSize := positiveIntFromEnv(scope, "GROUP_COMPACT_MAX_BUFFER_SIZE", 0)
 	groupCompactMinInterval := durationFromEnv(scope, "GROUP_COMPACT_MIN_INTERVAL", 30*time.Second)
@@ -185,15 +171,10 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		}
 		groupCompactor.SetMaxBufferSize(groupCompactMaxBufferSize)
 	}
-	// Gateway: owner + visibility filtering
+	// Gateway: conversation scope filtering
 	gateway := memory.NewGateway()
 	// Reflection: background, owner-isolated topic catalog generation
-	var catalog *memory.CatalogStore
-	if db != nil {
-		catalog = memory.NewSQLCatalogStore(db, instanceID, memory.ScopePrivate, "", "")
-	} else {
-		catalog = memory.NewCatalogStore(filepath.Join(dir, "memory_catalog.json"))
-	}
+	catalog := memory.NewSQLCatalogStore(db, instanceID, memory.ScopePrivate, "", "")
 	reflector := memory.NewReflector(
 		store,
 		catalog,
@@ -211,19 +192,23 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	reflections := memory.NewReflectionManager(reflector)
 	reflections.Scope = scope
 
-	var skillStore *skills.Store
-	if db != nil {
-		skillStore = skills.NewStore(db, instanceID)
-	}
+	skillStore := skills.NewStore(db, instanceID)
 
 	// Register tools
 	registry := make(map[string]tools.Tool)
-	balanceTool := tools.BalanceQueryTool(config.Get, routerManager.EndpointAPIKey)
+	balanceTool := tools.BalanceQueryTool(config.Get, func(endpointID string) (balancequery.ProviderCredential, error) {
+		credential, err := routerManager.EndpointCredential(endpointID)
+		return balancequery.ProviderCredential{APIKey: credential.APIKey, BaseURL: credential.BaseURL}, err
+	})
 	registry[balanceTool.Name()] = balanceTool
 	sendMsgTool := tools.SendMsgTool()
 	registry[sendMsgTool.Name()] = sendMsgTool
+	qqTool := tools.QQTool()
+	registry[qqTool.Name()] = qqTool
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool
+	timeSleepTool := tools.TimeSleepTool(config.Get)
+	registry[timeSleepTool.Name()] = timeSleepTool
 	if securityController != nil {
 		banUserTool := tools.NewBanUserTool(securityController)
 		registry[banUserTool.Name()] = banUserTool
@@ -246,38 +231,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	// Initialize ActionsCat client & tools
 	actionsCatClient := actionscat.New(scope.Getenv)
-	actionsCatListTool := tools.ActionsCatListActionsTool(actionsCatClient)
-	registry[actionsCatListTool.Name()] = actionsCatListTool
-	actionsCatRunTool := tools.ActionsCatRunActionTool(actionsCatClient)
-	registry[actionsCatRunTool.Name()] = actionsCatRunTool
-	actionsCatGetRunTool := tools.ActionsCatGetRunTool(actionsCatClient)
-	registry[actionsCatGetRunTool.Name()] = actionsCatGetRunTool
-	actionsCatCreateTool := tools.ActionsCatCreateActionTool(actionsCatClient, scope)
-	registry[actionsCatCreateTool.Name()] = actionsCatCreateTool
-	actionsCatCreateVersionTool := tools.ActionsCatCreateVersionTool(actionsCatClient, scope)
-	registry[actionsCatCreateVersionTool.Name()] = actionsCatCreateVersionTool
-	actionsCatBuildVersionTool := tools.ActionsCatBuildVersionTool(actionsCatClient, scope)
-	registry[actionsCatBuildVersionTool.Name()] = actionsCatBuildVersionTool
-	actionsCatGetBuildTool := tools.ActionsCatGetBuildTool(actionsCatClient)
-	registry[actionsCatGetBuildTool.Name()] = actionsCatGetBuildTool
-	actionsCatListBuildsTool := tools.ActionsCatListBuildsTool(actionsCatClient)
-	registry[actionsCatListBuildsTool.Name()] = actionsCatListBuildsTool
-	actionsCatActivateBuildTool := tools.ActionsCatActivateBuildTool(actionsCatClient, scope)
-	registry[actionsCatActivateBuildTool.Name()] = actionsCatActivateBuildTool
-	actionsCatDeployActionTool := tools.ActionsCatDeployActionTool(actionsCatClient, scope)
-	registry[actionsCatDeployActionTool.Name()] = actionsCatDeployActionTool
-	actionsCatCreateScheduleTool := tools.ActionsCatCreateScheduleTool(actionsCatClient, scope)
-	registry[actionsCatCreateScheduleTool.Name()] = actionsCatCreateScheduleTool
-	actionsCatListSchedulesTool := tools.ActionsCatListSchedulesTool(actionsCatClient)
-	registry[actionsCatListSchedulesTool.Name()] = actionsCatListSchedulesTool
-	actionsCatDeleteScheduleTool := tools.ActionsCatDeleteScheduleTool(actionsCatClient, scope)
-	registry[actionsCatDeleteScheduleTool.Name()] = actionsCatDeleteScheduleTool
-	actionsCatCreateMatcherTool := tools.ActionsCatCreateMatcherTool(actionsCatClient, scope)
-	registry[actionsCatCreateMatcherTool.Name()] = actionsCatCreateMatcherTool
-	actionsCatListMatchersTool := tools.ActionsCatListMatchersTool(actionsCatClient)
-	registry[actionsCatListMatchersTool.Name()] = actionsCatListMatchersTool
-	actionsCatDeleteMatcherTool := tools.ActionsCatDeleteMatcherTool(actionsCatClient, scope)
-	registry[actionsCatDeleteMatcherTool.Name()] = actionsCatDeleteMatcherTool
+	actionsCatTool := tools.ActionsCatTool(actionsCatClient, scope)
+	registry[actionsCatTool.Name()] = actionsCatTool
 
 	// Initialize sticker subsystem
 	stickerVision := &sticker.LLMVisionCaller{Scope: scope,
@@ -286,13 +241,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	}
 	var summarizer *sticker.Summarizer
 	var stealer *sticker.Stealer
-	var stickerStore *sticker.Store
-	var err2 error
-	if db != nil {
-		stickerStore, err2 = sticker.NewSQLStore(db, instanceID, filepath.Join(dir, "sticker"))
-	} else {
-		stickerStore, err2 = sticker.NewStore(filepath.Join(dir, "sticker"))
-	}
+	stickerStore, err2 := sticker.NewSQLStore(db, instanceID, filepath.Join(dir, "sticker"))
 	if err2 != nil {
 		return nil, err2
 	} else {
@@ -324,26 +273,8 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	billingCfg := billing.LoadConfig(scope.Getenv)
 	dispatcher := core.NewDefaultDispatcher()
 
-	dialoguePath := filepath.Join(configDir, "dialogue.yml")
-	if db == nil {
-		if _, err := os.Stat(dialoguePath); os.IsNotExist(err) {
-			var dialogueContent []byte
-			if templateDialogue != "" {
-				dialogueContent, _ = os.ReadFile(templateDialogue)
-			}
-			if len(dialogueContent) == 0 {
-				dialogueContent = []byte("[]\n")
-			}
-			_ = instanceconfig.WriteAtomic(dialoguePath, dialogueContent, 0600)
-		}
-	}
-	var dialoguePrompt string
-	if db != nil {
-		dialoguePrompt, err = dialogue.LoadPromptSQL(db, instanceID)
-	} else {
-		dialoguePrompt, err = llm.LoadDialoguePrompt(dialoguePath)
-	}
-	if err != nil && !os.IsNotExist(err) {
+	dialoguePrompt, err := dialogue.LoadPromptSQL(db, instanceID)
+	if err != nil {
 		scope.Log().Warn(logs.SYSTEM, fmt.Sprintf("加载人设预设对话失败: %v", err))
 	}
 
@@ -399,8 +330,17 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 
 	scope.Log().InfoWithConsoleSummary(logs.SYSTEM, "✓ 智能体引擎初始化完成", "✓ 智能体引擎初始化完成")
 	// Register memory tool (must be after engine assignment)
+	engine.ToolHistory = toolhistory.NewStore(db, instanceID)
+	engine.ChatHistory = chathistory.NewRecorder(chathistory.NewStore(db, instanceID), scope.Getenv,
+		func(message string) { scope.Log().Warn(logs.SYSTEM, message) })
+	historyTool := tools.NewChatHistoryTool(engine)
+	engine.ToolRegistry[historyTool.Name()] = historyTool
+	toolHistoryTool := tools.NewToolHistoryTool(engine)
+	engine.ToolRegistry[toolHistoryTool.Name()] = toolHistoryTool
 	memTool := tools.NewMemoryTool(engine)
 	engine.ToolRegistry[memTool.Name()] = memTool
+	overrideConfigTool := tools.OverrideFrostAgentConfigTool(engine, settingsWriteMu)
+	engine.ToolRegistry[overrideConfigTool.Name()] = overrideConfigTool
 	// Register the context-image inspection tool after the engine so it can use
 	// the routed vision/dialogue providers and the shared security controller.
 	inspectImageTool := tools.InspectMessageImageTool(engine)
@@ -415,19 +355,26 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.Handle(botPath, botHandler)
 
 	settingsService := settings.NewScoped(config, global, sandboxManager)
-	backend := "sqlite"
-	if db != nil {
-		backend = string(db.Backend)
-	}
+	backend := string(db.Backend)
 	settingsService.SetEmbeddingStorage(backend, func(ctx context.Context) error {
 		if _, err := routerManager.Snapshot().Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{}); err != nil {
 			return fmt.Errorf("请先配置可用的 Embedding 模型路由: %w", err)
 		}
-		if db != nil {
-			_, err := db.EnsureEmbeddingStorage(ctx)
-			return err
+		_, err := db.EnsureEmbeddingStorage(ctx)
+		return err
+	})
+	mux.HandleFunc("/api/persistence", func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
 		}
-		return nil
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		var checkpointStatus sessionstate.Status
+		if sessionManager.Checkpoints != nil {
+			checkpointStatus = sessionManager.Checkpoints.Status()
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"logs": logger.PersistenceStatus(), "sessions": checkpointStatus})
 	})
 	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingsService)
 	mux.Handle(settingsPath, settingsHandler)
@@ -447,12 +394,7 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	memoryPath, memoryHandler := pbconnect.NewMemoryServiceHandler(memoryService)
 	mux.Handle(memoryPath, memoryHandler)
 
-	var dialogueSvc *dialogue.Service
-	if db != nil {
-		dialogueSvc = dialogue.NewSQL(db, instanceID, engine, dialogue.WithLogger(logger))
-	} else {
-		dialogueSvc = dialogue.New(dialoguePath, engine, dialogue.WithLogger(logger))
-	}
+	dialogueSvc := dialogue.NewSQL(db, instanceID, engine, dialogue.WithLogger(logger))
 	dialogueServicePath, dialogueHandler := pbconnect.NewDialogueServiceHandler(
 		dialogueSvc,
 	)
@@ -475,15 +417,16 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 	mux.Handle("/api/v1/actionscat", actionsCatSvc)
 
 	ob := onebot.NewAdapter(engine)
-	ab := astrbot.NewAdapter(engine)
 	ob.ConfigureConnection(onebotConnection)
-	ab.ConfigureConnection(astrbotConnection)
 	ob.SetIncomingDispatcher(actionsCatClient)
-	ab.SetIncomingDispatcher(actionsCatClient)
 	ob.SetStealer(stealer)
-	ab.SetStealer(stealer)
 	dispatcher.RegisterAdapter(ob)
-	dispatcher.RegisterAdapter(ab)
+	engine.Awareness = &llm.AwarenessService{Engine: engine, Resolve: func(target llm.AwarenessTarget) (llm.AwarenessSender, bool) {
+		if (target.AdapterID != "" && target.AdapterID != "onebot") || !memory.IsQQPlatform(target.Platform) {
+			return nil, false
+		}
+		return ob.SendAwareness, ob.AwarenessReady()
+	}}
 	// Read-only self-description. Registered after the adapters so it can report
 	// live platform connections; every value is read at call time.
 	frostInfoTool := tools.FrostAgentInfoTool(tools.FrostAgentInfoSource{
@@ -497,9 +440,6 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 			var platforms []string
 			if ob.ConnectionCount() > 0 {
 				platforms = append(platforms, "onebot")
-			}
-			if ab.ConnectionCount() > 0 {
-				platforms = append(platforms, "astrbot")
 			}
 			return platforms
 		},
@@ -528,19 +468,16 @@ func buildRuntime(dir, configDir, prefix, wsListenAddr string, config, global *i
 		},
 	})
 	engine.ToolRegistry[frostInfoTool.Name()] = frostInfoTool
-	// Keep both endpoints for reverse connections and browser mock sessions.
-	// Each adapter rejects real inbound connections in forward mode.
+	// Keep OneBot available for reverse connections and browser mock sessions.
+	// The adapter rejects real inbound connections in forward mode.
 	mux.HandleFunc("/ws/onebot", ob.Handler())
-	mux.HandleFunc("/ws/astrbot", ab.Handler())
 	if !enabled {
 		engine.StartedAt = time.Time{}
-		logger.Clear()
 	}
 	success = true
 	return &Runtime{
-		Scope: scope, Engine: engine, Handler: mux, Onebot: ob, Astrbot: ab,
-		onebotClient:  !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
-		astrbotClient: !astrbotConnection.Disabled && astrbotConnection.Mode == wsclient.Forward,
+		Scope: scope, Engine: engine, Handler: mux, Onebot: ob,
+		onebotClient: !onebotConnection.Disabled && onebotConnection.Mode == wsclient.Forward,
 	}, nil
 }
 
@@ -551,12 +488,18 @@ func (r *Runtime) StartBackground() {
 		return
 	}
 	r.backgroundOnce.Do(func() {
+		if r.Engine.SessionManager.Checkpoints != nil {
+			r.Scope.Go(func() { r.Engine.SessionManager.Checkpoints.Run(r.Scope.Context()) })
+		}
+		if r.Engine.ChatHistory != nil {
+			r.Scope.Go(func() { r.Engine.ChatHistory.Run(r.Scope.Context()) })
+		}
 		r.StartEmbeddings()
+		if r.Engine.Awareness != nil {
+			r.Scope.Go(func() { r.Engine.Awareness.Run(r.Scope.Context()) })
+		}
 		if r.onebotClient {
 			r.Scope.Go(func() { r.Onebot.RunClient(r.Scope.Context()) })
-		}
-		if r.astrbotClient {
-			r.Scope.Go(func() { r.Astrbot.RunClient(r.Scope.Context()) })
 		}
 	})
 }
@@ -569,7 +512,6 @@ func (r *Runtime) StartEmbeddings() {
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
 	r.Onebot.CloseConnections()
-	r.Astrbot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()
 }

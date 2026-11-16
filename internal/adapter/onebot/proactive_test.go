@@ -249,14 +249,14 @@ func TestOneBotProactiveMultiTurnHistoryPurity(t *testing.T) {
 	provider.mu.Unlock()
 
 	lastMsg1, _ := req1.Messages[len(req1.Messages)-1].Content.(string)
-	if !strings.Contains(lastMsg1, proactive.PromptPrefix) {
+	if !strings.HasPrefix(lastMsg1, llm.WrapRuntimeGuidance(proactive.PromptPrefix)+"\n\nUser Message:") {
 		t.Fatalf("期望第1轮 requestPrompt 包含主动回复引导词，实际: %s", lastMsg1)
 	}
 
 	// 验证持久化历史中的第1条消息纯净，不包含 proactive.PromptPrefix
 	history1 := sess.Snapshot()
 	content1, _ := history1[0].Content.(string)
-	if strings.Contains(content1, proactive.PromptPrefix) {
+	if strings.Contains(content1, proactive.PromptPrefix) || strings.Contains(content1, "<frostagent_runtime_guidance>") {
 		t.Fatalf("第1轮持久历史被主动回复指令污染: %s", content1)
 	}
 
@@ -1139,7 +1139,7 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 
 		params, _ := action.Params.(map[string]any)
 		msgStr, _ := params["message"].(string)
-		if !strings.Contains(msgStr, "FrostAgent安全控制：模型输出已拦截。") {
+		if !strings.HasPrefix(msgStr, "[FrostAgent 错误] 安全审查拦截：模型输出已拦截 (Ref_ID: ") {
 			t.Fatalf("显式唤醒 OutputBlocked 时应发送拦截提示，实际: %s", msgStr)
 		}
 	})
@@ -1235,7 +1235,7 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 
 		params, _ := action.Params.(map[string]any)
 		msgStr, _ := params["message"].(string)
-		if !strings.Contains(msgStr, security.RejectGatewayMsg) {
+		if !strings.HasPrefix(msgStr, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Fatalf("显式唤醒 ban_user 应发送封禁拒绝提示，实际: %s", msgStr)
 		}
 	})
@@ -1860,7 +1860,7 @@ func runOneBotProactiveTriggerLogging(t *testing.T, testCase string) {
 			t.Fatal(err)
 		}
 	}
-	srv, wsURL := startWSTestServer(engine)
+	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -1952,7 +1952,7 @@ func runOneBotProactiveTriggerLogging(t *testing.T, testCase string) {
 	if !ok {
 		t.Fatal("expected text content in LLM request")
 	}
-	if strings.HasPrefix(lastContent, proactive.PromptPrefix) != (testCase == "proactive") {
+	if strings.HasPrefix(lastContent, llm.WrapRuntimeGuidance(proactive.PromptPrefix)) != (testCase == "proactive") {
 		t.Fatalf("proactive prompt does not match trigger for %s", testCase)
 	}
 }

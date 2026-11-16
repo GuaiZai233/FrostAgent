@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
-	"github.com/GuaiZai233/FrostAgent/internal/adapter/astrbot"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
@@ -39,24 +38,15 @@ type ingressAdapter interface {
 	CloseConnections()
 }
 
-func ingressCase(name, messageType, text string) (ingressAdapter, *llm.Engine, any) {
+func ingressCase(_ string, messageType, text string) (ingressAdapter, *llm.Engine, any) {
 	engine := &llm.Engine{MaxIterations: 1, Provider: emptyProvider{}, SessionManager: llm.NewSessionManager()}
-	if name == "onebot" {
-		event := model.OneBotEvent{PostType: "message", MessageType: messageType, UserID: 1, SelfID: 3, MessageID: 1}
-		if messageType == "group" {
-			event.GroupID = 2
-		}
-		event.Message, _ = json.Marshal([]map[string]any{{"type": "text", "data": map[string]string{"text": text}}})
-		return onebot.NewAdapter(engine), engine, event
-	}
-	groupID := ""
+
+	event := model.OneBotEvent{PostType: "message", MessageType: messageType, UserID: 1, SelfID: 3, MessageID: 1}
 	if messageType == "group" {
-		groupID = "synthetic-group"
+		event.GroupID = 2
 	}
-	return astrbot.NewAdapter(engine), engine, astrbot.Event{
-		Type: "event", EventType: "message", Platform: "test-platform", UserID: "synthetic-user",
-		MessageID: "synthetic-message", MessageType: messageType, GroupID: groupID, Content: text,
-	}
+	event.Message, _ = json.Marshal([]map[string]any{{"type": "text", "data": map[string]string{"text": text}}})
+	return onebot.NewAdapter(engine), engine, event
 }
 
 func startIngress(t *testing.T, adapter ingressAdapter, mock bool) *websocket.Conn {
@@ -89,7 +79,7 @@ func dispatchClient(endpoint string) *actionscat.Client {
 }
 
 func TestIngressDispatchesPlainTextOnceWithoutDialogueWake(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		t.Run(name, func(t *testing.T) {
 			var calls atomic.Int32
 			received := make(chan actionscat.MessageEvent, 2)
@@ -115,13 +105,6 @@ func TestIngressDispatchesPlainTextOnceWithoutDialogueWake(t *testing.T) {
 			connection := startIngress(t, adapter, false)
 			if name == "onebot" {
 				if err := connection.WriteJSON(model.OneBotEvent{PostType: "notice", MessageType: "group", UserID: 1, GroupID: 2, Message: json.RawMessage(`"notice"`)}); err != nil {
-					t.Fatal(err)
-				}
-			} else if err := connection.WriteJSON(astrbot.Event{Type: "event", EventType: "notice", MessageType: "group", UserID: "synthetic-user", GroupID: "synthetic-group", Content: "notice"}); err != nil {
-				t.Fatal(err)
-			}
-			if name == "astrbot" {
-				if err := connection.WriteJSON(astrbot.Event{Type: "action", EventType: "message", MessageType: "group", UserID: "synthetic-user", GroupID: "synthetic-group", Content: "not an ingress event"}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -151,7 +134,7 @@ func TestIngressDispatchesPlainTextOnceWithoutDialogueWake(t *testing.T) {
 }
 
 func TestHardBotLoopPreservesIndependentIngressDispatch(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("BOT_LOOP_USER_IDS", "onebot:1,test-platform:synthetic-user")
 			t.Setenv("BOT_LOOP_MAX_TURNS", "1")
@@ -195,10 +178,6 @@ func TestHardBotLoopPreservesIndependentIngressDispatch(t *testing.T) {
 				event.MessageID = 2
 				event.Message, _ = json.Marshal([]map[string]any{{"type": "text", "data": map[string]string{"text": "second"}}})
 				second = event
-			case astrbot.Event:
-				event.MessageID = "synthetic-second"
-				event.Content = "second"
-				second = event
 			default:
 				t.Fatalf("unexpected adapter event type %T", first)
 			}
@@ -229,7 +208,7 @@ func (filteringClassifier) Classify(context.Context, security.ClassificationInpu
 }
 
 func TestDispatchUsesSanitizedIngressText(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		t.Run(name, func(t *testing.T) {
 			received := make(chan actionscat.MessageEvent, 1)
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -264,7 +243,7 @@ func TestDispatchUsesSanitizedIngressText(t *testing.T) {
 }
 
 func TestDispatchFailurePreservesPrivateDialogue(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		t.Run(name, func(t *testing.T) {
 			var attempts atomic.Int32
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +272,7 @@ func TestDispatchFailurePreservesPrivateDialogue(t *testing.T) {
 }
 
 func TestMockAndLockedIngressNeverDispatch(t *testing.T) {
-	for _, name := range []string{"onebot", "astrbot"} {
+	for _, name := range []string{"onebot"} {
 		for _, mock := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/mock=%t", name, mock), func(t *testing.T) {
 				var attempts atomic.Int32
@@ -393,7 +372,7 @@ func TestIngressCreatesRunThroughRealActionsCatMatcher(t *testing.T) {
 	if endpoint == "" {
 		t.Fatal("real matcher fixture did not start")
 	}
-	for index, name := range []string{"onebot", "astrbot"} {
+	for index, name := range []string{"onebot"} {
 		adapter, _, event := ingressCase(name, "group", "https://www.bilibili.com/video/test")
 		adapter.SetIncomingDispatcher(dispatchClient(endpoint))
 		connection := startIngress(t, adapter, false)
@@ -424,7 +403,7 @@ func TestIngressCreatesRunThroughRealActionsCatMatcher(t *testing.T) {
 		}
 		found := false
 		for _, run := range runs {
-			if run.PlannedEnv["ACTIONSCAT_EVENT_PLATFORM"] == map[string]string{"onebot": "onebot", "astrbot": "test-platform"}[name] {
+			if run.PlannedEnv["ACTIONSCAT_EVENT_PLATFORM"] == name {
 				found = run.PlannedEnv["ACTIONSCAT_EVENT_TEXT"] == "https://www.bilibili.com/video/test" && run.PlannedEnv["ACTIONSCAT_EVENT_GROUP_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_USER_ID"] != "" && run.PlannedEnv["ACTIONSCAT_EVENT_ADAPTER_ID"] == name
 			}
 		}

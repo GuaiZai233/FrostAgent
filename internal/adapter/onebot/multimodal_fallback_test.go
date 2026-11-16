@@ -46,7 +46,7 @@ func TestOneBotMultimodalFallbackRequest(t *testing.T) {
 			if _, err := engine.ModelRouter.Publish(); err != nil {
 				t.Fatal(err)
 			}
-			srv, url := startWSTestServer(engine)
+			srv, url := startReplyWSTestServer(t, engine)
 			defer srv.Close()
 			conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 			if err != nil {

@@ -584,6 +584,11 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
+export interface PersistenceHealth {
+  logs: { enabled: boolean; budget_bytes: number; used_bytes: number; entries: number; error?: string };
+  sessions: { pending: number; local_pending: number; error?: string };
+}
+
 export function createInstanceAPI(options: { globalModelCatalog?: boolean; catalogDraftOwner?: string } = {}) {
   let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
@@ -670,6 +675,16 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
   return {
     // Bot Overview & Sessions
+    async getPersistenceHealth(): Promise<PersistenceHealth> {
+      selectionSignal.throwIfAborted();
+      if (!instanceID) throw new Error('请先选择实例');
+      const headers = new Headers();
+      const token = getControlToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const response = await fetch(`/instances/${encodeURIComponent(instanceID)}/api/persistence`, { headers, signal: selectionSignal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json() as PersistenceHealth;
+    },
     getOverview(): Promise<GetOverviewResponse> {
       return botClient.getOverview({});
     },
@@ -682,8 +697,17 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.getBalanceQueryConfig({});
     },
 
-    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false) {
-      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey });
+    saveBalanceQueryConfig(curl: string, apiKey: string, providerId = '', clearApiKey = false, quotaPerUnit = 0, newapi = false, usdExchangeRate = 0, quotaDisplayType = '', customSymbol = '', customRate = 0) {
+      return botClient.saveBalanceQueryConfig({ curl, apiKey, providerId, clearApiKey, quotaPerUnit, newapi, usdExchangeRate, quotaDisplayType, customCurrencySymbol: customSymbol, customCurrencyExchangeRate: customRate });
+    },
+    fetchQuotaConfig(curl: string) {
+      return botClient.fetchQuotaConfig({ curl });
+    },
+    clearBalanceQueryConfig() {
+      return botClient.clearBalanceQueryConfig({});
+    },
+    testBalanceQueryConfig(curl: string, apiKey: string, providerId = '', quotaPerUnit = 0, newapi = false, extras = { usd: 0, type: '', symbol: '', customRate: 0 }) {
+      return botClient.testBalanceQueryConfig({ curl, apiKey, providerId, quotaPerUnit, newapi, usdExchangeRate: extras.usd, quotaDisplayType: extras.type, customCurrencySymbol: extras.symbol, customCurrencyExchangeRate: extras.customRate });
     },
 
     getSessions(
@@ -712,12 +736,17 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.deleteGroupSummary({ sessionId });
     },
 
+    getToolHistoryEntry(refId: string) {
+      return botClient.getToolHistoryEntry({ refId });
+    },
+
     // Logs
     listLogs(
       pageSize: number,
       pageToken: string,
       minLevel: LogLevel,
       sourceFilter: string,
+      errorUuid = '',
     ): Promise<ListLogsResponse> {
       return logClient.listLogs({
         pagination: {
@@ -726,6 +755,7 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
         },
         minLevel,
         sourceFilter,
+        errorUuid,
       });
     },
 
@@ -835,6 +865,11 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
     testModel(modelId: string): Promise<TestModelResponse> {
       return modelRouterClient.testModel({ modelId });
+    },
+    inferModelCapabilities(
+      modelName: string,
+    ): Promise<{ found: boolean; capabilities: string[] }> {
+      return modelRouterClient.inferModelCapabilities({ modelName });
     },
 
     // Memory
@@ -1051,71 +1086,6 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
     },
     syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
       return mcpClient.syncMCPServer({ id });
-    },
-
-    // ActionsCat
-    getActionsCatStatus(): Promise<ActionsCatStatus> {
-      return actionsCatAPI.getStatus();
-    },
-    listActionsCatActions(): Promise<ActionsCatAction[]> {
-      return actionsCatAPI.listActions();
-    },
-    createActionsCatAction(req: CreateActionRequest): Promise<ActionsCatAction> {
-      return actionsCatAPI.createAction(req);
-    },
-    getActionCatAction(actionID: string): Promise<ActionsCatAction> {
-      return actionsCatAPI.getAction(actionID);
-    },
-    triggerActionsCatRun(
-      actionID: string,
-      req?: TriggerActionRunRequest,
-    ): Promise<ActionsCatRun> {
-      return actionsCatAPI.triggerRun(actionID, req);
-    },
-    listActionsCatRuns(
-      actionID: string,
-      limit = 50,
-      offset = 0,
-    ): Promise<ActionsCatRun[]> {
-      return actionsCatAPI.listRuns(actionID, limit, offset);
-    },
-    getActionsCatRun(actionID: string, runID: string): Promise<ActionsCatRun> {
-      return actionsCatAPI.getRun(actionID, runID);
-    },
-    getActionsCatRunLogs(
-      actionID: string,
-      runID: string,
-    ): Promise<ActionsCatRunLogs> {
-      return actionsCatAPI.getRunLogs(actionID, runID);
-    },
-    dispatchActionsCat(
-      payload: Record<string, unknown>,
-    ): Promise<{ ok: boolean }> {
-      return actionsCatAPI.dispatch(payload);
-    },
-    listActionsCatSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
-      return actionsCatAPI.listSchedules(actionID);
-    },
-    createActionsCatSchedule(
-      actionID: string,
-      req: CreateScheduleRequest,
-    ): Promise<ActionsCatSchedule> {
-      return actionsCatAPI.createSchedule(actionID, req);
-    },
-    deleteActionsCatSchedule(scheduleID: string): Promise<{ ok: boolean }> {
-      return actionsCatAPI.deleteSchedule(scheduleID);
-    },
-    listActionsCatMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
-      return actionsCatAPI.listMatchers(actionID);
-    },
-    createActionsCatMatcher(
-      actionID: string,
-      req: CreateMatcherRequest,
-    ): Promise<ActionsCatMatcher> {
-      return actionsCatAPI.createMatcher(actionID, req);
-    },
-    deleteActionsCatMatcher(matcherID: string): Promise<{ ok: boolean }> {
-      return actionsCatAPI.deleteMatcher(matcherID);
     },
   };
 }

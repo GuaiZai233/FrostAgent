@@ -50,6 +50,13 @@ func (c *wsConnection) SendActionAndWait(action model.OneBotAction, timeout time
 }
 
 func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn) (oneBotAPIResponse, error) {
+	return c.sendActionAndWaitContext(action, timeout, turn, turn.Context())
+}
+
+func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeout time.Duration, turn *llm.SessionTurn, ctx context.Context) (result oneBotAPIResponse, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return oneBotAPIResponse{}, err
+	}
 	if c == nil || c.conn == nil {
 		return oneBotAPIResponse{}, fmt.Errorf("websocket connection is nil")
 	}
@@ -66,18 +73,27 @@ func (c *wsConnection) sendActionAndWaitTurn(action model.OneBotAction, timeout 
 		return oneBotAPIResponse{}, fmt.Errorf("marshal action failed: %w", err)
 	}
 
-	if err := c.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
+	key, pending, writeErr := c.writeTurnMessagePending(websocket.TextMessage, actionBytes, turn)
+	defer func() { c.finishOutgoingError(key, pending, resultErr) }()
+	if writeErr != nil {
 		c.clearMessageRequest(echo, responseChannel)
-		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", err)
+		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", writeErr)
 	}
+	response, err := c.waitActionACK(action.Action, echo, responseChannel, timeout, ctx)
+	if err == nil {
+		c.recordHistoryAction(action, response, "delivered")
+	}
+	return response, err
+}
 
+func (c *wsConnection) waitActionACK(actionName string, echo string, responseChannel chan oneBotAPIResponse, timeout time.Duration, ctx context.Context) (oneBotAPIResponse, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	defer c.clearMessageRequest(echo, responseChannel)
-	response, err := waitActionResponse(turn.Context(), c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
+	response, err := waitActionResponse(ctx, c.Context(), responseChannel, timer.C, func() { c.clearMessageRequest(echo, responseChannel) })
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			err = fmt.Errorf("action %s timeout after %v (echo=%s)", action.Action, timeout, echo)
+			err = fmt.Errorf("action %s timeout after %v (echo=%s)", actionName, timeout, echo)
 		}
 		return response, err
 	}
@@ -432,6 +448,7 @@ func (c *wsConnection) rememberMessageSession(messageID int64, sessionID string)
 		oldest := c.messageSessionOrder[0]
 		c.messageSessionOrder = c.messageSessionOrder[1:]
 		delete(c.messageSessions, oldest)
+		delete(c.ownMessageSessions, oldest)
 	}
 }
 
@@ -451,7 +468,24 @@ func (c *wsConnection) rememberActionMessageSession(response oneBotAPIResponse, 
 	}
 	if messageID, ok := numericMessageID(data["message_id"]); ok {
 		c.rememberMessageSession(messageID, sessionID)
+		c.messageSessionMu.Lock()
+		if c.messageSessions[messageID] == sessionID {
+			if c.ownMessageSessions == nil {
+				c.ownMessageSessions = make(map[int64]string)
+			}
+			c.ownMessageSessions[messageID] = sessionID
+		}
+		c.messageSessionMu.Unlock()
 	}
+}
+
+func (c *wsConnection) ownMessageSessionMatches(messageID int64, sessionID string) bool {
+	if c == nil || messageID == 0 || sessionID == "" {
+		return false
+	}
+	c.messageSessionMu.Lock()
+	defer c.messageSessionMu.Unlock()
+	return c.messageSessions[messageID] == sessionID && c.ownMessageSessions[messageID] == sessionID
 }
 
 func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resolvedReplyContext) {
@@ -521,6 +555,9 @@ func (c *wsConnection) loadObservedImage(
 	}
 	if imageIndex < 0 {
 		return nil, fmt.Errorf("image_index %d 不能小于 0", imageIndex)
+	}
+	if strings.HasPrefix(messageID, qqForwardImagePrefix) {
+		return c.loadQQForwardImage(ctx, event, messageID, imageIndex)
 	}
 
 	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)

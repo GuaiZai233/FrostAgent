@@ -21,6 +21,8 @@ func TestGroupCompactAllowed(t *testing.T) {
 		{"enabled allows a listed bare QQ id", map[string]string{enable: "true", list: "123, 456"}, "group:123", true},
 		{"enabled rejects an unlisted group", map[string]string{enable: "true", list: "123"}, "group:789", false},
 		{"onebot-prefixed session matches the bare QQ id", map[string]string{enable: "TRUE", list: "123"}, "onebot:group:123", true},
+		{"retired session does not match the bare QQ id", map[string]string{enable: "true", list: "123"}, "aiocqhttp:group:123", false},
+		{"retired whitelist entry does not match OneBot", map[string]string{enable: "true", list: "aiocqhttp:123"}, "onebot:group:123", false},
 		{"telegram group needs a platform-qualified entry", map[string]string{enable: "true", list: "123"}, "telegram:group:123", false},
 		{"telegram group matches its platform entry", map[string]string{enable: "true", list: "telegram:123"}, "telegram:group:123", true},
 		{"enabled with an empty list rejects every group", map[string]string{enable: "true"}, "group:123", false},
@@ -45,7 +47,7 @@ func TestGroupIdentityFromConversationID(t *testing.T) {
 	}{
 		{"group:123", "123", true},
 		{"onebot:group:123", "123", true},
-		{"AIOCQHTTP:group:9", "9", true},
+		{"QQ:group:9", "9", true},
 		{"discord:group:chan", "discord:chan", true},
 		{"private:1", "", false},
 	}

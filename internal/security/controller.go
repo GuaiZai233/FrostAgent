@@ -20,9 +20,9 @@ var (
 
 const (
 	BanUserToolName    = "ban_user"
-	RejectInspectorMsg = "FrostAgent 错误：Request rejected by security inspector: 不合适的内容！"
-	RejectGatewayMsg   = "FrostAgent 错误：Request rejected by security gateway: 您已被封禁，请联系管理员。"
-	RejectFailureMsg   = "FrostAgent 错误：Request rejected by security service: 安全审查服务暂时不可用，请稍后重试。"
+	RejectInspectorMsg = "安全审查拦截：不合适的内容"
+	RejectGatewayMsg   = "安全访问拒绝：您已被封禁，请联系管理员"
+	RejectFailureMsg   = "安全审查失败：服务暂时不可用，请稍后重试"
 )
 
 type Controller struct {
@@ -447,7 +447,8 @@ func (c *Controller) IsLocked(p Principal) bool {
 	return err == nil && locked
 }
 
-// RejectMessage returns the user-facing error message for a blocked security decision.
+// RejectMessage returns the safe summary for a blocked security decision.
+// The caller records it with ReportRejection in the owning instance's log store.
 // If the principal is locked (in AccessStore, via WatchdogLock action, or with ErrLocked reason),
 // it returns RejectGatewayMsg. If the block is due to classifier/infrastructure failure (IsFailure),
 // it returns RejectFailureMsg. Otherwise, it returns RejectInspectorMsg.
@@ -462,4 +463,11 @@ func (c *Controller) RejectMessage(p Principal, decision WatchdogDecision) strin
 		return RejectFailureMsg
 	}
 	return RejectInspectorMsg
+}
+
+// ReportRejection keeps decision diagnostics in the owning store, including the
+// evaluation ID needed to correlate classifier and access-control diagnostics.
+func ReportRejection(store *logs.Store, summary string, decision WatchdogDecision, traceID ...string) string {
+	return store.ReportError(logs.SYSTEM, summary, fmt.Errorf("action=%s reason=%s error_type=%s detail=%s eval_id=%s",
+		decision.Action, decision.Reason, decision.ErrorType, decision.SafeSummary, decision.EvaluationID), traceID...)
 }

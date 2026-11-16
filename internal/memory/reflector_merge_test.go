@@ -81,7 +81,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Content:     "用户喜欢打舞萌",
 			Tags:        []string{"舞萌"},
 			Source:      SourceExtract,
-			Visibility:  VisibilityPrivate,
 			AccessCount: 2,
 		},
 		{
@@ -90,7 +89,6 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 			Content:     "用户的舞萌 dx rating 为 w6",
 			Tags:        []string{"舞萌", "dx rating"},
 			Source:      SourceExtract,
-			Visibility:  VisibilityPublic,
 			AccessCount: 5,
 		},
 	})
@@ -119,8 +117,8 @@ func TestApplyReflectionMergeArchivesSources(t *testing.T) {
 	}
 
 	merged := applied.Remaining[0]
-	if merged.Source != SourceReflect || merged.Visibility != VisibilityPrivate {
-		t.Fatalf("unexpected merged source/visibility: %q/%q", merged.Source, merged.Visibility)
+	if merged.Source != SourceReflect {
+		t.Fatalf("unexpected merged source: %q", merged.Source)
 	}
 	if merged.AccessCount != 5 {
 		t.Fatalf("unexpected merged ranking fields: access=%d", merged.AccessCount)
@@ -275,24 +273,22 @@ func TestReflectLegacyAndCanonicalOwnerSinglePassAndCatalog(t *testing.T) {
 	brainPath := filepath.Join(dir, "brain.json")
 	catalogPath := filepath.Join(dir, "catalog.json")
 
-	// 1. Seed raw brain.json containing mixed legacy aiocqhttp:user:X and canonical X entries
+	// 1. Seed raw brain.json containing mixed legacy qq:user:X and canonical X entries
 	legacyBrain := BrainData{
 		Entries: []MemoryEntry{
 			{
-				ID:         "mem_001",
-				Owner:      "aiocqhttp:user:test_user_42",
-				Content:    "用户喜欢打舞萌",
-				Tags:       []string{"舞萌"},
-				Source:     SourceExtract,
-				Visibility: VisibilityPrivate,
+				ID:      "mem_001",
+				Owner:   "qq:user:test_user_42",
+				Content: "用户喜欢打舞萌",
+				Tags:    []string{"舞萌"},
+				Source:  SourceExtract,
 			},
 			{
-				ID:         "mem_002",
-				Owner:      "test_user_42",
-				Content:    "用户的舞萌 dx rating 为 w6",
-				Tags:       []string{"w6"},
-				Source:     SourceExtract,
-				Visibility: VisibilityPrivate,
+				ID:      "mem_002",
+				Owner:   "test_user_42",
+				Content: "用户的舞萌 dx rating 为 w6",
+				Tags:    []string{"w6"},
+				Source:  SourceExtract,
 			},
 		},
 	}
@@ -309,8 +305,8 @@ func TestReflectLegacyAndCanonicalOwnerSinglePassAndCatalog(t *testing.T) {
 		Version:   currentCatalogVersion,
 		UpdatedAt: time.Now(),
 		Users: map[string]UserMemoryCatalog{
-			"aiocqhttp:user:test_user_42": {
-				Owner:       "aiocqhttp:user:test_user_42",
+			"qq:user:test_user_42": {
+				Owner:       "qq:user:test_user_42",
 				Topics:      []MemoryTopic{{Name: "旧主题"}},
 				MemoryCount: 1,
 				GeneratedAt: time.Now().Add(-1 * time.Hour),
@@ -377,9 +373,9 @@ func TestReflectLegacyAndCanonicalOwnerSinglePassAndCatalog(t *testing.T) {
 	if err != nil || catCanonical == nil {
 		t.Fatalf("Get('test_user_42') failed: %v", err)
 	}
-	catLegacy, err := catalog.Get("aiocqhttp:user:test_user_42")
+	catLegacy, err := catalog.Get("qq:user:test_user_42")
 	if err != nil || catLegacy == nil {
-		t.Fatalf("Get('aiocqhttp:user:test_user_42') failed: %v", err)
+		t.Fatalf("Get('qq:user:test_user_42') failed: %v", err)
 	}
 	if catCanonical.Owner != "test_user_42" || catLegacy.Owner != "test_user_42" {
 		t.Fatalf("expected canonical owner in retrieved catalog: canonical=%s legacy=%s", catCanonical.Owner, catLegacy.Owner)
@@ -390,9 +386,9 @@ func TestReflectLegacyAndCanonicalOwnerSinglePassAndCatalog(t *testing.T) {
 	if err != nil || promptCanonical == "" {
 		t.Fatalf("FormatForPrompt('test_user_42') failed: %v", err)
 	}
-	promptLegacy, err := catalog.FormatForPrompt("aiocqhttp:user:test_user_42")
+	promptLegacy, err := catalog.FormatForPrompt("qq:user:test_user_42")
 	if err != nil || promptLegacy == "" {
-		t.Fatalf("FormatForPrompt('aiocqhttp:user:test_user_42') failed: %v", err)
+		t.Fatalf("FormatForPrompt('qq:user:test_user_42') failed: %v", err)
 	}
 	if promptCanonical != promptLegacy {
 		t.Fatalf("expected identical prompt format for alias: canonical=%q legacy=%q", promptCanonical, promptLegacy)
@@ -418,7 +414,7 @@ func TestCatalogStoreAliasGetAndReplace(t *testing.T) {
 
 	// Save using legacy alias
 	err := catalog.Replace(UserMemoryCatalog{
-		Owner:       "aiocqhttp:user:test_user_99",
+		Owner:       "qq:user:test_user_99",
 		Topics:      []MemoryTopic{{Name: "测试主题"}},
 		MemoryCount: 2,
 		GeneratedAt: time.Now(),
@@ -440,7 +436,7 @@ func TestCatalogStoreAliasGetAndReplace(t *testing.T) {
 	}
 
 	// Retrieve via other aliases
-	for _, query := range []string{"test_user_99", "aiocqhttp:user:test_user_99", "onebot:user:test_user_99", "qq:user:test_user_99"} {
+	for _, query := range []string{"test_user_99", "qq:user:test_user_99", "onebot:user:test_user_99", "qq:user:test_user_99"} {
 		got, err := catalog.Get(query)
 		if err != nil || got == nil {
 			t.Errorf("Get(%q) failed: %v, got=%v", query, err, got)

@@ -552,7 +552,7 @@ func TestExecutor_Reset_GroupSummaryStoreDeleteError(t *testing.T) {
 	if len(replies) == 0 {
 		t.Fatalf("expected reply, got none")
 	}
-	if !strings.Contains(replies[0], "持久化总结清理失败") || !strings.Contains(replies[0], "simulated disk deletion failure") {
+	if !strings.HasPrefix(replies[0], "[FrostAgent 错误] 持久化总结清理失败：当前会话已重置 (Ref_ID: ") || strings.Contains(replies[0], "simulated disk deletion failure") {
 		t.Errorf("expected reply to report disk deletion failure, got: %q", replies[0])
 	}
 
@@ -748,7 +748,7 @@ func TestExecutor_LockedAdminRejected(t *testing.T) {
 	if !errors.Is(err, security.ErrLocked) {
 		t.Fatalf("expected ErrLocked, got: %v", err)
 	}
-	if len(replies) == 0 || replies[0] != security.RejectGatewayMsg {
+	if len(replies) == 0 || !strings.HasPrefix(replies[0], "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 		t.Errorf("expected RejectGatewayMsg, got: %v", replies)
 	}
 
@@ -758,7 +758,7 @@ func TestExecutor_LockedAdminRejected(t *testing.T) {
 	if !errors.Is(err, security.ErrLocked) {
 		t.Fatalf("expected ErrLocked on unban attempt, got: %v", err)
 	}
-	if len(replies) == 0 || replies[0] != security.RejectGatewayMsg {
+	if len(replies) == 0 || !strings.HasPrefix(replies[0], "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 		t.Errorf("expected RejectGatewayMsg on unban, got: %v", replies)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/groupsummary"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
@@ -18,7 +19,10 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
+	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
+	"github.com/google/uuid"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,6 +78,7 @@ func truncateRunes(value string, limit int) string {
 // answer was blocked or failed-closed by the security watchdog.
 type AgentRunResult struct {
 	Content          string
+	FinalMessage     *core.ChatMessage // Original terminal response; state is reusable only for identical confirmed text.
 	MemoryWritten    bool
 	Silent           bool
 	StaySilentCalled bool
@@ -118,8 +123,10 @@ func (e *Engine) isToolAllowedForProactive(name string) bool {
 
 // Engine 结构体，用于管理智能体的执行
 type Engine struct {
-	TokenUsage *tokenusage.Store
-	PokeGate   poke.Gate
+	ToolHistory *toolhistory.Store
+	ChatHistory *chathistory.Recorder
+	TokenUsage  *tokenusage.Store
+	PokeGate    poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
@@ -131,6 +138,7 @@ type Engine struct {
 	VisionProvider         core.LLMProvider
 	SessionManager         *SessionManager // 会话上下文管理器
 	Dispatcher             core.MessageDispatcher
+	Awareness              *AwarenessService
 	StartedAt              time.Time // 引擎启动时间
 	Version                string    // 版本号
 	TotalMessagesProcessed atomic.Int64
@@ -190,6 +198,25 @@ func (e *Engine) PauseOnStorageError(err error) {
 	if e.Scope != nil {
 		e.Scope.Cancel()
 	}
+}
+
+func (e *Engine) durableSessionsEnabled() bool {
+	return e != nil && e.SessionManager != nil && e.SessionManager.Checkpoints != nil
+}
+
+func (e *Engine) handleMemoryStorageError(err error) {
+	e.ContinueAfterMemoryStorageError(err)
+}
+
+// ContinueAfterMemoryStorageError covers optional observation/extraction only.
+// Security purges and access checks retain their existing fail-closed behavior.
+func (e *Engine) ContinueAfterMemoryStorageError(err error) bool {
+	if e.durableSessionsEnabled() {
+		e.Log().Warn(logs.SYSTEM, "记忆数据库暂不可用，本次记忆写入失败，聊天继续")
+		return true
+	}
+	e.PauseOnStorageError(err)
+	return false
 }
 
 func (e *Engine) memoryFailure(operation string, err error) AgentRunResult {
@@ -290,6 +317,16 @@ func (e *Engine) RunMessagesWithContext(
 	messages []ChatMessage,
 	runContext RunContext,
 ) AgentRunResult {
+	if !runContext.Mock && runContext.SessionID != "" && e.SessionManager != nil {
+		if session, ok := e.SessionManager.Get(runContext.SessionID); ok {
+			if err := session.(*SessionContext).RecoveryError(); err != nil {
+				return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "会话快照暂时无法恢复，请检查存储状态", err, runContext.SessionID), Error: err}
+			}
+		}
+	}
+	if runContext.ToolHistoryRunID == "" {
+		runContext.ToolHistoryRunID = uuid.NewString()
+	}
 	if runContext.Turn != nil {
 		runContext.SkillState = runContext.Turn.SkillSession()
 	}
@@ -313,6 +350,9 @@ func (e *Engine) RunMessagesWithContext(
 		defer cancel()
 		stop := context.AfterFunc(runContext.Context, cancel)
 		defer stop()
+		if runContext.Context.Err() != nil {
+			cancel()
+		}
 	}
 	if runContext.Turn != nil {
 		var cancel context.CancelFunc
@@ -335,119 +375,165 @@ func (e *Engine) RunMessagesWithContext(
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
 
-	if len(messages) == 0 || messages[0].Role != "system" {
+	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
-		isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
-		if isGroupChat {
-			groupID := runContext.RouteScope.GroupID
-			if groupID == "" && strings.HasPrefix(owner, "group:") {
-				groupID = strings.TrimPrefix(owner, "group:")
-			}
-			senderID := runContext.ActorUserID
-
-			if e.GroupManager != nil && groupID != "" {
-				groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
-				if gErr != nil {
-					return e.memoryFailure("open group memory", gErr)
+		basePrompt := systemPrompt
+		memoryErr := func() error {
+			isGroupChat := runContext.RouteScope.GroupID != "" || runContext.OwnerType == memory.OwnerGroup || strings.HasPrefix(owner, "group:")
+			if isGroupChat {
+				groupID := runContext.RouteScope.GroupID
+				if groupID == "" && strings.HasPrefix(owner, "group:") {
+					groupID = strings.TrimPrefix(owner, "group:")
 				}
-				if groupStore != nil {
-					profile, pErr := groupStore.GetProfile()
-					if pErr != nil {
-						return e.memoryFailure("read group profile", pErr)
-					}
-					var senderProfile *memory.MemberProfile
-					if profile != nil {
-						senderProfile = profile.GetMember(senderID)
-						if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
-							systemPrompt += "\n\n" + memberPrompt
-						}
-					}
+				senderID := runContext.ActorUserID
 
-					if groupStore.CatalogStore() != nil {
-						catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
-						if cErr != nil {
-							return e.memoryFailure("read group memory catalog", cErr)
-						} else if catalogContext != "" {
-							systemPrompt += "\n\n" + catalogContext
-						}
+				if e.GroupManager != nil && groupID != "" {
+					groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
+					if gErr != nil {
+						return fmt.Errorf("open group memory: %w", gErr)
 					}
-
-					if e.MemoryGateway != nil {
-						lastUserMsg := extractLastUserMessage(messages)
-						var raw []memory.MemoryEntry
-						var sErr error
-						if e.MemoryEmbeddings != nil {
-							raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
-						} else {
-							raw, sErr = groupStore.Search(lastUserMsg, 0)
+					if groupStore != nil {
+						profile, pErr := groupStore.GetProfile()
+						if pErr != nil {
+							return fmt.Errorf("read group profile: %w", pErr)
 						}
-						if sErr != nil {
+						var senderProfile *memory.MemberProfile
+						if profile != nil {
+							senderProfile = profile.GetMember(senderID)
+							if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
+								systemPrompt += "\n\n" + memberPrompt
+							}
+						}
+
+						if groupStore.CatalogStore() != nil {
+							catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
+							if cErr != nil {
+								return fmt.Errorf("read group memory catalog: %w", cErr)
+							} else if catalogContext != "" {
+								systemPrompt += "\n\n" + catalogContext
+							}
+						}
+
+						if e.MemoryGateway != nil {
+							lastUserMsg := extractLastUserMessage(messages)
+							var raw []memory.MemoryEntry
+							var sErr error
 							if e.MemoryEmbeddings != nil {
-								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
-								raw = nil
+								raw, sErr = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopeGroup, Platform: runContext.RouteScope.Platform, GroupID: groupID}, lastUserMsg, 20)
 							} else {
-								return e.memoryFailure("search group memory", sErr)
+								raw, sErr = groupStore.Search(lastUserMsg, 0)
 							}
-						}
-						if len(raw) > 0 {
-							filtered := e.MemoryGateway.FilterGroup(raw)
-							if len(filtered) > 20 {
-								filtered = filtered[:20]
+							if sErr != nil {
+								if e.MemoryEmbeddings != nil {
+									e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群记忆向量召回失败，继续对话: %v", sErr))
+									raw = nil
+								} else {
+									return fmt.Errorf("search group memory: %w", sErr)
+								}
 							}
-							if len(filtered) > 0 {
-								groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
-								systemPrompt += "\n\n" + groupMemContext
-								if !runContext.Mock {
-									if err := groupStore.RecordRecall(filtered); err != nil {
-										return e.memoryFailure("record group memory recall", err)
+							if len(raw) > 0 {
+								filtered := e.MemoryGateway.FilterGroup(raw)
+								if len(filtered) > 20 {
+									filtered = filtered[:20]
+								}
+								if len(filtered) > 0 {
+									groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
+									systemPrompt += "\n\n" + groupMemContext
+									if !runContext.Mock {
+										if err := groupStore.RecordRecall(filtered); err != nil {
+											return fmt.Errorf("record group memory recall: %w", err)
+										}
 									}
 								}
 							}
 						}
 					}
 				}
-			}
-		} else {
-			if owner != "" && e.MemoryCatalog != nil {
-				catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
-				if err != nil {
-					return e.memoryFailure("read memory catalog", err)
-				} else if catalogContext != "" {
-					systemPrompt += "\n\n" + catalogContext
-				}
-			}
-
-			// 召回 → 网关过滤 → 注入
-			if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
-				lastUserMsg := extractLastUserMessage(messages)
-				var raw []memory.MemoryEntry
-				var err error
-				if e.MemoryEmbeddings != nil {
-					raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
-				} else {
-					raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
-				}
-				if err != nil {
-					if e.MemoryEmbeddings != nil {
-						e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
-						raw = nil
-					} else {
-						return e.memoryFailure("recall memory", err)
+				if e.MemoryReader != nil && e.MemoryGateway != nil {
+					for _, scope := range runContext.MemoryReadScopes() {
+						if scope.Type != memory.ScopePrivate {
+							continue
+						}
+						if e.MemoryCatalog != nil {
+							catalogContext, err := e.MemoryCatalog.FormatForPrompt(scope.Owner)
+							if err != nil {
+								return fmt.Errorf("read sender memory catalog: %w", err)
+							}
+							if catalogContext != "" {
+								systemPrompt += "\n\n" + catalogContext
+							}
+						}
+						entries, err := e.SearchMemoryScope(ctx, scope, extractLastUserMessage(messages), nil)
+						if err != nil {
+							if e.MemoryEmbeddings != nil {
+								e.Log().Warn(logs.SYSTEM, fmt.Sprintf("发言者用户记忆向量召回失败，继续对话: %v", err))
+								continue
+							}
+							return fmt.Errorf("recall sender memory: %w", err)
+						}
+						entries = e.MemoryReader.Limit(entries)
+						if len(entries) == 0 {
+							continue
+						}
+						systemPrompt += "\n\n" + e.MemoryGateway.FormatForGroupUserContext(entries, scope.Owner)
+						if !runContext.Mock {
+							if err := e.RecordMemoryScopeRecall(scope, entries); err != nil {
+								return fmt.Errorf("record sender memory recall: %w", err)
+							}
+						}
 					}
 				}
-				filtered := e.MemoryGateway.FilterPrivate(raw, owner)
-				filtered = e.MemoryReader.Limit(filtered)
-				if len(filtered) > 0 {
-					memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
-					systemPrompt += "\n\n" + memoryContext
-					if !runContext.Mock {
-						if err := e.MemoryReader.RecordRecall(filtered); err != nil {
-							return e.memoryFailure("record memory recall", err)
+			} else {
+				if owner != "" && e.MemoryCatalog != nil {
+					catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
+					if err != nil {
+						return fmt.Errorf("read memory catalog: %w", err)
+					} else if catalogContext != "" {
+						systemPrompt += "\n\n" + catalogContext
+					}
+				}
+
+				// 召回 → 网关过滤 → 注入
+				if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+					lastUserMsg := extractLastUserMessage(messages)
+					var raw []memory.MemoryEntry
+					var err error
+					if e.MemoryEmbeddings != nil {
+						raw, err = e.MemoryEmbeddings.Search(ctx, memory.SearchScope{Type: memory.ScopePrivate, Owner: owner}, lastUserMsg, 20)
+					} else {
+						raw, err = e.MemoryReader.Recall(ctx, lastUserMsg)
+					}
+					if err != nil {
+						if e.MemoryEmbeddings != nil {
+							e.Log().Warn(logs.SYSTEM, fmt.Sprintf("记忆向量召回失败，继续对话: %v", err))
+							raw = nil
+						} else {
+							return fmt.Errorf("recall memory: %w", err)
+						}
+					}
+					filtered := e.MemoryGateway.FilterPrivate(raw, owner)
+					filtered = e.MemoryReader.Limit(filtered)
+					if len(filtered) > 0 {
+						memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
+						systemPrompt += "\n\n" + memoryContext
+						if !runContext.Mock {
+							if err := e.MemoryReader.RecordRecall(filtered); err != nil {
+								return fmt.Errorf("record memory recall: %w", err)
+							}
 						}
 					}
 				}
 			}
+
+			return nil
+		}()
+		if memoryErr != nil {
+			if !e.durableSessionsEnabled() {
+				return e.memoryFailure("assemble memory context", memoryErr)
+			}
+			systemPrompt = basePrompt
+			e.Log().Warn(logs.SYSTEM, "记忆数据库暂不可用，本轮使用会话上下文继续聊天；依赖数据库的记忆操作暂不可用")
 		}
 
 		messages = append([]ChatMessage{
@@ -637,7 +723,7 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 					return
 				}
 				if errors.Is(err, memory.ErrStorageUnavailable) {
-					e.PauseOnStorageError(err)
+					e.handleMemoryStorageError(err)
 					return
 				}
 				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("群聊批量提取记忆失败 (群: %s): %v", group.groupID, err))
@@ -648,7 +734,7 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 					return
 				}
 				if errors.Is(err, memory.ErrStorageUnavailable) {
-					e.PauseOnStorageError(err)
+					e.handleMemoryStorageError(err)
 					return
 				}
 				e.Log().Warn(logs.SYSTEM, fmt.Sprintf("批量提取记忆失败 (owner: %s): %v", group.owner, err))
@@ -750,6 +836,9 @@ func buildExtractionContext(messages []ChatMessage, finalReply string) []core.Ch
 // RunWithSession 执行智能体的主循环（带会话上下文）
 func (e *Engine) RunWithSession(sessionID string, prompt string) string {
 	session := e.SessionManager.GetOrCreate(sessionID)
+	if err := session.RecoveryError(); err != nil {
+		return e.Log().ReportError(logs.SYSTEM, "会话快照暂时无法恢复，请检查存储状态", err, sessionID)
+	}
 
 	// 加锁保护会话内部状态
 	session.Lock()
@@ -804,6 +893,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 		if runCanceled(ctx) {
 			result.Content = ""
+			result.FinalMessage = nil
 			result.Silent = true
 			result.SilenceReason = "canceled"
 			result.Error = context.Canceled
@@ -826,7 +916,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				return AgentRunResult{Silent: true, SilenceReason: "route_disabled"}
 			}
 			return AgentRunResult{
-				Content:   fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Content:   e.Log().ReportError(logs.LLM_RESPONSE, "LLM 响应失败：模型路由错误", err, runCtx.SessionID),
 				Error:     err,
 				LLMFailed: true,
 			}
@@ -835,7 +925,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 
 	if err := e.activateRequestedSkill(ctx, messages); err != nil {
-		return AgentRunResult{Content: err.Error(), Error: err}
+		return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "技能激活失败", err, runCtx.SessionID), Error: err}
 	}
 
 	// 主循环
@@ -853,6 +943,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 	var specificReplyEchoes proactive.ReplyEchoGuard
 	specificReplyDelivered := false
+	refreshPromptPending := false
 	for i := 0; i < maxIterations; i++ {
 		if runCanceled(ctx) {
 			return AgentRunResult{Silent: true, Error: context.Canceled}
@@ -872,15 +963,25 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 		}
+		if refreshPromptPending && runCtx.RefreshPrompt != nil {
+			refreshed, err := runCtx.RefreshPrompt(ctx)
+			if err != nil {
+				return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "挂起后上下文刷新失败", err, runCtx.SessionID), Error: err, Usage: totalUsage}
+			}
+			messages = replaceCurrentPrompt(messages, refreshed.Content)
+			mergeSecurityNotice(&runCtx, refreshed.SecurityNotice)
+			refreshPromptPending = false
+		}
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
 		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
 
+		messages = frostAgentSystemMessages(messages)
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
 		if e.Skills != nil {
 			skillMessages, skillErr := e.skillMessages(ctx, messages)
 			if skillErr != nil {
-				return AgentRunResult{Error: skillErr, Content: "技能上下文读取失败", Usage: totalUsage}
+				return AgentRunResult{Error: skillErr, Content: e.Log().ReportError(logs.SYSTEM, "技能上下文读取失败", skillErr, runCtx.SessionID), Usage: totalUsage}
 			}
 			messages = skillMessages
 		}
@@ -895,6 +996,19 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
+			var lastUser string
+			for _, message := range messages {
+				if message.Role == "user" {
+					// Overwrite on every user turn so an unrecognised content type
+					// cannot leave the previous request's text behind.
+					lastUser = userContentText(message.Content)
+				}
+			}
+			var traceEpoch uint64
+			if hasRunCtx {
+				traceEpoch = runCtx.Epoch
+			}
+			sess.SetLastUserPromptAtEpoch(traceEpoch, lastUser)
 		}
 		modelTools := e.EffectiveTools()
 		if hasRunCtx && runCtx.Proactive {
@@ -902,8 +1016,13 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			for _, t := range modelTools {
 				if e.isToolAllowedForProactive(t.Name) {
 					if t.Name == "send_message" {
-						t.Description = proactive.SpecificReplyDescription
-						t.Parameters = proactive.SpecificReplyParameters()
+						if runCtx.Awareness {
+							t.Description = "Send text and native mentions to the current conversation. No triggering message exists. Only known current-group member IDs may be mentioned; session changes, quotes, media and files are unavailable."
+							t.Parameters = proactive.AwarenessParameters()
+						} else {
+							t.Description = proactive.SpecificReplyDescription
+							t.Parameters = proactive.SpecificReplyParameters()
+						}
 					}
 					proactiveTools = append(proactiveTools, t)
 				}
@@ -913,6 +1032,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// Build transient constraints from current availability so a disabled
 		// tool cannot leave an impossible instruction in later model requests.
+		compactArchivedToolMessages(messages)
 		coreMsgs := convertToCoreMessages(messages)
 		if enforceStickerActivity() {
 			if notice := e.stickerActivityPrompt(); notice != "" {
@@ -975,7 +1095,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			content := fmt.Sprintf("上下文长度 (%d tokens) 超出硬上限 (%d tokens)", contextTokens, MaxContextTokens)
 			e.Log().WarnWithConsoleSummary(logs.SYSTEM, content, "上下文长度超出硬上限")
 			return AgentRunResult{
-				Content:       "FrostAgent错误：对话上下文过长，超出模型处理上限。",
+				Content:       e.Log().ReportError(logs.SYSTEM, "上下文处理失败：对话上下文过长，超出模型处理上限", errors.New(content), runCtx.SessionID),
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
 				Error:         fmt.Errorf("context tokens %d exceeded limit %d", contextTokens, MaxContextTokens),
@@ -993,9 +1113,8 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				e.BillingConfig.Price(modelName),
 			)
 			if err != nil {
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("计费预估失败 (fail-closed, iter %d): %v", i+1, err))
 				return AgentRunResult{
-					Content:       billing.FormatBillingUnavailableMessage(),
+					Content:       e.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("计费预估失败 (fail-closed, iter %d): %w", i+1, err), runCtx.SessionID),
 					MemoryWritten: memoryWritten,
 					Usage:         totalUsage,
 					Error:         err,
@@ -1050,18 +1169,17 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					if i == 0 {
 						replyMsg = billing.FormatInsufficientFundsMessage(balMinor)
 					} else {
-						replyMsg = fmt.Sprintf("对话因雪花余额不足中断。\n%s", billing.FormatInsufficientFundsMessage(balMinor))
+						replyMsg = "对话中断：" + billing.FormatInsufficientFundsMessage(balMinor)
 					}
 					return AgentRunResult{
-						Content:       replyMsg,
+						Content:       e.Log().ReportError(logs.SYSTEM, replyMsg, billing.ErrInsufficientFunds, runCtx.SessionID),
 						MemoryWritten: memoryWritten,
 						Usage:         totalUsage,
 						Error:         billing.ErrInsufficientFunds,
 					}
 				}
-				e.Log().Error(logs.SYSTEM, fmt.Sprintf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %v", i+1, err))
 				return AgentRunResult{
-					Content:       billing.FormatBillingUnavailableMessage(),
+					Content:       e.Log().ReportError(logs.SYSTEM, billing.FormatBillingUnavailableMessage(), fmt.Errorf("Alcyone 计费服务预扣款失败 (fail-closed, iter %d): %w", i+1, err), runCtx.SessionID),
 					MemoryWritten: memoryWritten,
 					Usage:         totalUsage,
 					Error:         err,
@@ -1074,10 +1192,10 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				if i == 0 {
 					replyMsg = billing.FormatInsufficientFundsMessage(res.BalanceMinor)
 				} else {
-					replyMsg = fmt.Sprintf("对话因雪花余额不足中断。\n%s", billing.FormatInsufficientFundsMessage(res.BalanceMinor))
+					replyMsg = "对话中断：" + billing.FormatInsufficientFundsMessage(res.BalanceMinor)
 				}
 				return AgentRunResult{
-					Content:       replyMsg,
+					Content:       e.Log().ReportError(logs.SYSTEM, replyMsg, billing.ErrInsufficientFunds, runCtx.SessionID),
 					MemoryWritten: memoryWritten,
 					Usage:         totalUsage,
 					Error:         billing.ErrInsufficientFunds,
@@ -1105,15 +1223,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			},
 			TraceID: runCtx.SessionID,
 		}
+		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && runCtx.Mock) {
+			sess.SetLastActualRequest(runCtx.Epoch, modelName, chatReq)
+		}
+
 		var callBilling *BillingRunState
 		if billingActive {
 			callBilling = runCtx.Billing
 		}
 		resp, err, commitErr := e.chatAndSettle(ctx, chatReq, reservationID, callBilling)
 		if err != nil {
-			e.Log().Error(logs.LLM_RESPONSE, fmt.Sprintf("LLM调用失败: %v", err))
 			return AgentRunResult{
-				Content:       fmt.Sprintf("FrostAgent 错误：LLM 响应失败：%s", truncateRunes(err.Error(), 100)),
+				Content:       e.Log().ReportError(logs.LLM_RESPONSE, "LLM 响应失败："+llmErrorType(err), err, runCtx.SessionID),
 				LLMFailed:     true,
 				MemoryWritten: memoryWritten,
 				Usage:         totalUsage,
@@ -1132,8 +1253,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// Map back to internal message for now to maintain compatibility
 		responseMsg := &ChatMessage{
-			Role:    string(resp.Message.Role),
-			Content: resp.Message.Content,
+			Role:          string(resp.Message.Role),
+			Content:       resp.Message.Content,
+			ProviderState: resp.Message.ProviderState,
 		}
 		if len(resp.Message.ToolCalls) > 0 {
 			responseMsg.ToolCalls = make([]ToolCall, len(resp.Message.ToolCalls))
@@ -1150,7 +1272,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 
 		if commitErr != nil && len(responseMsg.ToolCalls) > 0 {
-			return AgentRunResult{Content: "FrostAgent错误：计费结算失败，已终止后续工具执行。", MemoryWritten: memoryWritten, Usage: totalUsage, Error: commitErr}
+			return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "计费结算失败：已终止后续工具执行", commitErr, runCtx.SessionID), MemoryWritten: memoryWritten, Usage: totalUsage, Error: commitErr}
 		}
 
 		messages = append(messages, *responseMsg)
@@ -1168,14 +1290,14 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			outputBlocked := false
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
-					contentStr = "FrostAgent安全控制：安全审查服务暂时不可用，模型输出已拦截。"
+					contentStr = security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，模型输出已拦截", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出因安全审查服务异常被拦截: eval_id=%s", decision.EvaluationID))
 					outputBlocked = true
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					contentStr = decision.SanitizedContent
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制过滤脱敏: category=%s eval_id=%s", decision.Classification.Category, decision.EvaluationID))
 				} else {
-					contentStr = "FrostAgent安全控制：模型输出已拦截。"
+					contentStr = security.ReportRejection(e.Log(), "安全审查拦截：模型输出已拦截", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("模型输出被安全控制拦截: reason=%s eval_id=%s", decision.Reason, decision.EvaluationID))
 					outputBlocked = true
 				}
@@ -1241,6 +1363,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体给出最终答案】", "【智能体给出最终答案】")
 			return AgentRunResult{
 				Content:       contentStr,
+				FinalMessage:  &resp.Message,
 				MemoryWritten: memoryWritten,
 				OutputBlocked: outputBlocked,
 				Usage:         totalUsage,
@@ -1256,7 +1379,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					specificReplyCalls++
 				}
 				if !e.isToolAllowedForProactive(tc.Function.Name) ||
-					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactive.IsSpecificReply(tc.Function.Arguments))) {
+					(tc.Function.Name == "send_message" && (specificReplyDelivered || specificReplyCalls > 1 || !proactiveSendAllowed(runCtx, tc.Function.Arguments))) {
 					e.Log().WarnWithConsoleSummary(logs.SYSTEM, fmt.Sprintf("主动回复批次包含禁止的工具调用 [%s]，整批静默终止", tc.Function.Name), "主动回复禁止副作用工具")
 					// After a confirmed send, finish as a tool-only answer so the
 					// adapters retain public history without sending anything else.
@@ -1308,24 +1431,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				if e.stickerNeededBeforeReply() {
 					stickerCall := responseMsg.ToolCalls[tcIndex+1]
 					startedTools[tc.ID], startedTools[stickerCall.ID] = true, true
-					textResult, stickerResult := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					textResult, stickerResult, archiveErr := e.deliverStickerPair(ctx, &runCtx, tc, stickerCall)
+					if archiveErr != nil {
+						return AgentRunResult{Error: archiveErr, MemoryWritten: memoryWritten, Usage: totalUsage}
+					}
 					if runCanceled(ctx) {
 						return AgentRunResult{Silent: true, Error: context.Canceled}
 					}
-					messages = append(messages,
-						ChatMessage{Role: "tool", Content: textResult, ToolCallID: tc.ID},
-						ChatMessage{Role: "tool", Content: stickerResult, ToolCallID: stickerCall.ID},
-					)
+					messages = append(messages, textResult, stickerResult)
 					tcIndex++
 					continue
 				}
 			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolArgument, security.SourceToolArgument, tc.Function.Arguments, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
-					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：安全审查服务暂时不可用，该工具调用已被阻止。", ToolCallID: tc.ID})
+					messages = append(messages, ChatMessage{Role: "tool", Content: security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，该工具调用已被阻止", decision, runCtx.SessionID), ToolCallID: tc.ID})
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参因安全审查服务异常被阻止: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
 				} else {
-					messages = append(messages, ChatMessage{Role: "tool", Content: "FrostAgent安全控制：该工具调用已被阻止。", ToolCallID: tc.ID})
+					messages = append(messages, ChatMessage{Role: "tool", Content: security.ReportRejection(e.Log(), "安全审查拦截：该工具调用已被阻止", decision, runCtx.SessionID), ToolCallID: tc.ID})
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具入参被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
 				}
 				continue
@@ -1342,15 +1465,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
 				var err error
 				startedTools[tc.ID] = true
-				execution, err = executeInterruptibleTool(ctx, tool, tc)
+				execution, err = e.executeRecordedTool(ctx, tool, tc)
+				if errors.Is(err, errToolHistoryStorage) {
+					return AgentRunResult{Error: err, MemoryWritten: memoryWritten, Usage: totalUsage}
+				}
 				if runCanceled(ctx) {
 					if isMemoryWriteRequest(tc) {
 						memoryWritten = true
 					}
 					return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: ctx.Err(), Usage: totalUsage}
 				}
+				if tc.Function.Name == timesleep.ToolName && (err == nil || errors.Is(err, timesleep.ErrTimeout)) {
+					refreshPromptPending = true
+				}
 				if err != nil {
 					if errors.Is(err, security.ErrBanUserSuccess) {
+						if _, archiveErr := e.finishToolHistory(ctx, execution, err.Error(), false); archiveErr != nil {
+							return AgentRunResult{Error: archiveErr}
+						}
 						if hasRunCtx && runCtx.Proactive {
 							return AgentRunResult{
 								MemoryWritten: memoryWritten,
@@ -1360,16 +1492,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 						}
 						e.Log().WarnWithConsoleSummary(logs.SYSTEM, "Bot 自主封禁用户成功，终止思考循环", "Bot 封禁用户")
 						return AgentRunResult{
-							Content:       security.RejectGatewayMsg,
+							Content:       e.Log().ReportError(logs.SYSTEM, security.RejectGatewayMsg, err, runCtx.SessionID),
 							MemoryWritten: memoryWritten,
 							Banned:        true,
 							Usage:         totalUsage,
 						}
 					}
-					if errors.Is(err, actionscat.ErrDisabled) {
-						toolResult = err.Error()
+					if errors.Is(err, timesleep.ErrTimeout) {
+						toolResult = e.Log().ReportError(logs.TOOL, "Timeout", err, runCtx.SessionID)
+					} else if errors.Is(err, actionscat.ErrDisabled) {
+						toolResult = e.Log().ReportError(logs.TOOL, "工具调用失败：ActionsCat 已被管理员禁用", err, runCtx.SessionID)
 					} else {
-						toolResult = fmt.Sprintf("FrostAgent错误：工具执行失败: %v", err)
+						toolResult = e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", tc.Function.Name, err), runCtx.SessionID)
 					}
 				} else {
 					toolSucceeded = true
@@ -1379,6 +1513,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							toolResult = stickerEnforcementPrompt
 						} else {
 							e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【智能体选择保持沉默】", "【智能体选择保持沉默】")
+							if _, archiveErr := e.finishToolHistory(ctx, execution, toolResult, false); archiveErr != nil {
+								return AgentRunResult{Error: archiveErr}
+							}
 							return AgentRunResult{
 								MemoryWritten:    memoryWritten,
 								Silent:           true,
@@ -1393,7 +1530,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			} else {
-				toolResult = "FrostAgent错误：工具未找到"
+				toolResult = e.Log().ReportError(logs.TOOL, "工具调用失败：工具未找到", fmt.Errorf("tool=%s", tc.Function.Name), runCtx.SessionID)
 			}
 
 			// 单条工具结果过大保护
@@ -1407,19 +1544,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				toolResult = toolResult[:cut] + "\n...(工具输出过长，已截断)"
 			}
 
+			historyRestricted := false
 			securityContent := toolResult
 			if execution.MessagePayload != "" && execution.MessagePayload != toolResult && len(execution.MessagePayload) <= MaxToolOutputBytes {
 				securityContent += "\n" + execution.MessagePayload
 			}
+			if execution.PlatformActionPayload != "" && execution.PlatformActionPayload != toolResult && len(execution.PlatformActionPayload) <= MaxToolOutputBytes {
+				securityContent += "\n" + execution.PlatformActionPayload
+			}
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageToolResult, security.SourceToolResult, securityContent, tc.Function.Name); blocked || decision.Action == security.WatchdogFilter {
+				historyRestricted = true
 				if decision.IsFailure {
-					toolResult = "FrostAgent安全控制：安全审查服务暂时不可用，外部工具结果已隔离。"
+					toolResult = security.ReportRejection(e.Log(), "安全审查失败：服务暂时不可用，外部工具结果已隔离", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果因安全审查服务异常被隔离: tool=%s eval_id=%s", tc.Function.Name, decision.EvaluationID))
 				} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
 					toolResult = decision.SanitizedContent
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制过滤脱敏: tool=%s category=%s eval_id=%s", tc.Function.Name, decision.Classification.Category, decision.EvaluationID))
 				} else {
-					toolResult = "FrostAgent安全控制：外部工具结果已隔离。"
+					toolResult = security.ReportRejection(e.Log(), "安全审查拦截：外部工具结果已隔离", decision, runCtx.SessionID)
 					e.Log().Warn(logs.SYSTEM, fmt.Sprintf("工具结果被安全控制拦截: tool=%s reason=%s eval_id=%s", tc.Function.Name, decision.Reason, decision.EvaluationID))
 				}
 				toolSucceeded = false
@@ -1430,11 +1572,20 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			e.Log().InfoWithConsoleSummary(logs.TOOL, toolResultLog, "【工具执行结果】...")
 
 			if toolSucceeded {
-				deliverySticker := hasStickerImage(execution.MessagePayload)
-				if enforceStickerActivity() && execution.MessagePayload != "" && !deliverySticker {
+				stickerPayload := execution.MessagePayload
+				if execution.PlatformActionPayload != "" {
+					stickerPayload = platformActionMessagePayload(execution.PlatformActionPayload)
+				}
+				deliverySticker := hasStickerImage(stickerPayload)
+				if enforceStickerActivity() && stickerPayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
-						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
-						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID})
+						toolResult = WrapRuntimeGuidance("表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。")
+						var archiveErr error
+						toolResult, archiveErr = e.finishToolHistory(ctx, execution, toolResult, historyRestricted)
+						if archiveErr != nil {
+							return AgentRunResult{Error: archiveErr}
+						}
+						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID, ToolHistoryRefID: execution.HistoryRefID})
 						continue
 					}
 				}
@@ -1449,12 +1600,24 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			if runCanceled(ctx) {
 				return AgentRunResult{Silent: true, Error: context.Canceled}
 			}
+			var archiveErr error
+			toolResult, archiveErr = e.finishToolHistory(ctx, execution, toolResult, historyRestricted)
+			if archiveErr != nil {
+				return AgentRunResult{Error: archiveErr}
+			}
 			toolMsg := ChatMessage{
-				Role:       "tool",
-				Content:    toolResult,
-				ToolCallID: tc.ID,
+				ToolHistoryRefID: execution.HistoryRefID,
+				Role:             "tool",
+				Content:          toolResult,
+				ToolCallID:       tc.ID,
 			}
 			messages = append(messages, toolMsg)
+		}
+		if specificReplyDelivered && !runCtx.Awareness {
+			// Finish the validated batch and its memory/transcript bookkeeping,
+			// then keep the confirmed delivery as the complete public answer.
+			// Awareness retains its existing continuation behavior.
+			return AgentRunResult{MemoryWritten: memoryWritten, Usage: totalUsage}
 		}
 		if enforceStickerActivity() && (stickerEnforcing || e.stickerNeededBeforeReply()) {
 			if interval, remaining, grace := e.stickerActivitySnapshot(); interval > 0 && grace == 0 && (remaining == 0 || stickerEnforcing) {
@@ -1485,7 +1648,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		}
 	}
 	return AgentRunResult{
-		Content:       "FrostAgent错误：达到最大迭代次数，未能得出最终答案",
+		Content:       e.Log().ReportError(logs.SYSTEM, "智能体运行失败：达到最大迭代次数，未能得出最终答案", ErrMaxIterationsReached, runCtx.SessionID),
 		MemoryWritten: memoryWritten,
 		Usage:         totalUsage,
 	}
@@ -1527,11 +1690,24 @@ func effectiveMaxHistory(fallback int, scopes ...*runtimescope.Scope) int {
 
 // TrimSession 将会话持久化的历史裁剪到配置的消息上限
 // （MAX_CONTEXT_MESSAGES env，未配置时回退 SessionManager.MaxHistory）。
-func (e *Engine) TrimSession(session *SessionContext) {
+func (e *Engine) TrimSession(session *SessionContext, routes ...modelrouter.Scope) {
 	if session == nil {
 		return
 	}
-	session.TrimHistory(effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope))
+	limit := effectiveMaxHistory(e.SessionManager.MaxHistory, e.Scope)
+	if e.GroupCompactor != nil && isPrivateConversation(session.ConversationID) && !session.IsMock() {
+		route := modelrouter.Scope{Platform: "onebot"}
+		if len(routes) > 0 {
+			route = routes[0]
+		}
+		threshold := max(1, min(e.GroupCompactor.BufferSize(), limit-2))
+		e.triggerPrivateCompact(session, route, threshold)
+		// Keep the configured dialogue budget even when compaction is slow,
+		// unavailable or disabled. A captured snapshot owns its own copy.
+		session.trimPrivateHistory(limit)
+		return
+	}
+	session.TrimHistory(limit)
 }
 
 // trimMessagesForSession 改进的裁剪逻辑，确保工具链完整
@@ -1640,9 +1816,10 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 	res := make([]core.ChatMessage, len(msgs))
 	for i, m := range msgs {
 		coreMsg := core.ChatMessage{
-			Role:       core.MessageRole(m.Role),
-			Content:    m.Content,
-			ToolCallID: m.ToolCallID,
+			Role:          core.MessageRole(m.Role),
+			Content:       m.Content,
+			ToolCallID:    m.ToolCallID,
+			ProviderState: m.ProviderState,
 		}
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
@@ -1694,4 +1871,26 @@ func mergeSecurityNotice(runCtx *RunContext, notice string) {
 	if !strings.Contains(runCtx.SecurityNotice, notice) {
 		runCtx.SecurityNotice = runCtx.SecurityNotice + "\n\n" + notice
 	}
+}
+
+// userContentText extracts the speakable text of a user message. Multimodal
+// parts contribute their text and a placeholder per image; unknown shapes yield
+// an empty string rather than a stale value.
+func userContentText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []core.ContentPart:
+		var lines []string
+		for _, part := range v {
+			switch {
+			case part.Type == string(core.ContentPartTypeText) && part.Text != "":
+				lines = append(lines, part.Text)
+			case part.Type == string(core.ContentPartTypeImage):
+				lines = append(lines, "[图片]")
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	return ""
 }

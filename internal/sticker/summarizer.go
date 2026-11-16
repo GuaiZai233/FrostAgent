@@ -3,8 +3,10 @@ package sticker
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"os"
 	"strings"
@@ -110,6 +112,9 @@ func (s *Summarizer) process(id string) {
 
 	desc, keywords, suspectedInappropriate, err := s.vision.Describe(b64, mime)
 	if err != nil {
+		if errors.Is(err, modelrouter.ErrDisabled) {
+			return
+		}
 		s.Log().Error(logs.SYSTEM, fmt.Sprintf("sticker summarizer: vision call failed for %s: %v", id[:12], err))
 		return
 	}

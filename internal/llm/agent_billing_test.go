@@ -140,7 +140,7 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 	}
 	mu.Unlock()
 
-	// 2. Test when Platform is astrbot and TaskID is specified
+	// 2. Test when Platform is fixture and TaskID is specified
 	mu.Lock()
 	commitCalled = false
 	receivedKey = ""
@@ -149,7 +149,7 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 
 	runCtx2 := RunContext{
 		Billing: &BillingRunState{
-			Platform:      "astrbot",
+			Platform:      "fixture",
 			ExternalID:    "ast_user_001",
 			DisplayName:   "AstrMember",
 			TaskID:        "ast_msg_999",
@@ -158,7 +158,7 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 	}
 
 	res2 := engine.RunMessagesWithContext([]ChatMessage{
-		{Role: "user", Content: "Hello from astrbot"},
+		{Role: "user", Content: "Hello from fixture"},
 	}, runCtx2)
 
 	if res2.Error != nil {
@@ -166,17 +166,17 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 	}
 
 	mu.Lock()
-	if receivedReserveReq.Platform != "astrbot" {
-		t.Errorf("expected platform='astrbot', got %q", receivedReserveReq.Platform)
+	if receivedReserveReq.Platform != "fixture" {
+		t.Errorf("expected platform='fixture', got %q", receivedReserveReq.Platform)
 	}
 	if receivedReserveReq.TaskID != "ast_msg_999" {
 		t.Errorf("expected taskID='ast_msg_999', got %q", receivedReserveReq.TaskID)
 	}
-	if receivedKey != "res_astrbot_ast_msg_999_0" {
-		t.Errorf("expected Idempotency-Key='res_astrbot_ast_msg_999_0', got %q", receivedKey)
+	if receivedKey != "res_fixture_ast_msg_999_0" {
+		t.Errorf("expected Idempotency-Key='res_fixture_ast_msg_999_0', got %q", receivedKey)
 	}
 	if !commitCalled {
-		t.Errorf("expected commit to be called for astrbot session")
+		t.Errorf("expected commit to be called for fixture session")
 	}
 	mu.Unlock()
 }

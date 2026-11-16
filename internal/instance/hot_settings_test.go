@@ -42,6 +42,11 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 		}
 	}
 	update("BOT_NAME", "HotBot")
+	update("CHAT_HISTORY_PRIVATE_ENABLED", "false")
+	update("CHAT_HISTORY_GROUP_WHITELIST", "qq:group:fixture-group")
+	if before.Scope.Getenv("CHAT_HISTORY_PRIVATE_ENABLED") != "false" || before.Scope.Getenv("CHAT_HISTORY_GROUP_WHITELIST") != "qq:group:fixture-group" {
+		t.Fatal("chat history collection settings were not applied live")
+	}
 	if got := before.Scope.Getenv("BOT_NAME"); got != "HotBot" {
 		t.Fatalf("runtime still sees old name %q", got)
 	}
@@ -50,6 +55,10 @@ func TestSQLHotSettingsKeepRunningRuntime(t *testing.T) {
 		t.Fatalf("runtime status switch was not applied: %q", got)
 	}
 	update("ENABLE_QUOTE_TRACE", "false")
+	update("QQ_EXTEND_MESSAGES_TARGET_GROUPS", "42,43")
+	if before.Scope.Getenv("QQ_EXTEND_MESSAGES_TARGET_GROUPS") != "42,43" {
+		t.Fatal("QQ target whitelist was not applied live")
+	}
 	update("QUOTE_TRACE_DEPTH", "3")
 	update("BOT_LOOP_USER_IDS", "onebot:synthetic-bot")
 	update("BOT_LOOP_MAX_TURNS", "2")
@@ -184,18 +193,21 @@ func TestSQLActionsCatDraftVisibilityKeepsRunningRuntime(t *testing.T) {
 		count := 0
 		for _, tool := range runtime.Engine.ModelTools() {
 			if strings.HasPrefix(tool.Name, "actionscat_") {
+				t.Fatalf("legacy ActionsCat tool still exposed: %s", tool.Name)
+			}
+			if tool.Name == "actionscat" {
 				count++
 			}
 		}
 		want := 0
 		if step.enabled && step.configured {
-			want = 16
+			want = 1
 		}
 		if count != want {
 			t.Fatalf("enabled=%v configured=%v exposes %d ActionsCat tools, want %d", step.enabled, step.configured, count, want)
 		}
 		if !step.enabled {
-			_, err := runtime.Engine.ToolRegistry["actionscat_list_actions"].Execute("{}")
+			_, err := runtime.Engine.ToolRegistry["actionscat"].Execute("{}")
 			if !errors.Is(err, actionscat.ErrDisabled) {
 				t.Fatalf("retained tool did not reject disabled call: %v", err)
 			}

@@ -12,9 +12,20 @@ import (
 	"time"
 )
 
-// extractLegacyGroupID extracts a canonical group ID if the entry belongs to a group,
-// or returns an empty string if the entry belongs to a private user.
+// hasNonQQLegacyNamespace recognizes explicit platform-qualified memory identities.
+// Such identities must not fall back to an unqualified QQ group during migration.
+func hasNonQQLegacyNamespace(identity string) bool {
+	platform, rest, qualified := strings.Cut(strings.ToLower(strings.TrimSpace(identity)), ":")
+	return qualified && platform != "group" && !IsQQPlatform(platform) &&
+		(strings.HasPrefix(rest, "group:") || strings.HasPrefix(rest, "user:") || strings.HasPrefix(rest, "private:"))
+}
+
+// extractLegacyGroupID extracts a canonical group ID for legacy QQ group entries.
+// Private entries and explicitly namespaced non-QQ records stay in brain.json.
 func extractLegacyGroupID(entry MemoryEntry) string {
+	if hasNonQQLegacyNamespace(entry.Owner) || hasNonQQLegacyNamespace(entry.GroupID) {
+		return ""
+	}
 	if entry.ScopeType == ScopeGroup && entry.GroupID != "" {
 		return CanonicalGroupID(entry.GroupID)
 	}
@@ -28,10 +39,8 @@ func extractLegacyGroupID(entry MemoryEntry) string {
 		}
 	}
 	for _, prefix := range []string{
-		"aiocqhttp:group:",
 		"onebot:group:",
 		"qq:group:",
-		"astrbot:group:",
 		"group:",
 	} {
 		if cut, ok := strings.CutPrefix(entry.Owner, prefix); ok {
@@ -45,11 +54,17 @@ func extractLegacyGroupID(entry MemoryEntry) string {
 }
 
 func extractLegacyArchiveGroupID(archive MemoryMergeArchive) string {
+	if hasNonQQLegacyNamespace(archive.Owner) {
+		return ""
+	}
+	for _, source := range archive.Sources {
+		if hasNonQQLegacyNamespace(source.Owner) || hasNonQQLegacyNamespace(source.GroupID) {
+			return ""
+		}
+	}
 	for _, prefix := range []string{
-		"aiocqhttp:group:",
 		"onebot:group:",
 		"qq:group:",
-		"astrbot:group:",
 		"group:",
 	} {
 		if cut, ok := strings.CutPrefix(archive.Owner, prefix); ok {
@@ -92,7 +107,7 @@ func MigrateLegacyGroupMemories(
 		return fmt.Errorf("unmarshal brain.json: %w", err)
 	}
 
-	var privateEntries []MemoryEntry
+	var remainingEntries []MemoryEntry
 	groupEntries := make(map[string][]MemoryEntry)
 	for _, entry := range brain.Entries {
 		groupID := extractLegacyGroupID(entry)
@@ -103,9 +118,7 @@ func MigrateLegacyGroupMemories(
 			migrated.OwnerType = OwnerGroup
 			if strings.HasPrefix(migrated.Owner, "group:") ||
 				strings.HasPrefix(migrated.Owner, "qq:group:") ||
-				strings.HasPrefix(migrated.Owner, "aiocqhttp:group:") ||
 				strings.HasPrefix(migrated.Owner, "onebot:group:") ||
-				strings.HasPrefix(migrated.Owner, "astrbot:group:") ||
 				migrated.Owner == groupID ||
 				migrated.Owner == "" {
 				migrated.Owner = GroupOwnerExplicit
@@ -114,11 +127,11 @@ func MigrateLegacyGroupMemories(
 			}
 			groupEntries[groupID] = append(groupEntries[groupID], migrated)
 		} else {
-			privateEntries = append(privateEntries, entry)
+			remainingEntries = append(remainingEntries, entry)
 		}
 	}
 
-	var privateArchives []MemoryMergeArchive
+	var remainingArchives []MemoryMergeArchive
 	groupArchives := make(map[string][]MemoryMergeArchive)
 	for _, archive := range brain.MergeArchives {
 		groupID := extractLegacyArchiveGroupID(archive)
@@ -127,7 +140,7 @@ func MigrateLegacyGroupMemories(
 			migrated.Owner = GroupOwnerExplicit
 			groupArchives[groupID] = append(groupArchives[groupID], migrated)
 		} else {
-			privateArchives = append(privateArchives, archive)
+			remainingArchives = append(remainingArchives, archive)
 		}
 	}
 
@@ -197,10 +210,10 @@ func MigrateLegacyGroupMemories(
 		}
 	}
 
-	// Atomically write updated brain.json containing only private memories
+	// Atomically write updated brain.json containing all unmigrated memories.
 	updatedBrain := BrainData{
-		Entries:       privateEntries,
-		MergeArchives: privateArchives,
+		Entries:       remainingEntries,
+		MergeArchives: remainingArchives,
 	}
 	cleanData, err := json.MarshalIndent(updatedBrain, "", "  ")
 	if err != nil {

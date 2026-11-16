@@ -210,3 +210,20 @@ func validHeaderName(name string) bool {
 	}
 	return true
 }
+
+// SameEndpoint reports whether two curl templates send requests to the same scheme, host and path,
+// as determined by the same parser used for real queries. Headers, query-free body and key placement
+// do not affect the result. A template that fails to parse is never considered the same endpoint.
+func SameEndpoint(a, b string) bool {
+	ea, errA := endpointOf(a)
+	eb, errB := endpointOf(b)
+	return errA == nil && errB == nil && ea == eb
+}
+
+func endpointOf(raw string) (string, error) {
+	spec, err := parseCurl(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(spec.url.Scheme) + "://" + strings.ToLower(spec.url.Host) + spec.url.Path, nil
+}

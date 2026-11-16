@@ -26,8 +26,8 @@ func TestSafeGroupKey(t *testing.T) {
 	if SafeGroupKey("onebot:group:mock_grp_100") != baseKey {
 		t.Errorf("expected onebot:group: prefix to match canonical key")
 	}
-	if SafeGroupKey("astrbot:group:mock_grp_100") != baseKey {
-		t.Errorf("expected astrbot:group: prefix to match canonical key")
+	if SafeGroupKey("fixture:group:mock_grp_100") == baseKey {
+		t.Errorf("unexpected normalization of a non-OneBot platform prefix")
 	}
 
 	// Injective mapping: distinct IDs with delimiters must NEVER collide
@@ -282,7 +282,7 @@ func TestGroupStore_MemoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByOwner(mock_u_a) failed: %v", err)
 	}
-	if len(byUserA) != 1 || byUserA[0].ID != "gmem_1" {
+	if len(byUserA) != 0 {
 		t.Errorf("ListByOwner(mock_u_a) mismatch: %+v", byUserA)
 	}
 
@@ -290,8 +290,8 @@ func TestGroupStore_MemoryCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListByOwner(group) failed: %v", err)
 	}
-	if len(byGroup) != 2 {
-		t.Errorf("ListByOwner(group) len = %d; want 2", len(byGroup))
+	if len(byGroup) != 3 {
+		t.Errorf("ListByOwner(group) len = %d; want 3", len(byGroup))
 	}
 
 	// Search
@@ -571,7 +571,7 @@ func TestJSONGroupManagerRepeatedKnownPrefixes(t *testing.T) {
 	aliases := []string{
 		"group:group:review_test_group",
 		"qq:group:qq:group:review_test_group",
-		"group:onebot:group:aiocqhttp:group:review_test_group",
+		"group:onebot:group:qq:group:review_test_group",
 	}
 	for _, platform := range []string{"qq", "telegram"} {
 		for _, alias := range aliases {
@@ -674,7 +674,7 @@ func TestJSONGroupManagerLegacyQQAndPlatformAliases(t *testing.T) {
 		t.Fatal("legacy QQ path changed")
 	}
 	manager := NewGroupManager(baseDir, nil)
-	qq, err := manager.GetGroupStoreForPlatform(" AIOCQHTTP ", "onebot:group:legacy_group")
+	qq, err := manager.GetGroupStoreForPlatform(" QQ ", "onebot:group:legacy_group")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -875,8 +875,8 @@ func TestLegacyGroupMemoriesMigration(t *testing.T) {
 		if m.ID == "g_mem_1" && m.Owner != GroupOwnerExplicit {
 			t.Errorf("g_mem_1 owner = %q, want %q", m.Owner, GroupOwnerExplicit)
 		}
-		if m.ID == "g_mem_2" && m.Owner != "mock_u_alice" {
-			t.Errorf("g_mem_2 owner = %q, want mock_u_alice", m.Owner)
+		if m.ID == "g_mem_2" && m.Owner != GroupOwnerExplicit {
+			t.Errorf("g_mem_2 owner = %q, want group", m.Owner)
 		}
 	}
 
@@ -2248,8 +2248,8 @@ func TestGroupStore_Finding3_ConflictingOwnershipIdempotency(t *testing.T) {
 		if len(all) != 1 {
 			t.Fatalf("expected exactly 1 entry, got %d: %+v", len(all), all)
 		}
-		if all[0].Owner != "mock_u_alice" {
-			t.Errorf("expected Owner to remain %q when agreed, got %q", "mock_u_alice", all[0].Owner)
+		if all[0].Owner != GroupOwnerExplicit {
+			t.Errorf("expected group scope owner %q, got %q", GroupOwnerExplicit, all[0].Owner)
 		}
 	})
 }

@@ -62,7 +62,7 @@ type IncomingMessage struct {
 	SenderName  string         `json:"sender_name,omitempty"`
 	SenderCard  string         `json:"sender_card,omitempty"`
 	Content     string         `json:"content"`
-	Platform    string         `json:"platform"`     // "qq", "telegram", "discord", "astrbot", etc.
+	Platform    string         `json:"platform"`     // "qq", "telegram", "discord", etc.
 	AdapterID   string         `json:"-"`            // Trusted transport identity; never decoded from a message payload.
 	MessageType string         `json:"message_type"` // "group" | "private"
 	GroupID     string         `json:"group_id,omitempty"`

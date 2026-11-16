@@ -122,7 +122,7 @@ func load(path string) (fileData, error) {
 // CanonicalSessionID converts any QQ group session alias into its canonical form ("group:<id>").
 func CanonicalSessionID(sessionID string) string {
 	sessionID = strings.TrimSpace(sessionID)
-	for _, prefix := range []string{"aiocqhttp:group:", "qq:group:", "onebot:group:"} {
+	for _, prefix := range []string{"qq:group:", "onebot:group:"} {
 		if cut, ok := strings.CutPrefix(sessionID, prefix); ok {
 			return "group:" + cut
 		}
@@ -138,7 +138,6 @@ func sessionIDAliases(sessionID string) []string {
 	if groupID, ok := strings.CutPrefix(canonical, "group:"); ok {
 		return []string{
 			canonical,
-			"aiocqhttp:group:" + groupID,
 			"qq:group:" + groupID,
 			"onebot:group:" + groupID,
 		}

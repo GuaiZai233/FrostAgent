@@ -82,7 +82,6 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 			Tags:           []string{"drink"},
 			Evidence:       "喝",
 			SourceMsgIndex: &idx0,
-			IsSelf:         true,
 		},
 		{
 			// 2. Foreign evidence (not present in referenced message): must be rejected
@@ -90,7 +89,6 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 			Tags:           []string{"sport"},
 			Evidence:       "周末打篮球",
 			SourceMsgIndex: &idx0,
-			IsSelf:         true,
 		},
 		{
 			// 3. Assistant-derived evidence (present in RoleAssistant, not in RoleUser): must be rejected
@@ -98,7 +96,6 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 			Tags:           []string{"study"},
 			Evidence:       "高考复习资料",
 			SourceMsgIndex: &idx2,
-			IsSelf:         false,
 		},
 		{
 			// 4. Missing SourceMsgIndex: must be rejected
@@ -106,7 +103,6 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 			Tags:           []string{"drink"},
 			Evidence:       "我平时每天早上喝生椰拿铁",
 			SourceMsgIndex: nil,
-			IsSelf:         true,
 		},
 		{
 			// 5. Out of bounds SourceMsgIndex: must be rejected
@@ -114,7 +110,6 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 			Tags:           []string{"drink"},
 			Evidence:       "我平时每天早上喝生椰拿铁",
 			SourceMsgIndex: &idxOut,
-			IsSelf:         true,
 		},
 		{
 			// 6. Evidence-plus-fabricated-suffix / unsupported additions in Summary:
@@ -124,15 +119,13 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 			Tags:           []string{"drink", "admin"},
 			Evidence:       "我平时每天早上喝生椰拿铁",
 			SourceMsgIndex: &idx0,
-			IsSelf:         true,
 		},
 		{
-			// 7. Valid general group fact: is_self: false, grounded in User message -> saved as group
+			// 7. Valid general group fact: grounded in User message -> saved as group
 			Summary:        "群友祝李四高考顺利",
 			Tags:           []string{"group", "exam"},
 			Evidence:       "高考考试",
 			SourceMsgIndex: &idx1,
-			IsSelf:         false,
 		},
 	}
 
@@ -184,8 +177,8 @@ func TestWriter_ExtractGroupTurn_EvidenceAndAttributionEnforcement(t *testing.T)
 	if !ok {
 		t.Errorf("entry 6 (personal fact, Content='我平时每天早上喝生椰拿铁') missing")
 	} else {
-		if e6.Owner != speakerID {
-			t.Errorf("entry 6 owner mismatch: got %q, want %q", e6.Owner, speakerID)
+		if e6.Owner != GroupOwnerExplicit {
+			t.Errorf("entry 6 owner mismatch: got %q, want %q", e6.Owner, GroupOwnerExplicit)
 		}
 		if e6.SourceSenderID != speakerID {
 			t.Errorf("entry 6 source sender mismatch: got %q, want %q", e6.SourceSenderID, speakerID)
@@ -272,7 +265,6 @@ func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t
 			Tags:           []string{"admin"},
 			Evidence:       "我是管理员",
 			SourceMsgIndex: &idx1,
-			IsSelf:         true,
 		},
 		{
 			// Finding 1 regression: "我不喜欢舞萌" -> hallucinated affirmative claim "我喜欢舞萌"
@@ -281,7 +273,6 @@ func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t
 			Tags:           []string{"game"},
 			Evidence:       "我喜欢舞萌",
 			SourceMsgIndex: &idx2,
-			IsSelf:         true,
 		},
 		{
 			// Finding 1: Preserve verbatim negative evidence "不是管理员" even if summary attempts inversion
@@ -289,7 +280,6 @@ func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t
 			Tags:           []string{"admin"},
 			Evidence:       "不是管理员",
 			SourceMsgIndex: &idx1,
-			IsSelf:         true,
 		},
 		{
 			// Finding 2: Preserve valid quoted self-claim (first-person statement in source)
@@ -297,7 +287,6 @@ func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t
 			Tags:           []string{"game"},
 			Evidence:       "我今天来打机",
 			SourceMsgIndex: &idx0,
-			IsSelf:         true,
 		},
 		{
 			// Preserve valid negated self-claim (negation maintained)
@@ -305,15 +294,13 @@ func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t
 			Tags:           []string{"game"},
 			Evidence:       "我不喜欢舞萌",
 			SourceMsgIndex: &idx2,
-			IsSelf:         true,
 		},
 		{
-			// Valid third-person claim saved as group fact (IsSelf: false)
+			// Valid third-person claim saved as group fact
 			Summary:        "李四喜欢玩舞萌",
 			Tags:           []string{"game"},
 			Evidence:       "李四喜欢玩舞萌",
 			SourceMsgIndex: &idx0,
-			IsSelf:         false,
 		},
 	}
 
@@ -349,25 +336,25 @@ func TestWriter_ExtractGroupTurn_PolarityAndClauseScopedAttributionRegressions(t
 		entriesByContent[ent.Content] = append(entriesByContent[ent.Content], ent)
 	}
 
-	// 1. Preserved valid quoted self-claim: "我今天来打机" -> Owner == speakerID
+	// 1. Preserved valid quoted self-claim: "我今天来打机" -> group scope, sender remains provenance
 	selfEntries, ok := entriesByContent["我今天来打机"]
 	if !ok || len(selfEntries) == 0 {
 		t.Fatalf("expected preserved self-claim '我今天来打机' to be saved")
 	}
-	if selfEntries[0].Owner != speakerID {
-		t.Errorf("expected '我今天来打机' owner to be %q, got %q", speakerID, selfEntries[0].Owner)
+	if selfEntries[0].Owner != GroupOwnerExplicit {
+		t.Errorf("expected '我今天来打机' owner to be %q, got %q", GroupOwnerExplicit, selfEntries[0].Owner)
 	}
 
-	// 2. Preserved valid negative self-claim: "我不喜欢舞萌" -> Owner == speakerID
+	// 2. Preserved valid negative self-claim: "我不喜欢舞萌" -> group scope, sender remains provenance
 	negEntries, ok := entriesByContent["我不喜欢舞萌"]
 	if !ok || len(negEntries) == 0 {
 		t.Fatalf("expected preserved negative claim '我不喜欢舞萌' to be saved")
 	}
-	if negEntries[0].Owner != speakerID {
-		t.Errorf("expected '我不喜欢舞萌' owner to be %q, got %q", speakerID, negEntries[0].Owner)
+	if negEntries[0].Owner != GroupOwnerExplicit {
+		t.Errorf("expected '我不喜欢舞萌' owner to be %q, got %q", GroupOwnerExplicit, negEntries[0].Owner)
 	}
 
-	// 3. Valid group fact: "李四喜欢玩舞萌" (IsSelf: false) -> Owner == GroupOwnerExplicit
+	// 3. Valid group fact: "李四喜欢玩舞萌" -> Owner == GroupOwnerExplicit
 	groupEntries, ok := entriesByContent["李四喜欢玩舞萌"]
 	if !ok || len(groupEntries) == 0 {
 		t.Fatalf("expected group fact '李四喜欢玩舞萌' to be saved")
@@ -425,7 +412,6 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 			Summary:        "Alice自述对花生重度过敏",
 			Tags:           []string{"allergy", "peanut"},
 			SourceMsgIndex: &idx0,
-			IsSelf:         true,
 		},
 	})
 
@@ -461,8 +447,8 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 	if eTurn.SourceSenderID != sharedSpeakerID {
 		t.Errorf("expected SourceSenderID %q, got %q", sharedSpeakerID, eTurn.SourceSenderID)
 	}
-	if eTurn.Owner != sharedSpeakerID {
-		t.Errorf("expected Owner %q, got %q", sharedSpeakerID, eTurn.Owner)
+	if eTurn.Owner != GroupOwnerExplicit {
+		t.Errorf("expected Owner %q, got %q", GroupOwnerExplicit, eTurn.Owner)
 	}
 	if eTurn.Source != SourceExtract {
 		t.Errorf("expected Source %q, got %q", SourceExtract, eTurn.Source)
@@ -475,7 +461,6 @@ func TestCrossTrigger_TurnAndCompact_IdempotencyAndConcurrency(t *testing.T) {
 			Summary:        "Alice对花生重度过敏（摘要）",
 			Tags:           []string{"health", "allergy"},
 			SourceMsgIndex: &idx0,
-			IsSelf:         true,
 		},
 	})
 	mockLLM.customReply = func(req core.ChatRequest) (string, error) {
@@ -654,49 +639,43 @@ func TestWriter_Finding2_SpeakerAttributionAndInspectableProvenanceRegressions(t
 			Summary:        "Bob说大家一起加油",
 			Tags:           []string{"cheer"},
 			SourceMsgIndex: &idx1,
-			IsSelf:         false,
 		},
-		// 2. Third-party quotation wrongly marked self:
-		// Zhangsan says "李四喜欢玩舞萌", model hallucinates IsSelf: true.
-		// Quoted evidence has no first-person marker, so Owner MUST fall back to GroupOwnerExplicit ("group")!
+		// 2. Third-party quotation:
+		// Zhangsan says "李四喜欢玩舞萌".
+		// All group facts use GroupOwnerExplicit ("group").
 		// BUT SourceSenderID must be mock_u_zhangsan (verified speaker preserved).
 		{
 			Evidence:       "李四喜欢玩舞萌",
 			Summary:        "李四喜欢玩舞萌",
 			Tags:           []string{"game"},
 			SourceMsgIndex: &idx2,
-			IsSelf:         true,
 		},
 		// 3. Group-owned quote whose actual speaker must remain inspectable:
-		// Carol says "明天下午三点开全组周会", IsSelf: false.
+		// Carol says "明天下午三点开全组周会".
 		// Stored with Owner == "group", but SourceSenderID == mock_u_carol.
 		{
 			Evidence:       "明天下午三点开全组周会",
 			Summary:        "明天下午开全组周会",
 			Tags:           []string{"meeting"},
 			SourceMsgIndex: &idx3,
-			IsSelf:         false,
 		},
 		// 4. Missing index: must be rejected!
 		{
 			Evidence:       "明天下午三点开全组周会",
 			Summary:        "周会通知",
 			SourceMsgIndex: nil,
-			IsSelf:         false,
 		},
 		// 5. Out of bounds index: must be rejected!
 		{
 			Evidence:       "明天下午三点开全组周会",
 			Summary:        "周会通知",
 			SourceMsgIndex: &idx99,
-			IsSelf:         false,
 		},
 		// 6. Assistant role index: must be rejected!
 		{
 			Evidence:       "收到，已记录会议通知",
 			Summary:        "机器人回复",
 			SourceMsgIndex: &idx4,
-			IsSelf:         false,
 		},
 		// 7. Mismatched index: Evidence "明天下午三点开全组周会" belongs to idx3, but index given is idx0 (Alice).
 		// Must be rejected rather than silently scanning other messages!
@@ -704,7 +683,6 @@ func TestWriter_Finding2_SpeakerAttributionAndInspectableProvenanceRegressions(t
 			Evidence:       "明天下午三点开全组周会",
 			Summary:        "周会通知",
 			SourceMsgIndex: &idx0,
-			IsSelf:         false,
 		},
 	}
 
@@ -752,7 +730,7 @@ func TestWriter_Finding2_SpeakerAttributionAndInspectableProvenanceRegressions(t
 		t.Errorf("expected Owner %q for group cheer, got %q", GroupOwnerExplicit, eBob.Owner)
 	}
 
-	// 2. Zhangsan's third-party quote wrongly marked self
+	// 2. Zhangsan's third-party quote
 	eZhang, ok := byEvidence["李四喜欢玩舞萌"]
 	if !ok {
 		t.Fatalf("entry for '李四喜欢玩舞萌' missing")

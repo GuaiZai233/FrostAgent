@@ -82,8 +82,16 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var action model.OneBotAction
-	if err := peer.ReadJSON(&action); err != nil {
-		t.Fatal(err)
+	for {
+		if err := peer.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Action != "set_input_status" {
+			break
+		}
+		if err := peer.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": nil}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if action.Action != "send_private_msg" {
 		t.Fatalf("incoming event did not produce an outbound action: %s", action.Action)

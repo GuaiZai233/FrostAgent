@@ -25,10 +25,10 @@ func TestDefaultDispatcher(t *testing.T) {
 	d := NewDefaultDispatcher()
 
 	mockOneBot := &mockAdapter{id: "onebot"}
-	mockAstrBot := &mockAdapter{id: "astrbot"}
+	mockFixture := &mockAdapter{id: "fixture"}
 
 	d.RegisterAdapter(mockOneBot)
-	d.RegisterAdapter(mockAstrBot)
+	d.RegisterAdapter(mockFixture)
 
 	// Test GetAdapter
 	if a, ok := d.GetAdapter("onebot"); !ok || a.ID() != "onebot" {
@@ -66,8 +66,8 @@ func TestDefaultDispatcher(t *testing.T) {
 	}
 
 	// Test error propagation
-	mockAstrBot.err = errors.New("send failed")
-	if err := d.Dispatch(context.Background(), "astrbot", msg); err == nil || err.Error() != "send failed" {
+	mockFixture.err = errors.New("send failed")
+	if err := d.Dispatch(context.Background(), "fixture", msg); err == nil || err.Error() != "send failed" {
 		t.Errorf("expected send failed error, got %v", err)
 	}
 }

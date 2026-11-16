@@ -31,11 +31,11 @@ type Principal struct {
 }
 
 // CanonicalPlatform maps transport names or adapter aliases to canonical user platform identities.
-// For example, onebot, aiocqhttp, cqhttp, and qq all map to "qq".
+// For example, onebot, cqhttp, and qq all map to "qq".
 func CanonicalPlatform(platform string) string {
 	p := strings.ToLower(strings.TrimSpace(platform))
 	switch p {
-	case "onebot", "aiocqhttp", "cqhttp", "qq":
+	case "onebot", "cqhttp", "qq":
 		return "qq"
 	case "":
 		return "unknown"

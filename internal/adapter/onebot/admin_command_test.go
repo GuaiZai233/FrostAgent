@@ -243,7 +243,7 @@ func setupTestWS(t *testing.T) (*wsConnection, chan model.OneBotAction, func()) 
 	}()
 
 	cleanup := func() {
-		_ = clientConn.Close()
+		_ = wsConn.Close()
 		server.Close()
 	}
 
@@ -286,7 +286,7 @@ func TestHandleAdminCommand_AdminFlow(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(wsConn, event, engine)
+	handled := handleAdminCommand(wsConn, event, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for admin /reset")
 	}
@@ -313,7 +313,7 @@ func TestHandleAdminCommand_AdminFlow(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled = handleAdminCommand(wsConn, eventSyntaxErr, engine)
+	handled = handleAdminCommand(wsConn, eventSyntaxErr, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for syntax error")
 	}
@@ -371,7 +371,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(wsConn, event, engine)
+	handled := handleAdminCommand(wsConn, event, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for locked admin")
 	}
@@ -383,7 +383,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 			t.Errorf("expected send_group_msg action, got %s", act.Action)
 		}
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); !strings.Contains(msg, security.RejectGatewayMsg) {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("expected reply containing RejectGatewayMsg, got %q", msg)
 		}
 	case <-time.After(2 * time.Second):
@@ -403,7 +403,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 		Message:     msgBytesUnban,
 	}
 
-	handled = handleAdminCommand(wsConn, eventUnban, engine)
+	handled = handleAdminCommand(wsConn, eventUnban, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true for locked admin unban attempt")
 	}
@@ -411,7 +411,7 @@ func TestHandleAdminCommand_LockedAdminRejected(t *testing.T) {
 	select {
 	case act := <-actionCh:
 		params, _ := act.Params.(map[string]any)
-		if msg, _ := params["message"].(string); !strings.Contains(msg, security.RejectGatewayMsg) {
+		if msg, _ := params["message"].(string); !strings.HasPrefix(msg, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ") {
 			t.Errorf("expected reply containing RejectGatewayMsg on unban attempt, got %q", msg)
 		}
 	case <-time.After(2 * time.Second):
@@ -454,7 +454,7 @@ func TestHandleAdminCommand_NonAdminSilentDrop(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(wsConn, event, engine)
+	handled := handleAdminCommand(wsConn, event, engine, nil)
 	if !handled {
 		t.Fatalf("expected handleAdminCommand to return true to drop non-admin candidate")
 	}
@@ -493,7 +493,7 @@ func TestHandleAdminCommand_NonCandidatePassthrough(t *testing.T) {
 		Message:     msgBytes,
 	}
 
-	handled := handleAdminCommand(nil, event, engine)
+	handled := handleAdminCommand(nil, event, engine, nil)
 	if handled {
 		t.Fatalf("expected handleAdminCommand to return false for non-candidate chat message")
 	}
@@ -799,7 +799,7 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 			MessageType: "group",
 			Message:     msgBytes,
 		}
-		handled := handleAdminCommand(wsConn, event, engine)
+		handled := handleAdminCommand(wsConn, event, engine, nil)
 		if !handled {
 			t.Fatalf("expected handleAdminCommand to return true")
 		}
@@ -902,7 +902,8 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 		{"type": "at", "data": map[string]any{"qq": "10001"}},
 		{"type": "text", "data": map[string]any{"text": " /ban all"}},
 	})
-	if !strings.Contains(reply, "不支持对全体成员或全局通配符执行该操作") {
+	assertFailureReference(t, engine.Log(), reply, "不支持对全体成员或全局通配符执行该操作")
+	if !strings.HasPrefix(reply, "[FrostAgent 错误] 管理员指令执行失败 (Ref_ID: ") {
 		t.Errorf("expected wildcard rejection, got: %q", reply)
 	}
 
@@ -911,11 +912,11 @@ func TestOneBotAdminCommand_MentionBanAndUnbanRegression(t *testing.T) {
 		{"type": "at", "data": map[string]any{"qq": "10001"}},
 		{"type": "text", "data": map[string]any{"text": " /ban [@测试昵称]"}},
 	})
-	if !strings.Contains(reply, "包含非法字符或非ASCII字符（禁止使用昵称）") {
+	assertFailureReference(t, engine.Log(), reply, "包含非法字符或非ASCII字符（禁止使用昵称）")
+	if !strings.HasPrefix(reply, "[FrostAgent 错误] 管理员指令执行失败 (Ref_ID: ") {
 		t.Errorf("expected nickname rejection, got: %q", reply)
 	}
 }
-
 
 func TestExtractOneBotAdminCommand_QuotedBanSticker(t *testing.T) {
 	scope := newAdminTestScope(t, map[string]string{

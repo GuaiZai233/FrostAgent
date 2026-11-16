@@ -3,8 +3,8 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 )
 
 type contextualToolExecutor interface {
@@ -14,8 +14,14 @@ type contextualToolExecutor interface {
 // executeToolResult adapts legacy executors at one compatibility boundary.
 // Builtin tools implement StructuredToolExecutor and bypass text inference.
 func executeToolResult(ctx context.Context, tool ToolExecutor, call ToolCall) (core.ToolExecutionResult, error) {
+	var raw string
+	ctx = core.WithRawToolResultReceiver(ctx, func(value string) { raw = value })
 	if structured, ok := tool.(core.StructuredToolExecutor); ok {
-		return structured.ExecuteResult(ctx, call.Function.Arguments)
+		result, err := structured.ExecuteResult(ctx, call.Function.Arguments)
+		if raw != "" {
+			result.RawResult = raw
+		}
+		return result, err
 	}
 	var content string
 	var err error
@@ -24,7 +30,7 @@ func executeToolResult(ctx context.Context, tool ToolExecutor, call ToolCall) (c
 	} else {
 		content, err = tool.Execute(call.Function.Arguments)
 	}
-	result := core.ToolExecutionResult{Content: content}
+	result := core.ToolExecutionResult{Content: content, RawResult: raw}
 	if err == nil {
 		result.MemoryWritten = isMemoryWriteAction(call, content)
 		if looksLikeMessagePayload(content) {
@@ -61,6 +67,34 @@ func looksLikeMessagePayload(content string) bool {
 // Call only after tool-result security inspection permits delivery.
 func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutionResult, content string) (string, bool) {
 	run, ok := RunContextFromContext(ctx)
+	if ok && result.PlatformActionPayload != "" {
+		if run.Proactive || run.Mock || run.PlatformActionHook == nil || len(result.PlatformActionPayload) > MaxToolOutputBytes {
+			return "QQ 扩展操作不可用，未发送", false
+		}
+		if runCanceled(ctx) {
+			return "QQ 操作取消：会话已取消", false
+		}
+		if run.SessionID != "" && run.Epoch > 0 && e.SessionManager != nil {
+			if current, exists := e.SessionManager.Get(run.SessionID); exists {
+				if s, isSession := current.(*SessionContext); isSession && s.Epoch() != run.Epoch {
+					return "QQ 操作取消：会话已重置", false
+				}
+			}
+		}
+		var delivery core.PlatformActionResult
+		err := awaitDelivery(ctx, func() error {
+			var err error
+			delivery, err = run.PlatformActionHook(ctx, result.PlatformActionPayload)
+			for i := 0; i < delivery.MessagesSent; i++ {
+				e.RecordBotMessage(delivery.StickerSent)
+			}
+			return err
+		})
+		if err != nil {
+			return e.Log().ReportError(logs.WEBSOCKET, "QQ 操作失败", err, run.SessionID), false
+		}
+		return delivery.Content, delivery.MessagesSent > delivery.ExternalMessagesSent
+	}
 	if !ok || run.SendHook == nil || result.MessagePayload == "" || len(result.MessagePayload) > MaxToolOutputBytes {
 		return content, false
 	}
@@ -88,7 +122,18 @@ func (e *Engine) deliverToolResult(ctx context.Context, result core.ToolExecutio
 		}
 		return err
 	}); err != nil {
-		return fmt.Sprintf("消息发送失败：%v", err), false
+		return e.Log().ReportError(logs.WEBSOCKET, "消息发送失败", err, run.SessionID), false
 	}
 	return "消息已发送", true
+}
+
+func platformActionMessagePayload(raw string) string {
+	var action struct {
+		Action    string          `json:"action"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if json.Unmarshal([]byte(raw), &action) == nil && (action.Action == "send" || action.Action == "forward_bundle" || action.Action == "forward_message") {
+		return string(action.Arguments)
+	}
+	return ""
 }

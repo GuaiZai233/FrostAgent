@@ -51,6 +51,10 @@ func TestInstanceZIPAfterSkillsV12Migration(t *testing.T) {
 	}
 	// Reconstruct the other branch's v12 without replacing any user rows.
 	for _, statement := range []string{
+		`DROP TABLE session_states`,
+		`DROP TABLE chat_history`,
+		`DROP TABLE tool_history`,
+		`ALTER TABLE provider_endpoints DROP COLUMN api_format`,
 		`ALTER TABLE provider_models DROP COLUMN max_input_tokens`,
 		`ALTER TABLE memory_entries DROP COLUMN summary_dirty`,
 		`UPDATE schema_meta SET version=12, min_compatible_version=12 WHERE id=1`,
@@ -60,7 +64,7 @@ func TestInstanceZIPAfterSkillsV12Migration(t *testing.T) {
 		}
 	}
 	images := t.TempDir()
-	if _, err := BuildInstanceZIP(db, id, images); err == nil || !strings.Contains(err.Error(), "max_input_tokens") {
+	if _, err := BuildInstanceZIP(db, id, images); err == nil || !strings.Contains(err.Error(), "api_format") {
 		t.Fatalf("fixture did not reproduce missing-column backup failure: %v", err)
 	}
 	if err := db.Close(); err != nil {

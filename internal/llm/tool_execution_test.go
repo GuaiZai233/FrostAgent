@@ -120,3 +120,65 @@ func TestStructuredPayloadIsInspectedAndFilteredBeforeDelivery(t *testing.T) {
 		t.Fatalf("payload security gate was bypassed: inspected=%t, deliveries=%d", inspected, calls)
 	}
 }
+
+func TestQQPlatformActionsPassSecurityAndRunGates(t *testing.T) {
+	payload := `{"action":"send","arguments":{"messages":[{"type":"plain","text":"qq-payload-marker"}]}}`
+	for _, tc := range []struct {
+		name                                       string
+		block, proactive, mock, oversize, canceled bool
+		want                                       int
+	}{
+		{name: "allowed", want: 1}, {name: "security rejection", block: true}, {name: "proactive", proactive: true}, {name: "mock", mock: true}, {name: "oversize", oversize: true}, {name: "canceled", canceled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := core.ToolExecutionResult{Content: "prepared", PlatformActionPayload: payload}
+			if tc.oversize {
+				output.PlatformActionPayload = strings.Repeat("x", MaxToolOutputBytes+1)
+			}
+			tool := &structuredResultTool{staticTool: staticTool{name: "qq_extend_messages"}, output: output}
+			engine := &Engine{MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{"qq_extend_messages": tool}, Provider: &sequentialProvider{responses: []core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "qq-fixture", Type: "function", Function: core.ToolCallFunction{Name: "qq_extend_messages", Arguments: `{}`}}}}}}}}
+			inspected := false
+			if tc.block {
+				controller := security.NewController(t.TempDir())
+				controller.SetMode(security.ControlModeAggressive)
+				controller.Watchdog.SetClassifier(&mockGateClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+					if input.Stage == security.StageToolResult && strings.Contains(input.Content, "qq-payload-marker") {
+						inspected = true
+						return security.ClassificationResult{Category: security.RiskCategoryDataExfiltration, RiskLevel: security.RiskLevelHigh}, nil
+					}
+					return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+				}})
+				engine.Security = controller
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			calls := 0
+			engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "fixture"}}, RunContext{Context: ctx, ActorPlatform: "fixture", ActorUserID: "fixture-actor", Proactive: tc.proactive, Mock: tc.mock, PlatformActionHook: func(_ context.Context, got string) (core.PlatformActionResult, error) {
+				calls++
+				if got != payload {
+					t.Error("platform payload changed")
+				}
+				return core.PlatformActionResult{Content: `{"ok":true}`, MessagesSent: 1}, nil
+			}})
+			if calls != tc.want || tc.block && !inspected {
+				t.Fatalf("calls=%d want=%d inspected=%t", calls, tc.want, inspected)
+			}
+		})
+	}
+}
+
+func TestQQExternalDeliveryDoesNotMarkSourceReply(t *testing.T) {
+	for _, external := range []int{0, 1} {
+		ctx := WithRunContext(context.Background(), RunContext{PlatformActionHook: func(context.Context, string) (core.PlatformActionResult, error) {
+			return core.PlatformActionResult{Content: "confirmed", MessagesSent: 1, ExternalMessagesSent: external}, nil
+		}})
+		engine := &Engine{}
+		content, sourceReply := engine.deliverToolResult(ctx, core.ToolExecutionResult{PlatformActionPayload: `{}`}, "prepared")
+		if content != "confirmed" || sourceReply != (external == 0) {
+			t.Fatalf("external=%d content=%s sourceReply=%t", external, content, sourceReply)
+		}
+	}
+}
