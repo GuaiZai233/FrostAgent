@@ -27,8 +27,8 @@ func hasStickerImage(content string) bool {
 
 const (
 	ignoreEnforceStickerMarker = "<ignore_enforce_sticker />"
-	ignoreEnforceStickerReply  = "你认为对话场景实在无法发送表情。你的行为被宽容，请寻找适宜的时机，不要过度依赖宽容。"
-	stickerEnforcementPrompt   = "你仍未发送表情。如果你认为对话场景实在无法发送/挑选不到适宜的表情，请调用 ignore_enforce_sticker 工具以放宽约束。此内部动作请仅输出 <ignore_enforce_sticker />。"
+	ignoreEnforceStickerReply  = runtimeGuidancePrefix + "你认为对话场景实在无法发送表情。你的行为被宽容，请寻找适宜的时机，不要过度依赖宽容。" + runtimeGuidanceSuffix
+	stickerEnforcementPrompt   = runtimeGuidancePrefix + "你仍未发送表情。如果你认为对话场景实在无法发送/挑选不到适宜的表情，请调用 ignore_enforce_sticker 工具以放宽约束。此内部动作请仅输出 <ignore_enforce_sticker />。" + runtimeGuidanceSuffix
 )
 
 // stickerActivityState counts selected incoming turns per instance. Confirmed
@@ -140,13 +140,13 @@ func (e *Engine) stickerActivityPrompt() string {
 		return ""
 	}
 	if grace > 0 {
-		return fmt.Sprintf("表情包发送约束已放宽，还剩 %d 轮回复。", grace)
+		return WrapRuntimeGuidance(fmt.Sprintf("表情包发送约束已放宽，还剩 %d 轮回复。", grace))
 	}
 	unit := "个 Bot 对话轮次"
 	if sticker.ActivityMode(e.Getenv(sticker.ActivityModeEnvKey)) == sticker.ActivityAllMessages {
 		unit = "条传入消息"
 	}
-	return fmt.Sprintf("你的表情包发送积极性被设定，FrostAgent 强制你在还剩 %d %s之内发送一个表情。", remaining, unit)
+	return WrapRuntimeGuidance(fmt.Sprintf("你的表情包发送积极性被设定，FrostAgent 强制你在还剩 %d %s之内发送一个表情。", remaining, unit))
 }
 
 func (e *Engine) stickerNeededBeforeReply() bool {

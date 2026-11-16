@@ -73,13 +73,13 @@ func TestOneBotBotLoopSoftPromptOnlyInRequest(t *testing.T) {
 	provider.mu.Unlock()
 	firstText, _ := first.Messages[len(first.Messages)-1].Content.(string)
 	secondText, _ := second.Messages[len(second.Messages)-1].Content.(string)
-	if strings.Contains(firstText, botloop.PromptPrefix) || !strings.HasPrefix(secondText, botloop.PromptPrefix) {
+	if strings.Contains(firstText, botloop.PromptPrefix) || !strings.HasPrefix(secondText, llm.WrapRuntimeGuidance(botloop.PromptPrefix)+"\n\nUser Message:") {
 		t.Fatalf("soft prompt must start only the over-limit request: first=%q second=%q", firstText, secondText)
 	}
 	history := engine.SessionManager.GetOrCreate("private:11").Snapshot()
 	for _, message := range history {
 		content, _ := message.Content.(string)
-		if strings.Contains(content, botloop.PromptPrefix) {
+		if strings.Contains(content, botloop.PromptPrefix) || strings.Contains(content, "<frostagent_runtime_guidance>") {
 			t.Fatal("soft prompt leaked into session history")
 		}
 	}

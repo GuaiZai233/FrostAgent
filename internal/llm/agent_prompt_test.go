@@ -159,7 +159,7 @@ func TestEngineContextPromptSecurityNoticeRequestLocal(t *testing.T) {
 			t.Fatal(result.Error)
 		}
 		request := provider.lastRequest.Messages
-		if request[0].Content != "固定系统设定" {
+		if request[0].Content != "固定系统设定\n\n"+frostAgentSystemPrompt {
 			t.Fatalf("security notice changed the stable prompt prefix: %+v", request)
 		}
 		if notice != "" {
