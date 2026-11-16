@@ -1105,6 +1105,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
 		stopThinking()
+		deliveries.SetFinalMessage(runResult.FinalMessage)
 		replyText = runResult.Content
 		multiSegment := replyformat.Enabled(engine.Getenv)
 		if !multiSegment {

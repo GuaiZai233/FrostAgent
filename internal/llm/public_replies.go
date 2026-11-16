@@ -40,6 +40,7 @@ type PublicReplyLog struct {
 	fallbackText  string
 	finalAccepted bool
 	finalID       uint64
+	finalMessage  *core.ChatMessage
 	// confirmed records a platform-acknowledged public send even when it has no
 	// speakable text (image, file, audio). It is separate from texts so media-only
 	// deliveries are not mistaken for silence.
@@ -48,6 +49,32 @@ type PublicReplyLog struct {
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
 	return &PublicReplyLog{session: session, epoch: epoch}
+}
+
+// SetFinalMessage retains the original provider response without publishing it.
+// Only identical confirmed text may inherit its opaque continuation state.
+func (p *PublicReplyLog) SetFinalMessage(message *core.ChatMessage) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.finalMessage = nil
+	if message == nil || message.Role != core.RoleAssistant || len(message.ToolCalls) != 0 {
+		return
+	}
+	text, ok := message.Content.(string)
+	if !ok {
+		return
+	}
+	p.finalMessage = &core.ChatMessage{Role: core.RoleAssistant, Content: text, ProviderState: cloneProviderState(message.ProviderState)}
+}
+
+// The caller holds the reply-log mutex. Rewritten or partial text must not
+// inherit reasoning/signatures bound to a different provider message.
+func (p *PublicReplyLog) finalMessageForText(text string) core.ChatMessage {
+	message := core.ChatMessage{Role: core.RoleAssistant, Content: text}
+	if p.finalMessage != nil && p.finalMessage.Content == text {
+		message.ProviderState = cloneProviderState(p.finalMessage.ProviderState)
+	}
+	return message
 }
 
 // RecordFinalProgress publishes the cumulative confirmed prefix as one history
@@ -68,26 +95,29 @@ func (p *PublicReplyLog) RecordFinalProgress(text string, turn *SessionTurn) {
 		}
 		p.session.mu.Lock()
 		defer p.session.unlockCheckpoint()
-		p.updateFinalLocked(text)
+		message := p.updateFinalLocked(text)
 		if turn == nil || turn.lane == nil {
 			return
 		}
 		lane := turn.lane
 		lane.mu.Lock()
 		defer lane.mu.Unlock()
-		lane.recordFinalProgress(turn, p.finalID, text)
+		lane.recordFinalProgress(turn, p.finalID, ChatMessage{Role: string(message.Role), Content: message.Content, ProviderState: message.ProviderState})
 	})
 }
 
 // The caller holds both the reply-log and session mutexes.
-func (p *PublicReplyLog) updateFinalLocked(text string) {
+func (p *PublicReplyLog) updateFinalLocked(text string) core.ChatMessage {
+	message := p.finalMessageForText(text)
 	for i, id := range p.session.historySeq {
 		if p.finalID != 0 && id == p.finalID {
 			p.session.History[i].Content = text
-			return
+			p.session.History[i].ProviderState = message.ProviderState
+			return message
 		}
 	}
-	p.finalID = p.session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: text})
+	p.finalID = p.session.addMessageLocked(message)
+	return message
 }
 
 func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
@@ -185,7 +215,7 @@ func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 	if p.finalID != 0 {
 		p.updateFinalLocked(text)
 	} else {
-		p.session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: text})
+		p.session.addMessageLocked(p.finalMessageForText(text))
 	}
 	return true
 }
