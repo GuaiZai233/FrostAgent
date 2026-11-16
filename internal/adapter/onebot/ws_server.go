@@ -806,14 +806,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if engine != nil {
 			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
 		}
-		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
-		groupContextStart += len(proactive.PromptPrefix) + 2
-		groupContextEnd += len(proactive.PromptPrefix) + 2
+		guidance := llm.WrapRuntimeGuidance(proactive.PromptPrefix)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", guidance, requestPrompt)
+		groupContextStart += len(guidance) + 2
+		groupContextEnd += len(guidance) + 2
 	}
 	if botLoopSoft {
-		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
-		groupContextStart += len(botloop.PromptPrefix) + 2
-		groupContextEnd += len(botloop.PromptPrefix) + 2
+		guidance := llm.WrapRuntimeGuidance(botloop.PromptPrefix)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", guidance, requestPrompt)
+		groupContextStart += len(guidance) + 2
+		groupContextEnd += len(guidance) + 2
 	}
 
 	// 4. Call the agent engine with history

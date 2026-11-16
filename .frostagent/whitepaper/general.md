@@ -145,6 +145,7 @@ Race detector 只能发现本次测试实际执行路径中的 Go 共享内存�
 - **引导提示词**：`以下是示例对话，请仿照句子格式、语气等回应接下来的用户输入。`
 - **示例对话格式**：包含用户问题（`user`）与期望回复（`preferred`）的 Few-Shot 对话示范，持久化保存于各实例的 `data/instance_<id>/dialogue.yml`。
 - **系统提示词合成**：在每次调用大模型前，系统提示词依次组合：实例级基础系统提示词 -> 示例对话 Few-Shot -> 记忆主题目录 -> 召回记忆与隔离规则。OneBot 将当前系统时间追加到用户消息的 `response_context.guidance` 末尾，统一按 UTC+8 动态生成（例如 `当前系统时间：2026-11-7 23:43(UTC+8)。`），系统提示词不再注入每轮时间。
+- **后端运行协议**：主对话引擎在每轮请求快照的首条系统消息中追加固定的 `<frostagent_system_prompt>`，没有可合并的系统消息时单独前置；调用方自定义提示词也会附带该协议，重复迭代不会累积。协议按 Maintainer 确认的文案说明 `frostagent_runtime_guidance`、`frostagent_msg_guidance`、`outbound_message_guidance`、`response_context.guidance` 与 `system_context.interaction_guidance` 的后端用途。表情包倒计时、到期重试与宽容状态，以及主动回复和 Bot 防循环前缀，统一包在 `<frostagent_runtime_guidance>` 中，动态值继续保留在本轮请求内，不写回会话历史。此标签是模型输入的格式约定，不能代替后端鉴权或将聊天、引用、记忆和工具正文提升为可信指令；工具权限与执行门禁仍由后端校验。
 - **实例级生命周期与模板初始化**：创建新实例时，系统自动从模板路径（默认为 `eval/dialogue/dialogue.yml`，可通过 Control Plane 的 `DEFAULT_DIALOGUE_TEMPLATE` 环境变量自定义）拷贝生成初始 `dialogue.yml`，并写入默认 `SYSTEM_PROMPT`；实例删除时彻底清理，不留孤儿数据。
 - **快速配置（Copy）两阶段事务**：在实例克隆复制过程中，包含 `SYSTEM_PROMPT` 的 `.env` 与 `dialogue.yml` 共同纳入事务配置清单，经历暂存（Stage）、校验、预备提交与崩溃恢复保障，确保整套人设（提示词与对话示例）与环境配置同步原子转移。
 - **并发安全与内存热重载**：每个实例运行时启动时预先解析 YAML 并缓存于 `Engine.DialoguePrompt`，通过读写锁 `sync.RWMutex` 保护，彻底消除每轮对话中的重复磁盘 I/O。Web 端通过 `/instances/<id>/...` 保存或更新原始 YAML 时，原子落盘并即时刷新内存提示词，热重载无缝生效。

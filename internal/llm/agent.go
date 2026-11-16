@@ -976,6 +976,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
 		e.Log().InfoWithConsoleSummary(logs.SYSTEM, iterationSummary, iterationSummary)
 
+		messages = frostAgentSystemMessages(messages)
 		// 每一轮刷新当前有效工具集合（包含运行时热开关的 MCP 工具）
 		if e.Skills != nil {
 			skillMessages, skillErr := e.skillMessages(ctx, messages)
@@ -1578,7 +1579,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				deliverySticker := hasStickerImage(stickerPayload)
 				if enforceStickerActivity() && stickerPayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
-						toolResult = "表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。"
+						toolResult = WrapRuntimeGuidance("表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。")
 						var archiveErr error
 						toolResult, archiveErr = e.finishToolHistory(ctx, execution, toolResult, historyRestricted)
 						if archiveErr != nil {
