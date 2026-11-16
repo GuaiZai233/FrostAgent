@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
+import { fromJson } from '@bufbuild/protobuf';
+import { GetSessionContextResponseSchema } from '@frostagent/proto';
+import groupToolContextFixture from './fixtures/group-tool-context.json';
 import {
   buildInspectorDataFromSessionContext,
   parsePrompt,
@@ -327,6 +330,110 @@ assert.equal(
   container.querySelector('.tool-activity-arguments')!.textContent,
   queryArguments,
 );
+// Decode the real GetSessionContext wire fixture as the Connect client does.
+const groupContext = fromJson(
+  GetSessionContextResponseSchema,
+  groupToolContextFixture,
+);
+const groupPrompt = buildInspectorDataFromSessionContext(groupContext);
+assert.equal(groupPrompt.recentMessages.length, 2);
+assert.equal(groupPrompt.groupToolMessages?.length, 1);
+let groupLoads = 0;
+cleanup = renderPromptInspector(container, groupPrompt, {
+  loadToolArguments: async (refId) => {
+    groupLoads++;
+    return {
+      refId,
+      tool: 'send_sticker',
+      argumentsRaw: queryArguments,
+      argumentsAvailable: true,
+    };
+  },
+});
+const groupToolSection = container.querySelector('[data-group-tool-records]')!;
+assert.ok(
+  groupToolSection,
+  'group history annotations need their own visible projection',
+);
+assert.equal(
+  groupToolSection.querySelectorAll('[data-tool-activity]').length,
+  1,
+);
+assert.equal(
+  groupToolSection.querySelector('.msg-role-badge'),
+  null,
+  'tool notes must not become delivered Bot replies',
+);
+assert.equal(
+  [...container.querySelectorAll('.msg-content')].filter(
+    (el) => el.textContent === 'fixture group answer',
+  ).length,
+  1,
+  'public replies must not be duplicated from history',
+);
+assert.doesNotMatch(container.textContent!, /fixture internal trigger/);
+assert.match(groupToolSection.textContent!, new RegExp(originalRef));
+(
+  groupToolSection.querySelector('[data-tool-activity]') as HTMLDetailsElement
+).open = true;
+const groupDetails = groupToolSection.querySelector(
+  'details[data-tool-ref]',
+) as HTMLDetailsElement;
+groupDetails.open = true;
+await flush();
+assert.equal(groupLoads, 1);
+assert.equal(groupDetails.querySelector('pre')!.textContent, queryArguments);
+cleanup();
+
+let executionState = 'running';
+let pendingLoads = 0;
+cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: async (refId) => {
+    pendingLoads++;
+    return {
+      refId,
+      tool: 'send_message',
+      argumentsRaw: executionState === 'complete' ? queryArguments : '',
+      argumentsAvailable: executionState === 'complete',
+      argumentsPending: executionState !== 'complete',
+    };
+  },
+});
+detail = container.querySelector(
+  'details[data-tool-ref]',
+) as HTMLDetailsElement;
+detail.open = true;
+await flush();
+assert.equal(detail.dataset.argumentsState, 'pending');
+assert.doesNotMatch(detail.querySelector('pre')!.textContent!, /隔离/);
+assert.equal(
+  (detail.querySelector('button') as HTMLButtonElement).hidden,
+  false,
+);
+executionState = 'executed';
+detail.open = false;
+await flush();
+detail.open = true;
+await flush();
+assert.equal(pendingLoads, 2, 'reopening a pending record must fetch again');
+assert.equal(detail.dataset.argumentsState, 'pending');
+executionState = 'complete';
+(detail.querySelector('button') as HTMLButtonElement).click();
+await flush();
+assert.equal(
+  pendingLoads,
+  3,
+  'pending records must also support an explicit retry',
+);
+assert.equal(detail.querySelector('pre')!.textContent, queryArguments);
+assert.equal(detail.dataset.argumentsState, 'loaded');
+detail.open = false;
+await flush();
+detail.open = true;
+await flush();
+assert.equal(pendingLoads, 3, 'final reviewed parameters may still be cached');
+cleanup();
+
 dom.window.close();
 process.stdout.write(
   'PASS: distinct tool calls, historical reads, legacy records, native results, folding and escaping\n',

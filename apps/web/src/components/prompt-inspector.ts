@@ -110,6 +110,7 @@ export interface ParsedPrompt {
   compactDisabled?: boolean;
   recentMessages: GroupMessageItem[];
   requestMessages?: GroupMessageItem[];
+  groupToolMessages?: GroupMessageItem[];
   summaryGroups: SummaryGroupInfo[];
   responseContext?: string;
   systemContext?: string;
@@ -369,6 +370,12 @@ export function buildInspectorDataFromSessionContext(context: {
     }
   }
 
+  // Group chat history is sourced from the compact buffer. Internal tool notes
+  // live in ordinary history and need their own projection, never public replies.
+  const groupToolMessages: GroupMessageItem[] = privateSession ? [] : (context.history || [])
+    .filter((message) => message.role === 'assistant' && (message.toolHistoryRunId || parseToolHistoryNote(message.content)))
+    .map((message) => ({ role: 'assistant', content: message.content, rawText: message.content, toolHistoryRunId: message.toolHistoryRunId }));
+
   return {
     sessionKind: privateSession ? 'private' : 'group',
     botName: configuredBotName || undefined,
@@ -378,6 +385,7 @@ export function buildInspectorDataFromSessionContext(context: {
     runningSummary: context.runningSummary,
     compactDisabled: !privateSession && !!context.groupCompactDisabled,
     recentMessages,
+    groupToolMessages,
     summaryGroups,
     images: [],
     hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.parsedMessages?.length ?? 0) > 0),
@@ -847,6 +855,17 @@ export function renderPromptInspector(
         `
             : ''
         }
+
+        ${parsed.groupToolMessages?.length ? `
+          <section class="prompt-section" data-group-tool-records>
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">${icon('wrench', 'w-3.5 h-3.5')}<span>群聊工具执行记录</span></div>
+              <span class="text-xs text-muted">${parsed.groupToolMessages.length} 组 · 来源消息见各记录</span>
+            </div>
+            <div class="prompt-section-body"><div class="group-messages-container">
+              ${parsed.groupToolMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model, botName)).join('')}
+            </div></div>
+          </section>` : ''}
 
         <!-- Delivery Context (if previous assistant message failed to deliver) -->
         ${

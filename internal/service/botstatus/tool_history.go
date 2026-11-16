@@ -32,5 +32,6 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 	}
 	visible := record.ForModel()
 	return connect.NewResponse(&v1.GetToolHistoryEntryResponse{RefId: record.RefID, Tool: record.Tool,
-		ArgumentsRaw: visible.ArgumentsRaw, ArgumentsAvailable: !record.Restricted && record.State == "complete"}), nil
+		ArgumentsRaw: visible.ArgumentsRaw, ArgumentsAvailable: !record.Restricted && record.State == "complete",
+		ArgumentsPending: record.State != "complete"}), nil
 }

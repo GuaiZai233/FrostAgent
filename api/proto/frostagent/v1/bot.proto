@@ -147,6 +147,8 @@ message GetToolHistoryEntryResponse {
   string tool = 2;
   string arguments_raw = 3;
   bool arguments_available = 4;
+  // Execution or result review is incomplete; the inspector may retry later.
+  bool arguments_pending = 5;
 }
 
 message SummaryGroupInfoProto {

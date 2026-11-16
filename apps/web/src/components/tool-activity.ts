@@ -22,6 +22,7 @@ export type ToolArgumentsLoader = (refId: string) => Promise<{
   tool: string;
   argumentsRaw: string;
   argumentsAvailable: boolean;
+  argumentsPending?: boolean;
 }>;
 
 const refPattern =
@@ -175,6 +176,7 @@ export function bindToolArguments(
     )!;
     const refId = details.dataset.toolRef!;
     const fetchArguments = async () => {
+      if (!active || !details.isConnected) return;
       if (
         details.dataset.argumentsState === 'loaded' ||
         details.dataset.argumentsState === 'loading'
@@ -197,6 +199,13 @@ export function bindToolArguments(
         if (!active || !details.isConnected) return;
         if (result.refId !== refId || result.tool !== details.dataset.toolName)
           throw new Error('工具记录不匹配');
+        if (result.argumentsPending) {
+          requests.delete(refId);
+          pre.textContent = '调用正在执行或审查中，请稍后重试';
+          details.dataset.argumentsState = 'pending';
+          retry.hidden = false;
+          return;
+        }
         pre.textContent = result.argumentsAvailable
           ? result.argumentsRaw
           : '参数已隔离，无法展示';
