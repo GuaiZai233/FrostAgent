@@ -64,8 +64,12 @@ func TestPrivateMessageTimeCompactAndRestart(t *testing.T) {
 	}
 	s.PrepareTurnMessages(nil, "recent input", "recent input", nil)
 	before, _ := s.SnapshotPrivateContext(50)
+	recorded := s.Snapshot()[2].RecordedAt
 	restored := persistentManager(t, dir).GetOrCreate(s.ID())
 	after, _ := restored.SnapshotPrivateContext(50)
+	if !restored.Snapshot()[2].RecordedAt.Equal(recorded) {
+		t.Fatal("restart changed the recorded instant")
+	}
 	if len(after.SummaryGroups) != 1 || len(after.RecentStructuredMessages) != 1 ||
 		after.SummaryGroups[0].StructuredMsgs[0].Time != "20:34:34" ||
 		after.SummaryGroups[0].StructuredMsgs[1].Time != "20:34:40" ||
