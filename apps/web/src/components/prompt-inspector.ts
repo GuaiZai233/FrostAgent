@@ -110,7 +110,6 @@ export interface ParsedPrompt {
   compactDisabled?: boolean;
   recentMessages: GroupMessageItem[];
   requestMessages?: GroupMessageItem[];
-  groupToolMessages?: GroupMessageItem[];
   summaryGroups: SummaryGroupInfo[];
   responseContext?: string;
   systemContext?: string;
@@ -298,6 +297,70 @@ function privateHistoryMessage(item: GroupMessageItem): GroupMessageItem {
   return { ...item, content: body.slice(prefix.length), promptContexts };
 }
 
+function messageToolActivity(message: GroupMessageItem): ToolActivity | undefined {
+  if (message.role !== 'assistant' && !message.toolActivity) return undefined;
+  return message.toolActivity || parseToolHistoryNote(message.content) ||
+    (message.toolHistoryRunId ? { entries: [], raw: message.content } : undefined);
+}
+
+function conversationMessageCount(messages: GroupMessageItem[]): number {
+  return messages.filter((message) => !messageToolActivity(message)).length;
+}
+
+// Group messages and internal tool notes have independent storage. Join only on
+// exact source IDs, including the visible compact batch, without importing the
+// internal user triggers or duplicating public replies from ordinary history.
+function mergeGroupToolHistory(
+  messageLists: GroupMessageItem[][],
+  history: Array<{ role: string; content: string; toolHistoryRunId?: string }>,
+): GroupMessageItem[][] {
+  const anchors = new Map<string, GroupMessageItem>();
+  const seenRuns = new Set<string>();
+  const seenRefs = new Set<string>();
+  for (const messages of messageLists) {
+    for (const message of messages) {
+      const activity = messageToolActivity(message);
+      if (activity) {
+        if (message.toolHistoryRunId) seenRuns.add(message.toolHistoryRunId);
+        for (const entry of activity.entries) if (entry.refId) seenRefs.add(entry.refId);
+      } else if (message.id) anchors.set(message.id, message);
+    }
+  }
+
+  const afterMessage = new Map<GroupMessageItem, GroupMessageItem[]>();
+  const unlocated: GroupMessageItem[] = [];
+  for (const message of history) {
+    if (message.role !== 'assistant') continue;
+    const activity = messageToolActivity({ ...message, role: 'assistant', rawText: message.content });
+    if (!activity || (message.toolHistoryRunId && seenRuns.has(message.toolHistoryRunId))) continue;
+    const entries = activity.entries.filter((entry) => !entry.refId || !seenRefs.has(entry.refId));
+    if (activity.entries.length && !entries.length) continue;
+    if (message.toolHistoryRunId) seenRuns.add(message.toolHistoryRunId);
+    for (const entry of entries) if (entry.refId) seenRefs.add(entry.refId);
+    const anchor = activity.sourceMessageId ? anchors.get(activity.sourceMessageId) : undefined;
+    const note: GroupMessageItem = {
+      role: 'assistant', content: message.content, rawText: message.content,
+      toolHistoryRunId: message.toolHistoryRunId,
+      toolActivity: {
+        ...activity, entries,
+        placementHint: anchor ? undefined : activity.sourceMessageId
+          ? '来源消息不在当前窗口，位置未定位' : '未记录来源消息，位置未定位',
+      },
+    };
+    if (anchor) {
+      const notes = afterMessage.get(anchor) || [];
+      notes.push(note);
+      afterMessage.set(anchor, notes);
+    } else unlocated.push(note);
+  }
+
+  const merged = messageLists.map((messages) => messages.flatMap((message) => [message, ...(afterMessage.get(message) || [])]));
+  // Keep unlocatable records visible in the same timeline, without assigning
+  // them to a nearby user or inventing an execution time.
+  merged[merged.length - 1].unshift(...unlocated);
+  return merged;
+}
+
 /**
  * Builds a structured ParsedPrompt from backend GetSessionContext response.
  */
@@ -370,11 +433,14 @@ export function buildInspectorDataFromSessionContext(context: {
     }
   }
 
-  // Group chat history is sourced from the compact buffer. Internal tool notes
-  // live in ordinary history and need their own projection, never public replies.
-  const groupToolMessages: GroupMessageItem[] = privateSession ? [] : (context.history || [])
-    .filter((message) => message.role === 'assistant' && (message.toolHistoryRunId || parseToolHistoryNote(message.content)))
-    .map((message) => ({ role: 'assistant', content: message.content, rawText: message.content, toolHistoryRunId: message.toolHistoryRunId }));
+  if (!privateSession) {
+    const merged = mergeGroupToolHistory(
+      [...summaryGroups.map((group) => group.parsedMessages || []), recentMessages],
+      context.history || [],
+    );
+    summaryGroups.forEach((group, index) => { group.parsedMessages = merged[index]; });
+    recentMessages = merged[merged.length - 1];
+  }
 
   return {
     sessionKind: privateSession ? 'private' : 'group',
@@ -385,7 +451,6 @@ export function buildInspectorDataFromSessionContext(context: {
     runningSummary: context.runningSummary,
     compactDisabled: !privateSession && !!context.groupCompactDisabled,
     recentMessages,
-    groupToolMessages,
     summaryGroups,
     images: [],
     hasGroupMessages: recentMessages.length > 0 || summaryGroups.some((g) => (g.parsedMessages?.length ?? 0) > 0),
@@ -672,7 +737,7 @@ export function renderPromptInspector(
     }
 
     const totalSummarizedMsgs = parsed.summaryGroups.reduce(
-      (acc, g) => acc + (g.parsedMessages?.length || g.messages?.length || 0),
+      (acc, g) => acc + (g.parsedMessages ? conversationMessageCount(g.parsedMessages) : g.messages?.length || 0),
       0,
     );
 
@@ -716,7 +781,7 @@ export function renderPromptInspector(
             }
             ${
               parsed.recentMessages.length > 0
-                ? `<span class="badge badge-info text-xs">${parsed.recentMessages.length} 条未压缩消息</span>`
+                ? `<span class="badge badge-info text-xs">${conversationMessageCount(parsed.recentMessages)} 条未压缩消息</span>`
                 : ''
             }
           </div>
@@ -859,17 +924,6 @@ export function renderPromptInspector(
         `
             : ''
         }
-
-        ${parsed.groupToolMessages?.length ? `
-          <section class="prompt-section" data-group-tool-records>
-            <div class="prompt-section-header">
-              <div class="prompt-section-title">${icon('wrench', 'w-3.5 h-3.5')}<span>群聊工具执行记录</span></div>
-              <span class="text-xs text-muted">${parsed.groupToolMessages.length} 组 · 来源消息见各记录</span>
-            </div>
-            <div class="prompt-section-body"><div class="group-messages-container">
-              ${parsed.groupToolMessages.map((msg) => renderSingleMessageRow(msg, false, parsed.model, botName)).join('')}
-            </div></div>
-          </section>` : ''}
 
         <!-- Delivery Context (if previous assistant message failed to deliver) -->
         ${
@@ -1062,7 +1116,7 @@ function renderSummaryGroupBlock(
             <span class="summary-compact-card-title">当前${chatLabel} compact 内容</span>
           </span>
           <span class="summary-compact-card-meta">
-            <span>${messages.length} 条消息</span>
+            <span>${conversationMessageCount(messages)} 条消息</span>
             <span class="summary-compact-card-chevron" aria-hidden="true">${icon('chevron_down', 'w-3.5 h-3.5')}</span>
           </span>
         </summary>
@@ -1082,10 +1136,8 @@ export function renderSingleMessageRow(
   botName = DEFAULT_BOT_NAME,
   interpretToolNotes = true,
 ): string {
-  if (interpretToolNotes && (msg.role === 'assistant' || msg.toolActivity)) {
-    const activity = msg.toolActivity || parseToolHistoryNote(msg.content) || (msg.toolHistoryRunId ? { entries: [], raw: msg.content } : undefined);
-    if (activity) return renderToolActivity(activity);
-  }
+  const activity = interpretToolNotes ? messageToolActivity(msg) : undefined;
+  if (activity) return renderToolActivity(activity);
   const uncompactedClass = isSummarized ? '' : 'is-uncompacted';
   const isAssistant = msg.role === 'assistant';
   const roleClass = isAssistant ? 'is-assistant' : 'is-user';

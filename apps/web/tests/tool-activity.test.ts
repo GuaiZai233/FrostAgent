@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { fromJson } from '@bufbuild/protobuf';
 import { GetSessionContextResponseSchema } from '@frostagent/proto';
 import groupToolContextFixture from './fixtures/group-tool-context.json';
+import privateTimedContextFixture from './fixtures/private-timed-context.json';
 import {
   buildInspectorDataFromSessionContext,
   parsePrompt,
@@ -336,8 +337,10 @@ const groupContext = fromJson(
   groupToolContextFixture,
 );
 const groupPrompt = buildInspectorDataFromSessionContext(groupContext);
-assert.equal(groupPrompt.recentMessages.length, 2);
-assert.equal(groupPrompt.groupToolMessages?.length, 1);
+assert.equal(groupPrompt.recentMessages.length, 3);
+assert.equal(groupPrompt.recentMessages[0].id, 'fixture-message');
+assert.equal(groupPrompt.recentMessages[1].toolHistoryRunId, 'fixture-run');
+assert.equal(groupPrompt.recentMessages[2].content, 'fixture group answer');
 let groupLoads = 0;
 cleanup = renderPromptInspector(container, groupPrompt, {
   loadToolArguments: async (refId) => {
@@ -350,20 +353,24 @@ cleanup = renderPromptInspector(container, groupPrompt, {
     };
   },
 });
-const groupToolSection = container.querySelector('[data-group-tool-records]')!;
-assert.ok(
-  groupToolSection,
-  'group history annotations need their own visible projection',
-);
+assert.equal(container.querySelector('[data-group-tool-records]'), null);
+assert.doesNotMatch(container.textContent!, /群聊工具执行记录/);
+const groupSource = container.querySelector('[data-msg-id="fixture-message"]')!;
+const groupToolCard = groupSource.nextElementSibling!;
+assert.ok(groupToolCard.matches('[data-tool-activity]'));
+const collapsedGroupCard = groupToolCard.outerHTML;
+assert.equal(container.querySelectorAll('[data-tool-activity]').length, 1);
 assert.equal(
-  groupToolSection.querySelectorAll('[data-tool-activity]').length,
-  1,
-);
-assert.equal(
-  groupToolSection.querySelector('.msg-role-badge'),
+  groupToolCard.querySelector('.msg-role-badge'),
   null,
   'tool notes must not become delivered Bot replies',
 );
+assert.equal(
+  groupToolCard.nextElementSibling!.querySelector('.msg-content')!.textContent,
+  'fixture group answer',
+  'source message, tool activity and reply must share one timeline',
+);
+assert.match(container.textContent!, /2 条未压缩消息/);
 assert.equal(
   [...container.querySelectorAll('.msg-content')].filter(
     (el) => el.textContent === 'fixture group answer',
@@ -372,11 +379,9 @@ assert.equal(
   'public replies must not be duplicated from history',
 );
 assert.doesNotMatch(container.textContent!, /fixture internal trigger/);
-assert.match(groupToolSection.textContent!, new RegExp(originalRef));
-(
-  groupToolSection.querySelector('[data-tool-activity]') as HTMLDetailsElement
-).open = true;
-const groupDetails = groupToolSection.querySelector(
+assert.match(groupToolCard.textContent!, new RegExp(originalRef));
+(groupToolCard as HTMLDetailsElement).open = true;
+const groupDetails = groupToolCard.querySelector(
   'details[data-tool-ref]',
 ) as HTMLDetailsElement;
 groupDetails.open = true;
@@ -384,6 +389,165 @@ await flush();
 assert.equal(groupLoads, 1);
 assert.equal(groupDetails.querySelector('pre')!.textContent, queryArguments);
 cleanup();
+
+// The same run must use identical markup in group and private conversations.
+renderPromptInspector(
+  container,
+  buildInspectorDataFromSessionContext({
+    sessionId: 'private:fixture-user',
+    history: groupContext.history,
+  }),
+);
+assert.equal(
+  container.querySelector('[data-tool-activity]')!.outerHTML,
+  collapsedGroupCard,
+);
+
+const oldRef = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440002';
+const missingRef = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440003';
+const sourceLessRef = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440004';
+const note = (source: string | undefined, refId: string) =>
+  `【工具执行记录】${source === undefined ? '' : `\n来源消息: ${JSON.stringify(source)}`}\n- 工具调用: send_message (ref_id: ${refId})`;
+const oldMessage = {
+  ...groupContext.recentStructuredMessages[0],
+  messageId: 'fixture-old',
+  content: 'fixture old question',
+};
+const mergedGroup = buildInspectorDataFromSessionContext({
+  ...groupContext,
+  summaryGroups: [
+    { summary: 'fixture compact', structuredMessages: [oldMessage] },
+  ],
+  recentStructuredMessages: [
+    ...groupContext.recentStructuredMessages,
+    {
+      ...groupContext.recentStructuredMessages[0],
+      messageId: 'fixture-unrelated',
+      content: 'fixture unrelated chatter',
+    },
+  ],
+  history: [
+    {
+      role: 'assistant',
+      content: note('fixture-old', oldRef),
+      toolHistoryRunId: 'fixture-old-run',
+    },
+    ...groupContext.history,
+    {
+      role: 'assistant',
+      content: `【工具执行记录】\n来源消息: "fixture-message"\n- 历史回查: read_tool_history (ref_id: ${readRef}) (read_target_ref_id: ${originalRef})`,
+      toolHistoryRunId: 'fixture-read-run',
+    },
+    { role: 'assistant', content: note('fixture-missing', missingRef) },
+    { role: 'assistant', content: note(undefined, sourceLessRef) },
+    // Replayed entries must not duplicate either runs or legacy references.
+    groupContext.history[1],
+    { role: 'assistant', content: note('fixture-old', oldRef) },
+    { role: 'user', content: note('fixture-unrelated', missingRef) },
+  ],
+});
+renderPromptInspector(container, mergedGroup);
+const compactRows = container.querySelector('.summary-group-messages')!;
+const compactToolCard = compactRows.querySelector('[data-tool-activity]')!;
+assert.equal(
+  compactToolCard.previousElementSibling!.getAttribute('data-msg-id'),
+  'fixture-old',
+);
+assert.match(compactToolCard.textContent!, new RegExp(oldRef));
+assert.match(
+  container.querySelector('.summary-compact-card-meta')!.textContent!,
+  /1 条消息/,
+);
+const recentSource = container.querySelector(
+  '[data-msg-id="fixture-message"]',
+)!;
+assert.match(
+  recentSource.nextElementSibling!.textContent!,
+  new RegExp(originalRef),
+);
+assert.match(
+  recentSource.nextElementSibling!.nextElementSibling!.textContent!,
+  new RegExp(readRef),
+);
+assert.equal(
+  recentSource.nextElementSibling!.nextElementSibling!.nextElementSibling!.querySelector(
+    '.msg-content',
+  )!.textContent,
+  'fixture group answer',
+);
+assert.equal(container.querySelectorAll('[data-tool-activity]').length, 5);
+assert.match(container.textContent!, /3 条未压缩消息/);
+const unlocatedCards = [
+  ...container.querySelectorAll('[data-tool-activity]'),
+].filter((card) => /位置未定位/.test(card.textContent!));
+assert.equal(
+  unlocatedCards.length,
+  2,
+  'missing and legacy source-less runs remain visible',
+);
+assert.match(unlocatedCards[0].textContent!, /来源消息不在当前窗口/);
+assert.match(unlocatedCards[1].textContent!, /未记录来源消息/);
+assert.equal(
+  container.querySelector('[data-msg-id="fixture-unrelated"]')!
+    .nextElementSibling,
+  null,
+  'unrelated chatter must not acquire a tool record',
+);
+assert.doesNotMatch(container.textContent!, /fixture internal trigger/);
+
+const toolsOnlyGroup = buildInspectorDataFromSessionContext({
+  sessionId: 'group:fixture-empty',
+  history: [{ role: 'assistant', content: note(undefined, sourceLessRef) }],
+});
+renderPromptInspector(container, toolsOnlyGroup);
+assert.equal(container.querySelectorAll('[data-tool-activity]').length, 1);
+assert.equal(container.querySelectorAll('.group-msg-row').length, 0);
+
+// An inline run supplied by a future/legacy server is not projected twice.
+const alreadyInline = buildInspectorDataFromSessionContext({
+  ...groupContext,
+  recentStructuredMessages: [
+    groupContext.recentStructuredMessages[0],
+    {
+      role: 'assistant',
+      content: groupContext.history[1].content,
+      toolHistoryRunId: 'fixture-run',
+      sender: '',
+      senderId: '',
+      messageId: '',
+      time: '',
+    },
+    groupContext.recentStructuredMessages[1],
+  ],
+});
+renderPromptInspector(container, alreadyInline);
+assert.equal(container.querySelectorAll('[data-tool-activity]').length, 1);
+
+const privateTimedContext = fromJson(
+  GetSessionContextResponseSchema,
+  privateTimedContextFixture,
+);
+renderPromptInspector(
+  container,
+  buildInspectorDataFromSessionContext(privateTimedContext),
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-user .msg-time')!.textContent,
+  '20:34:34',
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-assistant .msg-time')!.textContent,
+  '20:34:40',
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-user .msg-content')!.textContent,
+  'fixture input',
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-assistant .msg-content')!
+    .textContent,
+  'fixture reply',
+);
 
 let executionState = 'running';
 let pendingLoads = 0;

@@ -57,6 +57,13 @@ func TestCheckpointRestartPreservesPrivateInspectionAndMedia(t *testing.T) {
 	if request, at := restored.LastActualRequest(); request == "" || at.IsZero() {
 		t.Fatal("actual request attachments lost")
 	}
+	// JSON preserves instants and offsets, not the identity of time.Location.
+	for i := range history {
+		history[i].RecordedAt = history[i].RecordedAt.UTC()
+	}
+	for i := range restoredHistory {
+		restoredHistory[i].RecordedAt = restoredHistory[i].RecordedAt.UTC()
+	}
 	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(history, restoredHistory) {
 		t.Fatalf("inspection changed across restart\nbefore=%+v\nafter=%+v", before, after)
 	}

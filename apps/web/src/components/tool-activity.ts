@@ -14,6 +14,7 @@ export interface ToolActivityEntry {
 export interface ToolActivity {
   entries: ToolActivityEntry[];
   sourceMessageId?: string;
+  placementHint?: string;
   raw?: string;
 }
 
@@ -125,7 +126,7 @@ export function renderToolActivity(activity: ToolActivity): string {
       <span class="tool-activity-count">${escapeHtml(counts || '内部记录')}</span>
       ${reads ? '<span class="tool-activity-read-badge">历史回查</span>' : ''}
       <span class="tool-activity-chevron">${icon('chevron_down', 'w-3.5 h-3.5')}</span>
-      <span class="tool-activity-preview">${[...names].map(([name, count]) => escapeHtml(name) + (count > 1 ? ` ×${count}` : '')).join(' · ')}</span>
+      <span class="tool-activity-preview">${[...names].map(([name, count]) => escapeHtml(name) + (count > 1 ? ` ×${count}` : '')).join(' · ')}${activity.placementHint ? ` · ${escapeHtml(activity.placementHint)}` : ''}</span>
     </summary>
     <div class="tool-activity-body">
       ${activity.sourceMessageId ? `<div class="tool-activity-source">来源消息 <code>${escapeHtml(activity.sourceMessageId)}</code></div>` : ''}

@@ -3,14 +3,56 @@ package botstatus
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
+
+// Shared with the frontend test so timestamps come from the real RPC projection.
+func TestPrivateMessageTimeWireFixture(t *testing.T) {
+	manager := llm.NewSessionManager()
+	session := manager.GetOrCreate("private:fixture-timed-context")
+	stamp := time.Date(2026, 11, 17, 20, 34, 34, 0, time.FixedZone("fixture", 8*60*60))
+	session.ReplaceMessages([]llm.ChatMessage{
+		{Role: "user", Content: "User Message: fixture input\n\n<system_context>\n{\"message_id\":\"fixture-message\",\"user_id\":\"fixture-user\"}\n</system_context>", RecordedAt: stamp},
+		{Role: "assistant", Content: "fixture reply", RecordedAt: stamp.Add(6 * time.Second)},
+	})
+	response, err := New(&llm.Engine{SessionManager: manager}, "test", "").GetSessionContext(context.Background(),
+		connect.NewRequest(&v1.GetSessionContextRequest{SessionId: session.ID()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("..", "..", "..", "apps", "web", "tests", "fixtures", "private-timed-context.json")
+	if os.Getenv("FROSTAGENT_UPDATE_TIME_CONTEXT_FIXTURE") == "1" {
+		data, err := (protojson.MarshalOptions{Multiline: true, Indent: "  "}).Marshal(response.Msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture v1.GetSessionContextResponse
+	if err := protojson.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(response.Msg, &fixture) {
+		t.Fatal("private timestamp fixture differs from the RPC response")
+	}
+}
 
 func TestPrivateSessionInspection(t *testing.T) {
 	for _, id := range []string{"private:test_native_user", "qq:private:test_alias_user", "fixture:private:test_bridge_user", "telegram:private:test_telegram_user", "telegram:private:test_user:group:label"} {
@@ -38,6 +80,11 @@ func TestPrivateSessionInspection(t *testing.T) {
 			if len(before.RecentStructuredMessages) != 2 || before.RecentStructuredMessages[1].Role != "assistant" || len(before.History) != 2 {
 				t.Fatalf("private messages not exposed: %+v", before)
 			}
+			for _, message := range before.RecentStructuredMessages {
+				if message.Time == "" {
+					t.Fatalf("private message timestamp lost in RPC: %+v", message)
+				}
+			}
 			snapshot, err := session.SnapshotPrivateCompact()
 			if err != nil {
 				t.Fatal(err)
@@ -52,6 +99,11 @@ func TestPrivateSessionInspection(t *testing.T) {
 			}
 			if len(after.RecentStructuredMessages) != 1 || after.RecentStructuredMessages[0].Content != "new input" {
 				t.Fatalf("unexpected recent messages: %+v", after)
+			}
+			if after.RecentStructuredMessages[0].Time == "" ||
+				after.SummaryGroups[0].StructuredMessages[0].Time != before.RecentStructuredMessages[0].Time ||
+				after.SummaryGroups[0].StructuredMessages[1].Time != before.RecentStructuredMessages[1].Time {
+				t.Fatal("private compact or recent RPC projection lost timestamps")
 			}
 			if after.SystemPrompt != "test persona" || after.Model != "test-model" {
 				t.Fatalf("prompt trace missing: %+v", after)

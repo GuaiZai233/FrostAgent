@@ -1334,7 +1334,11 @@ func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot
 }
 
 func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
-	return GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID}
+	item := GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID}
+	if !msg.RecordedAt.IsZero() {
+		item.Time = msg.RecordedAt.Format("15:04:05")
+	}
+	return item
 }
 
 // CancelPrivateCompact releases the private compaction lock if compaction fails.
@@ -2690,6 +2694,9 @@ func (s *SessionContext) addMessageLocked(msg core.ChatMessage) uint64 {
 		Content:       msg.Content,
 		ToolCallID:    msg.ToolCallID,
 		ProviderState: msg.ProviderState,
+	}
+	if isPrivateConversation(s.ConversationID) {
+		llmMsg.RecordedAt = time.Now().Round(0)
 	}
 	if len(msg.ToolCalls) > 0 {
 		llmMsg.ToolCalls = make([]ToolCall, len(msg.ToolCalls))
