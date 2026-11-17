@@ -14,6 +14,8 @@ import (
 // openai 兼容协议结构体
 
 type ChatMessage struct {
+	// Inspection metadata; checkpointed separately, never sent to a model.
+	RecordedAt       time.Time           `json:"-"`
 	ToolHistoryRefID string              `json:"tool_history_ref_id,omitempty"`
 	ToolHistoryRunID string              `json:"tool_history_run_id,omitempty"`
 	Role             string              `json:"role"`

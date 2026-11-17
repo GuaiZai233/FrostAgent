@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { fromJson } from '@bufbuild/protobuf';
 import { GetSessionContextResponseSchema } from '@frostagent/proto';
 import groupToolContextFixture from './fixtures/group-tool-context.json';
+import privateTimedContextFixture from './fixtures/private-timed-context.json';
 import {
   buildInspectorDataFromSessionContext,
   parsePrompt,
@@ -521,6 +522,32 @@ const alreadyInline = buildInspectorDataFromSessionContext({
 });
 renderPromptInspector(container, alreadyInline);
 assert.equal(container.querySelectorAll('[data-tool-activity]').length, 1);
+
+const privateTimedContext = fromJson(
+  GetSessionContextResponseSchema,
+  privateTimedContextFixture,
+);
+renderPromptInspector(
+  container,
+  buildInspectorDataFromSessionContext(privateTimedContext),
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-user .msg-time')!.textContent,
+  '20:34:34',
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-assistant .msg-time')!.textContent,
+  '20:34:40',
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-user .msg-content')!.textContent,
+  'fixture input',
+);
+assert.equal(
+  container.querySelector('.group-msg-row.is-assistant .msg-content')!
+    .textContent,
+  'fixture reply',
+);
 
 let executionState = 'running';
 let pendingLoads = 0;

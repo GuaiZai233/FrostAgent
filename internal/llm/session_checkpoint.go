@@ -32,6 +32,7 @@ type SessionCheckpoint struct {
 	Deleted             bool
 	ConversationID      string
 	History             []ChatMessage
+	HistoryRecordedAt   []time.Time `json:",omitempty"`
 	HistorySeq          []uint64
 	NextMsgSeq          uint64
 	Epoch               uint64
@@ -77,6 +78,14 @@ func (s *SessionContext) checkpointLocked() SessionCheckpoint {
 		SystemPrompt: s.lastSystemPrompt, UserPrompt: s.lastUserPrompt, Model: s.lastModelName,
 		DeliveryFailure: s.deliveryFailure,
 		ActualRequest:   s.lastActualRequest, RequestAt: s.lastRequestAt,
+	}
+	for i, message := range s.History {
+		if !message.RecordedAt.IsZero() {
+			if result.HistoryRecordedAt == nil {
+				result.HistoryRecordedAt = make([]time.Time, len(s.History))
+			}
+			result.HistoryRecordedAt[i] = message.RecordedAt
+		}
 	}
 	for _, item := range s.groupCompactBuffer {
 		// Staged messages have not passed admission yet and must not become
@@ -168,6 +177,9 @@ func ValidateCheckpoint(record sessionstate.Record) error {
 	if snapshot.Version != 1 || record.SessionID == "" || memory.CanonicalSessionKey(snapshot.ConversationID) != record.SessionID || record.Revision < 1 {
 		return fmt.Errorf("invalid session checkpoint identity or version")
 	}
+	if len(snapshot.HistoryRecordedAt) != 0 && len(snapshot.HistoryRecordedAt) != len(snapshot.History) {
+		return fmt.Errorf("invalid session checkpoint history timestamps")
+	}
 	return nil
 }
 
@@ -179,7 +191,13 @@ func (sm *SessionManager) restoreCheckpoint(record sessionstate.Record) (*Sessio
 	if snapshot.Version != 1 || snapshot.Deleted || memory.CanonicalSessionKey(snapshot.ConversationID) != record.SessionID {
 		return nil, fmt.Errorf("invalid session checkpoint")
 	}
+	if len(snapshot.HistoryRecordedAt) != 0 && len(snapshot.HistoryRecordedAt) != len(snapshot.History) {
+		return nil, fmt.Errorf("invalid session checkpoint history timestamps")
+	}
 	for i := range snapshot.History {
+		if len(snapshot.HistoryRecordedAt) > 0 {
+			snapshot.History[i].RecordedAt = snapshot.HistoryRecordedAt[i]
+		}
 		if _, ok := snapshot.History[i].Content.([]any); ok {
 			data, err := json.Marshal(snapshot.History[i].Content)
 			if err != nil {
