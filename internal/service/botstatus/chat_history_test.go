@@ -81,3 +81,66 @@ func TestSessionHistoryInspection(t *testing.T) {
 		t.Fatal("database failure not reported", err)
 	}
 }
+
+func TestSessionHistoryMockIdentityUsesTrustedFlag(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: "fixture-instance", Name: "Fixture", CreatedAt: time.Now()}, 1); err != nil {
+		t.Fatal(err)
+	}
+	store := chathistory.NewStore(db, "fixture-instance")
+	manager := llm.NewSessionManager()
+	service := New(&llm.Engine{SessionManager: manager, ChatHistory: chathistory.NewRecorder(store, nil, nil)}, "test", "")
+	cases := []struct {
+		sessionID string
+		scope     chathistory.Scope
+		mock      bool
+	}{
+		{"mock:private:synthetic-user", chathistory.Scope{Platform: "mock", MessageType: "private", TargetID: "synthetic-user"}, false},
+		{"mock:group:synthetic-group", chathistory.Scope{Platform: "mock", MessageType: "group", TargetID: "synthetic-group"}, false},
+		{"private:synthetic-marked-user", chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "synthetic-marked-user"}, true},
+		{"mock:private:synthetic-marked-prefix", chathistory.Scope{Platform: "mock", MessageType: "private", TargetID: "synthetic-marked-prefix"}, true},
+	}
+	for _, tc := range cases {
+		record := chathistory.Record{Scope: tc.scope, ID: tc.sessionID, Content: "original for " + tc.sessionID,
+			Role: "user", OccurredAt: time.Now().UTC(), DeliveryStatus: "received"}
+		if err := store.Save(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+		session := manager.GetOrCreate(tc.sessionID)
+		if tc.mock {
+			session.MarkMock()
+		}
+		response, err := service.GetSessionHistory(ctx, connect.NewRequest(&v1.GetSessionHistoryRequest{SessionId: tc.sessionID}))
+		if tc.mock {
+			if connect.CodeOf(err) != connect.CodeInvalidArgument {
+				t.Fatalf("trusted Mock session returned archive: %s %v", tc.sessionID, err)
+			}
+		} else if err != nil || len(response.Msg.Records) != 1 || response.Msg.Records[0].Content != record.Content {
+			t.Fatalf("real mock-prefix session lost its archive: %s %v %v", tc.sessionID, response, err)
+		}
+	}
+	list, err := service.GetSessions(ctx, connect.NewRequest(&v1.GetSessionsRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, session := range list.Msg.Sessions {
+		seen[session.SessionId] = true
+	}
+	for _, tc := range cases {
+		if seen[tc.sessionID] == tc.mock {
+			t.Fatalf("session list disagrees with trusted Mock identity: %s", tc.sessionID)
+		}
+	}
+	// Archive reads after restart must also accept a real platform named mock.
+	coldService := New(&llm.Engine{ChatHistory: chathistory.NewRecorder(store, nil, nil)}, "test", "")
+	response, err := coldService.GetSessionHistory(ctx, connect.NewRequest(&v1.GetSessionHistoryRequest{SessionId: cases[0].sessionID}))
+	if err != nil || len(response.Msg.Records) != 1 {
+		t.Fatalf("real mock-prefix archive requires a live session: %v %v", response, err)
+	}
+}

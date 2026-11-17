@@ -73,7 +73,7 @@ func (s *Service) GetSessionHistory(ctx context.Context, req *connect.Request[v1
 }
 
 func chatHistoryScope(sessionID string) (chathistory.Scope, bool) {
-	if len(sessionID) > 2048 || strings.HasPrefix(strings.ToLower(sessionID), "mock:") {
+	if len(sessionID) > 2048 {
 		return chathistory.Scope{}, false
 	}
 	canonical := memory.CanonicalSessionKey(sessionID)

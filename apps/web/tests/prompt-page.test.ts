@@ -232,7 +232,7 @@ try {
   process.stdout.write('PASS: private filter, context rendering, fresh read-only summary, and group-only actions\n');
 
   const historyCallsBeforeLegacy = historyCalls.length;
-  for (const sessionId of ['discord_group_synthetic-group', 'onebot_private_synthetic-user', 'unstructured_fixture', 'mock:private:synthetic-user']) {
+  for (const sessionId of ['discord_group_synthetic-group', 'onebot_private_synthetic-user', 'unstructured_fixture']) {
     const legacyRoot = dom.root();
     const legacyAPI = {
       ...api,
@@ -255,6 +255,31 @@ try {
   }
   assert.equal(historyCalls.length, historyCallsBeforeLegacy);
   process.stdout.write('PASS: unsupported legacy session keys keep context inspection without history or copy in either view\n');
+
+  for (const sessionId of ['mock:private:synthetic-user', 'mock:group:synthetic-group']) {
+    const realPrefixRoot = dom.root();
+    const realPrefixAPI = {
+      ...api,
+      async getSessions() {
+        return { sessions: [{ ...session, sessionId, platform: 'mock', groupSummary: '' }], pagination: { total: 1, pageToken: '' } };
+      },
+    } as ReturnType<typeof createInstanceAPI>;
+    const cleanupRealPrefix = mountPromptPage(realPrefixRoot, realPrefixAPI);
+    await settle();
+    query(realPrefixRoot, '.prompt-session-card').click();
+    await settle();
+    const realPrefixInspector = query(realPrefixRoot, '#prompt-inspector-mount');
+    for (let view = 0; view < 2; view++) {
+      assert.equal(realPrefixInspector.querySelector('#pi-copy-btn'), null);
+      query(realPrefixInspector, '#pi-history-btn').click();
+      await settle();
+      assert.equal(historyCalls.at(-1), sessionId, 'real mock-prefix session must query its own archive');
+      query(dialogs.at(-1)!, '.dialog-close-btn').click();
+      if (view === 0) query(realPrefixInspector, '#pi-toggle-view-btn').click();
+    }
+    cleanupRealPrefix();
+  }
+  process.stdout.write('PASS: real mock-prefix group and private sessions expose history in both views\n');
   instanceState.select(null);
 } finally {
   instanceState.select(null);

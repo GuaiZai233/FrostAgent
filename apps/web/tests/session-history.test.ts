@@ -8,10 +8,10 @@ for (const id of [
   'qq:group:synthetic-group', 'onebot:private:synthetic-user',
   'fixture:group:synthetic-group', 'fixture:private:synthetic-user:group:opaque',
   'group:opaque:private:target', ' private:synthetic-user ',
+  'mock:private:synthetic-user', 'mock:group:synthetic-group', 'MOCK:group:synthetic-group',
 ]) assert.equal(supportsSessionHistory(id), true, id);
 for (const id of [
   '', 'discord_group_synthetic-group', 'onebot_private_synthetic-user', 'unstructured_fixture',
-  'mock:private:synthetic-user', 'MOCK:group:synthetic-group',
   'fixture:thread:synthetic-thread', 'group:', 'private:  ', 'fixture:private:',
   ':group:synthetic-group', '  :private:synthetic-user',
   'fixture:prefix:private:synthetic-user', 'private:' + 'x'.repeat(2048),

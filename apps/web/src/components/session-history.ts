@@ -8,7 +8,7 @@ import { DEFAULT_BOT_NAME, renderSingleMessageRow } from './prompt-inspector';
 // list entries can still be inspected, but cannot address the chat archive.
 export function supportsSessionHistory(sessionId: string): boolean {
   const id = sessionId.trim();
-  if (new TextEncoder().encode(id).length > 2048 || /^mock:/i.test(id)) return false;
+  if (new TextEncoder().encode(id).length > 2048) return false;
   const separator = id.indexOf(':');
   if (separator < 0) return false;
   const prefix = id.slice(0, separator);
