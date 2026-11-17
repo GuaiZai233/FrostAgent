@@ -141,9 +141,16 @@ func (s *SessionContext) PrepareTurnMessages(t *SessionTurn, durable, prompt str
 		}
 	}
 	history := cloneMessages(s.History)
+	for i := range history {
+		history[i].RecordedAt = time.Time{}
+	}
 	s.nextMsgSeq++
 	id := s.nextMsgSeq
-	s.History = append(s.History, ChatMessage{Role: "user", Content: durable})
+	var recordedAt time.Time
+	if isPrivateConversation(s.ConversationID) {
+		recordedAt = s.UpdatedAt.Round(0)
+	}
+	s.History = append(s.History, ChatMessage{Role: "user", Content: durable, RecordedAt: recordedAt})
 	s.historySeq = append(s.historySeq, id)
 	if t == nil || t.lane == nil {
 		return append(history, ChatMessage{Role: "user", Content: prompt}), billing, id

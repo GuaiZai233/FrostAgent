@@ -1,0 +1,31 @@
+{
+  "sessionId": "private:fixture-timed-context",
+  "platform": "onebot",
+  "recentMessages": [
+    "[user] user: User Message: fixture input\n\n<system_context>\n{\"message_id\":\"fixture-message\",\"user_id\":\"fixture-user\"}\n</system_context>",
+    "[assistant] 助手: fixture reply"
+  ],
+  "history": [
+    {
+      "role": "user",
+      "content": "User Message: fixture input\n\n<system_context>\n{\"message_id\":\"fixture-message\",\"user_id\":\"fixture-user\"}\n</system_context>"
+    },
+    {
+      "role": "assistant",
+      "content": "fixture reply"
+    }
+  ],
+  "promptText": "{\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"User Message: fixture input\\n\\n\\u003csystem_context\\u003e\\n{\\\"message_id\\\":\\\"fixture-message\\\",\\\"user_id\\\":\\\"fixture-user\\\"}\\n\\u003c/system_context\\u003e\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"fixture reply\"\n    }\n  ]\n}",
+  "recentStructuredMessages": [
+    {
+      "role": "user",
+      "content": "User Message: fixture input\n\n<system_context>\n{\"message_id\":\"fixture-message\",\"user_id\":\"fixture-user\"}\n</system_context>",
+      "time": "20:34:34"
+    },
+    {
+      "role": "assistant",
+      "content": "fixture reply",
+      "time": "20:34:40"
+    }
+  ]
+}
