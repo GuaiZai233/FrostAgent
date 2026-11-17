@@ -616,6 +616,7 @@ export function renderPromptInspector(
     title?: string;
     botName?: string;
     onViewSummary?: () => void;
+    onViewHistory?: () => void;
     onConfigureModel?: () => void;
     modelConfigHref?: string;
     loadToolArguments?: ToolArgumentsLoader;
@@ -628,6 +629,14 @@ export function renderPromptInspector(
   let viewMode: 'visual' | 'raw' = 'visual';
   let argumentsCleanup = () => {};
 
+  const historyOrCopyButton = options.onViewHistory
+    ? `<button class="btn btn-ghost btn-sm" id="pi-history-btn" title="查看当前会话历史记录">
+        ${icon('clock', 'w-3.5 h-3.5')}<span>历史记录</span>
+      </button>`
+    : `<button class="btn btn-ghost btn-sm" id="pi-copy-btn" title="复制 Prompt">
+        ${icon('copy', 'w-3.5 h-3.5')}<span>复制</span>
+      </button>`;
+
   function render() {
     argumentsCleanup();
     if (viewMode === 'raw') {
@@ -639,10 +648,7 @@ export function renderPromptInspector(
               <span>${escapeHtml(options.title || '原始 Prompt 内容')}</span>
             </div>
             <div class="flex items-center gap-2">
-              <button class="btn btn-ghost btn-sm" id="pi-copy-btn">
-                ${icon('copy', 'w-3.5 h-3.5')}
-                <span>复制</span>
-              </button>
+              ${historyOrCopyButton}
               ${
                 options.showRawToggle
                   ? `
@@ -714,10 +720,7 @@ export function renderPromptInspector(
             }
           </div>
           <div class="flex items-center gap-2">
-            <button class="btn btn-ghost btn-sm" id="pi-copy-btn" title="复制 Prompt">
-              ${icon('copy', 'w-3.5 h-3.5')}
-              <span>复制</span>
-            </button>
+            ${historyOrCopyButton}
             ${
               options.showRawToggle
                 ? `
@@ -967,6 +970,7 @@ export function renderPromptInspector(
   }
 
   function bindRawEvents() {
+    container.querySelector('#pi-history-btn')?.addEventListener('click', () => options.onViewHistory?.());
     const copyBtn = container.querySelector<HTMLButtonElement>('#pi-copy-btn');
     copyBtn?.addEventListener('click', async () => {
       const success = await copyToClipboard(parsed.raw);
@@ -982,6 +986,7 @@ export function renderPromptInspector(
   }
 
   function bindInteractiveEvents() {
+    container.querySelector('#pi-history-btn')?.addEventListener('click', () => options.onViewHistory?.());
     argumentsCleanup = bindToolArguments(container, options.loadToolArguments);
     container.querySelector<HTMLButtonElement>('#pi-view-summary-btn')
       ?.addEventListener('click', () => options.onViewSummary?.());
@@ -1069,13 +1074,14 @@ function renderSummaryGroupBlock(
 /**
  * Renders an individual message entry row.
  */
-function renderSingleMessageRow(
+export function renderSingleMessageRow(
   msg: GroupMessageItem,
   isSummarized: boolean,
   model?: string,
   botName = DEFAULT_BOT_NAME,
+  interpretToolNotes = true,
 ): string {
-  if (msg.role === 'assistant' || msg.toolActivity) {
+  if (interpretToolNotes && (msg.role === 'assistant' || msg.toolActivity)) {
     const activity = msg.toolActivity || parseToolHistoryNote(msg.content) || (msg.toolHistoryRunId ? { entries: [], raw: msg.content } : undefined);
     if (activity) return renderToolActivity(activity);
   }

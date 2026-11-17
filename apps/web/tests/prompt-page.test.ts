@@ -26,6 +26,7 @@ try {
   const contextCalls: string[] = [];
   let deleteCalls = 0;
   let modelStateCalls = 0;
+  const historyCalls: string[] = [];
   const api = {
     async getPersistenceHealth() {
       return { sessions: { pending: 0, local_pending: 0 }, logs: { enabled: true, budget_bytes: 134217728, used_bytes: 0, entries: 0 } };
@@ -48,6 +49,10 @@ try {
     async getSessionContext(id: string) {
       contextCalls.push(id);
       return { sessionId: id, platform: 'onebot', model: 'test-model', promptText: '{}', recentMessages: [] };
+    },
+    async getSessionHistory(id: string) {
+      historyCalls.push(id);
+      return { records: [], nextPageToken: '' };
     },
     async deleteGroupSummary() {
       deleteCalls += 1;
@@ -94,6 +99,20 @@ try {
   assert.match(inspector.innerHTML, /id="pi-model-config-btn"/);
   assert.doesNotMatch(inspector.innerHTML, /href="#\/model-router/);
   assert.deepEqual(contextCalls, [session.sessionId]);
+  assert.equal(root.querySelector('#prompt-toggle-editor-btn'), null);
+  assert.equal(root.querySelector('#prompt-copy-btn'), null);
+  assert.equal(inspector.querySelector('#pi-copy-btn'), null);
+  query(inspector, '#pi-history-btn').click();
+  await settle();
+  assert.deepEqual(historyCalls, [session.sessionId]);
+  query(dialogs.at(-1)!, '.dialog-close-btn').click();
+  query(inspector, '#pi-toggle-view-btn').click();
+  assert.equal(inspector.querySelector('#pi-copy-btn'), null, 'raw view retained copy');
+  query(inspector, '#pi-history-btn').click();
+  await settle();
+  assert.deepEqual(historyCalls, [session.sessionId, session.sessionId]);
+  query(dialogs.at(-1)!, '.dialog-close-btn').click();
+  query(inspector, '#pi-toggle-view-btn').click();
 
   query(inspector, '#pi-model-config-btn').click();
   await settle();
@@ -194,6 +213,12 @@ try {
   assert.match(privateInspector.innerHTML, />Configured Bot</, 'assistant history must show the configured bot name');
   assert.match(privateInspector.innerHTML, /href="#\/model-router"/);
   assert.doesNotMatch(privateInspector.innerHTML, /id="pi-model-config-btn"/);
+  query(privateInspector, '#pi-history-btn').click();
+  await settle();
+  assert.equal(historyCalls.at(-1), privateSession.sessionId);
+  const openHistory = dialogs.at(-1)!;
+  // Programmatic teardown must close an open history modal as instances switch.
+  query(openHistory, '.dialog-close-btn').click();
   query(privateInspector, '#pi-view-summary-btn').click();
   const privateDialog = dialogs.at(-1)!;
   assert.match(privateDialog.innerHTML, /私聊总结/);
