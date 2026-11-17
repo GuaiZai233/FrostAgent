@@ -4,6 +4,23 @@ import { openDialog } from './dialog';
 import { icon } from './icons';
 import { DEFAULT_BOT_NAME, renderSingleMessageRow } from './prompt-inspector';
 
+// Match the session key shapes accepted by botstatus.chatHistoryScope. Legacy
+// list entries can still be inspected, but cannot address the chat archive.
+export function supportsSessionHistory(sessionId: string): boolean {
+  const id = sessionId.trim();
+  if (new TextEncoder().encode(id).length > 2048 || /^mock:/i.test(id)) return false;
+  const separator = id.indexOf(':');
+  if (separator < 0) return false;
+  const prefix = id.slice(0, separator);
+  const rest = id.slice(separator + 1);
+  if (prefix === 'group' || prefix === 'private') return Boolean(rest.trim());
+  if (!prefix.trim()) return false;
+  const kindSeparator = rest.indexOf(':');
+  if (kindSeparator < 0) return false;
+  const kind = rest.slice(0, kindSeparator);
+  return (kind === 'group' || kind === 'private') && Boolean(rest.slice(kindSeparator + 1).trim());
+}
+
 // Calendar dates describe the browser's local day, including DST boundaries.
 export function historyDateRange(start: string, end: string): { after: string; before: string } {
   const date = (value: string, nextDay = false) => {

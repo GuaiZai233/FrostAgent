@@ -230,6 +230,31 @@ try {
   assert.match(privateList.innerHTML, /onebot:group:123/);
   cleanupPrivate();
   process.stdout.write('PASS: private filter, context rendering, fresh read-only summary, and group-only actions\n');
+
+  const historyCallsBeforeLegacy = historyCalls.length;
+  for (const sessionId of ['discord_group_synthetic-group', 'onebot_private_synthetic-user', 'unstructured_fixture', 'mock:private:synthetic-user']) {
+    const legacyRoot = dom.root();
+    const legacyAPI = {
+      ...api,
+      async getSessions() {
+        return { sessions: [{ ...session, sessionId, groupSummary: '' }], pagination: { total: 1, pageToken: '' } };
+      },
+    } as ReturnType<typeof createInstanceAPI>;
+    const cleanupLegacy = mountPromptPage(legacyRoot, legacyAPI);
+    await settle();
+    query(legacyRoot, '.prompt-session-card').click();
+    await settle();
+    const legacyInspector = query(legacyRoot, '#prompt-inspector-mount');
+    assert.ok(contextCalls.includes(sessionId), 'unsupported archive key must remain inspectable');
+    assert.equal(legacyInspector.querySelector('#pi-history-btn'), null, sessionId);
+    assert.equal(legacyInspector.querySelector('#pi-copy-btn'), null, 'hiding history must not restore copy');
+    query(legacyInspector, '#pi-toggle-view-btn').click();
+    assert.equal(legacyInspector.querySelector('#pi-history-btn'), null, 'raw view exposed unsupported history');
+    assert.equal(legacyInspector.querySelector('#pi-copy-btn'), null, 'raw view restored copy');
+    cleanupLegacy();
+  }
+  assert.equal(historyCalls.length, historyCallsBeforeLegacy);
+  process.stdout.write('PASS: unsupported legacy session keys keep context inspection without history or copy in either view\n');
   instanceState.select(null);
 } finally {
   instanceState.select(null);

@@ -58,6 +58,7 @@ func TestSessionHistoryInspection(t *testing.T) {
 	}
 	for _, invalid := range []*v1.GetSessionHistoryRequest{
 		{}, {SessionId: "mock:fixture:private:fixture-user"}, {SessionId: "invalid"}, {SessionId: "private:"},
+		{SessionId: "discord_group_synthetic-group"}, {SessionId: "onebot_private_synthetic-user"},
 		{SessionId: "private:fixture-user", After: "2026-01-02"},
 		{SessionId: "private:fixture-user", After: "2026-01-03T00:00:00Z", Before: "2026-01-02T00:00:00Z"},
 		{SessionId: "private:fixture-user", PageToken: "malformed"}, {SessionId: "private:fixture-user", PageSize: -1},

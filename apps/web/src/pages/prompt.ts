@@ -8,7 +8,7 @@ import { openDialog } from '../components/dialog';
 import { openGroupModelConfig } from '../components/group-model-config';
 import { confirmDialog } from '../components/confirm';
 import { attachPaginationEvents, renderPagination } from '../components/pagination';
-import { openSessionHistoryDialog } from '../components/session-history';
+import { openSessionHistoryDialog, supportsSessionHistory } from '../components/session-history';
 import {
   DEFAULT_BOT_NAME,
   renderPromptInspector,
@@ -392,9 +392,10 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       : '';
     inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, {
       showRawToggle: true,
+      showCopy: false,
       title,
       botName,
-      onViewHistory: session ? () => {
+      onViewHistory: session && supportsSessionHistory(session.sessionId) ? () => {
         historyDialogClose?.();
         historyDialogClose = openSessionHistoryDialog(api, session.sessionId, botName);
       } : undefined,

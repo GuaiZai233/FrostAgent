@@ -1,7 +1,22 @@
 import assert from 'node:assert/strict';
 import { createTestDOM, emit, query, settle } from './dom-fixture';
-import { historyDateRange, openSessionHistoryDialog } from '../src/components/session-history';
+import { historyDateRange, openSessionHistoryDialog, supportsSessionHistory } from '../src/components/session-history';
 import type { createInstanceAPI } from '../src/api/client';
+
+for (const id of [
+  'group:synthetic-group', 'private:synthetic-user',
+  'qq:group:synthetic-group', 'onebot:private:synthetic-user',
+  'fixture:group:synthetic-group', 'fixture:private:synthetic-user:group:opaque',
+  'group:opaque:private:target', ' private:synthetic-user ',
+]) assert.equal(supportsSessionHistory(id), true, id);
+for (const id of [
+  '', 'discord_group_synthetic-group', 'onebot_private_synthetic-user', 'unstructured_fixture',
+  'mock:private:synthetic-user', 'MOCK:group:synthetic-group',
+  'fixture:thread:synthetic-thread', 'group:', 'private:  ', 'fixture:private:',
+  ':group:synthetic-group', '  :private:synthetic-user',
+  'fixture:prefix:private:synthetic-user', 'private:' + 'x'.repeat(2048),
+  'private:' + '文'.repeat(700),
+]) assert.equal(supportsSessionHistory(id), false, id);
 
 assert.deepEqual(historyDateRange('', ''), { after: '', before: '' });
 assert.throws(() => historyDateRange('2026-01-03', '2026-01-02'), /开始日期/);

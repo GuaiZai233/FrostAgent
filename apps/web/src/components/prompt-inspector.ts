@@ -613,6 +613,7 @@ export function renderPromptInspector(
   dataOrRaw: ParsedPrompt | string,
   options: {
     showRawToggle?: boolean;
+    showCopy?: boolean;
     title?: string;
     botName?: string;
     onViewSummary?: () => void;
@@ -633,9 +634,9 @@ export function renderPromptInspector(
     ? `<button class="btn btn-ghost btn-sm" id="pi-history-btn" title="查看当前会话历史记录">
         ${icon('clock', 'w-3.5 h-3.5')}<span>历史记录</span>
       </button>`
-    : `<button class="btn btn-ghost btn-sm" id="pi-copy-btn" title="复制 Prompt">
+    : options.showCopy !== false ? `<button class="btn btn-ghost btn-sm" id="pi-copy-btn" title="复制 Prompt">
         ${icon('copy', 'w-3.5 h-3.5')}<span>复制</span>
-      </button>`;
+      </button>` : '';
 
   function render() {
     argumentsCleanup();
