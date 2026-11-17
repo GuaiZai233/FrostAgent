@@ -9,7 +9,6 @@ import (
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
-	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 )
 
@@ -20,13 +19,18 @@ func (s *Service) GetSessionHistory(ctx context.Context, req *connect.Request[v1
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("会话、日期范围或分页参数无效"))
 	}
 	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
+	if len(sessionID) > 2048 || req.Msg.GetPageSize() < 0 {
+		return invalid()
+	}
 	scope, ok := chatHistoryScope(sessionID)
-	if !ok || req.Msg.GetPageSize() < 0 {
+	if !ok {
 		return invalid()
 	}
 	if s.engine.SessionManager != nil {
-		if session, exists := s.engine.SessionManager.Get(sessionID); exists {
-			if live, ok := session.(*llm.SessionContext); ok && live.IsMock() {
+		// Compare the same canonical archive identities on both sides: raw
+		// session keys may differ in platform casing, aliases or whitespace.
+		for _, id := range s.engine.SessionManager.MockSessionIDs() {
+			if mockScope, ok := chatHistoryScope(id); ok && mockScope == scope {
 				return invalid()
 			}
 		}
@@ -73,9 +77,6 @@ func (s *Service) GetSessionHistory(ctx context.Context, req *connect.Request[v1
 }
 
 func chatHistoryScope(sessionID string) (chathistory.Scope, bool) {
-	if len(sessionID) > 2048 {
-		return chathistory.Scope{}, false
-	}
 	canonical := memory.CanonicalSessionKey(sessionID)
 	parts := strings.SplitN(canonical, ":", 3)
 	var scope chathistory.Scope

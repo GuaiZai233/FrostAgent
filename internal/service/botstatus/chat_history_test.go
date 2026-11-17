@@ -2,6 +2,7 @@ package botstatus
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 )
 
@@ -59,6 +61,7 @@ func TestSessionHistoryInspection(t *testing.T) {
 	for _, invalid := range []*v1.GetSessionHistoryRequest{
 		{}, {SessionId: "mock:fixture:private:fixture-user"}, {SessionId: "invalid"}, {SessionId: "private:"},
 		{SessionId: "discord_group_synthetic-group"}, {SessionId: "onebot_private_synthetic-user"},
+		{SessionId: "private:" + strings.Repeat("x", 2048)},
 		{SessionId: "private:fixture-user", After: "2026-01-02"},
 		{SessionId: "private:fixture-user", After: "2026-01-03T00:00:00Z", Before: "2026-01-02T00:00:00Z"},
 		{SessionId: "private:fixture-user", PageToken: "malformed"}, {SessionId: "private:fixture-user", PageSize: -1},
@@ -142,5 +145,100 @@ func TestSessionHistoryMockIdentityUsesTrustedFlag(t *testing.T) {
 	response, err := coldService.GetSessionHistory(ctx, connect.NewRequest(&v1.GetSessionHistoryRequest{SessionId: cases[0].sessionID}))
 	if err != nil || len(response.Msg.Records) != 1 {
 		t.Fatalf("real mock-prefix archive requires a live session: %v %v", response, err)
+	}
+}
+
+func TestSessionHistoryMockAliasesUseArchiveScope(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: "fixture-instance", Name: "Fixture", CreatedAt: time.Now()}, 1); err != nil {
+		t.Fatal(err)
+	}
+	store := chathistory.NewStore(db, "fixture-instance")
+	qqPrivate := chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "Synthetic-User:group:opaque"}
+	qqGroup := chathistory.Scope{Platform: "qq", MessageType: "group", TargetID: "Synthetic-Group:private:opaque"}
+	fixturePrivate := chathistory.Scope{Platform: "fixture", MessageType: "private", TargetID: "Synthetic-User:group:opaque"}
+	mockGroup := chathistory.Scope{Platform: "mock", MessageType: "group", TargetID: "Synthetic-Group:private:opaque"}
+	for _, scope := range []chathistory.Scope{qqPrivate, qqGroup, fixturePrivate, mockGroup} {
+		record := chathistory.Record{Scope: scope, ID: scope.Platform + ":" + scope.MessageType,
+			Role: "user", Content: "original for " + scope.Platform + ":" + scope.MessageType,
+			OccurredAt: time.Now().UTC(), DeliveryStatus: "received"}
+		if err := store.Save(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	qqPrivateAliases := []string{
+		"private:" + qqPrivate.TargetID,
+		"qq:private:" + qqPrivate.TargetID,
+		"onebot:private:" + qqPrivate.TargetID,
+		"QQ:private:" + qqPrivate.TargetID,
+		"ONEBOT:private:" + qqPrivate.TargetID,
+		" OnEbOt :private: " + qqPrivate.TargetID + " ",
+	}
+	qqGroupAliases := []string{
+		"group:" + qqGroup.TargetID,
+		"qq:group:" + qqGroup.TargetID,
+		"onebot:group:" + qqGroup.TargetID,
+		"QQ:group:" + qqGroup.TargetID,
+		"ONEBOT:group:" + qqGroup.TargetID,
+		" oNeBoT :group: " + qqGroup.TargetID + " ",
+	}
+	cases := []struct {
+		name, storedID string
+		scope          chathistory.Scope
+		aliases        []string
+	}{
+		{"native private", qqPrivateAliases[0], qqPrivate, qqPrivateAliases},
+		{"mixed-case private", qqPrivateAliases[5], qqPrivate, qqPrivateAliases},
+		{"native group", qqGroupAliases[0], qqGroup, qqGroupAliases},
+		{"uppercase group", qqGroupAliases[3], qqGroup, qqGroupAliases},
+		{"custom platform", "FiXtUrE:private: " + fixturePrivate.TargetID, fixturePrivate,
+			[]string{"fixture:private:" + fixturePrivate.TargetID, "FIXTURE:private:" + fixturePrivate.TargetID}},
+		{"real mock platform", "MOCK:group: " + mockGroup.TargetID, mockGroup,
+			[]string{"mock:group:" + mockGroup.TargetID, "MoCk:group:" + mockGroup.TargetID}},
+		{"long stored alias", "ONEBOT" + strings.Repeat(" ", 2048) + ":private:" + qqPrivate.TargetID, qqPrivate, qqPrivateAliases},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := llm.NewSessionManager()
+			marked := manager.GetOrCreate(tc.storedID)
+			// A separate real alias must not shadow a Mock with the same archive identity.
+			manager.GetOrCreate(memory.CanonicalSessionID(tc.scope.Platform, tc.scope.MessageType, tc.scope.TargetID))
+			service := New(&llm.Engine{SessionManager: manager, ChatHistory: chathistory.NewRecorder(store, nil, nil)}, "test", "")
+			for _, alias := range tc.aliases {
+				response, err := service.GetSessionHistory(ctx, connect.NewRequest(&v1.GetSessionHistoryRequest{SessionId: alias}))
+				if err != nil || len(response.Msg.Records) != 1 || response.Msg.Records[0].Content != "original for "+tc.scope.Platform+":"+tc.scope.MessageType {
+					t.Fatalf("real alias cannot read its own archive: %q %v %v", alias, response, err)
+				}
+			}
+			marked.MarkMock()
+			for _, alias := range tc.aliases {
+				if _, err := service.GetSessionHistory(ctx, connect.NewRequest(&v1.GetSessionHistoryRequest{SessionId: alias})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+					t.Errorf("alias bypassed trusted Mock flag: %q %v", alias, err)
+				}
+			}
+			// Only the exact canonical archive scope is denied. Platform, kind,
+			// opaque target casing and target contents remain separate identities.
+			unrelated := []chathistory.Scope{
+				{Platform: "other-platform", MessageType: tc.scope.MessageType, TargetID: tc.scope.TargetID},
+				{Platform: tc.scope.Platform, MessageType: "group", TargetID: tc.scope.TargetID},
+				{Platform: tc.scope.Platform, MessageType: "private", TargetID: tc.scope.TargetID},
+				{Platform: tc.scope.Platform, MessageType: tc.scope.MessageType, TargetID: strings.ToLower(tc.scope.TargetID)},
+				{Platform: tc.scope.Platform, MessageType: tc.scope.MessageType, TargetID: "another-target"},
+			}
+			for _, scope := range unrelated {
+				if scope == tc.scope {
+					continue
+				}
+				id := memory.CanonicalSessionID(scope.Platform, scope.MessageType, scope.TargetID)
+				if _, err := service.GetSessionHistory(ctx, connect.NewRequest(&v1.GetSessionHistoryRequest{SessionId: id})); err != nil {
+					t.Errorf("Mock flag blocked a different archive scope: %q %v", id, err)
+				}
+			}
+		})
 	}
 }
