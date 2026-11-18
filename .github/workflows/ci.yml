@@ -61,7 +61,7 @@ jobs:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: |
           go test ./internal/storage -run '^Test(ChatHistory|ToolHistory)Migration' -count=1 -v
-          go test ./internal/chathistory -run '^TestStoreKeywordIsolationAndRestart$' -count=1 -v
+          go test ./internal/chathistory -run '^(TestStoreKeywordIsolationAndRestart|TestListHistoryDatesPaginationAndIsolation)$' -count=1 -v
           go test ./internal/sessionstate -run '^TestPostgresSessionStateAncestry$' -count=1 -v
       - name: Set up buf
         uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0

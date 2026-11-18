@@ -736,6 +736,10 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.deleteGroupSummary({ sessionId });
     },
 
+    getSessionHistory(sessionId: string, after = '', before = '', pageToken = '', signal?: AbortSignal) {
+      return botClient.getSessionHistory({ sessionId, after, before, pageToken, pageSize: 50 }, { signal });
+    },
+
     getToolHistoryEntry(refId: string) {
       return botClient.getToolHistoryEntry({ refId });
     },

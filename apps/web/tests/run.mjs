@@ -32,6 +32,7 @@ for (const testFile of [
   'tool-activity.test.ts',
   'group-model-config.test.ts',
   'prompt-page.test.ts',
+  'session-history.test.ts',
   'dialogue-page.test.ts',
   'skills.test.ts',
   'backend-settings-page.test.ts',

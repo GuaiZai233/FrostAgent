@@ -26,6 +26,7 @@ try {
   const contextCalls: string[] = [];
   let deleteCalls = 0;
   let modelStateCalls = 0;
+  const historyCalls: string[] = [];
   const api = {
     async getPersistenceHealth() {
       return { sessions: { pending: 0, local_pending: 0 }, logs: { enabled: true, budget_bytes: 134217728, used_bytes: 0, entries: 0 } };
@@ -48,6 +49,10 @@ try {
     async getSessionContext(id: string) {
       contextCalls.push(id);
       return { sessionId: id, platform: 'onebot', model: 'test-model', promptText: '{}', recentMessages: [] };
+    },
+    async getSessionHistory(id: string) {
+      historyCalls.push(id);
+      return { records: [], nextPageToken: '' };
     },
     async deleteGroupSummary() {
       deleteCalls += 1;
@@ -94,6 +99,20 @@ try {
   assert.match(inspector.innerHTML, /id="pi-model-config-btn"/);
   assert.doesNotMatch(inspector.innerHTML, /href="#\/model-router/);
   assert.deepEqual(contextCalls, [session.sessionId]);
+  assert.equal(root.querySelector('#prompt-toggle-editor-btn'), null);
+  assert.equal(root.querySelector('#prompt-copy-btn'), null);
+  assert.equal(inspector.querySelector('#pi-copy-btn'), null);
+  query(inspector, '#pi-history-btn').click();
+  await settle();
+  assert.deepEqual(historyCalls, [session.sessionId]);
+  query(dialogs.at(-1)!, '.dialog-close-btn').click();
+  query(inspector, '#pi-toggle-view-btn').click();
+  assert.equal(inspector.querySelector('#pi-copy-btn'), null, 'raw view retained copy');
+  query(inspector, '#pi-history-btn').click();
+  await settle();
+  assert.deepEqual(historyCalls, [session.sessionId, session.sessionId]);
+  query(dialogs.at(-1)!, '.dialog-close-btn').click();
+  query(inspector, '#pi-toggle-view-btn').click();
 
   query(inspector, '#pi-model-config-btn').click();
   await settle();
@@ -194,6 +213,12 @@ try {
   assert.match(privateInspector.innerHTML, />Configured Bot</, 'assistant history must show the configured bot name');
   assert.match(privateInspector.innerHTML, /href="#\/model-router"/);
   assert.doesNotMatch(privateInspector.innerHTML, /id="pi-model-config-btn"/);
+  query(privateInspector, '#pi-history-btn').click();
+  await settle();
+  assert.equal(historyCalls.at(-1), privateSession.sessionId);
+  const openHistory = dialogs.at(-1)!;
+  // Programmatic teardown must close an open history modal as instances switch.
+  query(openHistory, '.dialog-close-btn').click();
   query(privateInspector, '#pi-view-summary-btn').click();
   const privateDialog = dialogs.at(-1)!;
   assert.match(privateDialog.innerHTML, /私聊总结/);
@@ -205,6 +230,56 @@ try {
   assert.match(privateList.innerHTML, /onebot:group:123/);
   cleanupPrivate();
   process.stdout.write('PASS: private filter, context rendering, fresh read-only summary, and group-only actions\n');
+
+  const historyCallsBeforeLegacy = historyCalls.length;
+  for (const sessionId of ['discord_group_synthetic-group', 'onebot_private_synthetic-user', 'unstructured_fixture']) {
+    const legacyRoot = dom.root();
+    const legacyAPI = {
+      ...api,
+      async getSessions() {
+        return { sessions: [{ ...session, sessionId, groupSummary: '' }], pagination: { total: 1, pageToken: '' } };
+      },
+    } as ReturnType<typeof createInstanceAPI>;
+    const cleanupLegacy = mountPromptPage(legacyRoot, legacyAPI);
+    await settle();
+    query(legacyRoot, '.prompt-session-card').click();
+    await settle();
+    const legacyInspector = query(legacyRoot, '#prompt-inspector-mount');
+    assert.ok(contextCalls.includes(sessionId), 'unsupported archive key must remain inspectable');
+    assert.equal(legacyInspector.querySelector('#pi-history-btn'), null, sessionId);
+    assert.equal(legacyInspector.querySelector('#pi-copy-btn'), null, 'hiding history must not restore copy');
+    query(legacyInspector, '#pi-toggle-view-btn').click();
+    assert.equal(legacyInspector.querySelector('#pi-history-btn'), null, 'raw view exposed unsupported history');
+    assert.equal(legacyInspector.querySelector('#pi-copy-btn'), null, 'raw view restored copy');
+    cleanupLegacy();
+  }
+  assert.equal(historyCalls.length, historyCallsBeforeLegacy);
+  process.stdout.write('PASS: unsupported legacy session keys keep context inspection without history or copy in either view\n');
+
+  for (const sessionId of ['mock:private:synthetic-user', 'mock:group:synthetic-group']) {
+    const realPrefixRoot = dom.root();
+    const realPrefixAPI = {
+      ...api,
+      async getSessions() {
+        return { sessions: [{ ...session, sessionId, platform: 'mock', groupSummary: '' }], pagination: { total: 1, pageToken: '' } };
+      },
+    } as ReturnType<typeof createInstanceAPI>;
+    const cleanupRealPrefix = mountPromptPage(realPrefixRoot, realPrefixAPI);
+    await settle();
+    query(realPrefixRoot, '.prompt-session-card').click();
+    await settle();
+    const realPrefixInspector = query(realPrefixRoot, '#prompt-inspector-mount');
+    for (let view = 0; view < 2; view++) {
+      assert.equal(realPrefixInspector.querySelector('#pi-copy-btn'), null);
+      query(realPrefixInspector, '#pi-history-btn').click();
+      await settle();
+      assert.equal(historyCalls.at(-1), sessionId, 'real mock-prefix session must query its own archive');
+      query(dialogs.at(-1)!, '.dialog-close-btn').click();
+      if (view === 0) query(realPrefixInspector, '#pi-toggle-view-btn').click();
+    }
+    cleanupRealPrefix();
+  }
+  process.stdout.write('PASS: real mock-prefix group and private sessions expose history in both views\n');
   instanceState.select(null);
 } finally {
   instanceState.select(null);

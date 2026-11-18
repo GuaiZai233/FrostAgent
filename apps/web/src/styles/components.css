@@ -576,8 +576,9 @@ dialog.dialog-modal::backdrop {
   background-color: var(--muted);
 }
 
-/* Keep the log footer visible while the body scrolls, including at UI zoom. */
-dialog.log-summary-dialog[open] {
+/* Keep log and history footers visible while the body scrolls, including at UI zoom. */
+dialog.log-summary-dialog[open],
+dialog.session-history-dialog[open] {
   width: calc(100vw / var(--ui-zoom) - 2rem);
   display: flex;
   flex-direction: column;
@@ -585,17 +586,25 @@ dialog.log-summary-dialog[open] {
 }
 
 .log-summary-dialog .dialog-header,
-.log-summary-dialog .dialog-footer {
+.log-summary-dialog .dialog-footer,
+.session-history-dialog .dialog-header,
+.session-history-dialog .dialog-footer {
   flex: none;
 }
 
-.log-summary-dialog .dialog-header > div {
+.log-summary-dialog .dialog-header > div,
+.session-history-dialog .dialog-header > div {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.log-summary-dialog .dialog-body {
+.log-summary-dialog .dialog-body,
+.session-history-dialog .dialog-body {
   min-height: 0;
+}
+
+.session-history-dialog .prompt-inspector-card {
+  flex: none;
 }
 
 .log-summary-content {

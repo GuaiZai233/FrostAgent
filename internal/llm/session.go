@@ -2919,6 +2919,20 @@ func (sm *SessionManager) CountVisible() int {
 	return n
 }
 
+// MockSessionIDs snapshots the trusted identities of live Direct Chat sessions.
+// It does not load cold checkpoints or lock/read individual message histories.
+func (sm *SessionManager) MockSessionIDs() []string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	var ids []string
+	for _, session := range sm.sessions {
+		if session.IsMock() {
+			ids = append(ids, session.ID())
+		}
+	}
+	return ids
+}
+
 func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
