@@ -3,6 +3,7 @@ package onebot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -10,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/gorilla/websocket"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -163,6 +165,23 @@ func TestWSPokeWakesAndBillsActor(t *testing.T) {
 	}
 }
 
+// assertNoOneBotOutput fails if the server writes anything within wait. It
+// leaves the connection unusable for further reads, so call it last.
+func assertNoOneBotOutput(t *testing.T, conn *websocket.Conn, wait time.Duration) {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw, err := conn.ReadMessage()
+	if err == nil {
+		t.Fatalf("expected no output, got %s", raw)
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("read failed before timeout: %v", err)
+	}
+}
+
 func readPokeSendAndAck(t *testing.T, conn *websocket.Conn) model.OneBotAction {
 	t.Helper()
 	if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
@@ -205,21 +224,28 @@ func TestWSPokeSecurityRejectionDoesNotConsumeCooldown(t *testing.T) {
 	}
 	srv, wsURL := startWSTestServer(engine)
 	defer srv.Close()
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	// A banned actor's poke produces no security reply. The silent check uses its
+	// own connection because a read timeout leaves a gorilla websocket unusable.
+	bannedConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
-	if err := conn.WriteJSON(pokeNotice()); err != nil {
+	defer bannedConn.Close()
+	if err := bannedConn.WriteJSON(pokeNotice()); err != nil {
 		t.Fatal(err)
 	}
-	readPokeSendAndAck(t, conn)
+	assertNoOneBotOutput(t, bannedConn, 500*time.Millisecond)
 	provider.mu.Lock()
 	count := len(provider.requests)
 	provider.mu.Unlock()
 	if count != 0 {
 		t.Fatal("locked actor invoked dialogue")
 	}
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
 	valid := pokeNotice()
 	valid.UserID = 303
 	if err := conn.WriteJSON(valid); err != nil {
