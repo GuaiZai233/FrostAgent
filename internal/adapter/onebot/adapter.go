@@ -494,6 +494,10 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			}
 			if security.Blocks(decision.Action) {
 				directReply := shouldSendSecurityDirectReply(event, a.engine, routing)
+				if directReply && isBannedRejection(a.engine.Security, principal, decision) {
+					directReply = allowBannedRejectReply(event, routing.WakeSignals, &a.engine.BannedRejectGate, a.engine.Getenv,
+						principal.Key()+":"+wsConn.historyKey(event), time.Now())
+				}
 				if directReply {
 					if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
 						continue

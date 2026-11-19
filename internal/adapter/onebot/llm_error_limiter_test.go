@@ -205,7 +205,17 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				}
 				for i := 0; i < 4; i++ {
 					send(second, 104, "blocked")
+					if messageType == "group" {
+						// Group @ rejections share one 180s cooldown per conversation.
+						if i == 0 {
+							read(second, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ")
+						}
+						continue
+					}
 					read(second, "[FrostAgent 错误] "+security.RejectGatewayMsg+" (Ref_ID: ")
+				}
+				if messageType == "group" {
+					assertNoOneBotOutput(t, second, 500*time.Millisecond)
 				}
 			})
 		}

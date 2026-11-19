@@ -127,6 +127,8 @@ type Engine struct {
 	ChatHistory *chathistory.Recorder
 	TokenUsage  *tokenusage.Store
 	PokeGate    poke.Gate
+	// BannedRejectGate rate-limits security rejection replies sent to banned users.
+	BannedRejectGate poke.Gate
 	*runtimescope.Scope
 	MaxIterations          int
 	ToolRegistry           map[string]ToolExecutor
