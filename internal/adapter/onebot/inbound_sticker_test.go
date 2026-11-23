@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,13 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 			requests := append([]core.ChatRequest(nil), provider.requests...)
 			provider.mu.Unlock()
 			if calls != 1 {
+				for i, req := range requests {
+					last := ""
+					if n := len(req.Messages); n > 0 {
+						last = fmt.Sprint(req.Messages[n-1].Role, ": ", req.Messages[n-1].Content)
+					}
+					t.Logf("dialogue request %d: messages=%d last=%.200s", i, len(req.Messages), last)
+				}
 				t.Fatalf("dialogue calls=%d want=1", calls)
 			}
 			if tc.noVision && !tc.silent {

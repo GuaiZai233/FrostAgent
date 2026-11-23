@@ -112,7 +112,7 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 	}
 	encoded, _ = json.Marshal(action.Params)
 	if !strings.Contains(string(encoded), "synthetic-push") {
-		t.Fatal("server role upstream did not receive an FA-initiated push")
+		t.Fatalf("server role upstream did not receive an FA-initiated push: next frame action=%q params=%s", action.Action, encoded)
 	}
 	duplicate := make(chan struct{})
 	go func() { defer close(duplicate); adapter.RunClient(context.Background()) }()
