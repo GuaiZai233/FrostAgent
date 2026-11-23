@@ -173,7 +173,7 @@ func TestToolHistoryResultInspectionIsPaged(t *testing.T) {
 	// Larger than the 64 KiB model output limit; every page must stay bounded.
 	large := strings.Repeat("原文一二三", 30000)
 	record := toolhistory.Record{Scope: chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"}, RefID: toolhistory.NewRef(), RunID: "fixture-run", ActorID: "fixture-user", Tool: "fixture_tool", State: "complete", OccurredAt: time.Now().UTC(),
-		ArgumentsRaw: `{}`, ResultRaw: large, ModelResultRaw: "complete"}
+		ArgumentsRaw: `{"blob":"` + strings.Repeat("参", 40000) + `"}`, ResultRaw: large, ModelResultRaw: "complete"}
 	if err := store.Save(ctx, record); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +192,9 @@ func TestToolHistoryResultInspectionIsPaged(t *testing.T) {
 		if response.Msg.ResultTotalChars != total || response.Msg.ResultOffset != offset {
 			t.Fatal("paging metadata wrong")
 		}
+		if response.Msg.ArgumentsRaw != "" {
+			t.Fatal("result page transferred the arguments payload")
+		}
 		assembled.WriteString(response.Msg.ResultRaw)
 		pages++
 		if !response.Msg.ResultHasMore {
@@ -207,5 +210,20 @@ func TestToolHistoryResultInspectionIsPaged(t *testing.T) {
 	}
 	if _, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true, ResultOffset: -1})); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatal("negative offset accepted", err)
+	}
+}
+
+func TestResultPageCountsCharactersAcrossMixedWidths(t *testing.T) {
+	text := "a中😀b"
+	page, total, end, ok := resultPage(text, 1, 2)
+	if !ok || page != "中😀" || total != 4 || end != 3 {
+		t.Fatalf("mixed-width page wrong: %q %d %d %v", page, total, end, ok)
+	}
+	page, total, end, ok = resultPage(text, 4, 2)
+	if !ok || page != "" || total != 4 || end != 4 {
+		t.Fatalf("page at end wrong: %q %d %d %v", page, total, end, ok)
+	}
+	if _, _, _, ok := resultPage(text, 5, 2); ok {
+		t.Fatal("offset past end accepted")
 	}
 }

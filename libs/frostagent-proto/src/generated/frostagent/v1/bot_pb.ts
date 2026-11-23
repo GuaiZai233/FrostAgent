@@ -693,7 +693,8 @@ export type GetToolHistoryEntryResponse = Message<"frostagent.v1.GetToolHistoryE
 
   /**
    * One bounded page of the original execution result, visible under the same
-   * review rules as arguments. Present only when include_result was requested.
+   * review rules as arguments. Present only when include_result was requested,
+   * and in that mode arguments_raw is omitted.
    *
    * @generated from field: string result_raw = 6;
    */

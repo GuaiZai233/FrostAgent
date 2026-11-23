@@ -168,6 +168,7 @@ export function renderToolActivity(activity: ToolActivity): string {
           ${entry.refId ? `<details class="tool-activity-details" data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}" data-tool-field="result" data-result-state="idle">
             <summary>工具执行结果</summary>
             <pre class="tool-activity-result">展开后加载结果</pre>
+            <p class="tool-activity-status" hidden></p>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-more" hidden>加载更多</button>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
           </details>` : ''}`
@@ -213,6 +214,13 @@ export function bindToolArguments(
     const more = details.querySelector<HTMLButtonElement>(
       '.tool-activity-more',
     );
+    // Status text is kept out of <pre>, which holds only the raw result.
+    const status = details.querySelector<HTMLElement>('.tool-activity-status');
+    const setStatus = (message: string) => {
+      if (!status) return;
+      status.textContent = message;
+      status.hidden = !message;
+    };
     // Each (reference, mode, page) is requested once; arguments never carry
     // the result, and result pages are fetched only when they are asked for.
     const fetchPage = (options: ToolLoadOptions) => {
@@ -235,6 +243,7 @@ export function bindToolArguments(
       details.dataset[stateKey] = 'loading';
       details.dataset.requestOffset = String(offset);
       if (offset === 0) pre.textContent = copy.loading;
+      setStatus('');
       retry.hidden = true;
       if (more) more.hidden = true;
       const options: ToolLoadOptions = isResult
@@ -277,9 +286,10 @@ export function bindToolArguments(
         requests.delete(`${refId}\u0000${isResult ? 1 : 0}\u0000${offset}`);
         if (!active || !details.isConnected) return;
         details.dataset[stateKey] = 'error';
-        // Keep pages already shown; a failed later page is reported after them.
+        // Pages already shown stay intact; a failed later page is reported in
+        // the status line, so a successful retry yields exactly the raw text.
         if (offset === 0) pre.textContent = copy.failed;
-        else pre.textContent += `\n\n${copy.failed}`;
+        else setStatus(copy.failed);
         retry.hidden = false;
       }
     };

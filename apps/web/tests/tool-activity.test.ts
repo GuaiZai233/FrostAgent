@@ -689,6 +689,53 @@ await flush();
 assert.equal(pendingLoads, 3, 'final reviewed parameters may still be cached');
 cleanup();
 
+
+let pageTwoAttempts = 0;
+cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: async (refId, options) => {
+    if (!options?.includeResult)
+      return { refId, tool: 'send_message', argumentsRaw: '', argumentsAvailable: false };
+    const offset = options.resultOffset ?? 0;
+    if (offset === 1 && pageTwoAttempts++ === 0) throw new Error('fixture page outage');
+    return {
+      refId,
+      tool: 'send_message',
+      argumentsRaw: '',
+      argumentsAvailable: false,
+      resultRaw: ['第一页 ', '第二页'][offset] ?? '',
+      resultAvailable: true,
+      resultHasMore: offset === 0,
+      resultNextOffset: offset === 0 ? 1 : 0,
+    };
+  },
+});
+const pagedDetails = container.querySelector(
+  `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+) as HTMLDetailsElement;
+pagedDetails.open = true;
+await flush();
+(pagedDetails.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+await flush();
+assert.equal(
+  pagedDetails.querySelector('pre')!.textContent,
+  '第一页 ',
+  'a failed page must not enter the raw result text',
+);
+const pageStatus = pagedDetails.querySelector('.tool-activity-status') as HTMLElement;
+assert.equal(pageStatus.hidden, false);
+assert.match(pageStatus.textContent!, /执行结果加载失败/);
+const retryPage = pagedDetails.querySelector('.tool-activity-retry') as HTMLButtonElement;
+assert.equal(retryPage.hidden, false);
+retryPage.click();
+await flush();
+assert.equal(
+  pagedDetails.querySelector('pre')!.textContent,
+  '第一页 第二页',
+  'after retry the raw text must equal the exact concatenation of pages',
+);
+assert.equal(pageStatus.hidden, true, 'status clears after success');
+cleanup();
+
 dom.window.close();
 process.stdout.write(
   'PASS: distinct tool calls, historical reads, legacy records, native results, folding and escaping\n',

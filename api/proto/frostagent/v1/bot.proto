@@ -183,7 +183,8 @@ message GetToolHistoryEntryResponse {
   // Execution or result review is incomplete; the inspector may retry later.
   bool arguments_pending = 5;
   // One bounded page of the original execution result, visible under the same
-  // review rules as arguments. Present only when include_result was requested.
+  // review rules as arguments. Present only when include_result was requested,
+  // and in that mode arguments_raw is omitted.
   string result_raw = 6;
   bool result_available = 7;
   int32 result_offset = 8;
