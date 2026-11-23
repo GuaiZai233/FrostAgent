@@ -13,7 +13,6 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
-	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 )
 
 type AwarenessTarget struct{ SessionID, Platform, Kind, ID, AdapterID string }
@@ -290,7 +289,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 		return nil
 	}
 	e.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动感知逻辑】 "+target.SessionID, "【触发主动感知逻辑】")
-	result := e.RunMessagesWithContext(messages, RunContext{
+	_ = e.RunMessagesWithContext(messages, RunContext{
 		Context: ctx, Turn: turn, Epoch: epoch, SessionID: target.SessionID, Owner: owner, OwnerType: ownerType,
 		ActorUserID: actor, ActorPlatform: actorPlatform, AdapterID: target.AdapterID, InstanceID: e.InstanceID,
 		RouteScope: modelrouter.Scope{Platform: target.Platform, GroupID: groupID}, Proactive: true, Awareness: true,
@@ -302,20 +301,6 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 			return sendMessages(parts)
 		},
 	})
-	if result.Error != nil || result.OutputBlocked || result.Silent || turn.Interrupted() || IsPlaceholderFinal(result.Content) {
-		return
-	}
-	// A confirmed tool message is the public response; do not add a second send.
-	if deliveries.Text() != "" {
-		return
-	}
-	deliveries.SetFinalMessage(result.FinalMessage)
-	parts := replyformat.SplitLimited(result.Content, replyformat.Enabled(e.Getenv), replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)))
-	for _, part := range parts {
-		if err := sendMessages([]proactive.AwarenessMessage{{Type: "plain", Text: part}}); err != nil {
-			e.Log().Warn(logs.SYSTEM, "主动感知发送失败: "+err.Error())
-			return
-		}
-		e.RecordBotMessage(false)
-	}
+	// Only send_message (via SendHook) delivers awareness output. Plain final
+	// text is rejected by the agent loop, so nothing else is sent here.
 }

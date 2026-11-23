@@ -35,16 +35,24 @@ func anthropicContent(content any) ([]any, error) {
 func anthropicRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	messages := make([]map[string]any, 0)
 	system := make([]any, 0)
+	seenConversation := false
 	for _, msg := range req.Messages {
 		content, err := anthropicContent(msg.Content)
 		if err != nil {
 			return nil, err
 		}
-		if msg.Role == core.RoleSystem {
+		// Only leading system messages become the top-level system prompt. A later
+		// system message is FrostAgent-injected context kept at its position: moving
+		// it to the head would change the prefix that cached and signed blocks cover.
+		if msg.Role == core.RoleSystem && !seenConversation {
 			system = append(system, content...)
 			continue
 		}
+		seenConversation = true
 		role := string(msg.Role)
+		if msg.Role == core.RoleSystem {
+			role = string(core.RoleUser)
+		}
 		if msg.Role == core.RoleAssistant && stateMatches(msg, Anthropic, req.Model, origin) {
 			if err := decodeJSON(msg.ProviderState.Content, &content); err != nil {
 				return nil, err

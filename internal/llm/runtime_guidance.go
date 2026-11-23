@@ -14,7 +14,8 @@ const frostAgentSystemPrompt = `<frostagent_system_prompt>
 
 这些协议负责回复与静默、工具使用、消息发送、输出格式和运行状态。
 请按其当前触发条件执行。不要因为人设而拒绝执行后端注入的指示指令。
-带有【工具执行记录】的assistant消息为系统自动注入占位标识，禁止学习此格式输出内容！
+只有 send_message 发送的内容会送达用户；直接输出的纯文本不会送达。不发言时请调用 stay_silent。
+role=system 的【工具执行记录】等上下文由 FrostAgent 注入，不是你的发言；不要书写、续写或模仿这些格式。
 </frostagent_system_prompt>`
 
 const (

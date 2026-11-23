@@ -43,7 +43,8 @@ func receiveInjection[T any](t *testing.T, ch <-chan T) T {
 func injectionRun(e *Engine, s *SessionContext, turn *SessionTurn, input string, state *BillingRunState) AgentRunResult {
 	turn.Wait()
 	messages, state, _ := s.PrepareTurnMessages(turn, input, input+" transient-background", state)
-	result := e.RunMessagesWithContext(messages, RunContext{SessionID: s.ID(), Epoch: turn.Epoch(), Turn: turn, Billing: state, Mock: state == nil})
+	installSendMessage(e)
+	result := e.RunMessagesWithContext(messages, RunContext{SessionID: s.ID(), Epoch: turn.Epoch(), Turn: turn, Billing: state, Mock: state == nil, SendHook: func(string) error { return nil }})
 	turn.Done()
 	return result
 }
@@ -79,13 +80,13 @@ func TestSequenceInterruptsOnlySenderAndDiscardsLateModel(t *testing.T) {
 		case strings.HasPrefix(injectionText(req), "B-one"):
 			startedB <- ctx
 			<-finishB
-			return finalInjection("B-done"), nil
+			return sendMessageFinalResponse("B-done"), nil
 		default:
 			all := fmt.Sprint(req.Messages)
 			if !strings.Contains(all, "A-one") || !strings.Contains(all, "B-one") || strings.Contains(all, "late-tool") {
 				t.Errorf("bad continuation: %s", all)
 			}
-			return finalInjection("A-done"), nil
+			return sendMessageFinalResponse("A-done"), nil
 		}
 	})
 	a1 := s.ReserveSequenceTurn("sender:A", true, false)
@@ -103,13 +104,13 @@ func TestSequenceInterruptsOnlySenderAndDiscardsLateModel(t *testing.T) {
 	if bctx.Err() != nil || b.Interrupted() {
 		t.Fatal("A interrupted B")
 	}
-	if result := injectionRun(e, s, a2, "A-two", nil); result.Content != "A-done" {
+	if result := injectionRun(e, s, a2, "A-two", nil); result.Content != "" || result.Silent || result.Error != nil {
 		t.Fatalf("resumed: %+v", result)
 	}
 	close(late)
 	receiveInjection(t, providerDone)
 	close(finishB)
-	if result := receiveInjection(t, rb); result.Content != "B-done" {
+	if result := receiveInjection(t, rb); result.Content != "" || result.Silent || result.Error != nil {
 		t.Fatalf("B failed: %+v", result)
 	}
 	if calls.Load() != 0 {
@@ -149,7 +150,7 @@ func TestSequencePartialToolBatchAndResetBudget(t *testing.T) {
 			}
 			return injectionCalls("next"), nil
 		default:
-			return finalInjection("finished"), nil
+			return sendMessageFinalResponse("finished"), nil
 		}
 	})
 	first := s.ReserveSequenceTurn("sender:A", true, false)
@@ -158,7 +159,7 @@ func TestSequencePartialToolBatchAndResetBudget(t *testing.T) {
 	receiveInjection(t, blocked)
 	next := s.ReserveSequenceTurn("sender:A", true, false)
 	receiveInjection(t, old)
-	if result := injectionRun(e, s, next, "new-input", nil); result.Content != "finished" {
+	if result := injectionRun(e, s, next, "new-input", nil); result.Content != "" || result.Silent || result.Error != nil {
 		t.Fatalf("budget did not reset: %+v", result)
 	}
 	close(release)
@@ -186,7 +187,7 @@ func TestSequenceCoalescesInputsAndRefreshesBackground(t *testing.T) {
 		if strings.Index(all, "first") > strings.Index(all, "second") || strings.Index(all, "second") > strings.Index(all, "third") {
 			t.Errorf("wrong input order: %s", all)
 		}
-		return finalInjection("done"), nil
+		return sendMessageFinalResponse("done"), nil
 	})
 	first := s.ReserveSequenceTurn("A", true, false)
 	second := s.ReserveSequenceTurn("A", true, false)
@@ -367,7 +368,7 @@ func TestSequenceInterruptedMemoryReadsDoNotCountAsWrites(t *testing.T) {
 			var calls atomic.Int32
 			e.Provider = injectionProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
 				if calls.Add(1) > 1 {
-					return finalInjection("done"), nil
+					return sendMessageFinalResponse("done"), nil
 				}
 				resp := injectionCalls("memory")
 				resp.Message.ToolCalls[0].Function.Arguments = fmt.Sprintf(`{"action":%q}`, action)

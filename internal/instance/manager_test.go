@@ -722,7 +722,9 @@ func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"category\":\"none\",\"risk_level\":\"none\",\"intent\":\"benign\",\"confidence\":0.99}"},"finish_reason":"stop"}]}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"mock reply"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+		// Plain assistant text is never delivered, so the fixture model speaks
+		// through send_message like a real compliant model.
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"fixture-final","type":"function","function":{"name":"send_message","arguments":"{\"messages\":[{\"type\":\"plain\",\"text\":\"mock reply\"}],\"declare_final_message\":true}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
 	}))
 	defer upstream.Close()
 	m := testManager(t)

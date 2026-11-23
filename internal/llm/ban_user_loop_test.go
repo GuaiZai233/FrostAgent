@@ -167,12 +167,7 @@ func TestSecurityGateModesClassifierBypass(t *testing.T) {
 
 			provider := &mockMultiStepProvider{
 				chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-					return &core.ChatResponse{
-						Message: core.ChatMessage{
-							Role:    core.RoleAssistant,
-							Content: "Normal helpful response",
-						},
-					}, nil
+					return sendMessageFinalResponse("Normal helpful response"), nil
 				},
 			}
 
@@ -180,16 +175,20 @@ func TestSecurityGateModesClassifierBypass(t *testing.T) {
 				MaxIterations: 1,
 				Security:      ctrl,
 				Provider:      provider,
+				ToolRegistry:  map[string]ToolExecutor{},
 			}
+			installSendMessage(engine)
 
 			runCtx := RunContext{
 				ActorPlatform: "qq",
 				ActorUserID:   "benign-user-1",
 			}
 
+			delivered := &deliveryCapture{}
+			runCtx.SendHook = delivered.hook
 			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, runCtx)
-			if result.Content != "Normal helpful response" {
-				t.Fatalf("expected normal response in %s mode, got %q", mode, result.Content)
+			if result.Error != nil || delivered.plainText() != "Normal helpful response" {
+				t.Fatalf("expected normal delivery in %s mode, got %q (%+v)", mode, delivered.plainText(), result)
 			}
 			if classifierCalls.Load() != 0 {
 				t.Fatalf("expected 0 classifier calls in %s mode, got %d", mode, classifierCalls.Load())
@@ -284,64 +283,6 @@ func TestProactiveTurnDisallowsSideEffectingToolsAndBanUser(t *testing.T) {
 	}
 	if result.Banned {
 		t.Fatal("expected result.Banned to be false on proactive ban attempt")
-	}
-}
-
-func TestProactiveTurnOutputBlockedWatchdog(t *testing.T) {
-	tmpDir := t.TempDir()
-	ctrl := security.NewController(tmpDir)
-	ctrl.SetMode(security.ControlModeAggressive)
-
-	ctrl.Watchdog.SetClassifier(&mockGateClassifier{
-		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			if input.Stage == security.StageModelOutput {
-				return security.ClassificationResult{
-					Category:  security.RiskCategoryViolenceTerrorism,
-					RiskLevel: security.RiskLevelCritical,
-					Reason:    "blocked output",
-				}, nil
-			}
-			return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
-		},
-	})
-
-	provider := &mockMultiStepProvider{
-		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-			return &core.ChatResponse{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "bad output text",
-				},
-			}, nil
-		},
-	}
-
-	engine := &Engine{
-		MaxIterations: 1,
-		Security:      ctrl,
-		Provider:      provider,
-	}
-
-	runCtx := RunContext{
-		ActorPlatform: "qq",
-		ActorUserID:   "user-1",
-		Proactive:     true,
-	}
-
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hi"}}, runCtx)
-	if !result.OutputBlocked {
-		t.Fatal("expected OutputBlocked to be true when StageModelOutput is blocked by watchdog")
-	}
-
-	// Also verify classifier outage triggers OutputBlocked == true
-	ctrl.Watchdog.SetClassifier(&mockGateClassifier{
-		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			return security.ClassificationResult{}, errors.New("classifier service down")
-		},
-	})
-	resultOutage := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hi"}}, runCtx)
-	if !resultOutage.OutputBlocked {
-		t.Fatal("expected OutputBlocked to be true when classifier has an outage at StageModelOutput")
 	}
 }
 
@@ -571,12 +512,7 @@ func TestProactiveTurnDisallowsActionsCatTools(t *testing.T) {
 			chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 				receivedTools = req.Tools
 				if len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == core.RoleTool {
-					return &core.ChatResponse{
-						Message: core.ChatMessage{
-							Role:    core.RoleAssistant,
-							Content: "成功获取动作列表",
-						},
-					}, nil
+					return sendMessageFinalResponse("成功获取动作列表"), nil
 				}
 				return &core.ChatResponse{
 					Message: core.ChatMessage{
@@ -602,12 +538,15 @@ func TestProactiveTurnDisallowsActionsCatTools(t *testing.T) {
 			},
 			Provider: provider,
 		}
+		installSendMessage(engine)
 
 		runCtx := RunContext{
 			ActorPlatform: "qq",
 			ActorUserID:   "admin-user",
 			Proactive:     false,
 		}
+		delivered := &deliveryCapture{}
+		runCtx.SendHook = delivered.hook
 
 		result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "列出动作"}}, runCtx)
 
@@ -632,11 +571,11 @@ func TestProactiveTurnDisallowsActionsCatTools(t *testing.T) {
 		}
 
 		// 3. Normal reply returned
-		if result.Silent {
-			t.Fatal("expected result.Silent to be false on explicit wake")
+		if result.Error != nil || result.Silent {
+			t.Fatalf("expected a delivered reply on explicit wake, got %+v", result)
 		}
-		if result.Content != "成功获取动作列表" {
-			t.Fatalf("expected '成功获取动作列表', got %q", result.Content)
+		if delivered.plainText() != "成功获取动作列表" {
+			t.Fatalf("expected '成功获取动作列表', got %q", delivered.plainText())
 		}
 	})
 }

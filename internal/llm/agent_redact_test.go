@@ -126,7 +126,15 @@ func TestAgent_ExecuteCommand_EndToEnd_LogsContainCommandAndResult(t *testing.T)
 			"choices": []map[string]any{{
 				"message": map[string]any{
 					"role":    "assistant",
-					"content": "Execution verified: command finished successfully.",
+					"content": nil,
+					"tool_calls": []map[string]any{{
+						"id":   "call_final_1",
+						"type": "function",
+						"function": map[string]any{
+							"name":      "send_message",
+							"arguments": sendMessageFinalArgs("Execution verified: command finished successfully."),
+						},
+					}},
 				},
 			}},
 		})
@@ -154,17 +162,20 @@ func TestAgent_ExecuteCommand_EndToEnd_LogsContainCommandAndResult(t *testing.T)
 		},
 		Provider: openai.NewClient(server.URL, "test-api-key"),
 	}
+	installSendMessage(engine)
 
+	delivered := &deliveryCapture{}
 	res := engine.RunMessagesWithContext([]ChatMessage{{
 		Role:    "user",
 		Content: "run the secret command",
 	}}, RunContext{
 		SessionID: "test-e2e-session-uuid",
+		SendHook:  delivered.hook,
 	})
 
 	// 1. Verify agent completed successfully
-	if !strings.Contains(res.Content, "Execution verified") {
-		t.Fatalf("unexpected agent loop result: %q, error: %v", res.Content, res.Error)
+	if res.Error != nil || !strings.Contains(delivered.plainText(), "Execution verified") {
+		t.Fatalf("unexpected agent loop result: %+v delivered=%q", res, delivered.plainText())
 	}
 	if !turn1Called || !turn2Called {
 		t.Fatalf("expected both LLM turns to be executed, got turn1=%t turn2=%t", turn1Called, turn2Called)

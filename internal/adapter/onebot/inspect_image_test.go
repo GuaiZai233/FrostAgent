@@ -146,7 +146,7 @@ func testWSInspectMessageImage(t *testing.T, dedicatedVision bool) {
 				}},
 			},
 		},
-		{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "我看过那张海报了"}},
+		{Message: sendMessageFinalMessage("我看过那张海报了")},
 	}}
 	engine := newTestEngine(dialogueProvider)
 	if dedicatedVision {

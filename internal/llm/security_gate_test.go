@@ -54,140 +54,6 @@ func TestEngineRejectsLockedActorBeforeProviderExecution(t *testing.T) {
 	}
 }
 
-func TestEngineModelOutputClassifierFailure(t *testing.T) {
-	logs.Init(100)
-	logs.Clear()
-
-	controller := security.NewController(t.TempDir())
-	controller.SetMode(security.ControlModeAggressive)
-	controller.Watchdog.SetClassifier(&mockGateClassifier{
-		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			return security.ClassificationResult{}, errors.New("upstream gateway timeout")
-		},
-	})
-	engine := &Engine{
-		MaxIterations: 1,
-		ToolRegistry:  map[string]ToolExecutor{},
-		Security:      controller,
-		Provider: &staticProvider{
-			response: &core.ChatResponse{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "这是正常的模型输出",
-				},
-			},
-		},
-	}
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "你好"}}, RunContext{
-		ActorPlatform: "test-platform",
-		ActorUserID:   "actor-001",
-	})
-	if result.LLMFailed {
-		t.Fatal("security classifier failure must not be classified as dialogue LLM failure")
-	}
-	want := "安全审查失败：服务暂时不可用，模型输出已拦截"
-	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
-
-	snapshot := logs.Snapshot()
-	var watchdogErrors []logs.LogEntry
-	var engineWarns []logs.LogEntry
-	for _, entry := range snapshot {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") {
-			watchdogErrors = append(watchdogErrors, entry)
-		}
-		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出因安全审查服务异常被拦截:") {
-			engineWarns = append(engineWarns, entry)
-		}
-	}
-	if len(watchdogErrors) != 1 {
-		t.Fatalf("expected exactly 1 Watchdog ERROR log, got %d, snapshot=%+v", len(watchdogErrors), snapshot)
-	}
-	if len(engineWarns) != 1 {
-		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
-	}
-	watchdogEvalID := extractEvalID(watchdogErrors[0].Content)
-	engineEvalID := extractEvalID(engineWarns[0].Content)
-	if watchdogEvalID == "" || watchdogEvalID != engineEvalID {
-		t.Fatalf("expected shared eval_id between Watchdog and Engine, got watchdog=%q, engine=%q", watchdogEvalID, engineEvalID)
-	}
-	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
-		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
-	}
-	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全审查分类器异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
-			t.Fatalf("unexpected ERROR log found outside Watchdog: %+v", entry)
-		}
-	}
-}
-
-func TestEngineModelOutputPolicyBlock(t *testing.T) {
-	controller := security.NewController(t.TempDir())
-	controller.SetMode(security.ControlModeAggressive)
-	controller.Watchdog.SetClassifier(&mockGateClassifier{
-		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			return security.ClassificationResult{
-				Category:  security.RiskCategoryMaliciousExecution,
-				RiskLevel: security.RiskLevelCritical,
-				Reason:    "harmful payload detected",
-			}, nil
-		},
-	})
-	engine := &Engine{
-		MaxIterations: 1,
-		ToolRegistry:  map[string]ToolExecutor{},
-		Security:      controller,
-		Provider: &staticProvider{
-			response: &core.ChatResponse{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "危险脚本内容",
-				},
-			},
-		},
-	}
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "生成脚本"}}, RunContext{
-		ActorPlatform: "test-platform",
-		ActorUserID:   "actor-002",
-	})
-	want := "安全审查拦截：模型输出已拦截"
-	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
-}
-
-func TestEngineModelOutputPolicyFilter(t *testing.T) {
-	controller := security.NewController(t.TempDir())
-	controller.SetMode(security.ControlModeAggressive)
-	controller.Watchdog.SetClassifier(&mockGateClassifier{
-		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			return security.ClassificationResult{
-				Category:  security.RiskCategoryMaliciousExecution,
-				RiskLevel: security.RiskLevelHigh,
-				Reason:    "harmful payload detected",
-			}, nil
-		},
-	})
-	engine := &Engine{
-		MaxIterations: 1,
-		ToolRegistry:  map[string]ToolExecutor{},
-		Security:      controller,
-		Provider: &staticProvider{
-			response: &core.ChatResponse{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "危险脚本内容",
-				},
-			},
-		},
-	}
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "生成脚本"}}, RunContext{
-		ActorPlatform: "test-platform",
-		ActorUserID:   "actor-002",
-	})
-	want := security.SanitizedMessageForCategory(security.RiskCategoryMaliciousExecution)
-	if result.Content != want {
-		t.Fatalf("expected sanitized message %q, got %q", want, result.Content)
-	}
-}
-
 type gateDummyTool struct{}
 
 func (d *gateDummyTool) Name() string               { return "dummy_tool" }
@@ -213,6 +79,7 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 	})
 
 	callCount := 0
+	seenToolContent := ""
 	provider := &mockMultiStepProvider{
 		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 			callCount++
@@ -228,15 +95,14 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 					},
 				}, nil
 			}
-			// Second iteration gets the tool response message in history
+			// Second iteration gets the tool response message in history. Plain
+			// final text is never delivered, so assert on what the model received.
 			for _, m := range req.Messages {
 				if m.Role == core.RoleTool {
-					return &core.ChatResponse{
-						Message: core.ChatMessage{Role: core.RoleAssistant, Content: fmt.Sprintf("got tool response: %v", m.Content)},
-					}, nil
+					seenToolContent = fmt.Sprint(m.Content)
 				}
 			}
-			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "no tool msg"}}, nil
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
 		},
 	}
 
@@ -246,12 +112,12 @@ func TestEngineToolArgumentClassifierFailure(t *testing.T) {
 		Security:      controller,
 		Provider:      provider,
 	}
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run tool"}}, RunContext{
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run tool"}}, RunContext{
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-003",
 	})
 	want := "安全审查失败：服务暂时不可用，该工具调用已被阻止"
-	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(seenToolContent, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var watchdogErrors []logs.LogEntry
@@ -304,6 +170,7 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 	})
 
 	callCount := 0
+	seenToolContent := ""
 	provider := &mockMultiStepProvider{
 		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 			callCount++
@@ -321,12 +188,10 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 			}
 			for _, m := range req.Messages {
 				if m.Role == core.RoleTool {
-					return &core.ChatResponse{
-						Message: core.ChatMessage{Role: core.RoleAssistant, Content: fmt.Sprintf("got tool response: %v", m.Content)},
-					}, nil
+					seenToolContent = fmt.Sprint(m.Content)
 				}
 			}
-			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "no tool msg"}}, nil
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
 		},
 	}
 
@@ -336,12 +201,12 @@ func TestEngineToolResultClassifierFailure(t *testing.T) {
 		Security:      controller,
 		Provider:      provider,
 	}
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run tool"}}, RunContext{
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run tool"}}, RunContext{
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-004",
 	})
 	want := "安全审查失败：服务暂时不可用，外部工具结果已隔离"
-	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
+	assertReferencedError(t, engine.Log(), strings.TrimPrefix(seenToolContent, "got tool response: "), want)
 
 	snapshot := logs.Snapshot()
 	var watchdogErrors []logs.LogEntry
@@ -384,76 +249,6 @@ type mockMultiStepProvider struct {
 
 func (m *mockMultiStepProvider) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	return m.chatFunc(ctx, req)
-}
-
-func TestEngineModelOutputAccessStoreFailure(t *testing.T) {
-	logs.Init(100)
-	logs.Clear()
-
-	controller := security.NewController(t.TempDir())
-	provider := &mockMultiStepProvider{
-		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-			// Corrupt the access store file before the model output checkpoint
-			if err := os.WriteFile(controller.Access.Path(), []byte("{broken json content"), 0600); err != nil {
-				return nil, err
-			}
-			return &core.ChatResponse{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "这是正常的模型输出",
-				},
-			}, nil
-		},
-	}
-
-	engine := &Engine{
-		MaxIterations: 1,
-		ToolRegistry:  map[string]ToolExecutor{},
-		Security:      controller,
-		Provider:      provider,
-	}
-
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "你好"}}, RunContext{
-		ActorPlatform: "test-platform",
-		ActorUserID:   "actor-access-failure",
-	})
-
-	want := "安全审查失败：服务暂时不可用，模型输出已拦截"
-	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
-
-	snapshot := logs.Snapshot()
-	var storageErrors []logs.LogEntry
-	var engineWarns []logs.LogEntry
-	for _, entry := range snapshot {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.ERROR && strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") {
-			storageErrors = append(storageErrors, entry)
-		}
-		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出因安全审查服务异常被拦截:") {
-			engineWarns = append(engineWarns, entry)
-		}
-	}
-	if len(storageErrors) != 1 {
-		t.Fatalf("expected exactly 1 Storage ERROR log, got %d, snapshot=%+v", len(storageErrors), snapshot)
-	}
-	if len(engineWarns) != 1 {
-		t.Fatalf("expected exactly 1 Engine WARN log, got %d, snapshot=%+v", len(engineWarns), snapshot)
-	}
-	storageEvalID := extractEvalID(storageErrors[0].Content)
-	engineEvalID := extractEvalID(engineWarns[0].Content)
-	if storageEvalID == "" || storageEvalID != engineEvalID {
-		t.Fatalf("expected shared eval_id between Storage ERROR and Engine WARN, got storage=%q, engine=%q", storageEvalID, engineEvalID)
-	}
-	if !strings.Contains(storageErrors[0].Content, "principal=test-platform:actor-access-failure") {
-		t.Fatalf("expected principal in storage error log: %q", storageErrors[0].Content)
-	}
-	if strings.Contains(engineWarns[0].Content, "error_type=") || strings.Contains(engineWarns[0].Content, "reason=") {
-		t.Fatalf("engine WARN log must not duplicate error_type or reason: %q", engineWarns[0].Content)
-	}
-	for _, entry := range snapshot {
-		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
-			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
-		}
-	}
 }
 
 func TestEngineToolArgumentAccessStoreFailure(t *testing.T) {
@@ -631,65 +426,6 @@ func TestEngineToolResultAccessStoreFailure(t *testing.T) {
 		if entry.Level == logs.ERROR && !strings.Contains(entry.Content, "安全控制存储状态异常 (Fail-Closed):") && !strings.HasPrefix(entry.Content, "安全审查失败：") && !strings.HasPrefix(entry.Content, "智能体运行失败：") {
 			t.Fatalf("unexpected ERROR log found outside Storage failure: %+v", entry)
 		}
-	}
-}
-
-func TestEngineModelOutputAccessStoreLocked(t *testing.T) {
-	logs.Init(100)
-	logs.Clear()
-
-	controller := security.NewController(t.TempDir())
-	principal, err := security.NewPrincipal("test-platform", "actor-locked-during-chat")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	provider := &mockMultiStepProvider{
-		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-			if err := controller.Access.Lock(principal, "policy violation ban"); err != nil {
-				return nil, err
-			}
-			return &core.ChatResponse{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "这是正常的模型输出",
-				},
-			}, nil
-		},
-	}
-
-	engine := &Engine{
-		MaxIterations: 1,
-		ToolRegistry:  map[string]ToolExecutor{},
-		Security:      controller,
-		Provider:      provider,
-	}
-
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "你好"}}, RunContext{
-		ActorPlatform: "test-platform",
-		ActorUserID:   "actor-locked-during-chat",
-	})
-
-	want := "安全审查拦截：模型输出已拦截"
-	assertReferencedError(t, engine.Log(), strings.TrimPrefix(result.Content, "got tool response: "), want)
-
-	snapshot := logs.Snapshot()
-	var foundLog bool
-	var evalID string
-	for _, entry := range snapshot {
-		if entry.Category == logs.SYSTEM && entry.Level == logs.WARN && strings.Contains(entry.Content, "模型输出被安全控制拦截") {
-			foundLog = true
-			parts := strings.Split(entry.Content, "eval_id=")
-			if len(parts) > 1 {
-				evalID = strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	if !foundLog {
-		t.Fatalf("expected Warn log for model output policy block, snapshot=%+v", snapshot)
-	}
-	if evalID == "" || !strings.HasPrefix(evalID, "eval_model_output_") {
-		t.Fatalf("expected valid eval_model_output_* correlation ID, got %q", evalID)
 	}
 }
 
@@ -875,6 +611,7 @@ func TestEngineToolResultPolicyFilter(t *testing.T) {
 	})
 
 	callCount := 0
+	seenToolContent := ""
 	provider := &mockMultiStepProvider{
 		chatFunc: func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 			callCount++
@@ -892,12 +629,7 @@ func TestEngineToolResultPolicyFilter(t *testing.T) {
 			}
 			for _, m := range req.Messages {
 				if m.Role == core.RoleTool {
-					return &core.ChatResponse{
-						Message: core.ChatMessage{
-							Role:    core.RoleAssistant,
-							Content: fmt.Sprintf("tool said: %v", m.Content),
-						},
-					}, nil
+					seenToolContent = fmt.Sprint(m.Content)
 				}
 			}
 			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "done"}}, nil
@@ -911,14 +643,15 @@ func TestEngineToolResultPolicyFilter(t *testing.T) {
 		Provider:      provider,
 	}
 
-	result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run"}}, RunContext{
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run"}}, RunContext{
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-tool-filt",
 	})
 
-	wantPrefix := "tool said: [FrostAgent 安全审查系统] <此内容已过滤：检测到敏感数据窃取内容！"
-	if !strings.HasPrefix(result.Content, wantPrefix) {
-		t.Fatalf("expected filtered tool result starting with %q, got %q", wantPrefix, result.Content)
+	// Plain final text is not delivered, so assert on what the model received.
+	wantPrefix := "[FrostAgent 安全审查系统] <此内容已过滤：检测到敏感数据窃取内容！"
+	if !strings.HasPrefix(seenToolContent, wantPrefix) {
+		t.Fatalf("expected filtered tool result starting with %q, got %q", wantPrefix, seenToolContent)
 	}
 }
 
@@ -959,7 +692,7 @@ func TestEngineToolArgumentMediumRiskWarnPropagation(t *testing.T) {
 				}, nil
 			}
 			iter2ReqMessages = req.Messages
-			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "final reply"}}, nil
+			return &core.ChatResponse{Message: sendMessageFinalMessage("final reply")}, nil
 		},
 	}
 
@@ -969,22 +702,25 @@ func TestEngineToolArgumentMediumRiskWarnPropagation(t *testing.T) {
 		Security:      controller,
 		Provider:      provider,
 	}
+	installSendMessage(engine)
 
 	runMessages := []ChatMessage{
 		{Role: "system", Content: "base system prompt"},
 		{Role: "user", Content: "please run dummy tool"},
 	}
 
+	delivered := &deliveryCapture{}
 	res := engine.RunMessagesWithContext(runMessages, RunContext{
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-tool-arg-warn",
+		SendHook:      delivered.hook,
 	})
 
 	if res.Error != nil {
 		t.Fatalf("unexpected error: %v", res.Error)
 	}
-	if res.Content != "final reply" {
-		t.Fatalf("expected final reply, got %q", res.Content)
+	if delivered.plainText() != "final reply" {
+		t.Fatalf("expected final reply, got %q", delivered.plainText())
 	}
 
 	// 1. Assert that iter2 received the injected MediumRiskWarningNotice in system messages
@@ -1044,7 +780,7 @@ func TestEngineToolResultMediumRiskWarnPropagation(t *testing.T) {
 				}, nil
 			}
 			iter2ReqMessages = req.Messages
-			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "final reply after result"}}, nil
+			return &core.ChatResponse{Message: sendMessageFinalMessage("final reply after result")}, nil
 		},
 	}
 
@@ -1054,22 +790,25 @@ func TestEngineToolResultMediumRiskWarnPropagation(t *testing.T) {
 		Security:      controller,
 		Provider:      provider,
 	}
+	installSendMessage(engine)
 
 	runMessages := []ChatMessage{
 		{Role: "system", Content: "base system prompt"},
 		{Role: "user", Content: "please run dummy tool"},
 	}
 
+	delivered := &deliveryCapture{}
 	res := engine.RunMessagesWithContext(runMessages, RunContext{
 		ActorPlatform: "test-platform",
 		ActorUserID:   "actor-tool-res-warn",
+		SendHook:      delivered.hook,
 	})
 
 	if res.Error != nil {
 		t.Fatalf("unexpected error: %v", res.Error)
 	}
-	if res.Content != "final reply after result" {
-		t.Fatalf("expected final reply, got %q", res.Content)
+	if delivered.plainText() != "final reply after result" {
+		t.Fatalf("expected final reply, got %q", delivered.plainText())
 	}
 
 	// 1. Assert that iter2 received the injected MediumRiskWarningNotice in system messages

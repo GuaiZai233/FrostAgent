@@ -39,8 +39,9 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "synthetic-answer"}}}}
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: sendMessageFinalMessage("synthetic-answer")}}}
 	engine := newTestEngine(provider)
+	installTestSendMessage(engine)
 	engine.Scope = runtimescope.New(nil, nil, nil)
 	engine.Version = "synthetic-forward-version"
 	adapter := NewAdapter(engine)

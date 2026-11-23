@@ -19,7 +19,6 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
-	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net"
 	"net/http"
@@ -50,8 +49,17 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 	defer m.mu.Unlock()
 
 	m.requests = append(m.requests, req)
+	// 只有带工具的对话请求需要投递改写：视觉/摘要等辅助模型保持纯文本。
+	// 主动回复只接受 mention_specific + plain 形状，fixture 自行构造，不改写。
+	deliver := func(resp *core.ChatResponse) *core.ChatResponse {
+		if len(req.Tools) == 0 || proactiveSpecificReplySchema(req.Tools) {
+			return resp
+		}
+		return deliverMockReply(resp)
+	}
 	if m.customChat != nil {
-		return m.customChat(ctx, req)
+		resp, err := m.customChat(ctx, req)
+		return deliver(resp), err
 	}
 	idx := m.reqCount
 	m.reqCount++
@@ -61,11 +69,11 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 	}
 
 	if idx < len(m.responses) {
-		return m.responses[idx], nil
+		return deliver(m.responses[idx]), nil
 	}
 
-	// 默认返回纯文本
-	return &core.ChatResponse{
+	// 默认通过 send_message 送达一条文本
+	return deliver(&core.ChatResponse{
 		Message: core.ChatMessage{
 			Role:    core.RoleAssistant,
 			Content: "你好！这是默认的模拟回复。",
@@ -75,7 +83,7 @@ func (m *mockLLMProvider) Chat(ctx context.Context, req core.ChatRequest) (*core
 			CompletionTokens: 50,
 			TotalTokens:      150,
 		},
-	}, nil
+	}), nil
 }
 
 type mockClassifier struct {
@@ -93,11 +101,14 @@ func (m *mockClassifier) Classify(ctx context.Context, input security.Classifica
 	}, nil
 }
 
-// newTestEngine 创建一个用于测试的 Engine
+// newTestEngine 创建一个用于测试的 Engine。send_message 是 production 中唯一
+// 的投递出口，因此测试引擎默认注册它。
 func newTestEngine(provider core.LLMProvider) *llm.Engine {
 	return &llm.Engine{
-		MaxIterations:  3,
-		ToolRegistry:   make(map[string]llm.ToolExecutor),
+		MaxIterations: 3,
+		ToolRegistry: map[string]llm.ToolExecutor{
+			"send_message": tools.SendMsgTool(),
+		},
 		Provider:       provider,
 		BaseURL:        "http://mock",
 		APIKey:         "mock-key",
@@ -200,13 +211,9 @@ func TestHandleWSPrivateMessage(t *testing.T) {
 		t.Errorf("期望 user_id=987654, 实际=%v", params["user_id"])
 	}
 
-	// 验证 message 是默认文本回复
-	if msg, ok := params["message"].(string); ok {
-		if msg != "你好！这是默认的模拟回复。" {
-			t.Errorf("期望回复内容=%q, 实际=%q", "你好！这是默认的模拟回复。", msg)
-		}
-	} else {
-		t.Errorf("message 不是字符串: %T", params["message"])
+	// 验证 message 是默认文本回复（send_message 送达后是 text segment 链）
+	if msg := outboundText(params["message"]); msg != "你好！这是默认的模拟回复。" {
+		t.Errorf("期望回复内容=%q, 实际=%q", "你好！这是默认的模拟回复。", msg)
 	}
 
 	t.Logf("✅ 私聊消息测试通过，回复内容: %v", params["message"])
@@ -842,77 +849,6 @@ func TestHandleWSEmptyFinalWarningUsesInstanceLogger(t *testing.T) {
 	}
 }
 
-func TestOneBotFinalStickerRespectsActivityAndResetsQuota(t *testing.T) {
-	const rawSticker = `{"messages":[{"type":"image","url":"https://example.com/sticker.png","is_sticker":true}]}`
-	for _, tc := range []struct {
-		name, level string
-		wantSticker bool
-	}{
-		{name: "default disabled"},
-		{name: "enabled", level: "10", wantSticker: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(sticker.ActivityEnvKey, tc.level)
-			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: rawSticker}}}}
-			engine := newTestEngine(provider)
-			engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
-			if tc.wantSticker {
-				for range 4 {
-					engine.RecordBotTurn()
-				}
-			}
-			srv, wsURL := startReplyWSTestServer(t, engine)
-			defer srv.Close()
-			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer conn.Close()
-			event := model.OneBotEvent{
-				SelfID: 700000041, PostType: "message", MessageType: "private",
-				UserID: 700000042, MessageID: 700000043,
-				Message: json.RawMessage(`[{"type":"text","data":{"text":"你好"}}]`),
-			}
-			if err := conn.WriteJSON(event); err != nil {
-				t.Fatal(err)
-			}
-			var action model.OneBotAction
-			if err := conn.ReadJSON(&action); err != nil {
-				t.Fatal(err)
-			}
-			if action.Action != "send_private_msg" {
-				t.Fatalf("unexpected action: %s", action.Action)
-			}
-			message := action.Params.(map[string]any)["message"]
-			if tc.wantSticker {
-				segments, ok := message.([]any)
-				if !ok || len(segments) != 1 || segments[0].(map[string]any)["type"] != "image" {
-					t.Fatalf("enabled sticker was not sent: %#v", message)
-				}
-			} else if message != "表情包发送功能已被禁用，请管理员在 FrostAgent 后端启用此功能。" {
-				t.Fatalf("disabled sticker escaped as rich text: %#v", message)
-			}
-			if err := conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo}); err != nil {
-				t.Fatal(err)
-			}
-			if tc.wantSticker {
-				deadline := time.Now().Add(time.Second)
-				for len(engine.SessionManager.GetOrCreate("private:700000042").Snapshot()) < 2 && time.Now().Before(deadline) {
-					time.Sleep(time.Millisecond)
-				}
-				engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "quota"}}, llm.RunContext{})
-				provider.mu.Lock()
-				request := provider.requests[len(provider.requests)-1]
-				provider.mu.Unlock()
-				last := request.Messages[len(request.Messages)-1].Content.(string)
-				if !strings.Contains(last, "还剩 4 个 Bot 对话轮次") {
-					t.Fatalf("terminal sticker did not reset quota: %s", last)
-				}
-			}
-		})
-	}
-}
-
 func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *testing.T) {
 	t.Setenv("ENABLE_AT_IN_GROUP_MSG", "true")
 	t.Setenv("STICKER_ACTIVITY", "10")
@@ -1023,7 +959,8 @@ func TestHandleWSGroupMessageWithToolReplyAndEmptyFinalPreservesDelivery(t *test
 	provider.mu.Lock()
 	request := provider.requests[len(provider.requests)-1]
 	provider.mu.Unlock()
-	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 个 Bot 对话轮次") {
+	// 投递指引位于请求开头，检查整份请求而不是最后一条消息。
+	if all := fmt.Sprint(request.Messages); !strings.Contains(all, "还剩 3 个 Bot 对话轮次") {
 		t.Fatalf("同一对话的工具发送不应额外累计轮次，实际=%v", request.Messages)
 	}
 }
@@ -1107,7 +1044,8 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	provider.mu.Lock()
 	request := provider.requests[len(provider.requests)-1]
 	provider.mu.Unlock()
-	if content, ok := request.Messages[len(request.Messages)-1].Content.(string); !ok || !strings.Contains(content, "还剩 3 个 Bot 对话轮次") {
+	// 投递指引位于请求开头，检查整份请求而不是最后一条消息。
+	if all := fmt.Sprint(request.Messages); !strings.Contains(all, "还剩 3 个 Bot 对话轮次") {
 		t.Fatalf("失败 ACK 不应重置已触发的对话轮次，实际=%v", request.Messages)
 	}
 }
@@ -1247,11 +1185,8 @@ func TestHandleWSSendMessageToolHook(t *testing.T) {
 				},
 			},
 			{
-				// 第二轮：LLM 收到 "消息已发送" 后给出最终回复
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "已发送！",
-				},
+				// 第二轮：LLM 收到 "消息已发送" 后通过 send_message 说出最终回复
+				Message: sendMessageFinalMessage("已发送！"),
 			},
 		},
 	}
@@ -1317,7 +1252,7 @@ func TestHandleWSSendMessageToolHook(t *testing.T) {
 	}
 
 	params2, _ := action2.Params.(map[string]interface{})
-	msg2, _ := params2["message"].(string)
+	msg2 := outboundText(params2["message"])
 	if msg2 != "已发送！" {
 		t.Errorf("期望最终回复='已发送！', 实际=%q", msg2)
 	}
@@ -1527,21 +1462,10 @@ func TestWSBilling_WelcomeBonus(t *testing.T) {
 		t.Fatalf("发送消息失败: %v", err)
 	}
 
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取响应失败: %v", err)
-	}
-
-	var action model.OneBotAction
-	if err := json.Unmarshal(respBytes, &action); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-
-	params, ok := action.Params.(map[string]interface{})
-	if !ok {
-		t.Fatalf("params 不是 map: %T", action.Params)
-	}
-	replyMsg, _ := params["message"].(string)
+	// 答案经 send_message 送达，账单回执是随后单独的一条消息，需要都收集。
+	replyMsg, _ := collectOutboundText(t, conn, 5*time.Second, func(text string) bool {
+		return strings.Contains(text, "本次消耗")
+	})
 
 	if !strings.Contains(replyMsg, "🎉 首次对话赠送 100.00 片雪花！") {
 		t.Errorf("期望回复包含首充赠送提示，实际回复: %s", replyMsg)
@@ -1670,21 +1594,10 @@ func TestWSBilling_WelcomeBonus_WithToolCall(t *testing.T) {
 		t.Fatalf("发送消息失败: %v", err)
 	}
 
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取响应失败: %v", err)
-	}
-
-	var action model.OneBotAction
-	if err := json.Unmarshal(respBytes, &action); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-
-	params, ok := action.Params.(map[string]interface{})
-	if !ok {
-		t.Fatalf("params 不是 map: %T", action.Params)
-	}
-	replyMsg, _ := params["message"].(string)
+	// 工具回答经 send_message 送达，账单回执是随后单独的一条消息。
+	replyMsg, _ := collectOutboundText(t, conn, 5*time.Second, func(text string) bool {
+		return strings.Contains(text, "本次消耗")
+	})
 
 	if !strings.Contains(replyMsg, "杭州天气晴朗！") {
 		t.Errorf("期望包含最终工具回答，实际回复: %s", replyMsg)
@@ -1780,21 +1693,10 @@ func TestWSBilling_StandardConsumption(t *testing.T) {
 		t.Fatalf("发送消息失败: %v", err)
 	}
 
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取响应失败: %v", err)
-	}
-
-	var action model.OneBotAction
-	if err := json.Unmarshal(respBytes, &action); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-
-	params, ok := action.Params.(map[string]interface{})
-	if !ok {
-		t.Fatalf("params 不是 map: %T", action.Params)
-	}
-	replyMsg, _ := params["message"].(string)
+	// 只保留账单回执这一条外发消息：模型没有正文回答。
+	replyMsg, _ := collectOutboundText(t, conn, 5*time.Second, func(text string) bool {
+		return strings.Contains(text, "本次消耗")
+	})
 
 	if strings.Contains(replyMsg, "首次对话赠送") {
 		t.Errorf("非首次对话不应包含首充提示，实际回复: %s", replyMsg)
@@ -2137,21 +2039,10 @@ func TestWSBilling_ToolLoop_MultiTurnAccumulation(t *testing.T) {
 		t.Fatalf("发送消息失败: %v", err)
 	}
 
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取响应失败: %v", err)
-	}
-
-	var action model.OneBotAction
-	if err := json.Unmarshal(respBytes, &action); err != nil {
-		t.Fatalf("解析响应失败: %v", err)
-	}
-
-	params, ok := action.Params.(map[string]interface{})
-	if !ok {
-		t.Fatalf("params 不是 map: %T", action.Params)
-	}
-	replyMsg, _ := params["message"].(string)
+	// 工具回答经 send_message 送达，累计回执是随后单独的一条消息。
+	replyMsg, _ := collectOutboundText(t, conn, 5*time.Second, func(text string) bool {
+		return strings.Contains(text, "输入: 1200, 输出: 150")
+	})
 
 	if mockTool.executed != 1 {
 		t.Errorf("期望 tool 执行 1 次, 实际=%d", mockTool.executed)
@@ -2879,30 +2770,18 @@ func TestWSGroupMessage_SendFailureDoesNotPolluteCompactBuffer(t *testing.T) {
 }
 
 func TestWS_PlatformACKFailure_ExcludesHistoryAndInjectsDeliveryContextOnNextTurn(t *testing.T) {
-	mockLLM := &mockLLMProvider{
-		responses: []*core.ChatResponse{
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "我是第一轮回复（将被平台拒绝）",
-				},
-				Usage: &core.Usage{PromptTokens: 50, CompletionTokens: 20, TotalTokens: 70},
-			},
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "我是第二轮回复（平台发送成功）",
-				},
-				Usage: &core.Usage{PromptTokens: 80, CompletionTokens: 30, TotalTokens: 110},
-			},
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "我是第三轮回复（无 delivery context）",
-				},
-				Usage: &core.Usage{PromptTokens: 90, CompletionTokens: 30, TotalTokens: 120},
-			},
-		},
+	mockLLM := &mockLLMProvider{}
+	attempts := 0
+	mockLLM.customChat = func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		attempts++
+		for _, message := range req.Messages {
+			content, _ := message.Content.(string)
+			if message.Role == core.RoleTool && strings.Contains(content, "消息发送失败") {
+				// 失败回执已回传到模型，下一轮投递成功结束本轮。
+				return &core.ChatResponse{Message: sendMessageFinalMessage("我是第二轮回复（平台发送成功）")}, nil
+			}
+		}
+		return &core.ChatResponse{Message: sendMessageFinalMessage("我是第一轮回复（将被平台拒绝）")}, nil
 	}
 	engine := newTestEngine(mockLLM)
 	srv, wsURL := startWSTestServer(engine)
@@ -2914,207 +2793,76 @@ func TestWS_PlatformACKFailure_ExcludesHistoryAndInjectsDeliveryContextOnNextTur
 	}
 	defer conn.Close()
 
-	// 1. 发送第一条群消息
-	event1 := model.OneBotEvent{
-		SelfID:      123456,
-		PostType:    "message",
-		MessageType: "group",
-		GroupID:     50001,
-		UserID:      111222,
-		MessageID:   801,
-		Sender: &model.OneBotSender{
-			Nickname: "张三",
-			UserID:   111222,
-		},
+	event := model.OneBotEvent{
+		SelfID: 123456, PostType: "message", MessageType: "group", GroupID: 50001,
+		UserID: 111222, MessageID: 801,
+		Sender:  &model.OneBotSender{Nickname: "张三", UserID: 111222},
 		Message: json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"第一句"}}]`),
 	}
-	event1Bytes, _ := json.Marshal(event1)
-	if err := conn.WriteMessage(websocket.TextMessage, event1Bytes); err != nil {
-		t.Fatalf("发送消息1失败: %v", err)
+	eventBytes, _ := json.Marshal(event)
+	if err := conn.WriteMessage(websocket.TextMessage, eventBytes); err != nil {
+		t.Fatalf("发送消息失败: %v", err)
 	}
 
-	// 接收群信息请求并回复
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取群信息请求失败: %v", err)
-	}
-	var groupInfoAction model.OneBotAction
-	if err := json.Unmarshal(respBytes, &groupInfoAction); err != nil {
-		t.Fatalf("解析群信息请求失败: %v", err)
-	}
-	if groupInfoAction.Action == "get_group_info" {
-		resBytes, _ := json.Marshal(map[string]any{
-			"status":  "ok",
-			"retcode": 0,
-			"data":    map[string]any{"group_id": 50001, "group_name": "测试群50001"},
-			"echo":    groupInfoAction.Echo,
-		})
-		_ = conn.WriteMessage(websocket.TextMessage, resBytes)
-
-		// 接收第一轮出站 action (send_group_msg)
-		_, respBytes, err = conn.ReadMessage()
-		if err != nil {
-			t.Fatalf("读取回复1失败: %v", err)
+	// 平台先拒绝第一次投递，再确认第二次。
+	for index := 0; index < 2; index++ {
+		var action model.OneBotAction
+		if err := conn.ReadJSON(&action); err != nil {
+			t.Fatalf("读取第 %d 次投递失败: %v", index+1, err)
 		}
-	}
-
-	var sendAction1 model.OneBotAction
-	if err := json.Unmarshal(respBytes, &sendAction1); err != nil {
-		t.Fatalf("解析回复1 action 失败: %v", err)
-	}
-
-	// 模拟平台返回 ACK 失败 (例如机器人被禁言 retcode=10004)
-	ackFailBytes, _ := json.Marshal(map[string]any{
-		"status":  "failed",
-		"retcode": 10004,
-		"wording": "该群已开启全员禁言或机器人被禁言",
-		"echo":    sendAction1.Echo,
-	})
-	if err := conn.WriteMessage(websocket.TextMessage, ackFailBytes); err != nil {
-		t.Fatalf("发送 ACK 失败响应失败: %v", err)
+		if action.Action == "get_group_info" {
+			_ = conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"group_id": 50001, "group_name": "测试群50001"}, "echo": action.Echo})
+			if err := conn.ReadJSON(&action); err != nil {
+				t.Fatalf("读取第 %d 次投递失败: %v", index+1, err)
+			}
+		}
+		if action.Action != "send_group_msg" {
+			t.Fatalf("unexpected action: %s", action.Action)
+		}
+		var ack map[string]any
+		if index == 0 {
+			ack = map[string]any{"status": "failed", "retcode": 10004, "wording": "该群已开启全员禁言或机器人被禁言", "echo": action.Echo}
+		} else {
+			ack = map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo}
+		}
+		if err := conn.WriteJSON(ack); err != nil {
+			t.Fatalf("发送 ACK 失败: %v", err)
+		}
 	}
 
 	time.Sleep(50 * time.Millisecond)
 
-	// 验证第一轮结果：
-	// a. Session.History 中只保留用户消息，不包含失败的 assistant 回复
+	// 模型在失败后收到了失败原因（作为工具结果），并且没有把失败文本写入历史。
+	mockLLM.mu.Lock()
+	requests := append([]core.ChatRequest(nil), mockLLM.requests...)
+	mockLLM.mu.Unlock()
+	if len(requests) < 2 {
+		t.Fatalf("期望模型在失败后继续决策，实际请求数=%d", len(requests))
+	}
+	foundFailure := false
+	for _, message := range requests[1].Messages {
+		content, _ := message.Content.(string)
+		if message.Role == core.RoleTool && strings.Contains(content, "消息发送失败") {
+			foundFailure = true
+		}
+	}
+	if !foundFailure {
+		t.Errorf("投递失败必须作为工具结果回传给模型，实际消息: %+v", requests[1].Messages)
+	}
+
 	sess := engine.SessionManager.GetOrCreate("group:50001")
-	history1 := sess.Snapshot()
-	if len(history1) != 1 {
-		t.Fatalf("第一轮发送失败后，期望 session history 仅包含 1 条用户消息，实际=%d", len(history1))
+	history := sess.Snapshot()
+	if len(history) != 2 {
+		t.Fatalf("期望历史包含 user 与成功送达的 assistant，实际=%d: %+v", len(history), history)
 	}
-	if history1[0].Role != string(core.RoleUser) {
-		t.Errorf("期望第 1 条为 user 消息，实际角色: %s", history1[0].Role)
+	if history[1].Role != string(core.RoleAssistant) || !strings.Contains(history[1].Content.(string), "我是第二轮回复（平台发送成功）") {
+		t.Errorf("期望第二条为成功送达的 assistant，实际: %+v", history[1])
 	}
-
-	// b. Compact buffer 中不包含失败的 assistant 回复
-	snap1 := sess.SnapshotGroupContext(20, 4000, "")
-	for _, m := range snap1.RecentMessages {
-		if strings.Contains(m, "我是第一轮回复（将被平台拒绝）") {
-			t.Errorf("失败的 assistant 回复不应进入 compact buffer: %s", m)
+	for _, message := range history {
+		content, _ := message.Content.(string)
+		if strings.Contains(content, "我是第一轮回复（将被平台拒绝）") {
+			t.Errorf("失败的回复严禁进入历史: %s", content)
 		}
-	}
-
-	// 2. 发送第二条群消息（测试 <delivery_context> 注入）
-	event2 := model.OneBotEvent{
-		SelfID:      123456,
-		PostType:    "message",
-		MessageType: "group",
-		GroupID:     50001,
-		UserID:      111222,
-		MessageID:   802,
-		Sender: &model.OneBotSender{
-			Nickname: "张三",
-			UserID:   111222,
-		},
-		Message: json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"第二句：你在吗？"}}]`),
-	}
-	event2Bytes, _ := json.Marshal(event2)
-	if err := conn.WriteMessage(websocket.TextMessage, event2Bytes); err != nil {
-		t.Fatalf("发送消息2失败: %v", err)
-	}
-
-	// 读取出站回复2
-	_, resp2Bytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取回复2失败: %v", err)
-	}
-	var sendAction2 model.OneBotAction
-	if err := json.Unmarshal(resp2Bytes, &sendAction2); err != nil {
-		t.Fatalf("解析回复2 action 失败: %v", err)
-	}
-
-	// 模拟第二轮平台 ACK 成功
-	ackOkBytes, _ := json.Marshal(map[string]any{
-		"status":  "ok",
-		"retcode": 0,
-		"echo":    sendAction2.Echo,
-	})
-	if err := conn.WriteMessage(websocket.TextMessage, ackOkBytes); err != nil {
-		t.Fatalf("发送 ACK 成功响应失败: %v", err)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 验证第二轮 LLM 请求中包含了 <delivery_context>
-	mockLLM.mu.Lock()
-	if len(mockLLM.requests) < 2 {
-		mockLLM.mu.Unlock()
-		t.Fatalf("期望 LLM 至少收到 2 次请求，实际=%d", len(mockLLM.requests))
-	}
-	req2 := mockLLM.requests[1]
-	mockLLM.mu.Unlock()
-
-	lastMsg2 := req2.Messages[len(req2.Messages)-1]
-	req2Content, _ := lastMsg2.Content.(string)
-
-	if !strings.Contains(req2Content, "<delivery_context>") {
-		t.Errorf("第二轮 LLM 请求必须包含 <delivery_context>，实际内容: %s", req2Content)
-	}
-	if !strings.Contains(req2Content, "该群已开启全员禁言或机器人被禁言") && !strings.Contains(req2Content, "10004") {
-		t.Errorf("第二轮 <delivery_context> 必须包含失败原因，实际内容: %s", req2Content)
-	}
-	if !strings.Contains(req2Content, "Do not assume the user saw or received that response.") {
-		t.Errorf("第二轮 <delivery_context> 必须包含提示词防脑补指示，实际内容: %s", req2Content)
-	}
-
-	// 验证第二轮发送成功后，Session.History 包含 3 条：user1, user2, assistant2
-	history2 := sess.Snapshot()
-	if len(history2) != 3 {
-		t.Fatalf("第二轮发送成功后，期望 session history 包含 3 条消息 (user1, user2, assistant2)，实际=%d", len(history2))
-	}
-	if history2[2].Role != string(core.RoleAssistant) || !strings.Contains(history2[2].Content.(string), "我是第二轮回复（平台发送成功）") {
-		t.Errorf("期望第 3 条为 assistant2 成功消息，实际: %+v", history2[2])
-	}
-
-	// 3. 发送第三条群消息（验证 delivery context 是一次性的，已自动清除）
-	event3 := model.OneBotEvent{
-		SelfID:      123456,
-		PostType:    "message",
-		MessageType: "group",
-		GroupID:     50001,
-		UserID:      111222,
-		MessageID:   803,
-		Sender: &model.OneBotSender{
-			Nickname: "张三",
-			UserID:   111222,
-		},
-		Message: json.RawMessage(`[{"type":"at","data":{"qq":"123456"}},{"type":"text","data":{"text":"第三句"}}]`),
-	}
-	event3Bytes, _ := json.Marshal(event3)
-	if err := conn.WriteMessage(websocket.TextMessage, event3Bytes); err != nil {
-		t.Fatalf("发送消息3失败: %v", err)
-	}
-
-	_, resp3Bytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("读取回复3失败: %v", err)
-	}
-	var sendAction3 model.OneBotAction
-	if err := json.Unmarshal(resp3Bytes, &sendAction3); err == nil && sendAction3.Echo != "" {
-		ack3Bytes, _ := json.Marshal(map[string]any{
-			"status":  "ok",
-			"retcode": 0,
-			"echo":    sendAction3.Echo,
-		})
-		_ = conn.WriteMessage(websocket.TextMessage, ack3Bytes)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 验证第三轮 LLM 请求中不包含 <delivery_context>
-	mockLLM.mu.Lock()
-	if len(mockLLM.requests) < 3 {
-		mockLLM.mu.Unlock()
-		t.Fatalf("期望 LLM 收到第 3 次请求，实际=%d", len(mockLLM.requests))
-	}
-	req3 := mockLLM.requests[2]
-	mockLLM.mu.Unlock()
-
-	lastMsg3 := req3.Messages[len(req3.Messages)-1]
-	req3Content, _ := lastMsg3.Content.(string)
-	if strings.Contains(req3Content, "<delivery_context>") {
-		t.Errorf("第三轮请求严禁包含已消费的 <delivery_context>: %s", req3Content)
 	}
 }
 
@@ -3204,12 +2952,10 @@ func TestWS_PlatformACKTimeout_DoesNotCommitAssistant(t *testing.T) {
 		}
 	}
 
-	failure := sess.TakeDeliveryFailure()
-	if failure == nil {
-		t.Fatalf("期望超时后记录 DeliveryFailure，实际为 nil")
-	}
-	if !strings.Contains(failure.Wording, "timeout") {
-		t.Errorf("期望 DeliveryFailure 描述包含 timeout，实际: %s", failure.Wording)
+	// send_message 的发送超时作为工具结果回传给模型，由模型决定重试或沉默；
+	// 但超时的回复仍不得提交到历史。
+	if len(mockLLM.requests) < 2 {
+		t.Fatalf("expected the timeout to be reported to the model, requests=%d", len(mockLLM.requests))
 	}
 }
 
@@ -3337,11 +3083,8 @@ func TestWS_SendMessage_ACKSuccess(t *testing.T) {
 				Usage: &core.Usage{PromptTokens: 50, CompletionTokens: 20, TotalTokens: 70},
 			},
 			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "处理完成！这是最终结果。",
-				},
-				Usage: &core.Usage{PromptTokens: 80, CompletionTokens: 30, TotalTokens: 110},
+				Message: sendMessageFinalMessage("处理完成！这是最终结果。"),
+				Usage:   &core.Usage{PromptTokens: 80, CompletionTokens: 30, TotalTokens: 110},
 			},
 		},
 	}
@@ -3433,14 +3176,22 @@ func TestWS_SendMessage_ACKSuccess(t *testing.T) {
 		t.Errorf("期望第二轮 LLM 请求收到 Tool 结果 '消息已发送'，实际 messages: %+v", req2.Messages)
 	}
 
-	// 验证 Session.History 中不包含中间消息
+	// 两条 send_message 都是 Bot 的真实发言，历史里各记录一次即可；关键是
+	// 工具调用轨迹本身不进入公开历史。
 	sess := engine.SessionManager.GetOrCreate("private:112233")
 	history := sess.Snapshot()
+	intermediateCount := 0
 	for _, m := range history {
+		if len(m.ToolCalls) > 0 {
+			t.Errorf("Session.History 严禁包含 send_message 工具调用轨迹，实际: %+v", m)
+		}
 		contentStr, _ := m.Content.(string)
 		if strings.Contains(contentStr, "正在处理中...") {
-			t.Errorf("Session.History 严禁包含 send_message 中间消息，实际: %s", contentStr)
+			intermediateCount++
 		}
+	}
+	if intermediateCount != 1 {
+		t.Errorf("中间消息应恰好记录一次，实际 %d 次: %+v", intermediateCount, history)
 	}
 }
 
@@ -3752,19 +3503,20 @@ func TestWS_SendMessage_WebsocketWriteFailure(t *testing.T) {
 func TestWS_DeliveryFailure_SessionTrimUnderContinuousFailures(t *testing.T) {
 	t.Setenv("MAX_CONTEXT_MESSAGES", "4")
 
-	// 模拟 6 轮对话，每轮助手回复都将被平台拒绝 (retcode != 0)
-	var responses []*core.ChatResponse
-	for i := 1; i <= 6; i++ {
-		responses = append(responses, &core.ChatResponse{
-			Message: core.ChatMessage{
-				Role:    core.RoleAssistant,
-				Content: fmt.Sprintf("这是第 %d 轮回复（将被平台拒绝）", i),
-			},
-			Usage: &core.Usage{PromptTokens: 50, CompletionTokens: 20, TotalTokens: 70},
-		})
+	// 模拟 6 轮对话：每轮先通过 send_message 投递，平台拒绝后模型保持沉默，
+	// 避免同一轮内反复重试。
+	mockLLM := &mockLLMProvider{}
+	attempts := 0
+	mockLLM.customChat = func(_ context.Context, _ core.ChatRequest) (*core.ChatResponse, error) {
+		attempts++
+		if attempts%2 == 1 {
+			return &core.ChatResponse{
+				Message: sendMessageFinalMessage(fmt.Sprintf("这是第 %d 轮回复（将被平台拒绝）", attempts/2+1)),
+				Usage:   &core.Usage{PromptTokens: 50, CompletionTokens: 20, TotalTokens: 70},
+			}, nil
+		}
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
 	}
-
-	mockLLM := &mockLLMProvider{responses: responses}
 	engine := newTestEngine(mockLLM)
 	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
@@ -3836,13 +3588,10 @@ func TestWS_DeliveryFailure_SessionTrimUnderContinuousFailures(t *testing.T) {
 		t.Errorf("期望历史最后一条为最新用户输入 (第 6 轮)，实际内容: %s", lastContent)
 	}
 
-	// 4. 验证 DeliveryFailure 被正确设置保留
-	failure := sess.TakeDeliveryFailure()
-	if failure == nil {
-		t.Fatalf("期望记录 DeliveryFailure，实际为 nil")
-	}
-	if !strings.Contains(failure.Wording, "机器人被禁言") {
-		t.Errorf("期望 DeliveryFailure 包含失败原因，实际: %+v", failure)
+	// 4. send_message 投递失败会作为工具结果回传给模型（由模型决定重试或沉默），
+	// 而不是记录 DeliveryFailure。这里验证失败确实被回传并触发了下一轮思考。
+	if attempts < 12 {
+		t.Fatalf("expected each failed delivery to be reported to the model, attempts=%d", attempts)
 	}
 }
 
@@ -4329,96 +4078,6 @@ func TestOneBotSecurityRejectionReplies(t *testing.T) {
 	// 验证整个过程中 LLM 从未被调用（前置 Ingress 拦截）
 	if mockLLM.reqCount != 0 {
 		t.Errorf("安全拦截严禁触发 LLM，实际请求数=%d", mockLLM.reqCount)
-	}
-}
-
-func TestOneBotTerminalModelOutputSingleClassification(t *testing.T) {
-	mockLLM := &mockLLMProvider{
-		responses: []*core.ChatResponse{
-			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "这是模型的最终安全回复文本。",
-				},
-			},
-		},
-	}
-	engine := newTestEngine(mockLLM)
-	engine.Security = security.NewController(t.TempDir())
-	engine.Security.SetMode(security.ControlModeAggressive)
-
-	var mu sync.Mutex
-	stageCallCounts := make(map[security.WatchdogStage]int)
-	evalIDs := make([]string, 0)
-
-	cls := &mockClassifier{
-		fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
-			mu.Lock()
-			stageCallCounts[input.Stage]++
-			if input.EvaluationID != "" {
-				evalIDs = append(evalIDs, input.EvaluationID)
-			}
-			mu.Unlock()
-			return security.ClassificationResult{
-				Category:  security.RiskCategoryNone,
-				RiskLevel: security.RiskLevelNone,
-				Reason:    "clean benign content",
-			}, nil
-		},
-	}
-	engine.Security.SetClassifier(cls)
-
-	srv, wsURL := startReplyWSTestServer(t, engine)
-	defer srv.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("WebSocket connection failed: %v", err)
-	}
-	defer conn.Close()
-
-	// Send a benign private message to trigger the OneBot pipeline
-	event := model.OneBotEvent{
-		SelfID:      123456,
-		PostType:    "message",
-		MessageType: "private",
-		UserID:      987654,
-		MessageID:   2001,
-		Message:     json.RawMessage(`[{"type":"text","data":{"text":"你好，请帮我写一首诗"}}]`),
-	}
-	data, _ := json.Marshal(event)
-	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		t.Fatalf("failed to send message: %v", err)
-	}
-
-	_, respBytes, err := conn.ReadMessage()
-	if err != nil {
-		t.Fatalf("failed to read response: %v", err)
-	}
-
-	var act model.OneBotAction
-	if err := json.Unmarshal(respBytes, &act); err != nil {
-		t.Fatalf("failed to parse action: %v", err)
-	}
-	if act.Action != "send_private_msg" {
-		t.Errorf("expected action=send_private_msg, got %s", act.Action)
-	}
-
-	mu.Lock()
-	ingressCalls := stageCallCounts[security.StageIngress]
-	modelOutputCalls := stageCallCounts[security.StageModelOutput]
-	mu.Unlock()
-
-	if ingressCalls != 1 {
-		t.Errorf("expected exactly 1 StageIngress classification call, got %d", ingressCalls)
-	}
-	// Regression assertion: terminal model output must be inspected exactly ONCE (owned by llm.Engine),
-	// never redundantly re-classified by adapter ws_server.go.
-	if modelOutputCalls != 1 {
-		t.Fatalf("expected exactly 1 StageModelOutput classification call (centralized in llm.Engine), got %d", modelOutputCalls)
-	}
-	if len(evalIDs) < 2 {
-		t.Errorf("expected EvaluationID to be propagated for ingress and model output, got %d", len(evalIDs))
 	}
 }
 

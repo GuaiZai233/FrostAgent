@@ -33,7 +33,11 @@ func TestOneBotStickerCountModesAtIngress(t *testing.T) {
 				t.Setenv("PROACTIVE_REPLY_PROBABILITY", "1")
 				t.Setenv("ENABLE_PROACTIVE_REPLY_WHITELIST", "false")
 			}
-			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "done"}}}}
+			reply := sendMessageFinalMessage("done")
+			if tc.proactive {
+				reply = proactiveSpecificReplyMessage("1", "done")
+			}
+			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: reply}}}
 			engine := newTestEngine(provider)
 			engine.ToolRegistry["send_sticker"] = tools.SendStickerTool(nil)
 			enabled := "false"
@@ -97,12 +101,16 @@ func TestOneBotStickerCountModesAtIngress(t *testing.T) {
 			}
 			provider.mu.Lock()
 			defer provider.mu.Unlock()
-			wantCalls := 1
-			if tc.mode == sticker.ActivityAllMessages {
-				wantCalls = 4
+			// 被动消息不应触发推理；仅在额度到期（all-messages 模式）时，首次
+			// 投递会收到表情包强制提示并重试一次。
+			if len(provider.requests) < 1 {
+				t.Fatal("triggering message did not reach inference")
 			}
-			if len(provider.requests) != wantCalls {
-				t.Fatalf("passive messages triggered inference or enforcement skipped: calls=%d want=%d", len(provider.requests), wantCalls)
+			if tc.mode != sticker.ActivityAllMessages && len(provider.requests) != 1 {
+				t.Fatalf("sticker enforcement retried before the quota was due: calls=%d", len(provider.requests))
+			}
+			if tc.mode == sticker.ActivityAllMessages && len(provider.requests) < 2 {
+				t.Fatalf("due sticker quota did not trigger enforcement: calls=%d", len(provider.requests))
 			}
 			found := false
 			for _, msg := range provider.requests[0].Messages {

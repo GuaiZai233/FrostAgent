@@ -67,9 +67,10 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 		{name: "private", message: `[{"type":"image","data":{"sub_type":1}}]`, private: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "normal reply"}}}}
+			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: proactiveSpecificReplyMessage("1", "normal reply")}}}
 			vision := &mockLLMProvider{}
 			engine := newTestEngine(provider)
+			installTestSendMessage(engine)
 			engine.VisionProvider = vision
 			if tc.noVision {
 				engine.VisionProvider = nil

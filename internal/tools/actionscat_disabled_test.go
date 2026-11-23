@@ -154,7 +154,7 @@ func (p *disablingActionsCatProvider) Chat(ctx context.Context, req core.ChatReq
 			p.t.Errorf("missing stale-call diagnostics: %q", content)
 		}
 	}
-	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "disabled"}}, nil
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
 }
 
 func TestActionsCatDisableDuringModelCallRejectsStaleCall(t *testing.T) {
@@ -165,7 +165,7 @@ func TestActionsCatDisableDuringModelCallRejectsStaleCall(t *testing.T) {
 		Scope: scope, MaxIterations: 3, Provider: provider,
 		ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool},
 	}
-	if got := engine.Run("list actions"); got != "disabled" || provider.round != 2 {
+	if got := engine.Run("list actions"); got != "" || provider.round != 2 {
 		t.Fatalf("agent result = %q, rounds = %d", got, provider.round)
 	}
 }
@@ -188,7 +188,7 @@ func (p *actionsCatVisibilityProvider) Chat(_ context.Context, req core.ChatRequ
 	if count != p.want || len(req.Tools) != p.want+1 {
 		p.t.Errorf("model request exposes %d ActionsCat tools and %d total, want %d and %d", count, len(req.Tools), p.want, p.want+1)
 	}
-	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "checked"}}, nil
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
 }
 
 func TestActionsCatToolVisibilityFollowsConfiguration(t *testing.T) {
@@ -228,7 +228,7 @@ func TestActionsCatToolVisibilityFollowsConfiguration(t *testing.T) {
 			}
 			provider.t, provider.want = t, step.want
 			before := provider.calls
-			if got := engine.Run("check tools"); got != "checked" {
+			if got := engine.Run("check tools"); got != "" {
 				t.Fatalf("model result = %q", got)
 			}
 			if provider.calls != before+1 {
