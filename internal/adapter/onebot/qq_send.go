@@ -579,12 +579,18 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 			return nil, fmt.Errorf("引用消息不在当前可信会话")
 		}
 	}
+	// Logical segment boundaries are fixed over the whole batch before any physical
+	// split, so a file or other standalone component cannot reset the grouping.
+	var segmentOf []int
+	if s.splitPlain {
+		segmentOf = replyformat.PlainGroupIDs(messages, func(m tools.Msg) string { return m.Type })
+	}
 	parts := []qqSendPart{}
 	inlineBudget := maxQQInlineBytes
 	for start := 0; start < len(messages); {
 		end := start + 1
 		if !s.separate(messages[start]) {
-			for end < len(messages) && !s.separate(messages[end]) && !s.startsSplitPlain(messages[start:end], messages[end]) {
+			for end < len(messages) && !s.separate(messages[end]) && (segmentOf == nil || segmentOf[end] == segmentOf[start]) {
 				end++
 			}
 			prefixOnly := true
@@ -955,19 +961,4 @@ func qqInlineFileLimit(path string, limit int64) (string, error) {
 // plain components share one message as before.
 func (s qqSender) separate(m tools.Msg) bool {
 	return qqSeparateMessage(m)
-}
-
-// startsSplitPlain reports whether next begins a new split segment: in a split
-// reply, a plain component starts a new segment only after the current one already
-// holds a plain. Non-plain components such as an image caption stay with it.
-func (s qqSender) startsSplitPlain(current []tools.Msg, next tools.Msg) bool {
-	if !s.splitPlain || next.Type != "plain" {
-		return false
-	}
-	for _, m := range current {
-		if m.Type == "plain" {
-			return true
-		}
-	}
-	return false
 }

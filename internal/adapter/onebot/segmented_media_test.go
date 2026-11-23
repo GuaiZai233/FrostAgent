@@ -50,19 +50,20 @@ func runMixedMediaSend(t *testing.T, limit, args string, rejectFirst bool) []mod
 		if err := json.Unmarshal(raw, &action); err != nil {
 			continue
 		}
-		switch action.Action {
-		case "get_group_info":
+		if action.Action == "get_group_info" {
 			reply, _ := json.Marshal(map[string]any{"status": "ok", "retcode": 0, "data": map[string]any{"group_id": event.GroupID, "group_name": "媒体分段测试群"}, "echo": action.Echo})
 			_ = conn.WriteMessage(websocket.TextMessage, reply)
-		case "send_group_msg":
-			sent = append(sent, action)
-			ack := map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 9}}
-			if rejectFirst && len(sent) == 1 {
-				ack = map[string]any{"status": "failed", "retcode": 403, "wording": "synthetic rejection", "echo": action.Echo}
-			}
-			encoded, _ := json.Marshal(ack)
-			_ = conn.WriteMessage(websocket.TextMessage, encoded)
+			continue
 		}
+		// Every other outbound action (group messages and file uploads) is recorded
+		// and acknowledged so each split part completes.
+		sent = append(sent, action)
+		ack := map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 9}}
+		if rejectFirst && len(sent) == 1 {
+			ack = map[string]any{"status": "failed", "retcode": 403, "wording": "synthetic rejection", "echo": action.Echo}
+		}
+		encoded, _ := json.Marshal(ack)
+		_ = conn.WriteMessage(websocket.TextMessage, encoded)
 	}
 	return sent
 }
@@ -117,5 +118,31 @@ func TestMixedMediaSendPreflightsBeforeAnySend(t *testing.T) {
 	args := `{"messages":[{"type":"plain","text":"第一段"},{"type":"plain","text":"第二段"},{"type":"image","path":"/nonexistent/synthetic-missing.png"}]}`
 	if sent := runMixedMediaSend(t, "3", args, false); len(sent) != 0 {
 		t.Fatalf("invalid trailing file must fail preflight with zero sends, got %d", len(sent))
+	}
+}
+
+// A standalone file between captions must not reset the caption grouping. The
+// batch is first | file | first image | second caption + second image: the first
+// image stays in the first segment, and the second caption still starts a new one.
+func TestMixedMediaSendFileDoesNotResetCaptionGrouping(t *testing.T) {
+	args := `{"messages":[` +
+		`{"type":"plain","text":"first caption"},` +
+		`{"type":"file","url":"https://example.invalid/doc.pdf"},` +
+		`{"type":"image","url":"https://example.invalid/first.png"},` +
+		`{"type":"plain","text":"second caption"},` +
+		`{"type":"image","url":"https://example.invalid/second.png"}]}`
+	sent := runMixedMediaSend(t, "5", args, false)
+	if len(sent) != 4 {
+		t.Fatalf("want 4 outbound actions (first | file | first image | second caption+image), got %d", len(sent))
+	}
+	last := segmentsOf(t, sent[3])
+	if len(last) != 2 {
+		t.Fatalf("last message must hold the second caption and its image together, got %d segments", len(last))
+	}
+	if m, _ := last[0].(map[string]any); m["type"] != "text" {
+		t.Fatalf("last message must start with the second caption, got %v", m["type"])
+	}
+	if m, _ := last[1].(map[string]any); m["type"] != "image" {
+		t.Fatalf("last message must carry the second image, got %v", m["type"])
 	}
 }
