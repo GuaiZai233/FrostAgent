@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,11 +64,16 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 	}
 	service := New(&llm.Engine{ToolHistory: store}, "test", "")
 	request := connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID})
+	resultRequest := connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true})
 	response, err := service.GetToolHistoryEntry(ctx, request)
 	if err != nil || response.Msg.ArgumentsRaw != record.ArgumentsRaw || response.Msg.Tool != record.Tool || !response.Msg.ArgumentsAvailable || response.Msg.RefId != record.RefID {
 		t.Fatalf("parameter original changed: %v %v", response, err)
 	}
-	if response.Msg.ResultRaw != record.ResultRaw || !response.Msg.ResultAvailable {
+	if response.Msg.ResultRaw != "" || response.Msg.ResultAvailable {
+		t.Fatal("arguments-only expansion transferred the result")
+	}
+	result, err := service.GetToolHistoryEntry(ctx, resultRequest)
+	if err != nil || result.Msg.ResultRaw != record.ResultRaw || !result.Msg.ResultAvailable {
 		t.Fatal("completed call result original not returned", err)
 	}
 	other := New(&llm.Engine{ToolHistory: toolhistory.NewStore(db, "fixture-b")}, "test", "")
@@ -89,7 +95,8 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 		if err != nil || response.Msg.ArgumentsAvailable || response.Msg.ArgumentsRaw != "" || response.Msg.ArgumentsPending != (state != "restricted") {
 			t.Fatal("uninspected parameters escaped quarantine", err)
 		}
-		if err != nil || response.Msg.ResultAvailable || response.Msg.ResultRaw != "" {
+		result, err := service.GetToolHistoryEntry(ctx, resultRequest)
+		if err != nil || result.Msg.ResultAvailable || result.Msg.ResultRaw != "" {
 			t.Fatal("uninspected result escaped quarantine", err)
 		}
 	}
@@ -98,7 +105,7 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 		t.Fatal(err)
 	}
 	response, err = service.GetToolHistoryEntry(ctx, request)
-	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.ArgumentsRaw != record.ArgumentsRaw || !response.Msg.ResultAvailable || response.Msg.ResultRaw != record.ResultRaw {
+	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.ArgumentsRaw != record.ArgumentsRaw {
 		t.Fatal("completed call did not become available", err)
 	}
 	if _, err := New(&llm.Engine{}, "test", "").GetToolHistoryEntry(ctx, request); connect.CodeOf(err) != connect.CodeUnavailable {
@@ -149,5 +156,56 @@ func TestGroupToolHistoryContextWireFixture(t *testing.T) {
 	}
 	if !proto.Equal(response.Msg, &fixture) {
 		t.Fatal("frontend fixture differs from the actual group GetSessionContext response")
+	}
+}
+
+func TestToolHistoryResultInspectionIsPaged(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: "fixture-a", Name: "fixture-a", CreatedAt: time.Now()}, 2); err != nil {
+		t.Fatal(err)
+	}
+	store := toolhistory.NewStore(db, "fixture-a")
+	// Larger than the 64 KiB model output limit; every page must stay bounded.
+	large := strings.Repeat("原文一二三", 30000)
+	record := toolhistory.Record{Scope: chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"}, RefID: toolhistory.NewRef(), RunID: "fixture-run", ActorID: "fixture-user", Tool: "fixture_tool", State: "complete", OccurredAt: time.Now().UTC(),
+		ArgumentsRaw: `{}`, ResultRaw: large, ModelResultRaw: "complete"}
+	if err := store.Save(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	service := New(&llm.Engine{ToolHistory: store}, "test", "")
+	total := int32(len([]rune(large)))
+	var assembled strings.Builder
+	offset, pages := int32(0), 0
+	for {
+		response, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true, ResultOffset: offset}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len([]rune(response.Msg.ResultRaw)); n > 8000 {
+			t.Fatalf("page exceeds bound: %d characters", n)
+		}
+		if response.Msg.ResultTotalChars != total || response.Msg.ResultOffset != offset {
+			t.Fatal("paging metadata wrong")
+		}
+		assembled.WriteString(response.Msg.ResultRaw)
+		pages++
+		if !response.Msg.ResultHasMore {
+			break
+		}
+		offset = response.Msg.ResultNextOffset
+	}
+	if pages < 2 || assembled.String() != large {
+		t.Fatalf("paged result did not reassemble exactly: pages=%d", pages)
+	}
+	if _, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true, ResultOffset: total + 1})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatal("out-of-range offset accepted", err)
+	}
+	if _, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true, ResultOffset: -1})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatal("negative offset accepted", err)
 	}
 }

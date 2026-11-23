@@ -235,15 +235,28 @@ cleanup();
 
 const resultLoads: string[] = [];
 cleanup = renderPromptInspector(container, data, {
-  loadToolArguments: async (refId) => {
-    resultLoads.push(refId);
+  loadToolArguments: async (refId, options) => {
+    resultLoads.push(
+      `${refId}:${options?.includeResult ? 'result' : 'args'}:${options?.resultOffset ?? 0}`,
+    );
+    if (!options?.includeResult)
+      return {
+        refId,
+        tool: 'send_message',
+        argumentsRaw: queryArguments,
+        argumentsAvailable: true,
+      };
+    const offset = options.resultOffset ?? 0;
+    const pages = ['{"orderIdStr":"7700000000000000001"} ', '<b>fixture</b>'];
     return {
       refId,
       tool: 'send_message',
-      argumentsRaw: queryArguments,
-      argumentsAvailable: true,
-      resultRaw: '{"orderIdStr":"7700000000000000001"} <b>fixture</b>',
+      argumentsRaw: '',
+      argumentsAvailable: false,
+      resultRaw: pages[offset] ?? '',
       resultAvailable: true,
+      resultHasMore: offset === 0,
+      resultNextOffset: offset === 0 ? 1 : 0,
     };
   },
 });
@@ -270,13 +283,24 @@ resultDetails.open = true;
 await flush();
 assert.equal(
   resultDetails.querySelector('pre')!.textContent,
+  '{"orderIdStr":"7700000000000000001"} ',
+  'first result page only',
+);
+const more = resultDetails.querySelector('.tool-activity-more') as HTMLButtonElement;
+assert.equal(more.hidden, false, 'more button shown while pages remain');
+more.click();
+await flush();
+assert.equal(
+  resultDetails.querySelector('pre')!.textContent,
   '{"orderIdStr":"7700000000000000001"} <b>fixture</b>',
+  'next page appends as text, not markup',
 );
 assert.equal(resultDetails.querySelector('b'), null);
+assert.equal(more.hidden, true, 'more button hidden after the last page');
 assert.deepEqual(
   resultLoads,
-  [originalRef],
-  'arguments and result should share one archive read',
+  [`${originalRef}:args:0`, `${originalRef}:result:0`, `${originalRef}:result:1`],
+  'arguments never request the result; result pages load on demand',
 );
 cleanup();
 
