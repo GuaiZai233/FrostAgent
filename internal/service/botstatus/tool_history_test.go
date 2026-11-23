@@ -67,6 +67,9 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 	if err != nil || response.Msg.ArgumentsRaw != record.ArgumentsRaw || response.Msg.Tool != record.Tool || !response.Msg.ArgumentsAvailable || response.Msg.RefId != record.RefID {
 		t.Fatalf("parameter original changed: %v %v", response, err)
 	}
+	if response.Msg.ResultRaw != record.ResultRaw || !response.Msg.ResultAvailable {
+		t.Fatal("completed call result original not returned", err)
+	}
 	other := New(&llm.Engine{ToolHistory: toolhistory.NewStore(db, "fixture-b")}, "test", "")
 	if _, err := other.GetToolHistoryEntry(ctx, request); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatal("cross-instance read accepted", err)
@@ -86,13 +89,16 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 		if err != nil || response.Msg.ArgumentsAvailable || response.Msg.ArgumentsRaw != "" || response.Msg.ArgumentsPending != (state != "restricted") {
 			t.Fatal("uninspected parameters escaped quarantine", err)
 		}
+		if err != nil || response.Msg.ResultAvailable || response.Msg.ResultRaw != "" {
+			t.Fatal("uninspected result escaped quarantine", err)
+		}
 	}
 	record.State, record.Restricted = "complete", false
 	if err := store.Save(ctx, record); err != nil {
 		t.Fatal(err)
 	}
 	response, err = service.GetToolHistoryEntry(ctx, request)
-	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.ArgumentsRaw != record.ArgumentsRaw {
+	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.ArgumentsRaw != record.ArgumentsRaw || !response.Msg.ResultAvailable || response.Msg.ResultRaw != record.ResultRaw {
 		t.Fatal("completed call did not become available", err)
 	}
 	if _, err := New(&llm.Engine{}, "test", "").GetToolHistoryEntry(ctx, request); connect.CodeOf(err) != connect.CodeUnavailable {

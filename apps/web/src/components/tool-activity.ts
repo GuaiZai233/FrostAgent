@@ -24,6 +24,8 @@ export type ToolArgumentsLoader = (refId: string) => Promise<{
   argumentsRaw: string;
   argumentsAvailable: boolean;
   argumentsPending?: boolean;
+  resultRaw?: string;
+  resultAvailable?: boolean;
 }>;
 
 const refPattern =
@@ -152,7 +154,12 @@ export function renderToolActivity(activity: ToolActivity): string {
             <summary>详细参数</summary>
             <pre class="tool-activity-arguments">${escapeHtml(entry.arguments ?? '展开后加载参数')}</pre>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
-          </details>`
+          </details>
+          ${entry.refId ? `<details class="tool-activity-details" data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}" data-tool-field="result" data-result-state="idle">
+            <summary>工具执行结果</summary>
+            <pre class="tool-activity-result">展开后加载结果</pre>
+            <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
+          </details>` : ''}`
           }
         </div>`;
         })
@@ -171,24 +178,40 @@ export function bindToolArguments(
   for (const details of container.querySelectorAll?.<HTMLDetailsElement>(
     'details[data-tool-ref]',
   ) || []) {
-    const pre = details.querySelector<HTMLElement>('.tool-activity-arguments')!;
+    const pre = details.querySelector<HTMLElement>('pre')!;
     const retry = details.querySelector<HTMLButtonElement>(
       '.tool-activity-retry',
     )!;
     const refId = details.dataset.toolRef!;
+    // Arguments and results share one loader request per reference.
+    const isResult = details.dataset.toolField === 'result';
+    const stateKey = isResult ? 'resultState' : 'argumentsState';
+    const copy = isResult
+      ? {
+          loading: '正在加载执行结果…',
+          unsupported: '当前视图无法加载执行结果',
+          unavailable: '执行结果已隔离，无法展示',
+          failed: '执行结果加载失败，请重试',
+        }
+      : {
+          loading: '正在加载参数…',
+          unsupported: '当前视图无法加载历史参数',
+          unavailable: '参数已隔离，无法展示',
+          failed: '参数加载失败，请重试',
+        };
     const fetchArguments = async () => {
       if (!active || !details.isConnected) return;
       if (
-        details.dataset.argumentsState === 'loaded' ||
-        details.dataset.argumentsState === 'loading'
+        details.dataset[stateKey] === 'loaded' ||
+        details.dataset[stateKey] === 'loading'
       )
         return;
       if (!load) {
-        pre.textContent = '当前视图无法加载历史参数';
+        pre.textContent = copy.unsupported;
         return;
       }
-      details.dataset.argumentsState = 'loading';
-      pre.textContent = '正在加载参数…';
+      details.dataset[stateKey] = 'loading';
+      pre.textContent = copy.loading;
       retry.hidden = true;
       try {
         let request = requests.get(refId);
@@ -203,19 +226,24 @@ export function bindToolArguments(
         if (result.argumentsPending) {
           requests.delete(refId);
           pre.textContent = '调用正在执行或审查中，请稍后重试';
-          details.dataset.argumentsState = 'pending';
+          details.dataset[stateKey] = 'pending';
           retry.hidden = false;
           return;
         }
-        pre.textContent = result.argumentsAvailable
-          ? result.argumentsRaw
-          : '参数已隔离，无法展示';
-        details.dataset.argumentsState = 'loaded';
+        if (isResult)
+          pre.textContent = result.resultAvailable
+            ? result.resultRaw || '（无返回内容）'
+            : copy.unavailable;
+        else
+          pre.textContent = result.argumentsAvailable
+            ? result.argumentsRaw
+            : copy.unavailable;
+        details.dataset[stateKey] = 'loaded';
       } catch {
         requests.delete(refId);
         if (!active || !details.isConnected) return;
-        details.dataset.argumentsState = 'error';
-        pre.textContent = '参数加载失败，请重试';
+        details.dataset[stateKey] = 'error';
+        pre.textContent = copy.failed;
         retry.hidden = false;
       }
     };

@@ -11,8 +11,9 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 )
 
-// GetToolHistoryEntry loads parameters only when an authenticated inspector
-// expands a call. Original results and private diagnostics are never returned.
+// GetToolHistoryEntry loads parameters and original results only when an
+// authenticated inspector expands a call. Quarantined records and private
+// diagnostics are never returned.
 func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[v1.GetToolHistoryEntryRequest]) (*connect.Response[v1.GetToolHistoryEntryResponse], error) {
 	ref := req.Msg.GetRefId()
 	if !toolhistory.ValidRef(ref) {
@@ -31,7 +32,9 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInternal, errors.New("工具参数读取失败"))
 	}
 	visible := record.ForModel()
+	available := !record.Restricted && record.State == "complete"
 	return connect.NewResponse(&v1.GetToolHistoryEntryResponse{RefId: record.RefID, Tool: record.Tool,
-		ArgumentsRaw: visible.ArgumentsRaw, ArgumentsAvailable: !record.Restricted && record.State == "complete",
-		ArgumentsPending: record.State != "complete"}), nil
+		ArgumentsRaw: visible.ArgumentsRaw, ArgumentsAvailable: available,
+		ArgumentsPending: record.State != "complete",
+		ResultRaw:        visible.ResultRaw, ResultAvailable: available}), nil
 }

@@ -233,6 +233,73 @@ assert.deepEqual(
 );
 cleanup();
 
+const resultLoads: string[] = [];
+cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: async (refId) => {
+    resultLoads.push(refId);
+    return {
+      refId,
+      tool: 'send_message',
+      argumentsRaw: queryArguments,
+      argumentsAvailable: true,
+      resultRaw: '{"orderIdStr":"7700000000000000001"} <b>fixture</b>',
+      resultAvailable: true,
+    };
+  },
+});
+const resultDetails = container.querySelector(
+  `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+) as HTMLDetailsElement;
+assert.equal(
+  resultDetails.querySelector('summary')!.textContent,
+  '工具执行结果',
+);
+assert.equal(resultDetails.querySelector('pre')!.textContent, '展开后加载结果');
+assert.equal(
+  container.querySelectorAll('details[data-tool-field="result"]').length,
+  2,
+  'every archived call should offer a result disclosure',
+);
+assert.deepEqual(resultLoads, [], 'results must not load before expansion');
+const argumentsDetails = container.querySelector(
+  `details[data-tool-ref="${originalRef}"]:not([data-tool-field])`,
+) as HTMLDetailsElement;
+argumentsDetails.open = true;
+await flush();
+resultDetails.open = true;
+await flush();
+assert.equal(
+  resultDetails.querySelector('pre')!.textContent,
+  '{"orderIdStr":"7700000000000000001"} <b>fixture</b>',
+);
+assert.equal(resultDetails.querySelector('b'), null);
+assert.deepEqual(
+  resultLoads,
+  [originalRef],
+  'arguments and result should share one archive read',
+);
+cleanup();
+
+renderPromptInspector(container, data, {
+  loadToolArguments: async (refId) => ({
+    refId,
+    tool: 'send_message',
+    argumentsRaw: queryArguments,
+    argumentsAvailable: true,
+    resultRaw: '',
+    resultAvailable: false,
+  }),
+});
+const quarantinedResult = container.querySelector(
+  `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+) as HTMLDetailsElement;
+quarantinedResult.open = true;
+await flush();
+assert.equal(
+  quarantinedResult.querySelector('pre')!.textContent,
+  '执行结果已隔离，无法展示',
+);
+
 let attempt = 0;
 renderPromptInspector(container, data, {
   loadToolArguments: async (refId) => {
