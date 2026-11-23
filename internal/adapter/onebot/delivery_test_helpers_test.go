@@ -48,12 +48,22 @@ func sendMessageFinalMessage(text string) core.ChatMessage {
 // proactiveSpecificReplyMessage returns the only send_message shape allowed in
 // proactive turns: a quote target followed by the reply text.
 func proactiveSpecificReplyMessage(messageID, text string) core.ChatMessage {
-	args, _ := json.Marshal(map[string]any{
+	return proactiveSpecificReplyFinal(messageID, text, false)
+}
+
+// proactiveSpecificReplyFinal builds a specific reply. When final is true the
+// call sets declare_final_message, so the turn ends after its delivery.
+func proactiveSpecificReplyFinal(messageID, text string, final bool) core.ChatMessage {
+	payload := map[string]any{
 		"messages": []map[string]any{
 			{"type": "mention_specific", "message_id": messageID},
 			{"type": "plain", "text": text},
 		},
-	})
+	}
+	if final {
+		payload["declare_final_message"] = true
+	}
+	args, _ := json.Marshal(payload)
 	return core.ChatMessage{
 		Role: core.RoleAssistant,
 		ToolCalls: []core.ToolCall{{

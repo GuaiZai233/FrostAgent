@@ -68,7 +68,9 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 		{name: "private", message: `[{"type":"image","data":{"sub_type":1}}]`, private: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: proactiveSpecificReplyMessage("1", "normal reply")}}}
+			// The explicit-wake turn is the only model call this fixture expects, so
+			// it declares its delivery final; the turn then ends without another call.
+			provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: proactiveSpecificReplyFinal("1", "normal reply", true)}}}
 			vision := &mockLLMProvider{}
 			engine := newTestEngine(provider)
 			installTestSendMessage(engine)
@@ -157,8 +159,21 @@ func TestOneBotProactiveInboundStickerSilenceAndImagePreservation(t *testing.T) 
 				_ = conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 3}})
 				break
 			}
+			// The turn ends asynchronously after the ACK. Wait until the model-call
+			// count has been stable for a short window, then assert on it.
+			var calls int
+			for stable, last := 0, -1; stable < 3; {
+				provider.mu.Lock()
+				calls = len(provider.requests)
+				provider.mu.Unlock()
+				if calls == last {
+					stable++
+				} else {
+					stable, last = 0, calls
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
 			provider.mu.Lock()
-			calls := len(provider.requests)
 			requests := append([]core.ChatRequest(nil), provider.requests...)
 			provider.mu.Unlock()
 			if calls != 1 {

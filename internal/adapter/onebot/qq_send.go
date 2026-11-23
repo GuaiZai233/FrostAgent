@@ -85,7 +85,9 @@ type qqItemResult struct {
 // qqSender is bound to one request's connection, conversation and turn authority.
 // Tests replace call, while production always uses the ACK-correlated transport.
 type qqSender struct {
-	event       model.OneBotEvent
+	event model.OneBotEvent
+	// splitPlain sends each plain component as its own message (multi-segment replies).
+	splitPlain  bool
 	call        func(model.OneBotAction) (oneBotAPIResponse, error)
 	reference   func(string) bool
 	own         func(string) bool
@@ -108,11 +110,6 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		}
 		if request.Action == "read_forward" {
 			return c.readQQForward(ctx, event, turn, request.Arguments)
-		}
-		if request.Action == "send" && engine != nil && replyformat.Enabled(engine.Getenv) {
-			if handled, result, err := c.sendQQPlainSegments(ctx, event, turn, delivered, engine, request); handled {
-				return result, err
-			}
 		}
 		sourceSessionID := c.historyKey(event)
 		sessionID := sourceSessionID
@@ -227,6 +224,17 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		for _, m := range request.Arguments.Messages {
 			if (m.IsSticker || m.Type == "mface") && sticker.ActivityLevel(c.Scope.Getenv(sticker.ActivityEnvKey)) == 0 {
 				return core.PlatformActionResult{}, fmt.Errorf("表情包发送功能已被禁用")
+			}
+		}
+		if request.Action == "send" && engine != nil && replyformat.Enabled(engine.Getenv) {
+			plainKind := func(m tools.Msg) string { return m.Type }
+			if plains := replyformat.CountPlain(request.Arguments.Messages, plainKind); plains > 1 {
+				// Validate the whole batch against the cap before any write; prepare
+				// then checks every part before the first send.
+				if err := replyformat.CheckPlainLimit(plains, replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))); err != nil {
+					return core.PlatformActionResult{}, err
+				}
+				sender.splitPlain = true
 			}
 		}
 		result, err := sender.execute(request)
@@ -575,8 +583,8 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 	inlineBudget := maxQQInlineBytes
 	for start := 0; start < len(messages); {
 		end := start + 1
-		if !qqSeparateMessage(messages[start]) {
-			for end < len(messages) && !qqSeparateMessage(messages[end]) {
+		if !s.separate(messages[start]) {
+			for end < len(messages) && !s.separate(messages[end]) {
 				end++
 			}
 			prefixOnly := true
@@ -693,6 +701,11 @@ func (s qqSender) send(messages []tools.Msg) (core.PlatformActionResult, error) 
 			s.confirmed(response, part.messages)
 		}
 	}
+	for _, item := range items {
+		if item.Status != "confirmed" {
+			result.Incomplete = true
+		}
+	}
 	result.Content = encodeQQResults(items)
 	return result, nil
 }
@@ -733,7 +746,7 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 			fallback = "inline"
 		}
 	}
-	if len(part.messages) == 1 || qqSeparateMessage(part.messages[len(part.messages)-1]) {
+	if len(part.messages) == 1 || s.separate(part.messages[len(part.messages)-1]) {
 		m := part.messages[len(part.messages)-1]
 		// Uploading a quoted file would discard its explicit reply prefix.
 		if m.Type == "file" && len(part.messages) > 1 {
@@ -937,47 +950,9 @@ func qqInlineFileLimit(path string, limit int64) (string, error) {
 	return "base64://" + base64.StdEncoding.EncodeToString(data), nil
 }
 
-// sendQQPlainSegments splits a multi-plain send that includes media or other QQ
-// components into one request per plain segment, so every segment is sent,
-// acknowledged, and confirmed on its own, the same as the text-only path. The
-// whole batch is checked against the segment cap before anything is sent.
-// handled is false when the request has at most one plain segment.
-func (c *wsConnection) sendQQPlainSegments(ctx context.Context, event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine, request tools.QQRequest) (bool, core.PlatformActionResult, error) {
-	kind := func(m tools.Msg) string { return m.Type }
-	groups := replyformat.GroupPlainSegments(request.Arguments.Messages, kind)
-	if len(groups) <= 1 {
-		return false, core.PlatformActionResult{}, nil
-	}
-	if err := replyformat.CheckPlainLimit(replyformat.CountPlain(request.Arguments.Messages, kind), replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))); err != nil {
-		return true, core.PlatformActionResult{}, err
-	}
-	hook := c.qqActionHook(event, turn, delivered, engine)
-	var total core.PlatformActionResult
-	var contents []string
-	for i, group := range groups {
-		part := request
-		part.Arguments.Messages = group
-		if i > 0 {
-			// Only the first segment keeps reply quote and automatic mention.
-			off := false
-			part.UseFrostAgentDecoration = &off
-			part.SuppressAutoMention = false
-		}
-		raw, err := json.Marshal(part)
-		if err != nil {
-			return true, total, fmt.Errorf("分段 QQ 请求序列化失败: %w", err)
-		}
-		result, err := hook(ctx, string(raw))
-		if err != nil {
-			return true, total, err
-		}
-		total.MessagesSent += result.MessagesSent
-		total.ExternalMessagesSent += result.ExternalMessagesSent
-		total.StickerSent = total.StickerSent || result.StickerSent
-		if result.Content != "" {
-			contents = append(contents, result.Content)
-		}
-	}
-	total.Content = strings.Join(contents, "\n")
-	return true, total, nil
+// separate reports whether m must start its own outbound message. Plain text is
+// separate only when the reply is split into segments; otherwise consecutive
+// plain components share one message as before.
+func (s qqSender) separate(m tools.Msg) bool {
+	return qqSeparateMessage(m) || (s.splitPlain && m.Type == "plain")
 }
