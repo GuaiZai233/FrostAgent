@@ -107,8 +107,18 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 	if err := adapter.Send(context.Background(), core.OutgoingMessage{Platform: "onebot", MessageType: "private", TargetID: "22", Content: "synthetic-push"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.ReadJSON(&action); err != nil {
-		t.Fatal(err)
+	// The thinking worker may write set_input_status frames asynchronously. Answer
+	// those control frames until the push itself arrives, then check its content.
+	for {
+		if err := peer.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Action != "set_input_status" {
+			break
+		}
+		if err := peer.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": nil}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	encoded, _ = json.Marshal(action.Params)
 	if !strings.Contains(string(encoded), "synthetic-push") {

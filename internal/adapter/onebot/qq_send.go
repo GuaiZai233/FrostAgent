@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
@@ -107,6 +108,11 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		}
 		if request.Action == "read_forward" {
 			return c.readQQForward(ctx, event, turn, request.Arguments)
+		}
+		if request.Action == "send" && engine != nil && replyformat.Enabled(engine.Getenv) {
+			if handled, result, err := c.sendQQPlainSegments(ctx, event, turn, delivered, engine, request); handled {
+				return result, err
+			}
 		}
 		sourceSessionID := c.historyKey(event)
 		sessionID := sourceSessionID
@@ -929,4 +935,49 @@ func qqInlineFileLimit(path string, limit int64) (string, error) {
 		return "", fmt.Errorf("inline media exceeds 30 MiB or is empty")
 	}
 	return "base64://" + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// sendQQPlainSegments splits a multi-plain send that includes media or other QQ
+// components into one request per plain segment, so every segment is sent,
+// acknowledged, and confirmed on its own, the same as the text-only path. The
+// whole batch is checked against the segment cap before anything is sent.
+// handled is false when the request has at most one plain segment.
+func (c *wsConnection) sendQQPlainSegments(ctx context.Context, event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine, request tools.QQRequest) (bool, core.PlatformActionResult, error) {
+	kind := func(m tools.Msg) string { return m.Type }
+	groups := replyformat.GroupPlainSegments(request.Arguments.Messages, kind)
+	if len(groups) <= 1 {
+		return false, core.PlatformActionResult{}, nil
+	}
+	if err := replyformat.CheckPlainLimit(replyformat.CountPlain(request.Arguments.Messages, kind), replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))); err != nil {
+		return true, core.PlatformActionResult{}, err
+	}
+	hook := c.qqActionHook(event, turn, delivered, engine)
+	var total core.PlatformActionResult
+	var contents []string
+	for i, group := range groups {
+		part := request
+		part.Arguments.Messages = group
+		if i > 0 {
+			// Only the first segment keeps reply quote and automatic mention.
+			off := false
+			part.UseFrostAgentDecoration = &off
+			part.SuppressAutoMention = false
+		}
+		raw, err := json.Marshal(part)
+		if err != nil {
+			return true, total, fmt.Errorf("分段 QQ 请求序列化失败: %w", err)
+		}
+		result, err := hook(ctx, string(raw))
+		if err != nil {
+			return true, total, err
+		}
+		total.MessagesSent += result.MessagesSent
+		total.ExternalMessagesSent += result.ExternalMessagesSent
+		total.StickerSent = total.StickerSent || result.StickerSent
+		if result.Content != "" {
+			contents = append(contents, result.Content)
+		}
+	}
+	total.Content = strings.Join(contents, "\n")
+	return true, total, nil
 }
