@@ -13,6 +13,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 )
 
 type AwarenessTarget struct{ SessionID, Platform, Kind, ID, AdapterID string }
@@ -254,13 +255,28 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	session.Unlock()
 	prompt += "\n" + fmt.Sprintf("当前时间：%s。上次会话活动时间：%s。当前会话：%s。没有触发消息，不要引用或自动艾特上一位发言者。", time.Now().Format(time.RFC3339), lastActive.Format(time.RFC3339), target.SessionID)
 	messages = append(messages, ChatMessage{Role: "system", Content: prompt})
-	sendMessages := func(parts []proactive.AwarenessMessage) error {
+	var sendMessages func(parts []proactive.AwarenessMessage) error
+	sendMessages = func(parts []proactive.AwarenessMessage) error {
 		if ctx.Err() != nil || turn.Interrupted() || session.Epoch() != epoch || !s.allowed(target) {
 			return context.Canceled
 		}
 		for _, part := range parts {
 			if part.Type == "mention_user" && (target.Kind != "group" || !knownMembers[part.MentionUserID]) {
 				return fmt.Errorf("主动感知只能艾特当前群中已知的成员")
+			}
+		}
+		if replyformat.Enabled(e.Getenv) {
+			kind := func(p proactive.AwarenessMessage) string { return p.Type }
+			if err := replyformat.CheckPlainLimit(replyformat.CountPlain(parts, kind), replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey))); err != nil {
+				return err
+			}
+			if groups := replyformat.GroupPlainSegments(parts, kind); len(groups) > 1 {
+				for _, group := range groups {
+					if err := sendMessages(group); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 		}
 		if err := send(ctx, target, parts, turn); err != nil {

@@ -144,13 +144,19 @@ func TestWSPokeWakesAndBillsActor(t *testing.T) {
 		}
 		// send_message 在轮次中途送达，等本次请求真正落库后再发下一次 poke，
 		// 否则同一 lane 会把两次 notice 合并成一轮。
+		// A provider request starts the round; the round is only finished once its
+		// billing commit has settled. Waiting on request count alone can let the
+		// next poke's ledger entry be mistaken for this round's answer.
 		want := int(sequence + 1)
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
 			provider.mu.Lock()
-			got := len(provider.requests)
+			requests := len(provider.requests)
 			provider.mu.Unlock()
-			if got >= want {
+			state.mu.Lock()
+			commits := state.commitCount
+			state.mu.Unlock()
+			if requests >= want && commits >= want {
 				break
 			}
 			time.Sleep(time.Millisecond)

@@ -387,7 +387,7 @@ func (e *Engine) RunMessagesWithContext(
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
 
-	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
+	if runContext.Awareness || !hasPrimarySystemPrompt(messages) {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
 		basePrompt := systemPrompt
@@ -1955,6 +1955,14 @@ func userContentText(content any) string {
 		return strings.Join(lines, "\n")
 	}
 	return ""
+}
+
+// hasPrimarySystemPrompt reports whether history starts with the assembled system
+// prompt. Tool execution records are also system-role but are timeline entries:
+// after trimming, a record can become the first message, and it must not stop
+// the prompt (persona, memory) from being rebuilt.
+func hasPrimarySystemPrompt(messages []ChatMessage) bool {
+	return len(messages) > 0 && messages[0].Role == "system" && messages[0].ToolHistoryRunID == ""
 }
 
 // declaresFinalMessage reports whether a send_message call asks the turn to end
