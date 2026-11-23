@@ -74,16 +74,23 @@ func segmentsOf(t *testing.T, action model.OneBotAction) []any {
 	return segs
 }
 
-// Each plain component is its own outbound message; the image is its own message
-// too, so the batch becomes text 1 | text 2 | image.
-func TestMixedMediaSendSegmentsAndAcksEachPart(t *testing.T) {
+// A caption plain and the image after it stay in one outbound message, so the
+// batch becomes first | caption+image.
+func TestMixedMediaSendKeepsCaptionWithImage(t *testing.T) {
 	args := `{"messages":[{"type":"plain","text":"第一段"},{"type":"plain","text":"第二段"},{"type":"image","url":"https://example.invalid/a.png"}]}`
 	sent := runMixedMediaSend(t, "3", args, false)
-	if len(sent) != 3 {
-		t.Fatalf("want 3 outbound group messages (text 1 | text 2 | image), got %d", len(sent))
+	if len(sent) != 2 {
+		t.Fatalf("want 2 outbound group messages (first | caption+image), got %d", len(sent))
 	}
-	if n := len(segmentsOf(t, sent[0])); n != 1 {
-		t.Fatalf("first message should hold one text segment, got %d", n)
+	second := segmentsOf(t, sent[1])
+	if len(second) != 2 {
+		t.Fatalf("second message must hold caption and image together, got %d segments", len(second))
+	}
+	if m, _ := second[0].(map[string]any); m["type"] != "text" {
+		t.Fatalf("second message must start with the caption text, got %v", m["type"])
+	}
+	if m, _ := second[1].(map[string]any); m["type"] != "image" {
+		t.Fatalf("second message must carry the image, got %v", m["type"])
 	}
 }
 

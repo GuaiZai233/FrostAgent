@@ -584,7 +584,7 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 	for start := 0; start < len(messages); {
 		end := start + 1
 		if !s.separate(messages[start]) {
-			for end < len(messages) && !s.separate(messages[end]) {
+			for end < len(messages) && !s.separate(messages[end]) && !s.startsSplitPlain(messages[start:end], messages[end]) {
 				end++
 			}
 			prefixOnly := true
@@ -954,5 +954,20 @@ func qqInlineFileLimit(path string, limit int64) (string, error) {
 // separate only when the reply is split into segments; otherwise consecutive
 // plain components share one message as before.
 func (s qqSender) separate(m tools.Msg) bool {
-	return qqSeparateMessage(m) || (s.splitPlain && m.Type == "plain")
+	return qqSeparateMessage(m)
+}
+
+// startsSplitPlain reports whether next begins a new split segment: in a split
+// reply, a plain component starts a new segment only after the current one already
+// holds a plain. Non-plain components such as an image caption stay with it.
+func (s qqSender) startsSplitPlain(current []tools.Msg, next tools.Msg) bool {
+	if !s.splitPlain || next.Type != "plain" {
+		return false
+	}
+	for _, m := range current {
+		if m.Type == "plain" {
+			return true
+		}
+	}
+	return false
 }
