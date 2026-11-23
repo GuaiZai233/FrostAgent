@@ -53,3 +53,26 @@ func TestSplitPlainAllConfirmedIsComplete(t *testing.T) {
 		t.Fatalf("want 2 confirmed and complete, got sent=%d incomplete=%v", result.MessagesSent, result.Incomplete)
 	}
 }
+
+// A quote prefix whose body sits in a later logical segment has no body in its
+// own message, so the batch is rejected before anything is sent.
+func TestSplitQuoteWithBodyInLaterSegmentIsRejected(t *testing.T) {
+	calls := 0
+	s := qqFixtureSender(func(action model.OneBotAction) (oneBotAPIResponse, error) {
+		calls++
+		return qqOK(1), nil
+	})
+	s.splitPlain = true
+	_, err := s.prepare([]tools.Msg{
+		{Type: "plain", Text: "first"},
+		{Type: "file", URL: "https://example.invalid/doc.pdf"},
+		{Type: "quote", MessageID: "101"},
+		{Type: "plain", Text: "second"},
+	})
+	if err == nil {
+		t.Fatal("a quote without its body in the same segment must be rejected in preflight")
+	}
+	if calls != 0 {
+		t.Fatalf("preflight must not send, calls=%d", calls)
+	}
+}

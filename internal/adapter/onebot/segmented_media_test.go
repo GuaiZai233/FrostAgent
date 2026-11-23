@@ -146,3 +146,25 @@ func TestMixedMediaSendFileDoesNotResetCaptionGrouping(t *testing.T) {
 		t.Fatalf("last message must carry the second image, got %v", m["type"])
 	}
 }
+
+// A mention prefix after a standalone file must not absorb the next segment's
+// caption. The batch is first | file | mention | second caption + image.
+func TestMixedMediaSendPrefixDoesNotCrossSegmentBoundary(t *testing.T) {
+	args := `{"messages":[` +
+		`{"type":"plain","text":"first caption"},` +
+		`{"type":"file","url":"https://example.invalid/doc.pdf"},` +
+		`{"type":"mention_user","mention_user_id":"700000050"},` +
+		`{"type":"plain","text":"second caption"},` +
+		`{"type":"image","url":"https://example.invalid/second.png"}]}`
+	sent := runMixedMediaSend(t, "5", args, false)
+	if len(sent) != 4 {
+		t.Fatalf("want 4 outbound actions (first | file | mention | second caption+image), got %d", len(sent))
+	}
+	last := segmentsOf(t, sent[3])
+	if len(last) != 2 {
+		t.Fatalf("last message must hold the second caption and its image, got %d segments", len(last))
+	}
+	if m, _ := last[1].(map[string]any); m["type"] != "image" {
+		t.Fatalf("last message must carry the image, got %v", m["type"])
+	}
+}

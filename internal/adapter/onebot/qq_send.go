@@ -599,13 +599,16 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 					prefixOnly = false
 				}
 			}
-			if prefixOnly && end < len(messages) {
+			// The prefix may absorb the next component only inside the same logical
+			// segment; a body in a later segment does not belong to this prefix.
+			sameSegment := end < len(messages) && (segmentOf == nil || segmentOf[end] == segmentOf[start])
+			if prefixOnly && sameSegment {
 				if messages[end].Type == "file" && messages[end].FolderID != "" {
 					return nil, fmt.Errorf("带引用或提及前缀的文件不能同时选择上传目录")
 				}
 				end++
 			}
-			if prefixOnly && end == len(messages) && messages[end-1].Type == "quote" {
+			if prefixOnly && messages[end-1].Type == "quote" && (end == len(messages) || !sameSegment) {
 				return nil, fmt.Errorf("引用消息必须附带正文")
 			}
 		}
