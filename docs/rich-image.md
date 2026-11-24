@@ -35,7 +35,7 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 
 需要完整的 `<svg>` 和 `viewBox`。形状、路径、渐变使用 SVG 属性（`fill`、`stroke`）。
 `<text>` 支持 `x` `y` `font-size` `fill` `text-anchor` `font-weight`、`tspan` 与
-`translate()` 变换。不支持 CSS `<style>`、class、脚本、外部图片和 `<foreignObject>`。
+`translate()` 变换。不支持 CSS `<style>`、class、脚本、外部图片、`<foreignObject>`，以及 `<use>` 和任何 href 引用（会被直接拒绝，请内联图形）；元素最多 3000 个。
 
 ## 字体
 

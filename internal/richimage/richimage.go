@@ -4,6 +4,7 @@ package richimage
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/png"
@@ -46,9 +47,20 @@ type Request struct {
 }
 
 // Render returns PNG bytes for the request.
-func Render(req Request) (data []byte, err error) {
-	renderSlots <- struct{}{}
+func Render(req Request) ([]byte, error) { return RenderContext(context.Background(), req) }
+
+// RenderContext is Render with admission control that honors cancellation: a
+// caller that has gone away never waits for, or consumes, a render slot.
+func RenderContext(ctx context.Context, req Request) (data []byte, err error) {
+	select {
+	case renderSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	defer func() { <-renderSlots }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Model-written input must surface as an error, never as a panic.
 	defer func() {
 		if r := recover(); r != nil {

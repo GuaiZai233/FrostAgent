@@ -185,7 +185,44 @@ func (c *canvas) parseSVGTexts(content string) []svgText {
 	}
 }
 
+// maxSVGElements bounds the work the third-party parser can be asked to do.
+const maxSVGElements = 3000
+
+// validateSVG rejects constructs the pinned oksvg parser expands without any
+// cycle, depth or size limit (<use> and any href reference), which could
+// overflow the stack or exhaust memory and cannot be recovered from.
+func validateSVG(content string) error {
+	dec := xml.NewDecoder(strings.NewReader(content))
+	dec.Strict = false
+	elements := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil // malformed XML is reported by the parser itself
+		}
+		el, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if elements++; elements > maxSVGElements {
+			return fmt.Errorf("SVG 元素过多（最多 %d 个）", maxSVGElements)
+		}
+		switch strings.ToLower(el.Name.Local) {
+		case "use", "image", "foreignobject", "script", "symbol", "pattern", "mask", "filter":
+			return fmt.Errorf("SVG 不支持 <%s> 元素", el.Name.Local)
+		}
+		for _, a := range el.Attr {
+			if strings.EqualFold(a.Name.Local, "href") {
+				return fmt.Errorf("SVG 不支持 href 引用，请直接内联图形")
+			}
+		}
+	}
+}
+
 func (c *canvas) renderSVG(content string, width int, maxHeight int) (*image.RGBA, error) {
+	if err := validateSVG(content); err != nil {
+		return nil, err
+	}
 	if err := c.fs.checkText(content); err != nil {
 		return nil, err
 	}

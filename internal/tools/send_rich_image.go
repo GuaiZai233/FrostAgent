@@ -78,7 +78,7 @@ func SendRichImageTool() Tool {
 			if err := decoder.Decode(&input); err != nil {
 				return textResult(""), fmt.Errorf("send_rich_image 参数不合法: %w", err)
 			}
-			data, err := richimage.Render(richimage.Request{
+			data, err := richimage.RenderContext(ctx, richimage.Request{
 				Format:   input.Format,
 				Content:  input.Content,
 				Theme:    input.Theme,
@@ -87,6 +87,9 @@ func SendRichImageTool() Tool {
 			})
 			if err != nil {
 				return textResult(""), fmt.Errorf("渲染失败: %w", err)
+			}
+			if err := ctx.Err(); err != nil {
+				return textResult(""), err
 			}
 			path, err := writeRichImage(data)
 			if err != nil {

@@ -2,9 +2,12 @@ package richimage
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"image"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Finding 1: hostile input must produce an error or an image, never a panic.
@@ -182,5 +185,76 @@ func TestTextKeepsInternalSpaces(t *testing.T) {
 	packed := renderBoxes(300, 100, m.strBox("abcd", fontRoman, 40), 10.0)
 	if bytes.Equal(packed.Pix, got.Pix) {
 		t.Fatal("spaced and packed text must differ")
+	}
+}
+
+// Review round 2: SVG constructs the dependency expands without limits.
+func TestSVGRejectsUnboundedReferences(t *testing.T) {
+	const head = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">`
+	bad := map[string]string{
+		"self use":     head + `<defs><g id="a"><use xlink:href="#a"/></g></defs><use xlink:href="#a"/></svg>`,
+		"plain use":    head + `<defs><g id="a"><rect width="1" height="1"/></g></defs><use href="#a"/></svg>`,
+		"amplify":      head + `<defs><g id="a"><rect width="1" height="1"/></g><g id="b"><use href="#a"/><use href="#a"/></g></defs><use href="#b"/></svg>`,
+		"gradient ref": head + `<linearGradient id="g" xlink:href="#g"/><rect fill="url(#g)" width="5" height="5"/></svg>`,
+		"image":        head + `<image width="5" height="5"/></svg>`,
+	}
+	for name, svg := range bad {
+		// validateSVG runs before the parser, so this never reaches oksvg.
+		if err := validateSVG(svg); err == nil {
+			t.Errorf("%s: must be rejected before parsing", name)
+		}
+		if _, err := Render(Request{Format: FormatSVG, Content: svg}); err == nil {
+			t.Errorf("%s: Render must fail", name)
+		}
+	}
+	if err := validateSVG(head + strings.Repeat(`<rect width="1" height="1"/>`, maxSVGElements+1) + `</svg>`); err == nil {
+		t.Error("element cap not enforced")
+	}
+	if err := validateSVG(head + `<rect width="5" height="5" fill="red"/></svg>`); err != nil {
+		t.Errorf("plain shapes must pass: %v", err)
+	}
+}
+
+// Review round 2: waiting for a render slot honors cancellation.
+func TestRenderContextCancelWhileQueued(t *testing.T) {
+	for i := 0; i < maxConcurrentRenders; i++ {
+		renderSlots <- struct{}{}
+	}
+	defer func() {
+		for i := 0; i < maxConcurrentRenders; i++ {
+			<-renderSlots
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := RenderContext(ctx, Request{Format: FormatMarkdown, Content: "x"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("must wait for a slot, returned %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled render stayed queued")
+	}
+	// The abandoned job must not have taken a slot.
+	if len(renderSlots) != maxConcurrentRenders {
+		t.Fatalf("slots in use = %d", len(renderSlots))
+	}
+}
+
+func TestRenderContextAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := RenderContext(ctx, Request{Format: FormatMarkdown, Content: "x"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v", err)
 	}
 }

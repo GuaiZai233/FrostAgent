@@ -112,3 +112,23 @@ func TestSendRichImageIsNotProactiveAllowed(t *testing.T) {
 		t.Fatal("send_rich_image must not be callable during unaddressed proactive turns")
 	}
 }
+
+func TestSendRichImageCanceledContextSendsNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(richImageContext(llm.RunContext{SessionID: "s"}))
+	cancel()
+	result, err := SendRichImageTool().executeResult(ctx, `{"format":"markdown","content":"hi"}`)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if result.PlatformActionPayload != "" || result.Content != "" {
+		t.Fatalf("canceled call must not produce a delivery: %+v", result)
+	}
+}
+
+func TestSendRichImageRejectsSVGUse(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><g id="a"><use href="#a"/></g></defs><use href="#a"/></svg>`
+	args, _ := json.Marshal(map[string]string{"format": "svg", "content": svg})
+	if _, err := SendRichImageTool().executeResult(richImageContext(llm.RunContext{SessionID: "s"}), string(args)); err == nil {
+		t.Fatal("cyclic <use> must be rejected")
+	}
+}
