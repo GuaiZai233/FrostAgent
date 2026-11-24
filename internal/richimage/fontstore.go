@@ -110,6 +110,10 @@ func readCachedFont(path string, rf remoteFont) ([]byte, bool) {
 	return data, true
 }
 
+// flightJoinHook is a test seam, called once a caller has joined (or started)
+// a download and is about to wait. It is nil in production.
+var flightJoinHook func(name string)
+
 // flight is one shared in-progress download. The download runs detached from
 // any single caller, so a canceled caller never aborts it for the others.
 type flight struct {
@@ -145,6 +149,9 @@ func ensureFont(ctx context.Context, rf remoteFont, dir string) ([]byte, error) 
 		go runFlight(key, fl, rf, dir)
 	}
 	fetchMu.Unlock()
+	if flightJoinHook != nil {
+		flightJoinHook(rf.name)
+	}
 	select {
 	case <-fl.done:
 		return fl.data, fl.err

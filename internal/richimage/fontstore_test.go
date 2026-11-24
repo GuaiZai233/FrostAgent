@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,25 +212,35 @@ func TestMathAlnum(t *testing.T) {
 func TestEnsureFontCanceledWaiterDoesNotBlock(t *testing.T) {
 	withDownloads(t)
 	body := []byte("slow font")
-	release := make(chan struct{})
+	releaseCh := make(chan struct{})
+	closeRelease := sync.OnceFunc(func() { close(releaseCh) })
 	started := make(chan struct{}, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		started <- struct{}{}
-		<-release
+		<-releaseCh
 		_, _ = w.Write(body)
 	}))
 	defer srv.Close()
+	defer closeRelease() // runs first, so a failing test cannot hang srv.Close
 	rf := testRemote(body)
 	rf.url = srv.URL
 	dir := t.TempDir()
 
+	// Each caller signals here once it has joined the flight and is about to wait.
+	joined := make(chan struct{}, 4)
+	flightJoinHook = func(string) { joined <- struct{}{} }
+	t.Cleanup(func() { flightJoinHook = nil })
+
 	first := make(chan error, 1)
 	go func() { _, err := ensureFont(context.Background(), rf, dir); first <- err }()
 	<-started
+	<-joined
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	second := make(chan error, 1)
 	go func() { _, err := ensureFont(ctx, rf, dir); second <- err }()
+	<-joined // the second caller is now waiting on the in-flight download
 	cancel()
 	select {
 	case err := <-second:
@@ -239,7 +250,7 @@ func TestEnsureFontCanceledWaiterDoesNotBlock(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("canceled waiter stayed blocked behind the download")
 	}
-	close(release)
+	closeRelease()
 	if err := <-first; err != nil {
 		t.Fatalf("first download failed: %v", err)
 	}

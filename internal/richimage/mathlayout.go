@@ -280,6 +280,7 @@ func (m *mathLayout) strBox(text string, sel int, size float64) mbox {
 	var segs []seg
 	var out mbox
 	split := true // the next glyph starts a new segment
+	inkRight := 0.0
 	for _, r := range text {
 		if r == ' ' {
 			out.w += size * 0.28
@@ -303,10 +304,13 @@ func (m *mathLayout) strBox(text string, sel int, size float64) mbox {
 			segs = append(segs, seg{f: f, text: string(r), x: out.w})
 		}
 		split = false
+		// Italic glyphs overhang their advance; the box must cover the ink.
+		inkRight = math.Max(inkRight, out.w+float64(bounds.Max.X)/64)
 		out.w += float64(adv) / 64
 		out.asc = math.Max(out.asc, -float64(bounds.Min.Y)/64)
 		out.desc = math.Max(out.desc, float64(bounds.Max.Y)/64)
 	}
+	out.w = math.Max(out.w, inkRight)
 	col := m.col
 	fs := m.fs
 	out.draw = func(dst *image.RGBA, x, base float64) {
@@ -401,7 +405,15 @@ func (m *mathLayout) layScripts(n *mScripts, st mstyle) mbox {
 			subBack *= 0.8
 		}
 	}
-	w := base.w + italic + math.Max(sup.w, sub.w) - subBack
+	// The box spans every present part: the base, the superscript and the
+	// (possibly pulled back) subscript.
+	w := base.w
+	if hasSup {
+		w = math.Max(w, base.w+italic+sup.w)
+	}
+	if hasSub {
+		w = math.Max(w, base.w+italic-subBack+sub.w)
+	}
 	out := mbox{w: w, asc: base.asc, desc: base.desc}
 	if hasSup {
 		out.asc = math.Max(out.asc, up+sup.asc)
