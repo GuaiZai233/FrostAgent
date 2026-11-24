@@ -740,8 +740,12 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
       return botClient.getSessionHistory({ sessionId, after, before, pageToken, pageSize: 50 }, { signal });
     },
 
-    getToolHistoryEntry(refId: string) {
-      return botClient.getToolHistoryEntry({ refId });
+    getToolHistoryEntry(refId: string, options: { includeResult?: boolean; resultOffset?: number } = {}) {
+      return botClient.getToolHistoryEntry({
+        refId,
+        includeResult: options.includeResult ?? false,
+        resultOffset: options.resultOffset ?? 0,
+      });
     },
 
     // Logs

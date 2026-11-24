@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 )
 
-// GetToolHistoryEntry loads parameters only when an authenticated inspector
-// expands a call. Original results and private diagnostics are never returned.
+// GetToolHistoryEntry loads parameters and original results only when an
+// authenticated inspector expands a call. Quarantined records and private
+// diagnostics are never returned.
 func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[v1.GetToolHistoryEntryRequest]) (*connect.Response[v1.GetToolHistoryEntryResponse], error) {
 	ref := req.Msg.GetRefId()
 	if !toolhistory.ValidRef(ref) {
@@ -31,7 +33,59 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeInternal, errors.New("工具参数读取失败"))
 	}
 	visible := record.ForModel()
-	return connect.NewResponse(&v1.GetToolHistoryEntryResponse{RefId: record.RefID, Tool: record.Tool,
-		ArgumentsRaw: visible.ArgumentsRaw, ArgumentsAvailable: !record.Restricted && record.State == "complete",
-		ArgumentsPending: record.State != "complete"}), nil
+	available := !record.Restricted && record.State == "complete"
+	response := &v1.GetToolHistoryEntryResponse{RefId: record.RefID, Tool: record.Tool,
+		ArgumentsAvailable: available, ArgumentsPending: record.State != "complete"}
+	if !req.Msg.GetIncludeResult() {
+		response.ArgumentsRaw = visible.ArgumentsRaw
+		return connect.NewResponse(response), nil
+	}
+	offset := int(req.Msg.GetResultOffset())
+	if offset < 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("结果偏移量无效"))
+	}
+	response.ResultAvailable = available
+	if !available {
+		return connect.NewResponse(response), nil
+	}
+	page, total, end, ok := resultPage(visible.ResultRaw, offset, toolHistoryResultPageChars)
+	if !ok {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("结果偏移量超过记录长度"))
+	}
+	response.ResultRaw = page
+	response.ResultOffset = int32(offset)
+	response.ResultTotalChars = int32(total)
+	response.ResultHasMore = end < total
+	if response.ResultHasMore {
+		response.ResultNextOffset = int32(end)
+	}
+	return connect.NewResponse(response), nil
 }
+
+// resultPage returns up to limit characters of text starting at character
+// offset, along with the total character count and the offset just past the
+// page. Pages are measured in characters, matching read_tool_history, so
+// callers can concatenate pages without splitting a UTF-8 sequence. It scans
+// the string in place instead of converting the whole result to runes.
+func resultPage(text string, offset, limit int) (page string, total, end int, ok bool) {
+	total = utf8.RuneCountInString(text)
+	if offset > total {
+		return "", total, 0, false
+	}
+	start := 0
+	for skipped := 0; skipped < offset; skipped++ {
+		_, size := utf8.DecodeRuneInString(text[start:])
+		start += size
+	}
+	stop, taken := start, 0
+	for stop < len(text) && taken < limit {
+		_, size := utf8.DecodeRuneInString(text[stop:])
+		stop += size
+		taken++
+	}
+	return text[start:stop], total, offset + taken, true
+}
+
+// toolHistoryResultPageChars matches the read_tool_history page size, so a
+// result page is bounded regardless of how large the archived result is.
+const toolHistoryResultPageChars = 8000

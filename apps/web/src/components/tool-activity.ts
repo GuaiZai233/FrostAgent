@@ -18,12 +18,24 @@ export interface ToolActivity {
   raw?: string;
 }
 
-export type ToolArgumentsLoader = (refId: string) => Promise<{
+export interface ToolLoadOptions {
+  includeResult?: boolean;
+  resultOffset?: number;
+}
+
+export type ToolArgumentsLoader = (
+  refId: string,
+  options?: ToolLoadOptions,
+) => Promise<{
   refId: string;
   tool: string;
   argumentsRaw: string;
   argumentsAvailable: boolean;
   argumentsPending?: boolean;
+  resultRaw?: string;
+  resultAvailable?: boolean;
+  resultHasMore?: boolean;
+  resultNextOffset?: number;
 }>;
 
 const refPattern =
@@ -152,7 +164,14 @@ export function renderToolActivity(activity: ToolActivity): string {
             <summary>详细参数</summary>
             <pre class="tool-activity-arguments">${escapeHtml(entry.arguments ?? '展开后加载参数')}</pre>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
-          </details>`
+          </details>
+          ${entry.refId ? `<details class="tool-activity-details" data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}" data-tool-field="result" data-result-state="idle">
+            <summary>工具执行结果</summary>
+            <pre class="tool-activity-result">展开后加载结果</pre>
+            <p class="tool-activity-status" hidden></p>
+            <button type="button" class="btn btn-ghost btn-sm tool-activity-more" hidden>加载更多</button>
+            <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
+          </details>` : ''}`
           }
         </div>`;
         })
@@ -171,59 +190,117 @@ export function bindToolArguments(
   for (const details of container.querySelectorAll?.<HTMLDetailsElement>(
     'details[data-tool-ref]',
   ) || []) {
-    const pre = details.querySelector<HTMLElement>('.tool-activity-arguments')!;
+    const pre = details.querySelector<HTMLElement>('pre')!;
     const retry = details.querySelector<HTMLButtonElement>(
       '.tool-activity-retry',
     )!;
     const refId = details.dataset.toolRef!;
-    const fetchArguments = async () => {
+    // Arguments and results share one loader request per reference.
+    const isResult = details.dataset.toolField === 'result';
+    const stateKey = isResult ? 'resultState' : 'argumentsState';
+    const copy = isResult
+      ? {
+          loading: '正在加载执行结果…',
+          unsupported: '当前视图无法加载执行结果',
+          unavailable: '执行结果已隔离，无法展示',
+          failed: '执行结果加载失败，请重试',
+        }
+      : {
+          loading: '正在加载参数…',
+          unsupported: '当前视图无法加载历史参数',
+          unavailable: '参数已隔离，无法展示',
+          failed: '参数加载失败，请重试',
+        };
+    const more = details.querySelector<HTMLButtonElement>(
+      '.tool-activity-more',
+    );
+    // Status text is kept out of <pre>, which holds only the raw result.
+    const status = details.querySelector<HTMLElement>('.tool-activity-status');
+    const setStatus = (message: string) => {
+      if (!status) return;
+      status.textContent = message;
+      status.hidden = !message;
+    };
+    // Each (reference, mode, page) is requested once; arguments never carry
+    // the result, and result pages are fetched only when they are asked for.
+    const fetchPage = (options: ToolLoadOptions) => {
+      const key = `${refId}\u0000${options.includeResult ? 1 : 0}\u0000${options.resultOffset ?? 0}`;
+      let request = requests.get(key);
+      if (!request) {
+        request = load!(refId, options);
+        requests.set(key, request);
+      }
+      return { key, request };
+    };
+    const fetchArguments = async (offset = 0) => {
       if (!active || !details.isConnected) return;
-      if (
-        details.dataset.argumentsState === 'loaded' ||
-        details.dataset.argumentsState === 'loading'
-      )
-        return;
+      const state = details.dataset[stateKey];
+      if (state === 'loading' || (offset === 0 && state === 'loaded')) return;
       if (!load) {
-        pre.textContent = '当前视图无法加载历史参数';
+        pre.textContent = copy.unsupported;
         return;
       }
-      details.dataset.argumentsState = 'loading';
-      pre.textContent = '正在加载参数…';
+      details.dataset[stateKey] = 'loading';
+      details.dataset.requestOffset = String(offset);
+      if (offset === 0) pre.textContent = copy.loading;
+      setStatus('');
       retry.hidden = true;
+      if (more) more.hidden = true;
+      const options: ToolLoadOptions = isResult
+        ? { includeResult: true, resultOffset: offset }
+        : { includeResult: false };
       try {
-        let request = requests.get(refId);
-        if (!request) {
-          request = load(refId);
-          requests.set(refId, request);
-        }
+        const { key, request } = fetchPage(options);
         const result = await request;
         if (!active || !details.isConnected) return;
         if (result.refId !== refId || result.tool !== details.dataset.toolName)
           throw new Error('工具记录不匹配');
         if (result.argumentsPending) {
-          requests.delete(refId);
+          requests.delete(key);
           pre.textContent = '调用正在执行或审查中，请稍后重试';
-          details.dataset.argumentsState = 'pending';
+          details.dataset[stateKey] = 'pending';
           retry.hidden = false;
           return;
         }
-        pre.textContent = result.argumentsAvailable
-          ? result.argumentsRaw
-          : '参数已隔离，无法展示';
-        details.dataset.argumentsState = 'loaded';
+        if (isResult) {
+          if (!result.resultAvailable) {
+            pre.textContent = copy.unavailable;
+          } else if (offset === 0) {
+            pre.textContent = result.resultRaw || '（无返回内容）';
+          } else {
+            pre.textContent += result.resultRaw || '';
+          }
+          if (more) {
+            more.hidden = !result.resultHasMore;
+            details.dataset.resultNextOffset = String(
+              result.resultNextOffset ?? 0,
+            );
+          }
+        } else {
+          pre.textContent = result.argumentsAvailable
+            ? result.argumentsRaw
+            : copy.unavailable;
+        }
+        details.dataset[stateKey] = 'loaded';
       } catch {
-        requests.delete(refId);
+        requests.delete(`${refId}\u0000${isResult ? 1 : 0}\u0000${offset}`);
         if (!active || !details.isConnected) return;
-        details.dataset.argumentsState = 'error';
-        pre.textContent = '参数加载失败，请重试';
+        details.dataset[stateKey] = 'error';
+        // Pages already shown stay intact; a failed later page is reported in
+        // the status line, so a successful retry yields exactly the raw text.
+        if (offset === 0) pre.textContent = copy.failed;
+        else setStatus(copy.failed);
         retry.hidden = false;
       }
     };
     details.addEventListener('toggle', () => {
-      if (details.open) void fetchArguments();
+      if (details.open) void fetchArguments(0);
     });
     retry.addEventListener('click', () => {
-      void fetchArguments();
+      void fetchArguments(Number(details.dataset.requestOffset || 0));
+    });
+    more?.addEventListener('click', () => {
+      void fetchArguments(Number(details.dataset.resultNextOffset || 0));
     });
   }
   return () => {

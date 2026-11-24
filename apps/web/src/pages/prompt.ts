@@ -399,7 +399,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
         historyDialogClose?.();
         historyDialogClose = openSessionHistoryDialog(api, session.sessionId, botName);
       } : undefined,
-      loadToolArguments: typeof api.getToolHistoryEntry === 'function' ? refId => api.getToolHistoryEntry(refId) : undefined,
+      loadToolArguments: typeof api.getToolHistoryEntry === 'function' ? (refId, options) => api.getToolHistoryEntry(refId, options) : undefined,
       modelConfigHref: session && !groupId ? '#/model-router' : undefined,
       onConfigureModel: session && groupId
         ? () => {

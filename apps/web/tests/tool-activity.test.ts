@@ -233,6 +233,97 @@ assert.deepEqual(
 );
 cleanup();
 
+const resultLoads: string[] = [];
+cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: async (refId, options) => {
+    resultLoads.push(
+      `${refId}:${options?.includeResult ? 'result' : 'args'}:${options?.resultOffset ?? 0}`,
+    );
+    if (!options?.includeResult)
+      return {
+        refId,
+        tool: 'send_message',
+        argumentsRaw: queryArguments,
+        argumentsAvailable: true,
+      };
+    const offset = options.resultOffset ?? 0;
+    const pages = ['{"orderIdStr":"7700000000000000001"} ', '<b>fixture</b>'];
+    return {
+      refId,
+      tool: 'send_message',
+      argumentsRaw: '',
+      argumentsAvailable: false,
+      resultRaw: pages[offset] ?? '',
+      resultAvailable: true,
+      resultHasMore: offset === 0,
+      resultNextOffset: offset === 0 ? 1 : 0,
+    };
+  },
+});
+const resultDetails = container.querySelector(
+  `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+) as HTMLDetailsElement;
+assert.equal(
+  resultDetails.querySelector('summary')!.textContent,
+  '工具执行结果',
+);
+assert.equal(resultDetails.querySelector('pre')!.textContent, '展开后加载结果');
+assert.equal(
+  container.querySelectorAll('details[data-tool-field="result"]').length,
+  2,
+  'every archived call should offer a result disclosure',
+);
+assert.deepEqual(resultLoads, [], 'results must not load before expansion');
+const argumentsDetails = container.querySelector(
+  `details[data-tool-ref="${originalRef}"]:not([data-tool-field])`,
+) as HTMLDetailsElement;
+argumentsDetails.open = true;
+await flush();
+resultDetails.open = true;
+await flush();
+assert.equal(
+  resultDetails.querySelector('pre')!.textContent,
+  '{"orderIdStr":"7700000000000000001"} ',
+  'first result page only',
+);
+const more = resultDetails.querySelector('.tool-activity-more') as HTMLButtonElement;
+assert.equal(more.hidden, false, 'more button shown while pages remain');
+more.click();
+await flush();
+assert.equal(
+  resultDetails.querySelector('pre')!.textContent,
+  '{"orderIdStr":"7700000000000000001"} <b>fixture</b>',
+  'next page appends as text, not markup',
+);
+assert.equal(resultDetails.querySelector('b'), null);
+assert.equal(more.hidden, true, 'more button hidden after the last page');
+assert.deepEqual(
+  resultLoads,
+  [`${originalRef}:args:0`, `${originalRef}:result:0`, `${originalRef}:result:1`],
+  'arguments never request the result; result pages load on demand',
+);
+cleanup();
+
+renderPromptInspector(container, data, {
+  loadToolArguments: async (refId) => ({
+    refId,
+    tool: 'send_message',
+    argumentsRaw: queryArguments,
+    argumentsAvailable: true,
+    resultRaw: '',
+    resultAvailable: false,
+  }),
+});
+const quarantinedResult = container.querySelector(
+  `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+) as HTMLDetailsElement;
+quarantinedResult.open = true;
+await flush();
+assert.equal(
+  quarantinedResult.querySelector('pre')!.textContent,
+  '执行结果已隔离，无法展示',
+);
+
 let attempt = 0;
 renderPromptInspector(container, data, {
   loadToolArguments: async (refId) => {
@@ -596,6 +687,53 @@ await flush();
 detail.open = true;
 await flush();
 assert.equal(pendingLoads, 3, 'final reviewed parameters may still be cached');
+cleanup();
+
+
+let pageTwoAttempts = 0;
+cleanup = renderPromptInspector(container, data, {
+  loadToolArguments: async (refId, options) => {
+    if (!options?.includeResult)
+      return { refId, tool: 'send_message', argumentsRaw: '', argumentsAvailable: false };
+    const offset = options.resultOffset ?? 0;
+    if (offset === 1 && pageTwoAttempts++ === 0) throw new Error('fixture page outage');
+    return {
+      refId,
+      tool: 'send_message',
+      argumentsRaw: '',
+      argumentsAvailable: false,
+      resultRaw: ['第一页 ', '第二页'][offset] ?? '',
+      resultAvailable: true,
+      resultHasMore: offset === 0,
+      resultNextOffset: offset === 0 ? 1 : 0,
+    };
+  },
+});
+const pagedDetails = container.querySelector(
+  `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+) as HTMLDetailsElement;
+pagedDetails.open = true;
+await flush();
+(pagedDetails.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+await flush();
+assert.equal(
+  pagedDetails.querySelector('pre')!.textContent,
+  '第一页 ',
+  'a failed page must not enter the raw result text',
+);
+const pageStatus = pagedDetails.querySelector('.tool-activity-status') as HTMLElement;
+assert.equal(pageStatus.hidden, false);
+assert.match(pageStatus.textContent!, /执行结果加载失败/);
+const retryPage = pagedDetails.querySelector('.tool-activity-retry') as HTMLButtonElement;
+assert.equal(retryPage.hidden, false);
+retryPage.click();
+await flush();
+assert.equal(
+  pagedDetails.querySelector('pre')!.textContent,
+  '第一页 第二页',
+  'after retry the raw text must equal the exact concatenation of pages',
+);
+assert.equal(pageStatus.hidden, true, 'status clears after success');
 cleanup();
 
 dom.window.close();
