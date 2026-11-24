@@ -54,6 +54,8 @@ type fontSet struct {
 	// math is STIX Two Math; nil when it could not be fetched, in which case
 	// formulas fall back to the Go fonts and unsupported symbols are shown as source.
 	math *sfnt.Font
+	// emoji is Noto Emoji (monochrome outlines); nil when unavailable.
+	emoji *sfnt.Font
 	// cjk reports whether text carries CJK glyphs.
 	cjk bool
 	// fetchErr records why a pinned font could not be obtained.
@@ -126,6 +128,11 @@ func loadFonts(ctx context.Context, override, dir string) (*fontSet, error) {
 	}
 	if m, err := pinnedFont(ctx, stixTwoMath, dir); err == nil {
 		set.math = m
+	} else {
+		fetchErrs = append(fetchErrs, err)
+	}
+	if e, err := pinnedFont(ctx, notoEmoji, dir); err == nil {
+		set.emoji = e
 	} else {
 		fetchErrs = append(fetchErrs, err)
 	}
@@ -208,13 +215,6 @@ func newFaces(set *fontSet) *faces {
 	return &faces{set: set, cache: map[faceKey]font.Face{}}
 }
 
-func (fs *faces) get(mono bool, size float64) (font.Face, error) {
-	if mono {
-		return fs.faceOf(fs.set.mono, size)
-	}
-	return fs.faceOf(fs.set.text, size)
-}
-
 func (fs *faces) faceOf(src *sfnt.Font, size float64) (font.Face, error) {
 	key := faceKey{src, size}
 	if face, ok := fs.cache[key]; ok {
@@ -234,18 +234,37 @@ func (fs *faces) close() {
 	}
 }
 
-// checkText fails when text needs glyphs the text font lacks.
-func (fs *faces) checkText(text string) error {
-	for _, r := range text {
-		if r < 0x2E80 {
-			continue
-		}
-		if !fs.set.cjk || !hasGlyph(fs.set.text, r) {
-			if fs.set.fetchErr != nil {
-				return fmt.Errorf("%w（%v）", ErrNoCJKFont, fs.set.fetchErr)
-			}
-			return ErrNoCJKFont
-		}
+// glyphFont returns the first loaded font that has a glyph for r: the body
+// font, then STIX Two Math (symbols and arrows), then Noto Emoji.
+func (fs *faces) glyphFont(r rune) (*sfnt.Font, bool) {
+	if hasGlyph(fs.set.text, r) {
+		return fs.set.text, true
 	}
-	return nil
+	if fs.set.math != nil && hasGlyph(fs.set.math, r) {
+		return fs.set.math, true
+	}
+	if fs.set.emoji != nil && hasGlyph(fs.set.emoji, r) {
+		return fs.set.emoji, true
+	}
+	return nil, false
+}
+
+// missingGlyph explains why no loaded font can draw r.
+func (fs *faces) missingGlyph(r rune) error {
+	if r >= 0x2E80 {
+		if fs.set.fetchErr != nil {
+			return fmt.Errorf("%w（%v）", ErrNoCJKFont, fs.set.fetchErr)
+		}
+		return ErrNoCJKFont
+	}
+	if fs.set.fetchErr != nil {
+		return fmt.Errorf("字符 %q 没有可用字形（%v）", r, fs.set.fetchErr)
+	}
+	return fmt.Errorf("字符 %q 没有可用字形", r)
+}
+
+// checkText fails when some rune has no glyph in any loaded font.
+func (fs *faces) checkText(text string) error {
+	_, err := fs.splitRuns(text, false)
+	return err
 }

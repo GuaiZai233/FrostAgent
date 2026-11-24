@@ -15,7 +15,7 @@ func TestDockerfileFontPinsMatchGo(t *testing.T) {
 		t.Skipf("Dockerfile not available: %v", err)
 	}
 	dockerfile := string(raw)
-	for _, rf := range []remoteFont{lxgwZhenKai, stixTwoMath} {
+	for _, rf := range []remoteFont{lxgwZhenKai, stixTwoMath, notoEmoji} {
 		for what, want := range map[string]string{"url": rf.url, "sha256": rf.sha256, "file name": rf.name} {
 			if !strings.Contains(dockerfile, want) {
 				t.Errorf("Dockerfile is missing the pinned %s for %s: %s", what, rf.name, want)

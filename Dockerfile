@@ -55,9 +55,11 @@ FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e13857
 RUN mkdir -p /fonts && cd /fonts \
     && curl -fsSL --retry 3 -o LXGWZhenKaiGB-Regular-v0.825.ttf "https://github.com/lxgw/LxgwZhenKai/releases/download/v0.825/LXGWZhenKaiGB-Regular.ttf" \
     && curl -fsSL --retry 3 -o STIXTwoMath-Regular-v2.13.otf "https://raw.githubusercontent.com/stipub/stixfonts/37308d44583ef882dc8b544aaa2e80ac8c406ebf/fonts/static_otf/STIXTwoMath-Regular.otf" \
+    && curl -fsSL --retry 3 -o NotoEmoji-8b0a1d0.ttf "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf" \
     && printf '%s  %s\n' \
         40876902a7ce25268ab710ad8fe6e2b63bc002aa4b68d22fd45fc1243726ced5 LXGWZhenKaiGB-Regular-v0.825.ttf \
         f2076b9f1676438439dd41e23676f5ab99056e83d6b8f8c27841591ef2ccfa72 STIXTwoMath-Regular-v2.13.otf \
+        de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551 NotoEmoji-8b0a1d0.ttf \
         | sha256sum -c -
 
 FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS runtime

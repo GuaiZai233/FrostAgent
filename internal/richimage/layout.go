@@ -9,6 +9,7 @@ import (
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
+	"golang.org/x/image/font/sfnt"
 	"golang.org/x/image/math/fixed"
 )
 
@@ -70,36 +71,55 @@ func (c *canvas) fail(err error) {
 
 type run struct {
 	text string
-	mono bool
+	font *sfnt.Font
 }
 
-// splitRuns keeps code on the Latin mono font while CJK falls back to the text font.
-func splitRuns(text string, mono bool) []run {
-	if !mono {
-		return []run{{text, false}}
-	}
+// splitRuns assigns every rune to the font that draws it, grouping neighbours
+// that share a font. Whitespace and control characters never fail.
+func (fs *faces) splitRuns(text string, mono bool) ([]run, error) {
 	var out []run
 	var cur []rune
-	curMono := true
-	for _, r := range text {
-		m := r < 0x2E80
-		if len(cur) > 0 && m != curMono {
-			out = append(out, run{string(cur), curMono})
+	var curFont *sfnt.Font
+	var firstErr error
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, run{string(cur), curFont})
 			cur = cur[:0]
 		}
-		curMono = m
+	}
+	for _, r := range text {
+		var f *sfnt.Font
+		switch {
+		case unicode.IsSpace(r) || unicode.IsControl(r):
+			f = fs.set.text
+		case mono && r < 0x80:
+			f = fs.set.mono
+		default:
+			g, ok := fs.glyphFont(r)
+			if !ok {
+				if firstErr == nil {
+					firstErr = fs.missingGlyph(r)
+				}
+				g = fs.set.text
+			}
+			f = g
+		}
+		if f != curFont {
+			flush()
+			curFont = f
+		}
 		cur = append(cur, r)
 	}
-	if len(cur) > 0 {
-		out = append(out, run{string(cur), curMono})
-	}
-	return out
+	flush()
+	return out, firstErr
 }
 
 func (c *canvas) measure(text string, st style, size float64) float64 {
 	total := 0.0
-	for _, r := range splitRuns(text, st.code) {
-		face, err := c.fs.get(r.mono, size)
+	runs, err := c.fs.splitRuns(text, st.code)
+	c.fail(err)
+	for _, r := range runs {
+		face, err := c.fs.faceOf(r.font, size)
 		if err != nil {
 			c.fail(err)
 			return 0
@@ -113,8 +133,10 @@ func (c *canvas) measure(text string, st style, size float64) float64 {
 }
 
 func (c *canvas) drawText(dst *image.RGBA, x, baseline float64, text string, st style, size float64, col color.RGBA) {
-	for _, r := range splitRuns(text, st.code) {
-		face, err := c.fs.get(r.mono, size)
+	runs, err := c.fs.splitRuns(text, st.code)
+	c.fail(err)
+	for _, r := range runs {
+		face, err := c.fs.faceOf(r.font, size)
 		if err != nil {
 			c.fail(err)
 			return

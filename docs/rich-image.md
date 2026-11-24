@@ -57,6 +57,7 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 | --- | --- | --- |
 | 中英文正文 | 霞鹜臻楷 LXGW ZhenKai GB v0.825（约 17 MB，SIL OFL 1.1） | `github.com/lxgw/LxgwZhenKai` release v0.825 |
 | 数学公式 | STIX Two Math v2.13（约 0.8 MB，SIL OFL 1.1） | `github.com/stipub/stixfonts` 固定到 v2.13 的提交 |
+| emoji 与符号 | Noto Emoji（单色轮廓，约 2 MB，SIL OFL 1.1） | `github.com/google/fonts` 固定到 8b0a1d0 提交 |
 
 URL、版本和哈希写死在 `internal/richimage/fontstore.go`，不能由模型或配置改成其它地址。
 
@@ -67,6 +68,8 @@ URL、版本和哈希写死在 `internal/richimage/fontstore.go`，不能由模�
   程序只接受哈希匹配的文件，损坏或被改动的缓存文件会被拒绝并重新下载。
 - 下载失败会在 5 分钟内不再重试，避免每次渲染都卡在网络上；调用方取消不计入失败。
 - 需要替换正文字体时，设置 `FROSTAGENT_RICH_IMAGE_FONT=/path/to/font.otf`（支持 `.otf` `.ttf` `.ttc`）。
+- 字符按“正文字体 → STIX → Noto Emoji”逐个回退选择字形。三者都没有时直接报错并指出字符，
+  不会再画成缺字方框。emoji 为单色轮廓，颜色跟随文字颜色，不是彩色 emoji。
 - 两个字体都下载失败且系统里没有思源黑体等 CJK 字体时，含中文的内容返回明确错误；
   没有 STIX 时公式退回到内置的 Go 字体，缺失的符号以源码显示。
 

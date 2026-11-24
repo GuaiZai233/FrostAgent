@@ -33,6 +33,14 @@ var lxgwZhenKai = remoteFont{
 	size:   17545474,
 }
 
+// Emoji fallback: Noto Emoji, monochrome outlines, SIL OFL 1.1.
+var notoEmoji = remoteFont{
+	name:   "NotoEmoji-8b0a1d0.ttf",
+	url:    "https://raw.githubusercontent.com/google/fonts/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf",
+	sha256: "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
+	size:   1982596,
+}
+
 // Math font: STIX Two Math v2.13 (pinned to its tag commit), SIL OFL 1.1.
 var stixTwoMath = remoteFont{
 	name:   "STIXTwoMath-Regular-v2.13.otf",
