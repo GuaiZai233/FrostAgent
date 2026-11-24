@@ -43,3 +43,16 @@ func anyText(v any) string {
 	s, _ := v.(string)
 	return s
 }
+
+// The session keeps tool notes as system; the wire layer decides the final role
+// per endpoint, so the conversion must carry the marker and only for these notes.
+func TestConvertToCoreMessagesMarksToolRecords(t *testing.T) {
+	out := convertToCoreMessages([]ChatMessage{
+		{Role: "system", Content: "record", ToolHistoryRunID: "run-1"},
+		{Role: "system", Content: "plain system"},
+		{Role: "assistant", Content: "reply"},
+	})
+	if !out[0].ToolRecord || out[1].ToolRecord || out[2].ToolRecord {
+		t.Fatalf("unexpected ToolRecord flags: %v %v %v", out[0].ToolRecord, out[1].ToolRecord, out[2].ToolRecord)
+	}
+}

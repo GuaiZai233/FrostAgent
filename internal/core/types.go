@@ -59,6 +59,9 @@ type ChatMessage struct {
 	ToolCalls     []ToolCall
 	ToolCallID    string
 	ProviderState *ProviderState `json:"provider_state,omitempty"`
+	// ToolRecord marks a FrostAgent-written tool timeline note stored as a system
+	// message. OpenAI-style endpoints send it as assistant text; others keep system.
+	ToolRecord bool `json:"-"`
 }
 
 // ProviderState preserves opaque reasoning/signature items for tool continuations.

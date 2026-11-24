@@ -26,10 +26,32 @@ func NewClient(baseURL, key string, format Format, timeout time.Duration) *Clien
 	return &Client{Client: openai.NewClientWithTimeout(baseURL, key, timeout), Format: format}
 }
 
+// toolRecordsAsAssistant sends tool timeline notes as assistant text, the
+// pre-existing wire form for OpenAI-style endpoints. It copies on write.
+func toolRecordsAsAssistant(messages []core.ChatMessage) []core.ChatMessage {
+	var out []core.ChatMessage
+	for i, msg := range messages {
+		if !msg.ToolRecord || msg.Role != core.RoleSystem {
+			continue
+		}
+		if out == nil {
+			out = append([]core.ChatMessage(nil), messages...)
+		}
+		out[i].Role = core.RoleAssistant
+	}
+	if out == nil {
+		return messages
+	}
+	return out
+}
+
 func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 	endpoint, err := c.Format.URL(c.BaseURL, "chat/completions", req.Model)
 	if err != nil {
 		return nil, err
+	}
+	if c.Format != Anthropic && c.Format != Gemini {
+		req.Messages = toolRecordsAsAssistant(req.Messages)
 	}
 	if c.Format == Legacy || c.Format == ChatCompletions || c.Format == Custom {
 		client := *c.Client

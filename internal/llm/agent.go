@@ -1882,6 +1882,7 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 			Content:       m.Content,
 			ToolCallID:    m.ToolCallID,
 			ProviderState: m.ProviderState,
+			ToolRecord:    m.Role == "system" && m.ToolHistoryRunID != "",
 		}
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
