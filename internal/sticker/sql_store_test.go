@@ -8,6 +8,45 @@ import (
 	"testing"
 )
 
+func TestSQLStickerSaveSucceedsWithoutForeignKeyCascade(t *testing.T) {
+	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
+	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "stickers.db"))
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewSQLStore(db, "test-instance", filepath.Join(t.TempDir(), "images"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add("sticker-a", "image.png", []byte{0x89, 'P', 'N', 'G'}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateSummary("sticker-a", "example", []string{"one", "two"}, false); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a connection that lost its foreign_keys pragma (for example after
+	// a reconnect): ON DELETE CASCADE no longer clears sticker_keywords.
+	if _, err := db.SQL.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkSuspectedInappropriate("sticker-a"); err != nil {
+		t.Fatalf("mark inappropriate without FK cascade: %v", err)
+	}
+	reopened, err := NewSQLStore(db, "test-instance", filepath.Join(t.TempDir(), "images"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := reopened.Get("sticker-a")
+	if !ok || !entry.ManualBlocked || len(entry.Keywords) != 2 {
+		t.Fatalf("sticker state not persisted correctly: %#v, %v", entry, ok)
+	}
+}
+
 func TestSQLStickerMetadataKeepsImageOnFilesystem(t *testing.T) {
 	t.Setenv("FROSTAGENT_DB_DRIVER", "sqlite")
 	t.Setenv("FROSTAGENT_DB_DSN", filepath.Join(t.TempDir(), "stickers.db"))
