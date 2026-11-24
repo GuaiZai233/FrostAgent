@@ -73,7 +73,6 @@ func TestToolErrorsRetainDiagnosticsInOwningStore(t *testing.T) {
 				registry[tool.Name()] = tool
 			}
 			engine := &Engine{Scope: runtimescope.New(nil, nil, store), ToolRegistry: registry, MaxIterations: 2}
-			installSendMessage(engine)
 			calls := 0
 			engine.Provider = &mockMultiStepProvider{chatFunc: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 				calls++
@@ -82,19 +81,18 @@ func TestToolErrorsRetainDiagnosticsInOwningStore(t *testing.T) {
 				}
 				for _, message := range req.Messages {
 					if message.Role == core.RoleTool {
-						return sendMessageFinalResponse(fmt.Sprint(message.Content)), nil
+						return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: message.Content}}, nil
 					}
 				}
 				return nil, errors.New("missing tool result")
 			}}
-			delivered := &deliveryCapture{}
-			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run"}}, RunContext{SessionID: "tool-session", SendHook: delivered.hook})
+			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "run"}}, RunContext{SessionID: "tool-session"})
 			summary := "工具执行失败"
 			if missing {
 				summary = "工具调用失败：工具未找到"
 			}
-			entry := assertReferencedError(t, store, delivered.plainText(), summary)
-			if strings.Contains(delivered.plainText(), "endpoint.invalid") || strings.Contains(delivered.plainText(), "synthetic-secret") || entry.TraceID != "tool-session" {
+			entry := assertReferencedError(t, store, result.Content, summary)
+			if strings.Contains(result.Content, "endpoint.invalid") || strings.Contains(result.Content, "synthetic-secret") || entry.TraceID != "tool-session" {
 				t.Fatalf("unsafe or misplaced tool diagnostics: %+v", result)
 			}
 			if !missing && !strings.Contains(entry.Content, raw) {

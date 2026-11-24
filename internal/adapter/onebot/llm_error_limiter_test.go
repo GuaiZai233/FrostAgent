@@ -188,10 +188,6 @@ func TestWSLLMErrorsShareQuotaAcrossConnections(t *testing.T) {
 				waitOneBotRequests(t, provider, before+1)
 				send(second, 102, "sentinel")
 				read(second, "sentinel success")
-				if billed {
-					// 送达后的账单回执是单独一条消息，先消费掉，避免干扰后续断言。
-					read(second, "本次消耗")
-				}
 				if state != nil {
 					state.mu.Lock()
 					released := state.releaseCount

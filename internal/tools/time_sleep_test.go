@@ -102,11 +102,11 @@ func TestTimeSleepContinuesSameTurn(t *testing.T) {
 				if last.ToolCallID != "sleep-call" || !strings.Contains(fmt.Sprint(last.Content), want) {
 					t.Errorf("sleep result not returned to same run: %+v", last)
 				}
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "continued"}}, nil
 			})
 			messages, _, _ := session.PrepareTurnMessages(turn, "synthetic-input", "synthetic-input", nil)
 			result := e.RunMessagesWithContext(messages, llm.RunContext{SessionID: session.ID(), Epoch: turn.Epoch(), Turn: turn, Mock: true})
-			if result.Error != nil || result.Content != "" || calls != 2 || e.TotalMessagesProcessed.Load() != 2 || turn.Interrupted() {
+			if result.Error != nil || result.Content != "continued" || calls != 2 || e.TotalMessagesProcessed.Load() != 2 || turn.Interrupted() {
 				t.Fatalf("sleep did not continue in same turn: %+v, calls=%d", result, calls)
 			}
 		})

@@ -15,39 +15,14 @@ import (
 )
 
 func TestEnginePreservesNativeToolContinuation(t *testing.T) {
-	quoteArgs := func() string {
-		args, _ := json.Marshal(sendMessageFinalArgs("done"))
-		return string(args)
-	}
 	for _, tc := range []struct {
-		format       api.Format
-		first, final string
-		marker       string
+		format               api.Format
+		first, final, marker string
 	}{
-		{
-			api.ChatCompletions,
-			`{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"synthetic-reasoning","tool_calls":[{"id":"fixture-call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
-			fmt.Sprintf(`{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"synthetic-final-reasoning","tool_calls":[{"id":"fixture-final","type":"function","function":{"name":"send_message","arguments":%s}}]}}]}`, quoteArgs()),
-			"synthetic-reasoning",
-		},
-		{
-			api.Responses,
-			`{"output":[{"type":"reasoning","summary":[],"encrypted_content":"opaque-reasoning"},{"type":"function_call","call_id":"fixture-call","name":"lookup","arguments":"{}"}]}`,
-			fmt.Sprintf(`{"output":[{"type":"function_call","call_id":"fixture-final","name":"send_message","arguments":%s}]}`, quoteArgs()),
-			"opaque-reasoning",
-		},
-		{
-			api.Anthropic,
-			`{"content":[{"type":"thinking","thinking":"hidden","signature":"opaque-signature"},{"type":"tool_use","id":"fixture-call","name":"lookup","input":{}}]}`,
-			`{"content":[{"type":"tool_use","id":"fixture-final","name":"send_message","input":{"messages":[{"type":"plain","text":"done"}],"declare_final_message":true}}]}`,
-			"opaque-signature",
-		},
-		{
-			api.Gemini,
-			`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{}},"thoughtSignature":"opaque-signature"}]}}]}`,
-			`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"send_message","args":{"messages":[{"type":"plain","text":"done"}],"declare_final_message":true}}}]}}]}`,
-			"opaque-signature",
-		},
+		{api.ChatCompletions, `{"choices":[{"message":{"role":"assistant","content":null,"reasoning_content":"synthetic-reasoning","tool_calls":[{"id":"fixture-call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`, `{"choices":[{"message":{"role":"assistant","content":"done","reasoning_content":"synthetic-final-reasoning"}}]}`, "synthetic-reasoning"},
+		{api.Responses, `{"output":[{"type":"reasoning","summary":[],"encrypted_content":"opaque-reasoning"},{"type":"function_call","call_id":"fixture-call","name":"lookup","arguments":"{}"}]}`, `{"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`, "opaque-reasoning"},
+		{api.Anthropic, `{"content":[{"type":"thinking","thinking":"hidden","signature":"opaque-signature"},{"type":"tool_use","id":"fixture-call","name":"lookup","input":{}}]}`, `{"content":[{"type":"text","text":"done"}]}`, "opaque-signature"},
+		{api.Gemini, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"lookup","args":{}},"thoughtSignature":"opaque-signature"}]}}]}`, `{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`, "opaque-signature"},
 	} {
 		t.Run(string(tc.format), func(t *testing.T) {
 			requests := 0
@@ -65,11 +40,9 @@ func TestEnginePreservesNativeToolContinuation(t *testing.T) {
 			}))
 			defer server.Close()
 			engine := &Engine{MaxIterations: 3, ModelName: "test-model", Provider: api.NewClient(server.URL, "", tc.format, 0), ToolRegistry: map[string]ToolExecutor{"lookup": &staticTool{name: "lookup", result: "synthetic-tool-result"}}}
-			installSendMessage(engine)
-			delivered := &deliveryCapture{}
-			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{SendHook: delivered.hook})
-			if result.Error != nil || delivered.plainText() != "done" || requests != 2 {
-				t.Fatalf("engine result: %+v delivered=%q, requests=%d", result, delivered.plainText(), requests)
+			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
+			if result.Error != nil || result.Content != "done" || requests != 2 {
+				t.Fatalf("engine result: %+v, requests=%d", result, requests)
 			}
 		})
 	}

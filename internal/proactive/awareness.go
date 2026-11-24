@@ -117,10 +117,6 @@ func AwarenessParameters() map[string]any {
 				"type": "boolean", "default": true,
 				"description": "Set false to skip automatic sender mentions and reply quotes; explicit message components are preserved. Omit or set true to keep existing decoration rules.",
 			},
-			"declare_final_message": map[string]any{
-				"type": "boolean", "default": false,
-				"description": "Set true only on the final send_message of this turn: the turn ends right after this delivery succeeds. Omit or set false to continue the loop. Must be the only tool call in its batch.",
-			},
 			"messages": map[string]any{"type": "array", "minItems": 1,
 				"items": map[string]any{"type": "object", "required": []string{"type"}, "additionalProperties": false,
 					"properties": map[string]any{"type": map[string]any{"type": "string", "enum": []string{"plain", "mention_user"}},

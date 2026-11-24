@@ -24,9 +24,6 @@ type PlatformActionResult struct {
 	StickerSent  bool
 	// ExternalMessagesSent counts sends outside the originating conversation.
 	ExternalMessagesSent int
-	// Incomplete reports that at least one requested item was not confirmed. The
-	// successful parts are still counted in MessagesSent.
-	Incomplete bool
 }
 
 // StructuredToolExecutor is optional; existing string-returning tools remain valid.

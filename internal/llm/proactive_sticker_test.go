@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"reflect"
@@ -21,16 +20,6 @@ func (t *proactiveMessageTool) IsProactiveAllowed() bool { return true }
 func (t *proactiveMessageTool) ExecuteResult(ctx context.Context, args string) (core.ToolExecutionResult, error) {
 	t.calls++
 	return t.structuredResultTool.ExecuteResult(ctx, args)
-}
-
-// proactiveSendMessage builds the only send_message shape allowed in proactive
-// turns: one quote target followed by the reply text.
-func proactiveSendMessage(text string) core.ChatMessage {
-	args := fmt.Sprintf(`{"messages":[{"type":"mention_specific","message_id":"1"},{"type":"plain","text":%q}]}`, text)
-	return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
-		ID: "proactive-send", Type: "function",
-		Function: core.ToolCallFunction{Name: "send_message", Arguments: args},
-	}}}
 }
 
 func TestProactiveStickerToolDeniedEvenWithOptIn(t *testing.T) {
@@ -63,14 +52,14 @@ func TestProactiveRepliesSkipStickerEnforcement(t *testing.T) {
 		responses []core.ChatMessage
 		silent    bool
 	}{
-		{name: "text", responses: []core.ChatMessage{proactiveSendMessage("ordinary reply")}},
+		{name: "text", responses: []core.ChatMessage{{Role: core.RoleAssistant, Content: "ordinary reply"}}},
 		{name: "silence marker", silent: true, responses: []core.ChatMessage{{Role: core.RoleAssistant, Content: AssistantSilentMarker}}},
 		{name: "silence tool", silent: true, responses: []core.ChatMessage{{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
 			ID: "silent", Type: "function", Function: core.ToolCallFunction{Name: StaySilentToolName, Arguments: `{}`},
 		}}}}},
 		{name: "memory then text", responses: []core.ChatMessage{
 			{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "memory", Type: "function", Function: core.ToolCallFunction{Name: "memory", Arguments: `{"action":"write"}`}}}},
-			proactiveSendMessage("ordinary reply"),
+			{Role: core.RoleAssistant, Content: "ordinary reply"},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,18 +68,16 @@ func TestProactiveRepliesSkipStickerEnforcement(t *testing.T) {
 				StaySilentToolName: &staticTool{name: StaySilentToolName},
 				"memory":           &staticTool{name: "memory", result: "记忆已写入"},
 			}}
-			installSendMessage(e)
 			for range 4 {
 				e.RecordBotTurn()
 			}
 			input := []ChatMessage{{Role: "user", Content: "hello"}}
-			delivered := &deliveryCapture{}
-			result := e.RunMessagesWithContext(input, RunContext{Proactive: true, SendHook: delivered.hook})
+			result := e.RunMessagesWithContext(input, RunContext{Proactive: true})
 			if result.Error != nil || result.Silent != tc.silent || len(p.requests) != len(tc.responses) {
 				t.Fatalf("result=%+v requests=%d", result, len(p.requests))
 			}
-			if !tc.silent && delivered.plainText() != "ordinary reply" {
-				t.Fatalf("ordinary reply changed: %q", delivered.plainText())
+			if !tc.silent && result.Content != "ordinary reply" {
+				t.Fatalf("ordinary reply changed: %q", result.Content)
 			}
 			if tc.name == "memory then text" && !result.MemoryWritten {
 				t.Fatal("proactive memory write was lost")
@@ -139,6 +126,37 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 		{"text", "ordinary reply", "ordinary reply"},
 	}, proactiveStickerEnvelopeCases()...) {
 		t.Run(tc.name, func(t *testing.T) {
+			for _, adapter := range []string{"onebot"} {
+				for _, proactive := range []bool{false, true} {
+					p := &stickerActivityProvider{responses: []core.ChatMessage{{Role: core.RoleAssistant, Content: tc.payload}}}
+					e := &Engine{Provider: p, MaxIterations: 1}
+					if proactive {
+						for range 4 {
+							e.RecordBotTurn()
+						}
+					}
+					turn := (&SessionContext{}).ReserveSequenceTurn("synthetic-sender", false, proactive)
+					turn.Wait()
+					result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{Proactive: proactive, AdapterID: adapter, Turn: turn})
+					turn.Done()
+					want := tc.payload
+					if proactive {
+						want = tc.want
+					}
+					assertStickerFilteredContent(t, result.Content, want)
+					if len(result.Transcript) == 0 {
+						t.Fatal("missing final transcript")
+					}
+					last := result.Transcript[len(result.Transcript)-1]
+					if last.Role != "assistant" || last.Content != result.Content {
+						t.Fatalf("final transcript = %+v, returned content = %q", last, result.Content)
+					}
+					if result.Error != nil || len(p.requests) != 1 {
+						t.Fatalf("adapter=%s proactive=%t result=%+v requests=%d", adapter, proactive, result, len(p.requests))
+					}
+				}
+			}
+
 			// A separately opted-in tool must still pass the common delivery gate.
 			tool := &proactiveMessageTool{structuredResultTool: structuredResultTool{
 				staticTool: staticTool{name: "test_message"},
@@ -146,7 +164,7 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 			}}
 			p := &stickerActivityProvider{responses: []core.ChatMessage{
 				{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "message", Type: "function", Function: core.ToolCallFunction{Name: tool.Name(), Arguments: `{}`}}}},
-				{Role: core.RoleAssistant},
+				{Role: core.RoleAssistant, Content: "done"},
 			}}
 			e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{tool.Name(): tool}}
 			for range 4 {
@@ -165,7 +183,7 @@ func TestProactiveMessagePathsFilterStickerRepresentations(t *testing.T) {
 			if tc.want == "" {
 				wantDeliveries = 0
 			}
-			if tool.calls != 1 || len(deliveredPayloads) != wantDeliveries || result.Error != nil || len(p.requests) != 2 {
+			if tool.calls != 1 || len(deliveredPayloads) != wantDeliveries || result.Content != "done" || result.Error != nil || len(p.requests) != 2 {
 				t.Fatalf("calls=%d deliveries=%d result=%+v requests=%d", tool.calls, len(deliveredPayloads), result, len(p.requests))
 			}
 			for _, got := range deliveredPayloads {

@@ -30,10 +30,7 @@ func TestOneBotOutboundPreservesText(t *testing.T) {
 		{name: "group mention", messageType: "group", mention: true},
 		{name: "group quote and mention", messageType: "group", quote: true, mention: true},
 	} {
-		// Only tool delivery and the direct transport path still reach the
-		// platform: plain assistant text is rejected by the agent loop, and
-		// structured final-message JSON inside Content is plain text too.
-		for _, path := range []string{"tool", "direct"} {
+		for _, path := range []string{"plain", "structured", "tool", "direct"} {
 			for _, text := range []string{"正文", " \t正文\n  "} {
 				t.Run(route.name+"/"+path+"/"+strconv.Quote(text), func(t *testing.T) {
 					scope := newTestScopeWithEnv(t, map[string]string{

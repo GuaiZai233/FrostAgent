@@ -116,14 +116,6 @@ func (e *Engine) chatAndSettle(ctx context.Context, request core.ChatRequest, re
 		if state != nil {
 			defer state.endCall()
 		}
-		// If the provider exits this goroutine without returning (for example a
-		// test double calling t.Fatal), the caller must still be released.
-		settled := false
-		defer func() {
-			if !settled {
-				done <- settledResponse{err: errors.New("provider call aborted")}
-			}
-		}()
 		var resp *core.ChatResponse
 		err := ctx.Err()
 		if runCanceled(ctx) {
@@ -177,7 +169,6 @@ func (e *Engine) chatAndSettle(ctx context.Context, request core.ChatRequest, re
 				cancel()
 			}
 		}
-		settled = true
 		done <- settledResponse{resp, err, commitErr}
 	}()
 	select {

@@ -43,3 +43,24 @@ func TestRunLoopTreatsStandaloneAssistantSilentMarkerAsSilence(t *testing.T) {
 		}
 	}
 }
+
+func TestRunLoopPreservesEmbeddedAssistantSilentMarker(t *testing.T) {
+	content := "不要把 " + AssistantSilentMarker + " 当作普通回复发送"
+	engine := &Engine{
+		MaxIterations: 1,
+		ToolRegistry:  map[string]ToolExecutor{},
+		Provider:      &silentMarkerProvider{content: content},
+	}
+
+	result := engine.RunMessagesWithContext([]ChatMessage{{
+		Role:    "user",
+		Content: "这个内部标记是什么？",
+	}}, RunContext{})
+
+	if result.Silent {
+		t.Fatal("expected embedded marker to remain visible content")
+	}
+	if result.Content != content {
+		t.Fatalf("expected content %q, got %q", content, result.Content)
+	}
+}

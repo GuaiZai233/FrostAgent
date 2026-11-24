@@ -182,7 +182,10 @@ func TestOneBotProactiveMultiTurnHistoryPurity(t *testing.T) {
 				},
 			},
 			{
-				Message: sendMessageFinalMessage("这是第二轮显式唤醒的正常回复。"),
+				Message: core.ChatMessage{
+					Role:    core.RoleAssistant,
+					Content: "这是第二轮显式唤醒的正常回复。",
+				},
 			},
 		},
 	}
@@ -342,7 +345,6 @@ func TestOneBotProactiveSecuritySilentDrop(t *testing.T) {
 	t.Run("proactive roll hit with locked principal silently drops without direct reply", func(t *testing.T) {
 		provider := &mockLLMProvider{}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		engine.Security = security.NewController(t.TempDir())
 
@@ -397,7 +399,6 @@ func TestOneBotProactiveSecuritySilentDrop(t *testing.T) {
 	t.Run("proactive roll hit with security service failure silently drops", func(t *testing.T) {
 		provider := &mockLLMProvider{}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		// 模拟安全服务异常 (AccessStore 为 nil，Fail-Closed)
 		engine.Security = &security.Controller{
@@ -438,7 +439,6 @@ func TestOneBotProactiveSecuritySilentDrop(t *testing.T) {
 	t.Run("explicit wake with security block sends direct reject reply", func(t *testing.T) {
 		provider := &mockLLMProvider{}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		engine.Security = security.NewController(t.TempDir())
 
@@ -530,7 +530,6 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 			},
 		}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		staySilent := tools.StaySilentTool()
 		engine.ToolRegistry[staySilent.Name()] = staySilent
@@ -610,7 +609,10 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 		provider := &mockLLMProvider{
 			responses: []*core.ChatResponse{
 				{
-					Message: proactiveSpecificReplyMessage("502", "大家好，我是霜降！"),
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "大家好，我是霜降！",
+					},
 					Usage: &core.Usage{
 						PromptTokens:     100,
 						CompletionTokens: 30,
@@ -620,7 +622,6 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 			},
 		}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
 		engine.BillingClient = billingClient
@@ -698,7 +699,7 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 		}
 
 		params, _ := action.Params.(map[string]any)
-		msgStr := outboundText(params["message"])
+		msgStr, _ := params["message"].(string)
 		if strings.Contains(msgStr, "本次消耗") || strings.Contains(msgStr, "雪花") {
 			t.Fatalf("主动回复不应附带计费账单回执，实际: %s", msgStr)
 		}
@@ -709,7 +710,6 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 			errs: []error{errors.New("mock upstream timeout 504")},
 		}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
 		engine.BillingClient = billingClient
@@ -776,7 +776,10 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 		provider := &mockLLMProvider{
 			responses: []*core.ChatResponse{
 				{
-					Message: sendMessageFinalMessage("收到，马上为您处理！"),
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "收到，马上为您处理！",
+					},
 					Usage: &core.Usage{
 						PromptTokens:     200,
 						CompletionTokens: 50,
@@ -786,7 +789,6 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 			},
 		}
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		billingClient := billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
 		engine.BillingClient = billingClient
@@ -825,10 +827,36 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 			t.Fatalf("发送事件失败: %v", err)
 		}
 
-		// 回答经 send_message 送达，账单回执是随后单独的一条消息。
-		msgStr, _ := collectOutboundText(t, conn, 5*time.Second, func(text string) bool {
-			return strings.Contains(text, "本次消耗")
-		})
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				b, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, b)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
 
 		if state.reserveCount <= initialReserveCount {
 			t.Fatalf("显式唤醒必须走计费预留: initial=%d, actual=%d", initialReserveCount, state.reserveCount)
@@ -837,6 +865,8 @@ func TestOneBotProactiveBillingExemption(t *testing.T) {
 			t.Fatalf("显式唤醒必须走计费结算: initial=%d, actual=%d", initialCommitCount, state.commitCount)
 		}
 
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
 		if !strings.Contains(msgStr, "本次消耗") && !strings.Contains(msgStr, "雪花") {
 			t.Fatalf("显式唤醒回复必须附带计费回执，实际: %s", msgStr)
 		}
@@ -874,7 +904,6 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		engine.Security = ctrl
 		engine.ToolRegistry[security.BanUserToolName] = banTool
@@ -966,7 +995,6 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		engine.Security = ctrl
 
@@ -1023,6 +1051,99 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit wake turn with OutputBlocked transmits security notice", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		ctrl := security.NewController(tmpDir)
+		ctrl.SetMode(security.ControlModeAggressive)
+		ctrl.Watchdog.SetClassifier(&mockClassifier{
+			fn: func(ctx context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
+				if input.Stage == security.StageModelOutput {
+					return security.ClassificationResult{
+						Category:  security.RiskCategoryViolenceTerrorism,
+						RiskLevel: security.RiskLevelCritical,
+						Reason:    "blocked output in explicit wake",
+					}, nil
+				}
+				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
+			},
+		})
+
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: "恶意内容输出",
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+		engine.Security = ctrl
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   603,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 帮我回答"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.HasPrefix(msgStr, "[FrostAgent 错误] 安全审查拦截：模型输出已拦截 (Ref_ID: ") {
+			t.Fatalf("显式唤醒 OutputBlocked 时应发送拦截提示，实际: %s", msgStr)
+		}
+	})
+
 	t.Run("explicit wake turn with ban_user locks user and sends notice", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		ctrl := security.NewController(tmpDir)
@@ -1049,7 +1170,6 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		engine.Security = ctrl
 		engine.ToolRegistry[security.BanUserToolName] = banTool
@@ -1145,7 +1265,6 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 		engine.Security = ctrl
 		engine.ToolRegistry["execute_command"] = cmdTool
@@ -1392,7 +1511,6 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 
 		srv, wsURL := startWSTestServer(engine)
@@ -1461,7 +1579,6 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 
 		engine := newTestEngine(provider)
-		installTestSendMessage(engine)
 		engine.Scope = scope
 
 		srv, wsURL := startWSTestServer(engine)
@@ -1517,6 +1634,157 @@ func TestOneBotProactiveSecurityOptionA(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit wake turn with invalid quote message sends error notice to group", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"messages":[{"type":"quote","message_id":"unobserved-quote-999"}]}`,
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   706,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 引用不存在的消息"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "引用消息校验失败") {
+			t.Fatalf("显式唤醒引用校验失败应向群发送错误提示，实际: %s", msgStr)
+		}
+	})
+
+	t.Run("explicit wake turn with invalid media build output sends error notice to group", func(t *testing.T) {
+		provider := &mockLLMProvider{
+			responses: []*core.ChatResponse{
+				{
+					Message: core.ChatMessage{
+						Role:    core.RoleAssistant,
+						Content: `{"messages":[{"type":"image","path":"/nonexistent/missing_file_123.png"}]}`,
+					},
+				},
+			},
+		}
+
+		engine := newTestEngine(provider)
+		engine.Scope = scope
+
+		srv, wsURL := startWSTestServer(engine)
+		defer srv.Close()
+
+		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+		if err != nil {
+			t.Fatalf("WebSocket 连接失败: %v", err)
+		}
+		defer conn.Close()
+
+		event := model.OneBotEvent{
+			SelfID:      30001,
+			PostType:    "message",
+			MessageType: "group",
+			GroupID:     10001,
+			UserID:      20001,
+			MessageID:   707,
+			Message:     json.RawMessage(`[{"type":"at","data":{"qq":"30001"}},{"type":"text","data":{"text":" 发送不存在的图片"}}]`),
+		}
+		b, _ := json.Marshal(event)
+		if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatalf("发送事件失败: %v", err)
+		}
+
+		var action model.OneBotAction
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, respBytes, err := conn.ReadMessage()
+			if err != nil {
+				t.Fatalf("读取响应失败: %v", err)
+			}
+			var act model.OneBotAction
+			if err := json.Unmarshal(respBytes, &act); err != nil {
+				t.Fatalf("解析响应失败: %v", err)
+			}
+			if act.Action == "get_group_info" {
+				groupInfoResponse := map[string]any{
+					"status":  "ok",
+					"retcode": 0,
+					"data": map[string]any{
+						"group_id":   10001,
+						"group_name": "测试群",
+					},
+					"echo": act.Echo,
+				}
+				respB, _ := json.Marshal(groupInfoResponse)
+				_ = conn.WriteMessage(websocket.TextMessage, respB)
+				continue
+			}
+			if act.Action == "send_group_msg" {
+				action = act
+				break
+			}
+		}
+
+		params, _ := action.Params.(map[string]any)
+		msgStr, _ := params["message"].(string)
+		if !strings.Contains(msgStr, "组装消息失败") {
+			t.Fatalf("显式唤醒组装媒体失败应向群发送错误提示，实际: %s", msgStr)
+		}
+	})
 }
 
 type dummyTestTool struct {
@@ -1579,13 +1847,7 @@ func runOneBotProactiveTriggerLogging(t *testing.T, testCase string) {
 		scope = newTestScopeWithEnv(t, map[string]string{"PROACTIVE_REPLY_PROBABILITY": "0"})
 	}
 	scope.Logger = logs.New("test-proactive", "test-proactive", 100)
-	var provider *mockLLMProvider
-	if testCase == "proactive" {
-		// 主动回复只接受 mention_specific + plain，且 message_id 必须可信。
-		provider = &mockLLMProvider{responses: []*core.ChatResponse{{Message: proactiveSpecificReplyMessage("1", "synthetic proactive reply")}}}
-	} else {
-		provider = &mockLLMProvider{}
-	}
+	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
 	engine.Scope = scope
 	if testCase == "security_block" {

@@ -100,23 +100,19 @@ func TestUnavailableStickerToolDoesNotEnforceDueQuota(t *testing.T) {
 				e.Provider = injectionProvider(func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 					calls++
 					assertNoStickerConstraint(t, req)
-					msg := sendMessageFinalMessage("ordinary final")
+					msg := core.ChatMessage{Role: core.RoleAssistant, Content: "ordinary final"}
 					if toolReply && calls == 1 {
-						msg = core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "fixture-reply", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}}}}
+						msg.ToolCalls = []core.ToolCall{{ID: "fixture-reply", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}}}
 					}
 					return &core.ChatResponse{Message: msg}, nil
 				})
-				var delivered []string
-				result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{SendHook: func(payload string) error { deliveries++; delivered = append(delivered, payload); return nil }})
-				wantCalls, wantDeliveries := 1, 1
+				result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{SendHook: func(string) error { deliveries++; return nil }})
+				wantCalls, wantDeliveries := 1, 0
 				if toolReply {
-					wantCalls, wantDeliveries = 2, 2
+					wantCalls, wantDeliveries = 2, 1
 				}
-				if result.Error != nil || calls != wantCalls || deliveries != wantDeliveries {
-					t.Fatalf("result=%+v calls=%d deliveries=%d", result, calls, deliveries)
-				}
-				if got := deliveredPlainText(delivered[len(delivered)-1]); got != "ordinary tool reply" {
-					t.Fatalf("final delivery = %q", got)
+				if result.Content != "ordinary final" || calls != wantCalls || deliveries != wantDeliveries {
+					t.Fatalf("content=%q calls=%d deliveries=%d", result.Content, calls, deliveries)
 				}
 				if _, remaining, grace := e.stickerActivitySnapshot(); remaining != 0 || grace != 0 {
 					t.Fatalf("unavailable tool changed quota: remaining=%d grace=%d", remaining, grace)
@@ -148,11 +144,10 @@ func TestStickerEnforcementStopsWhenToolBecomesUnavailable(t *testing.T) {
 						}
 					}
 					e.ToolRegistry["fixture-disable"] = &injectionTool{name: "fixture-disable", execute: func() (string, error) { disable(); return "disabled", nil }}
-					installSendMessage(e)
 					calls := 0
 					e.Provider = injectionProvider(func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 						calls++
-						msg := sendMessageFinalMessage("ordinary final")
+						msg := core.ChatMessage{Role: core.RoleAssistant, Content: "ordinary final"}
 						if calls == 1 {
 							sawEnforcement := false
 							for _, message := range req.Messages {
@@ -166,21 +161,20 @@ func TestStickerEnforcementStopsWhenToolBecomesUnavailable(t *testing.T) {
 							if disableDuring == "model response" {
 								disable()
 							} else {
-								msg = core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "fixture-disable", Type: "function", Function: core.ToolCallFunction{Name: "fixture-disable", Arguments: `{}`}}}}
+								msg.ToolCalls = []core.ToolCall{{ID: "fixture-disable", Type: "function", Function: core.ToolCallFunction{Name: "fixture-disable", Arguments: `{}`}}}
 							}
 						} else {
 							assertNoStickerConstraint(t, req)
 						}
 						return &core.ChatResponse{Message: msg}, nil
 					})
-					delivered := &deliveryCapture{}
-					result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: content.value}}, RunContext{SendHook: delivered.hook})
+					result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: content.value}}, RunContext{})
 					wantCalls := 1
 					if disableDuring == "tool execution" {
 						wantCalls = 2
 					}
-					if result.Error != nil || delivered.plainText() != "ordinary final" || calls != wantCalls {
-						t.Fatalf("result=%+v delivered=%q calls=%d", result, delivered.plainText(), calls)
+					if result.Content != "ordinary final" || calls != wantCalls {
+						t.Fatalf("content=%q calls=%d", result.Content, calls)
 					}
 					if _, _, grace := e.stickerActivitySnapshot(); grace != 0 {
 						t.Fatal("disabling tool granted automatic forgiveness")
@@ -204,7 +198,7 @@ func (p *staleToolProvider) Chat(_ context.Context, req core.ChatRequest) (*core
 	if p.tool.calls != 0 {
 		p.t.Fatal("stale model call executed disabled tool")
 	}
-	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "blocked"}}, nil
 }
 
 func TestToolSwitchRejectsStaleCallsAndIsInstanceLocal(t *testing.T) {
@@ -224,7 +218,7 @@ func TestToolSwitchRejectsStaleCallsAndIsInstanceLocal(t *testing.T) {
 	if err := config.Update(DisabledToolsKey, `["switch_fixture"]`, false); err != nil {
 		t.Fatal(err)
 	}
-	if got := e.Run("synthetic prompt"); got != "" {
+	if got := e.Run("synthetic prompt"); got != "blocked" {
 		t.Fatalf("result = %q", got)
 	}
 	if len(other.ModelTools()) != 1 {

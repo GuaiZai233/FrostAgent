@@ -15,7 +15,8 @@ import (
 
 func TestMessageGuidanceRefreshAndTrace(t *testing.T) {
 	wantGuidance := "<frostagent_msg_guidance>\n" +
-		"为保证拟真的对话效果，你被允许多段回复用户消息。需要分段时，请把每一段分别放进 send_message 的 messages 数组：按发送顺序使用多个 plain 组件，FrostAgent 后端会按顺序发送这些组件。请根据语境决定是否这样输出，不要在文本里插入分段标记。\n" +
+		"为保证拟真的对话效果，你被允许多段回复用户消息。在正常回复中插入<FROSTAGENT_SEGMENT_MARK>，FrostAgent 后端会自动解析并分段将你的消息发出。请根据语境决定是否这样输出。\n" +
+		"如因特殊需求，你想完整输出 mark 的整个原文，请用反引号``包裹它，这样后端不会解析。\n" +
 		"</frostagent_msg_guidance>"
 	if got := messageGuidance(0); got != wantGuidance {
 		t.Fatalf("unexpected guidance: %s", got)
@@ -37,21 +38,21 @@ func TestMessageGuidanceRefreshAndTrace(t *testing.T) {
 	base := []ChatMessage{{Role: "system", Content: "primary instructions"}, {Role: "user", Content: "hello"}}
 	ctx := withRunContext(context.Background(), RunContext{SessionID: session.ID()})
 	for _, tc := range []struct {
-		enabled  bool
-		limit    string
-		segments int
+		enabled bool
+		limit   string
+		markers string
 	}{
-		{false, "3", 0},
-		{true, "3", 3},
-		{true, "5", 5},
-		{true, "5", 5},
-		{true, "1", 0},
-		{true, "2", 2},
-		{true, "20", 20},
-		{true, "0", 0},
-		{true, "", 0},
-		{true, "invalid", 0},
-		{false, "3", 0},
+		{false, "3", ""},
+		{true, "3", "2"},
+		{true, "5", "4"},
+		{true, "5", "4"},
+		{true, "1", ""},
+		{true, "2", "1"},
+		{true, "20", "19"},
+		{true, "0", ""},
+		{true, "", ""},
+		{true, "invalid", ""},
+		{false, "3", ""},
 	} {
 		if err := config.Update(replyformat.EnvKey, fmt.Sprint(tc.enabled), false); err != nil {
 			t.Fatal(err)
@@ -61,8 +62,8 @@ func TestMessageGuidanceRefreshAndTrace(t *testing.T) {
 		}
 		enabled := tc.enabled && tc.limit != "1"
 		wantCurrent := wantGuidance
-		if tc.segments > 1 {
-			wantCurrent = strings.Replace(wantGuidance, "。需要分段时", fmt.Sprintf("。你一次最多发送 **%d** 个 plain 组件。需要分段时", tc.segments), 1)
+		if tc.markers != "" {
+			wantCurrent = strings.Replace(wantGuidance, "。在正常回复中", "。你不是无限分段的，你被允许插入<FROSTAGENT_SEGMENT_MARK>的数量是 **"+tc.markers+"**。在正常回复中", 1)
 		}
 		messages, err := e.skillMessages(ctx, base)
 		if err != nil {

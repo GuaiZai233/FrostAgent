@@ -143,13 +143,13 @@ func TestStickerConfirmationEngineCandidateBudget(t *testing.T) {
 				default:
 					t.Errorf("unexpected provider round %d", round)
 				}
-				return core.ChatMessage{Role: core.RoleAssistant}
+				return core.ChatMessage{Role: core.RoleAssistant, Content: "inspection complete"}
 			}}
 			engine := &llm.Engine{Provider: provider, MaxIterations: 2, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool}}
 			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "find a matching sticker"}}, llm.RunContext{
 				SendHook: func(string) error { sends++; return nil },
 			})
-			if result.Error != nil || result.Content != "" || provider.calls != 2 || sends != 0 {
+			if result.Error != nil || result.Content != "inspection complete" || provider.calls != 2 || sends != 0 {
 				t.Fatalf("result=%+v provider calls=%d sends=%d", result, provider.calls, sends)
 			}
 		})
@@ -204,7 +204,7 @@ func testStickerConfirmationEngineExpiredQuota(t *testing.T, count int) {
 				t.Errorf("query delivered messages before confirmation: %v", delivered)
 			}
 			if len(response.Candidates) == 0 {
-				return core.ChatMessage{Role: core.RoleAssistant}
+				return core.ChatMessage{Role: core.RoleAssistant, Content: "missing candidates"}
 			}
 			selectedID = response.Candidates[0].ID
 			return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{
@@ -220,7 +220,7 @@ func testStickerConfirmationEngineExpiredQuota(t *testing.T, count int) {
 		default:
 			t.Errorf("unexpected provider round %d after confirmed delivery", round)
 		}
-		return core.ChatMessage{Role: core.RoleAssistant}
+		return core.ChatMessage{Role: core.RoleAssistant, Content: "confirmation complete"}
 	}}
 	engine := &llm.Engine{Provider: provider, MaxIterations: 3, ToolRegistry: map[string]llm.ToolExecutor{
 		stickerTool.Name(): stickerTool, messageTool.Name(): messageTool,
@@ -231,7 +231,7 @@ func testStickerConfirmationEngineExpiredQuota(t *testing.T, count int) {
 	result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "reply with text and a sticker"}}, llm.RunContext{
 		SendHook: func(payload string) error { delivered = append(delivered, payload); return nil },
 	})
-	if result.Error != nil || result.Content != "" || provider.calls != 3 {
+	if result.Error != nil || result.Content != "confirmation complete" || provider.calls != 3 {
 		t.Fatalf("quota not satisfied after confirmation: result=%+v provider calls=%d", result, provider.calls)
 	}
 	if len(delivered) != 1 {

@@ -44,7 +44,7 @@ func TestTimeSleepRefreshesOneBotGroupPrompt(t *testing.T) {
 		if run.Turn.Interrupted() || !strings.Contains(prompt, "<response_context>") || !strings.Contains(prompt, "<system_context>") {
 			t.Error("refresh changed execution or adapter metadata")
 		}
-		return &core.ChatResponse{Message: sendMessageFinalMessage("sleep-finished")}, nil
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "sleep-finished"}}, nil
 	}))
 	engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_PROACTIVE_REPLY": "false"})
 	tool := tools.TimeSleepTool(func(string) string { close(started); <-release; return "60" })

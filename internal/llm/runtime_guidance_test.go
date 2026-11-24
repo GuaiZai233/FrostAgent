@@ -57,7 +57,7 @@ func TestFrostAgentSystemMessagesPreserveInputs(t *testing.T) {
 func TestFrostAgentProtocolReachesEveryIterationAndTrace(t *testing.T) {
 	provider := &stickerActivityProvider{responses: []core.ChatMessage{
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "synthetic-call", Type: "function", Function: core.ToolCallFunction{Name: "fixture", Arguments: "{}"}}}},
-		sendMessageFinalMessage("done"),
+		{Role: core.RoleAssistant, Content: "done"},
 	}}
 	manager := NewSessionManager()
 	session := manager.GetOrCreate("synthetic-protocol-session")
@@ -67,11 +67,9 @@ func TestFrostAgentProtocolReachesEveryIterationAndTrace(t *testing.T) {
 	session.ReplaceMessages(input)
 	before := session.Snapshot()
 	engine := &Engine{Provider: provider, MaxIterations: 3, SessionManager: manager, ToolRegistry: map[string]ToolExecutor{"fixture": &staticTool{name: "fixture"}}}
-	installSendMessage(engine)
-	delivered := &deliveryCapture{}
-	result := engine.RunMessagesWithContext(input, RunContext{SessionID: session.ID(), Epoch: session.Epoch(), SendHook: delivered.hook})
-	if result.Error != nil || delivered.plainText() != "done" || len(provider.requests) != 2 {
-		t.Fatalf("result=%+v delivered=%q requests=%d", result, delivered.plainText(), len(provider.requests))
+	result := engine.RunMessagesWithContext(input, RunContext{SessionID: session.ID(), Epoch: session.Epoch()})
+	if result.Error != nil || result.Content != "done" || len(provider.requests) != 2 {
+		t.Fatalf("result=%+v, requests=%d", result, len(provider.requests))
 	}
 	wantSystem := "custom persona\n\n" + frostAgentSystemPrompt
 	for _, request := range provider.requests {

@@ -190,7 +190,6 @@ func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
 		encoded, _ := json.Marshal(record.SourceMessageID)
 		header += "\n来源消息: " + string(encoded)
 	}
-	// FrostAgent writes this record, so it is system context rather than the bot's speech.
-	session.addMessageLocked(core.ChatMessage{Role: core.RoleSystem, Content: header + "\n" + strings.TrimSpace(line)})
+	session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: header + "\n" + strings.TrimSpace(line)})
 	session.History[len(session.History)-1].ToolHistoryRunID = record.RunID
 }
