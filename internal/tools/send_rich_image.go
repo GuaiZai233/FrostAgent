@@ -12,7 +12,6 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/richimage"
-	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
 
 const (
@@ -79,11 +78,13 @@ func SendRichImageTool() Tool {
 				return textResult(""), fmt.Errorf("send_rich_image 参数不合法: %w", err)
 			}
 			data, err := richimage.RenderContext(ctx, richimage.Request{
-				Format:   input.Format,
-				Content:  input.Content,
-				Theme:    input.Theme,
-				Width:    input.Width,
-				FontPath: strings.TrimSpace(runtimescope.FromContext(ctx).Getenv(richimage.FontEnvKey)),
+				Format:  input.Format,
+				Content: input.Content,
+				Theme:   input.Theme,
+				Width:   input.Width,
+				// Fonts are a deployment-level setting, read from the process environment.
+				FontPath: strings.TrimSpace(os.Getenv(richimage.FontEnvKey)),
+				FontDir:  strings.TrimSpace(os.Getenv(richimage.FontDirEnvKey)),
 			})
 			if err != nil {
 				return textResult(""), fmt.Errorf("渲染失败: %w", err)

@@ -55,7 +55,7 @@ func TestPlaceholderLookalikesStayText(t *testing.T) {
 
 func mustFonts(t *testing.T) *fontSet {
 	t.Helper()
-	f, err := loadFonts("")
+	f, err := loadFonts(context.Background(), "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -42,8 +42,11 @@ type Request struct {
 	Theme string
 	// Width is the layout width in CSS pixels; the PNG is twice as wide.
 	Width int
-	// FontPath overrides the automatically discovered CJK font.
+	// FontPath replaces the body font with a local file.
 	FontPath string
+	// FontDir is the cache directory for the pinned fonts; empty selects the
+	// per-user cache directory.
+	FontDir string
 }
 
 // Render returns PNG bytes for the request.
@@ -77,7 +80,7 @@ func RenderContext(ctx context.Context, req Request) (data []byte, err error) {
 	if width < MinWidth || width > MaxWidth {
 		return nil, fmt.Errorf("width 必须在 %d..%d 之间", MinWidth, MaxWidth)
 	}
-	fonts, err := loadFonts(req.FontPath)
+	fonts, err := loadFonts(ctx, req.FontPath, req.FontDir)
 	if err != nil {
 		return nil, err
 	}

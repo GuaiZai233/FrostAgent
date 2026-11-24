@@ -5,7 +5,6 @@ go 1.27.3
 require (
 	connectrpc.com/connect v1.20.0
 	github.com/danieljoos/wincred v1.2.3
-	github.com/go-fonts/stix v0.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.11.0

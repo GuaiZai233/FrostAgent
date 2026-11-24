@@ -1,6 +1,7 @@
 package richimage
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-fonts/stix/stix2mathregular"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
 	"golang.org/x/image/font/gofont/goitalic"
@@ -19,13 +19,14 @@ import (
 )
 
 // ErrNoCJKFont means the content needs glyphs that no loaded font provides.
-var ErrNoCJKFont = errors.New("没有可用的中日韩字体，请安装思源黑体(Noto Sans CJK)或设置 FROSTAGENT_RICH_IMAGE_FONT")
+var ErrNoCJKFont = errors.New("没有可用的中日韩字体：需要联网自动下载霞鹜臻楷，或安装思源黑体(Noto Sans CJK)，或设置 FROSTAGENT_RICH_IMAGE_FONT")
 
-// FontEnvKey names the optional environment variable holding a font file path.
+// FontEnvKey names the optional environment variable holding a font file path
+// that replaces the body font.
 const FontEnvKey = "FROSTAGENT_RICH_IMAGE_FONT"
 
-// Source Han Sans is published as Noto Sans CJK in most distributions.
-func defaultFontCandidates() []string {
+// systemFontCandidates are tried when the pinned body font is unavailable.
+func systemFontCandidates() []string {
 	list := []string{
 		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 		"/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf",
@@ -48,71 +49,100 @@ func defaultFontCandidates() []string {
 type fontSet struct {
 	text *sfnt.Font
 	mono *sfnt.Font
-	// Latin faces used by math layout (italic variables, bold vectors).
+	// Latin faces used by math layout when STIX is unavailable.
 	goReg, goIt, goBold *sfnt.Font
-	// math is STIX Two Math, the fallback for operators and relations that
-	// neither the body font nor the Go fonts provide.
+	// math is STIX Two Math; nil when it could not be fetched, in which case
+	// formulas fall back to the Go fonts and unsupported symbols are shown as source.
 	math *sfnt.Font
 	// cjk reports whether text carries CJK glyphs.
 	cjk bool
+	// fetchErr records why a pinned font could not be obtained.
+	fetchErr error
 }
+
+type fontKey struct{ override, dir string }
 
 var (
 	fontMu    sync.Mutex
-	fontCache = map[string]*fontSet{}
+	fontCache = map[fontKey]*fontSet{}
+	// pinnedFonts keeps parsed pinned fonts per directory: the body font alone is ~17 MB.
+	pinnedFonts = map[string]*sfnt.Font{}
 )
 
-// loadFonts resolves the text font. override may be empty.
-func loadFonts(override string) (*fontSet, error) {
-	fontMu.Lock()
-	defer fontMu.Unlock()
-	if set, ok := fontCache[override]; ok {
-		return set, nil
+func pinnedFont(ctx context.Context, rf remoteFont, dir string) (*sfnt.Font, error) {
+	key := dir + "\x00" + rf.name
+	if f, ok := pinnedFonts[key]; ok {
+		return f, nil
 	}
-	var text *sfnt.Font
-	cjk := false
-	candidates := defaultFontCandidates()
-	if override != "" {
-		candidates = []string{override}
-	}
-	var lastErr error
-	for _, path := range candidates {
-		f, err := parseFontFile(path)
-		if err != nil {
-			if override != "" {
-				lastErr = fmt.Errorf("读取字体 %q 失败: %w", path, err)
-			}
-			continue
-		}
-		text, cjk = f, true
-		break
-	}
-	if override != "" && text == nil {
-		return nil, lastErr
-	}
-	if text == nil {
-		f, err := sfnt.Parse(goregular.TTF)
-		if err != nil {
-			return nil, err
-		}
-		text = f
-	}
-	mono, err := sfnt.Parse(gomono.TTF)
+	data, err := ensureFont(ctx, rf, dir)
 	if err != nil {
 		return nil, err
 	}
-	set := &fontSet{text: text, mono: mono, cjk: cjk}
+	f, err := sfnt.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("解析字体 %s 失败: %w", rf.name, err)
+	}
+	pinnedFonts[key] = f
+	return f, nil
+}
+
+// loadFonts resolves the fonts. override replaces the body font; dir is the
+// pinned-font cache directory (empty selects the default).
+func loadFonts(ctx context.Context, override, dir string) (*fontSet, error) {
+	fontMu.Lock()
+	defer fontMu.Unlock()
+	dir = fontDir(dir)
+	key := fontKey{override, dir}
+	if set, ok := fontCache[key]; ok {
+		return set, nil
+	}
+	set := &fontSet{}
+	var fetchErrs []error
+	if override != "" {
+		f, err := parseFontFile(override)
+		if err != nil {
+			return nil, fmt.Errorf("读取字体 %q 失败: %w", override, err)
+		}
+		set.text, set.cjk = f, true
+	} else {
+		if f, err := pinnedFont(ctx, lxgwZhenKai, dir); err == nil {
+			set.text, set.cjk = f, true
+		} else {
+			fetchErrs = append(fetchErrs, err)
+		}
+		for _, path := range systemFontCandidates() {
+			if set.text != nil {
+				break
+			}
+			if f, err := parseFontFile(path); err == nil {
+				set.text, set.cjk = f, true
+			}
+		}
+	}
+	if m, err := pinnedFont(ctx, stixTwoMath, dir); err == nil {
+		set.math = m
+	} else {
+		fetchErrs = append(fetchErrs, err)
+	}
+	set.fetchErr = errors.Join(fetchErrs...)
 	for _, f := range []struct {
 		dst  **sfnt.Font
 		data []byte
-	}{{&set.goReg, goregular.TTF}, {&set.goIt, goitalic.TTF}, {&set.goBold, gobold.TTF}, {&set.math, stix2mathregular.TTF}} {
+	}{{&set.goReg, goregular.TTF}, {&set.goIt, goitalic.TTF}, {&set.goBold, gobold.TTF}, {&set.mono, gomono.TTF}} {
 		parsed, err := sfnt.Parse(f.data)
 		if err != nil {
 			return nil, err
 		}
 		*f.dst = parsed
 	}
-	fontCache[override] = set
+	if set.text == nil {
+		set.text = set.goReg
+	}
+	// Only complete results are cached, so a transient download failure is
+	// retried (subject to the cooldown) instead of sticking for the process.
+	if set.fetchErr == nil {
+		fontCache[key] = set
+	}
 	return set, nil
 }
 
@@ -203,6 +233,9 @@ func (fs *faces) checkText(text string) error {
 			continue
 		}
 		if !fs.set.cjk || !hasGlyph(fs.set.text, r) {
+			if fs.set.fetchErr != nil {
+				return fmt.Errorf("%w（%v）", ErrNoCJKFont, fs.set.fetchErr)
+			}
 			return ErrNoCJKFont
 		}
 	}

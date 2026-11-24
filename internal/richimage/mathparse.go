@@ -498,7 +498,8 @@ func buildMathSymbols() map[string]mathSym {
 		"degree", "°", "ldots", "…", "dots", "…", "cdots", "⋯", "vdots", "⋮", "ddots", "⋱", "hbar", "ℏ", "ell", "ℓ",
 		"Re", "ℜ", "Im", "ℑ", "aleph", "ℵ", "prime", "′", "therefore", "∴", "because", "∵", "mid", "∣",
 		"uparrow", "↑", "downarrow", "↓", "lbrace", "{", "rbrace", "}", "langle", "⟨", "rangle", "⟩",
-		"lfloor", "⌊", "rfloor", "⌋", "lceil", "⌈", "rceil", "⌉", "vert", "|", "Vert", "‖", "backslash", "\\")
+		"lfloor", "⌊", "rfloor", "⌋", "lceil", "⌈", "rceil", "⌉", "vert", "|", "Vert", "‖", "backslash", "\\",
+		"blacksquare", "■", "square", "□", "Box", "□", "qed", "■")
 	add(kBin, fontRoman, "pm", "±", "mp", "∓", "times", "×", "div", "÷", "cdot", "∙", "ast", "∗", "star", "⋆",
 		"circ", "∘", "bullet", "•", "cap", "∩", "cup", "∪", "wedge", "∧", "land", "∧", "vee", "∨", "lor", "∨",
 		"oplus", "⊕", "otimes", "⊗", "setminus", "∖")

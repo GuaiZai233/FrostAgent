@@ -199,24 +199,69 @@ func (m *mathLayout) laySeq(s mseq, st mstyle) mbox {
 	return out
 }
 
-func (m *mathLayout) pick(sel int, r rune) *sfnt.Font {
+// mathAlnum maps a plain letter, digit or lowercase Greek letter to its
+// Unicode mathematical alphanumeric form (italic or bold), which STIX Two Math
+// draws with the proper TeX-style shapes. It returns r when there is none.
+func mathAlnum(r rune, bold bool) rune {
+	switch {
+	case r >= 'A' && r <= 'Z':
+		if bold {
+			return 0x1D400 + (r - 'A')
+		}
+		return 0x1D434 + (r - 'A')
+	case r >= 'a' && r <= 'z':
+		if bold {
+			return 0x1D41A + (r - 'a')
+		}
+		if r == 'h' {
+			return 0x210E // the italic h lives in the Letterlike block
+		}
+		return 0x1D44E + (r - 'a')
+	case r >= '0' && r <= '9' && bold:
+		return 0x1D7CE + (r - '0')
+	case r >= 0x3B1 && r <= 0x3C9 && !bold:
+		return 0x1D6FC + (r - 0x3B1)
+	}
+	return r
+}
+
+// pick chooses the font and the code point to draw for r. STIX Two Math leads
+// whenever it is available so formulas look like typeset TeX.
+func (m *mathLayout) pick(sel int, r rune) (*sfnt.Font, rune) {
 	set := m.fs.set
+	if set.math != nil {
+		switch sel {
+		case fontItalic:
+			if mr := mathAlnum(r, false); mr != r && hasGlyph(set.math, mr) {
+				return set.math, mr
+			}
+		case fontBold:
+			if mr := mathAlnum(r, true); mr != r && hasGlyph(set.math, mr) {
+				return set.math, mr
+			}
+		}
+		if hasGlyph(set.math, r) && (sel == fontRoman || !isBasicLatin(r)) {
+			return set.math, r
+		}
+	}
 	var order []*sfnt.Font
 	switch sel {
 	case fontItalic:
-		order = []*sfnt.Font{set.goIt, set.text, set.goReg, set.math}
+		order = []*sfnt.Font{set.goIt, set.text, set.goReg}
 	case fontBold:
-		order = []*sfnt.Font{set.goBold, set.text, set.goReg, set.math}
+		order = []*sfnt.Font{set.goBold, set.text, set.goReg}
 	default:
-		order = []*sfnt.Font{set.text, set.goReg, set.math}
+		order = []*sfnt.Font{set.text, set.goReg}
 	}
 	for _, f := range order {
 		if hasGlyph(f, r) {
-			return f
+			return f, r
 		}
 	}
-	return nil
+	return nil, r
 }
+
+func isBasicLatin(r rune) bool { return r < 0x80 }
 
 // strBox lays out text, choosing a font per rune so missing symbols fall back.
 func (m *mathLayout) strBox(text string, sel int, size float64) mbox {
@@ -234,7 +279,7 @@ func (m *mathLayout) strBox(text string, sel int, size float64) mbox {
 			split = true
 			continue
 		}
-		f := m.pick(sel, r)
+		f, r := m.pick(sel, r)
 		if f == nil {
 			m.fail("符号 %q 无法显示", string(r))
 			continue

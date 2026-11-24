@@ -39,15 +39,27 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 
 ## 字体
 
-默认使用思源黑体（Noto Sans CJK SC）。程序按顺序查找常见系统路径，Docker 镜像已安装
-`fonts-noto-cjk`。如需指定字体文件（`.otf` `.ttf` `.ttc`），设置环境变量：
+字体不内嵌进二进制，而是从上游 GitHub 仓库下载，固定版本并校验 SHA-256：
 
-```text
-FROSTAGENT_RICH_IMAGE_FONT=/path/to/SourceHanSansSC-Regular.otf
-```
+| 用途 | 字体 | 固定来源 |
+| --- | --- | --- |
+| 中英文正文 | 霞鹜臻楷 LXGW ZhenKai GB v0.825（约 17 MB，SIL OFL 1.1） | `github.com/lxgw/LxgwZhenKai` release v0.825 |
+| 数学公式 | STIX Two Math v2.13（约 0.8 MB，SIL OFL 1.1） | `github.com/stipub/stixfonts` 固定到 v2.13 的提交 |
 
-找不到 CJK 字体时，含中文的内容会返回明确错误，而不是渲染成方块。数学符号使用内嵌的
-STIX Two Math 兜底，因此公式不依赖系统字体。
+URL、版本和哈希写死在 `internal/richimage/fontstore.go`，不能由模型或配置改成其它地址。
+
+- **Docker 镜像**：构建时下载并校验，放在 `/usr/share/fonts/frostagent`，并通过
+  `FROSTAGENT_RICH_IMAGE_FONT_DIR` 指向该目录，运行时无需联网。
+- **本地运行**：第一次渲染时下载到用户缓存目录（`<UserCacheDir>/frostagent/fonts`），之后直接使用。
+  可用 `FROSTAGENT_RICH_IMAGE_FONT_DIR` 指定目录。离线环境把两个文件按上表文件名预先放进该目录即可，
+  程序只接受哈希匹配的文件，损坏或被改动的缓存文件会被拒绝并重新下载。
+- 下载失败会在 5 分钟内不再重试，避免每次渲染都卡在网络上；调用方取消不计入失败。
+- 需要替换正文字体时，设置 `FROSTAGENT_RICH_IMAGE_FONT=/path/to/font.otf`（支持 `.otf` `.ttf` `.ttc`）。
+- 两个字体都下载失败且系统里没有思源黑体等 CJK 字体时，含中文的内容返回明确错误；
+  没有 STIX 时公式退回到内置的 Go 字体，缺失的符号以源码显示。
+
+字体的许可证文本见仓库根目录的 `THIRD_PARTY_NOTICES.md`（Docker 镜像内位于
+`/usr/share/doc/frostagent/`）。这两个环境变量是部署级设置，从进程环境变量读取。
 
 ## 发送与限制
 

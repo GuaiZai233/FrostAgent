@@ -1,6 +1,7 @@
 # Send only the source and manifests needed to build the image.
 *
 !Dockerfile
+!THIRD_PARTY_NOTICES.md
 !go.mod
 !go.sum
 !package.json
