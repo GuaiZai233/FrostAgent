@@ -84,6 +84,7 @@
   {"key": "SECURITY_CLASSIFIER_TIMEOUT", "scope": "shared", "catalog": "restart", "instanceRestart": true, "controlRestart": true, "sqlHot": false, "frontend": "reload", "seed": null},
   {"key": "SECURITY_CONTROL_MODE", "scope": "global", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": null},
   {"key": "SECURITY_GATEWAY_TIMEOUT", "scope": "shared", "catalog": "restart", "instanceRestart": true, "controlRestart": true, "sqlHot": false, "frontend": "reload", "seed": null},
+  {"key": "SILENT_IGNORE_USER_IDS", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": ""},
   {"key": "STICKER_ACTIVITY", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "dedicated", "seed": "0"},
   {"key": "STICKER_ACTIVITY_MODE", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "dedicated", "seed": "bot_turns"},
   {"key": "SYSTEM_PROMPT", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "dedicated", "seed": "你是一个乐于助人的助手。"},
