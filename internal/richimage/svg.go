@@ -7,8 +7,10 @@ import (
 	"image/color"
 	"image/draw"
 	"io"
+	"math"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/srwiley/oksvg"
 	"github.com/srwiley/rasterx"
@@ -30,10 +32,19 @@ type svgProps struct {
 	tx, ty float64
 }
 
+// firstField returns the first whitespace/comma separated token, or "".
+func firstField(s string) string {
+	f := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
+}
+
 func parseFloat(s string) (float64, bool) {
 	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "px"))
 	v, err := strconv.ParseFloat(s, 64)
-	return v, err == nil
+	return v, err == nil && !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
 // applyAttr updates inherited text properties from one attribute.
@@ -107,11 +118,11 @@ func (c *canvas) parseSVGTexts(content string) []svgText {
 						}
 					}
 				case "x":
-					if v, ok := parseFloat(strings.Fields(a.Value + " ")[0]); ok {
+					if v, ok := parseFloat(firstField(a.Value)); ok {
 						x = &v
 					}
 				case "y":
-					if v, ok := parseFloat(strings.Fields(a.Value + " ")[0]); ok {
+					if v, ok := parseFloat(firstField(a.Value)); ok {
 						y = &v
 					}
 				case "dx":

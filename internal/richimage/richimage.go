@@ -25,7 +25,13 @@ const (
 	scale = 2
 	// maxPixelHeight bounds memory and keeps the image readable in chat.
 	maxPixelHeight = 6000
+	// maxMathPixels caps all formula bitmaps of one render (about 32 MiB RGBA).
+	maxMathPixels = 8 << 20
+	// maxConcurrentRenders bounds memory when several sessions render at once.
+	maxConcurrentRenders = 2
 )
+
+var renderSlots = make(chan struct{}, maxConcurrentRenders)
 
 // Request describes one render.
 type Request struct {
@@ -40,7 +46,15 @@ type Request struct {
 }
 
 // Render returns PNG bytes for the request.
-func Render(req Request) ([]byte, error) {
+func Render(req Request) (data []byte, err error) {
+	renderSlots <- struct{}{}
+	defer func() { <-renderSlots }()
+	// Model-written input must surface as an error, never as a panic.
+	defer func() {
+		if r := recover(); r != nil {
+			data, err = nil, fmt.Errorf("渲染内部错误: %v", r)
+		}
+	}()
 	if strings.TrimSpace(req.Content) == "" {
 		return nil, fmt.Errorf("content 不能为空")
 	}
@@ -57,7 +71,7 @@ func Render(req Request) ([]byte, error) {
 	}
 	fs := newFaces(fonts)
 	defer fs.close()
-	c := &canvas{fs: fs, th: lightTheme, scale: scale}
+	c := &canvas{fs: fs, th: lightTheme, scale: scale, mathBudget: maxMathPixels}
 	pxWidth := width * scale
 
 	switch req.Format {

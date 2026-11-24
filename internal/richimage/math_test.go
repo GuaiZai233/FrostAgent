@@ -56,12 +56,13 @@ func TestRenderMathFormulas(t *testing.T) {
 	}
 	fs := newFaces(fonts)
 	defer fs.close()
+	budget := maxMathPixels
 	for _, f := range supportedFormulas {
 		if strings.Contains(f, "当") && !fonts.cjk {
 			continue
 		}
 		for _, display := range []bool{false, true} {
-			img, base, err := renderMath(fs, f, 32, display, lightTheme.fg)
+			img, base, err := renderMath(fs, f, 32, display, lightTheme.fg, &budget)
 			if err != nil {
 				t.Errorf("%q (display=%v): %v", f, display, err)
 				continue

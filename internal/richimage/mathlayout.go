@@ -12,6 +12,9 @@ import (
 	"golang.org/x/image/vector"
 )
 
+// maxMathDim bounds one formula image side; the shared budget bounds the total.
+const maxMathDim = 3000
+
 type mbox struct {
 	w, asc, desc float64
 	draw         func(dst *image.RGBA, x, base float64)
@@ -45,7 +48,7 @@ func (m *mathLayout) fail(format string, args ...any) {
 
 // renderMath draws expr to a transparent image and returns the baseline offset
 // from the image top.
-func renderMath(fs *faces, expr string, size float64, display bool, col color.RGBA) (*image.RGBA, float64, error) {
+func renderMath(fs *faces, expr string, size float64, display bool, col color.RGBA, budget *int) (*image.RGBA, float64, error) {
 	seq, err := parseMath(expr)
 	if err != nil {
 		return nil, 0, err
@@ -58,9 +61,10 @@ func renderMath(fs *faces, expr string, size float64, display bool, col color.RG
 	pad := size * 0.1
 	w := int(math.Ceil(box.w + 2*pad))
 	h := int(math.Ceil(box.asc + box.desc + 2*pad))
-	if w <= 0 || h <= 0 || w > 8000 || h > 4000 {
+	if w <= 0 || h <= 0 || w > maxMathDim || h > maxMathDim || w*h > *budget {
 		return nil, 0, fmt.Errorf("公式尺寸过大")
 	}
+	*budget -= w * h
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
 	base := box.asc + pad
 	box.draw(img, pad, base)
@@ -223,9 +227,11 @@ func (m *mathLayout) strBox(text string, sel int, size float64) mbox {
 	}
 	var segs []seg
 	var out mbox
+	split := true // the next glyph starts a new segment
 	for _, r := range text {
 		if r == ' ' {
 			out.w += size * 0.28
+			split = true
 			continue
 		}
 		f := m.pick(sel, r)
@@ -239,11 +245,12 @@ func (m *mathLayout) strBox(text string, sel int, size float64) mbox {
 			continue
 		}
 		bounds, adv, _ := face.GlyphBounds(r)
-		if len(segs) > 0 && segs[len(segs)-1].f == f {
+		if !split && len(segs) > 0 && segs[len(segs)-1].f == f {
 			segs[len(segs)-1].text += string(r)
 		} else {
 			segs = append(segs, seg{f: f, text: string(r), x: out.w})
 		}
+		split = false
 		out.w += float64(adv) / 64
 		out.asc = math.Max(out.asc, -float64(bounds.Min.Y)/64)
 		out.desc = math.Max(out.desc, float64(bounds.Max.Y)/64)

@@ -3,6 +3,7 @@ package richimage
 import (
 	"fmt"
 	"image"
+	"math"
 	"strconv"
 	"strings"
 
@@ -154,7 +155,7 @@ type mdRenderer struct {
 func (m *mdRenderer) width() float64 { return m.right - m.left }
 
 func renderMarkdown(c *canvas, content string, width float64) (float64, error) {
-	prepared, items := extractMath(content)
+	prepared, items := extractMath(scrubReserved(content))
 	src := []byte(prepared)
 	md := goldmark.New(goldmark.WithExtensions(extension.Table, extension.Strikethrough))
 	doc := md.Parser().Parse(text.NewReader(src))
@@ -379,16 +380,16 @@ func (m *mdRenderer) table(t *east.Table) {
 	}
 	widths := append([]float64(nil), natural...)
 	if total > avail {
-		minW := 3*m.base + 2*cp
+		minW := math.Min(3*m.base+2*cp, avail/float64(cols))
 		fixedW, flex := 0.0, 0.0
 		for i, w := range natural {
+			widths[i] = minW
 			if w <= minW {
 				fixedW += w
 			} else {
 				flex += w - minW
 				fixedW += minW
 			}
-			widths[i] = minW
 		}
 		if flex > 0 && avail > fixedW {
 			for i, w := range natural {
@@ -400,6 +401,22 @@ func (m *mdRenderer) table(t *east.Table) {
 		for i, w := range natural {
 			if w < minW {
 				widths[i] = w
+			}
+		}
+		// Rounding can leave a hair over; the columns must fit inside the canvas.
+		sum := 0.0
+		for _, w := range widths {
+			sum += w
+		}
+		if sum > avail {
+			for i := range widths {
+				widths[i] *= avail / sum
+			}
+		}
+		for i, w := range widths {
+			if w < natural[i]-0.5 && w-2*cp < m.base*0.8 {
+				c.fail(fmt.Errorf("表格列太多，无法在当前宽度内显示；请增大 width 或拆分表格"))
+				return
 			}
 		}
 	}
@@ -454,7 +471,7 @@ func (m *mdRenderer) soleDisplayMath(n ast.Node) (mathItem, bool) {
 	}
 	s := strings.TrimSpace(string(t.Segment.Value(m.src)))
 	idx, ok := parsePlaceholder(s)
-	if !ok || idx >= len(m.math) || !m.math[idx].display {
+	if !ok || idx < 0 || idx >= len(m.math) || !m.math[idx].display {
 		return mathItem{}, false
 	}
 	return m.math[idx], true
@@ -505,14 +522,14 @@ func (m *mdRenderer) inline(parent ast.Node, st style, size float64) []atom {
 		for ch := n.FirstChild(); ch != nil; ch = ch.NextSibling() {
 			switch v := ch.(type) {
 			case *ast.Text:
-				out = append(out, m.textWithMath(decode(v.Segment.Value(m.src)), st, size)...)
+				out = append(out, m.textWithMath(string(v.Segment.Value(m.src)), true, st, size)...)
 				if v.HardLineBreak() {
 					out = append(out, atom{br: true, size: size})
 				} else if v.SoftLineBreak() {
 					out = append(out, atom{text: " ", st: st, size: size, w: m.c.measure(" ", st, size), space: true})
 				}
 			case *ast.String:
-				out = append(out, m.textWithMath(string(v.Value), st, size)...)
+				out = append(out, m.textWithMath(string(v.Value), false, st, size)...)
 			case *ast.CodeSpan:
 				var sb strings.Builder
 				for t := v.FirstChild(); t != nil; t = t.NextSibling() {
@@ -563,8 +580,29 @@ func (m *mdRenderer) inline(parent ast.Node, st style, size float64) []atom {
 	return out
 }
 
-// textWithMath splits placeholders back into math atoms.
-func (m *mdRenderer) textWithMath(s string, st style, size float64) []atom {
+// scrubReserved replaces the private-use runes reserved for math placeholders,
+// so user text can never impersonate a generated placeholder.
+func scrubReserved(s string) string {
+	if !strings.ContainsAny(s, string([]rune{phOpen, phClose})) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if r == phOpen || r == phClose {
+			return '?'
+		}
+		return r
+	}, s)
+}
+
+// textWithMath splits generated placeholders back into math atoms. Text between
+// placeholders is entity-decoded (when raw) and scrubbed of reserved runes.
+func (m *mdRenderer) textWithMath(s string, raw bool, st style, size float64) []atom {
+	piece := func(p string) string {
+		if raw {
+			p = decode([]byte(p))
+		}
+		return scrubReserved(p)
+	}
 	var out []atom
 	runes := []rune(s)
 	start := 0
@@ -580,13 +618,13 @@ func (m *mdRenderer) textWithMath(s string, st style, size float64) []atom {
 			break
 		}
 		idx, err := strconv.Atoi(string(runes[i+1 : j]))
-		if err != nil || idx >= len(m.math) {
+		if err != nil || idx < 0 || idx >= len(m.math) {
 			continue
 		}
-		out = append(out, m.c.textAtoms(string(runes[start:i]), st, size)...)
+		out = append(out, m.c.textAtoms(piece(string(runes[start:i])), st, size)...)
 		out = append(out, m.mathAtoms(m.math[idx], size)...)
 		start = j + 1
 		i = j
 	}
-	return append(out, m.c.textAtoms(string(runes[start:]), st, size)...)
+	return append(out, m.c.textAtoms(piece(string(runes[start:])), st, size)...)
 }

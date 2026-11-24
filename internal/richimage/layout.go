@@ -58,6 +58,8 @@ type canvas struct {
 	scale float64
 	ops   []func(*image.RGBA)
 	err   error
+	// mathBudget is the remaining pixel count formula images may allocate.
+	mathBudget int
 }
 
 func (c *canvas) fail(err error) {
@@ -194,7 +196,7 @@ func (c *canvas) mathImage(expr string, size float64, display bool, col color.RG
 			img, base, err = nil, 0, fmt.Errorf("公式无法渲染: %v", r)
 		}
 	}()
-	return renderMath(c.fs, expr, size, display, col)
+	return renderMath(c.fs, expr, size, display, col, &c.mathBudget)
 }
 
 // flow lays out atoms inside [x, x+maxW) starting at y and returns the height used.
