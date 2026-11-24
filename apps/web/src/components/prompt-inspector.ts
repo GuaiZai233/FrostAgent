@@ -4,7 +4,7 @@ import { escapeHtml, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
-import { bindToolArguments, parseToolHistoryNote, readTargetFromArguments, refFromToolResult, renderToolActivity, type ToolActivity, type ToolActivityEntry, type ToolArgumentsLoader } from './tool-activity';
+import { bindToolArguments, extractToolActivityBlock, parseToolHistoryNote, readTargetFromArguments, refFromToolResult, renderToolActivity, type ToolActivity, type ToolActivityEntry, type ToolArgumentsLoader } from './tool-activity';
 
 export interface GroupMessageItem {
   id?: string;
@@ -115,6 +115,8 @@ export interface ParsedPrompt {
   systemContext?: string;
   replyContext?: string;
   deliveryContext?: string;
+  /** Backend-generated tool records attached to the final user turn of this request. */
+  toolActivity?: ToolActivity[];
   images: PromptImage[];
   raw: string;
   hasGroupMessages: boolean;
@@ -547,6 +549,14 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
             }] } });
           }
         }
+        // The backend block follows system_context in the final user turn. Remove it
+        // before the private envelope is parsed; the block is shown as its own card.
+        for (let i = requestMessages.length - 1; i >= 0; i--) {
+          if (requestMessages[i].role !== 'user') continue;
+          const stripped = extractToolActivityBlock(requestMessages[i].content);
+          if (stripped) requestMessages[i] = { ...requestMessages[i], content: stripped.rest, rawText: stripped.rest };
+          break;
+        }
         if (requestMessages.some((m) => m.toolActivity || (m.role === 'assistant' && (m.toolHistoryRunId || parseToolHistoryNote(m.content))))) {
           result.requestMessages = requestMessages.map(privateHistoryMessage);
         }
@@ -555,6 +565,12 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
     } catch {
       // Not valid JSON, continue with raw text parsing
     }
+  }
+
+  const toolBlock = extractToolActivityBlock(textToParse);
+  if (toolBlock) {
+    result.toolActivity = toolBlock.activities;
+    textToParse = toolBlock.rest;
   }
 
   // 2. Extract XML-like prompt tags from text
@@ -939,6 +955,23 @@ export function renderPromptInspector(
             <div class="card p-3 text-xs leading-relaxed select-text bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200 whitespace-pre-wrap">${escapeHtml(
               parsed.deliveryContext,
             )}</div>
+          </div>
+        `
+            : ''
+        }
+
+        <!-- Tool records the backend attached to this request (never stored in history) -->
+        ${
+          parsed.toolActivity?.length
+            ? `
+          <div class="prompt-section">
+            <div class="prompt-section-header">
+              <div class="prompt-section-title">
+                <span class="text-primary flex items-center">${icon('wrench', 'w-3.5 h-3.5')}</span>
+                <span>近期工具记录 (recent_tool_activity)</span>
+              </div>
+            </div>
+            ${parsed.toolActivity.map(renderToolActivity).join('')}
           </div>
         `
             : ''

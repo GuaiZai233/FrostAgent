@@ -46,14 +46,22 @@ func TestToolHistoryCrossTurnAndReadOfRead(t *testing.T) {
 		turn.Wait()
 		messages, _, _ := session.PrepareTurnMessages(turn, fmt.Sprintf("fixture-input-%d", phase), fmt.Sprintf("fixture-input-%d", phase), nil)
 		if phase > 0 {
+			// Session history stays clean: the reference never becomes a stored message.
 			encoded, _ := json.Marshal(messages)
-			if strings.Contains(string(encoded), "7700000000000000001") || !strings.Contains(string(encoded), target) {
-				t.Fatalf("cross-turn context must retain reference, not body: %s", encoded)
+			if strings.Contains(string(encoded), "7700000000000000001") || strings.Contains(string(encoded), target) {
+				t.Fatalf("tool records must not enter session history: %s", encoded)
 			}
 		}
 		calls := 0
 		engine.Provider = specificReplyProvider{chat: func(req core.ChatRequest) core.ChatMessage {
 			calls++
+			if calls == 1 && phase > 0 {
+				// The first request of a later turn carries the reference, not the body.
+				encoded, _ := json.Marshal(req.Messages)
+				if strings.Contains(string(encoded), "7700000000000000001") || !strings.Contains(string(encoded), target) {
+					t.Fatalf("cross-turn request must retain reference, not body: %s", encoded)
+				}
+			}
 			if calls == 1 {
 				name, args := create.Name(), `{"product":"fixture-matcha"}`
 				if phase > 0 {

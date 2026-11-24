@@ -376,6 +376,8 @@ func (e *Engine) RunMessagesWithContext(
 	if runContext.Proactive && runContext.ProactiveStickerOnly {
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
+	// Tool records reach the model as request-local context, never as history.
+	messages = e.withToolActivity(ctx, messages, runContext)
 
 	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())

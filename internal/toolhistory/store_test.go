@@ -94,3 +94,74 @@ func TestToolHistoryReferencesAndQuarantine(t *testing.T) {
 		t.Fatal("uninspected results must remain quarantined")
 	}
 }
+
+func TestRecentBySourceSelectsPerSourceWithoutCrowding(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, id := range []string{"fixture-instance", "fixture-other"} {
+		if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: id, Name: id, CreatedAt: time.Now()}, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"}
+	base := time.Now().UTC().Truncate(time.Millisecond)
+	offset := 0
+	save := func(s *Store, sc chathistory.Scope, source string) string {
+		offset++
+		r := Record{Scope: sc, RefID: NewRef(), RunID: "fixture-run", ActorID: "fixture-actor", Tool: "fixture-tool", SourceMessageID: source,
+			ArgumentsRaw: `{"secret":"fixture"}`, ResultRaw: "fixture-result", State: "complete", OccurredAt: base.Add(time.Duration(offset) * time.Second)}
+		if err := s.Save(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		return r.RefID
+	}
+	store := NewStore(db, "fixture-instance")
+	older := save(store, scope, "source-old")
+	middle := []string{save(store, scope, "source-mid"), save(store, scope, "source-mid")}
+	var heavy []string
+	for i := 0; i < 40; i++ {
+		heavy = append(heavy, save(store, scope, "source-heavy"))
+	}
+	empty := save(store, scope, "")
+	save(store, chathistory.Scope{Platform: "qq", MessageType: "group", TargetID: "fixture-user"}, "foreign-scope")
+	save(NewStore(db, "fixture-other"), scope, "foreign-instance")
+
+	got, err := store.RecentBySource(ctx, scope, 3, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].SourceMessageID != "" || got[1].SourceMessageID != "source-heavy" || got[2].SourceMessageID != "source-mid" {
+		t.Fatalf("not the newest three sources, newest first: %+v", got)
+	}
+	if got[0].Total != 1 || len(got[0].Refs) != 1 || got[0].Refs[0] != empty {
+		t.Fatalf("a call without a source message forms its own group: %+v", got[0])
+	}
+	wantHeavy := []string{heavy[39], heavy[38], heavy[37], heavy[36], heavy[35]}
+	if got[1].Total != 40 || len(got[1].Refs) != 5 {
+		t.Fatalf("heavy source must keep its newest five and report its real total: %+v", got[1])
+	}
+	for i, ref := range wantHeavy {
+		if got[1].Refs[i] != ref {
+			t.Fatalf("heavy refs are not newest first: %+v", got[1].Refs)
+		}
+	}
+	if got[2].Total != 2 || len(got[2].Refs) != 2 || got[2].Refs[0] != middle[1] || got[2].Refs[1] != middle[0] {
+		t.Fatalf("an earlier source must survive a heavy newer one: %+v", got[2])
+	}
+	all, err := store.RecentBySource(ctx, scope, 10, 5)
+	if err != nil || len(all) != 4 || all[3].SourceMessageID != "source-old" || all[3].Refs[0] != older {
+		t.Fatalf("scope or instance leaked into the selection: %+v %v", all, err)
+	}
+	for _, args := range [][2]int{{0, 5}, {3, 0}, {-1, 5}} {
+		if none, err := store.RecentBySource(ctx, scope, args[0], args[1]); err != nil || len(none) != 0 {
+			t.Fatalf("non-positive limits must return nothing: %v %d %v", args, len(none), err)
+		}
+	}
+	if _, err := store.RecentBySource(ctx, chathistory.Scope{}, 3, 5); err == nil {
+		t.Fatal("invalid scope must be rejected")
+	}
+}

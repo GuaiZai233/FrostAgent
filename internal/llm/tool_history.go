@@ -14,10 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// toolHistoryNotice closes every injected tool record so the model does not
-// mistake the placeholder for ordinary assistant output and imitate it.
-const toolHistoryNotice = "此为内部占位元数据，由后端自动生成，非常规Assistant输出结果，禁止模仿该格式输出！"
-
 var errToolHistoryStorage = errors.New("工具历史存储失败，已停止执行；请检查操作状态，勿自动重复执行")
 
 // ToolHistoryScope derives archive authority exclusively from trusted adapter state.
@@ -80,7 +76,6 @@ func (e *Engine) executeRecordedTool(ctx context.Context, tool ToolExecutor, cal
 	if err := e.saveToolHistory(ctx, record); err != nil {
 		return core.ToolExecutionResult{}, err
 	}
-	e.noteToolHistory(run, record)
 	wrapped := recordedTool{ToolExecutor: tool, execute: func(execCtx context.Context) (core.ToolExecutionResult, error) {
 		output, execErr := executeToolResult(execCtx, tool, call)
 		var envelope struct {
@@ -149,52 +144,4 @@ func compactArchivedToolMessages(messages []ChatMessage) {
 		}
 		msg.Content = "【历史工具结果已归档，请用 read_tool_history 读取原文】 (ref_id: " + msg.ToolHistoryRefID + ")"
 	}
-}
-
-// noteToolHistory retains one ordinary timeline annotation per execution run.
-// It carries no platform message identity and never counts as a delivered reply.
-func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
-	if e.SessionManager == nil || run.SessionID == "" {
-		return
-	}
-	current, exists := e.SessionManager.Get(run.SessionID)
-	if !exists {
-		return
-	}
-	session, ok := current.(*SessionContext)
-	if !ok {
-		return
-	}
-	label := "工具调用"
-	if record.Tool == "read_tool_history" {
-		label = "历史回查"
-	}
-	line := "- " + label + ": " + record.Tool + " (ref_id: " + record.RefID + ")"
-	if record.Tool == "read_tool_history" {
-		var args struct {
-			Ref string `json:"read_target_ref_id"`
-		}
-		if json.Unmarshal([]byte(record.ArgumentsRaw), &args) == nil && toolhistory.ValidRef(args.Ref) {
-			line += " (read_target_ref_id: " + args.Ref + ")"
-		}
-	}
-	session.mu.Lock()
-	defer session.unlockCheckpoint()
-	if run.Epoch != 0 && session.epoch != run.Epoch {
-		return
-	}
-	for i := range session.History {
-		if session.History[i].ToolHistoryRunID == record.RunID {
-			body := strings.TrimSuffix(contentToText(session.History[i].Content), "\n"+toolHistoryNotice)
-			session.History[i].Content = body + "\n" + line + "\n" + toolHistoryNotice
-			return
-		}
-	}
-	header := "【工具执行记录】"
-	if record.SourceMessageID != "" {
-		encoded, _ := json.Marshal(record.SourceMessageID)
-		header += "\n来源消息: " + string(encoded)
-	}
-	session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: header + "\n" + strings.TrimSpace(line) + "\n" + toolHistoryNotice})
-	session.History[len(session.History)-1].ToolHistoryRunID = record.RunID
 }
