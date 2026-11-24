@@ -90,10 +90,11 @@ func (fs *faces) splitRuns(text string, mono bool) ([]run, error) {
 	for _, r := range text {
 		var f *sfnt.Font
 		switch {
+		case mono && r < 0x80:
+			// ASCII in code style, spaces included, keeps the monospace advance.
+			f = fs.set.mono
 		case unicode.IsSpace(r) || unicode.IsControl(r):
 			f = fs.set.text
-		case mono && r < 0x80:
-			f = fs.set.mono
 		default:
 			g, ok := fs.glyphFont(r)
 			if !ok {

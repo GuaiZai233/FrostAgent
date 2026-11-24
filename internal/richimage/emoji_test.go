@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"golang.org/x/image/font"
 )
 
 // Without the emoji font, an emoji must fail the render instead of silently
@@ -79,4 +81,41 @@ func TestEmojiRendersWithPinnedFont(t *testing.T) {
 		t.Fatal("emoji line looks blank")
 	}
 	saveIfRequested(t, "emoji", withEmoji)
+}
+
+// Code-style spaces and indentation must advance with the monospace face so
+// columns line up with the monospace glyphs around them.
+func TestCodeSpacesUseMonoFont(t *testing.T) {
+	set, err := loadFonts(context.Background(), "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := newFaces(set)
+	defer fs.close()
+	for _, text := range []string{"x = 1", "    return a", "\tb"} {
+		runs, err := fs.splitRuns(text, true)
+		if err != nil {
+			t.Fatalf("%q: %v", text, err)
+		}
+		for _, r := range runs {
+			if r.font != set.mono {
+				t.Errorf("%q: run %q uses a non-mono font", text, r.text)
+			}
+		}
+	}
+	// A code-style space must measure exactly like the mono space advance.
+	c := &canvas{fs: fs, th: lightTheme, scale: 2}
+	gotSpace := c.measure(" ", style{code: true}, 16)
+	face, err := fs.faceOf(set.mono, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSpace := float64(font.MeasureString(face, " ")) / 64
+	if gotSpace != wantSpace {
+		t.Fatalf("code space width %v, mono space advance %v", gotSpace, wantSpace)
+	}
+	// Non-ASCII whitespace still falls back to the body font without failing.
+	if _, err := fs.splitRuns("a　b", true); err != nil {
+		t.Fatalf("ideographic space must not fail: %v", err)
+	}
 }
