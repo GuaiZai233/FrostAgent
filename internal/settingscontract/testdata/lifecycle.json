@@ -88,6 +88,7 @@
   {"key": "STICKER_ACTIVITY_MODE", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "dedicated", "seed": "bot_turns"},
   {"key": "SYSTEM_PROMPT", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "dedicated", "seed": "你是一个乐于助人的助手。"},
   {"key": "TIME_SLEEP_TIMEOUT_SECONDS", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": false, "frontend": "hot", "seed": null},
+  {"key": "RICH_IMAGE_THEME_MODE", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": false, "frontend": "hidden", "seed": null},
   {"key": "WS_ALLOWED_ORIGINS", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": null},
   {"key": "WS_LISTEN_ADDR", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": false, "frontend": "reload", "seed": null}
 ]

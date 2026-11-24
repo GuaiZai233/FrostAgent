@@ -25,7 +25,9 @@ const (
 
 // SendRichImageTool renders Markdown (with LaTeX math) or SVG to a PNG and
 // sends it to the active conversation, for platforms that only carry text.
-func SendRichImageTool() Tool {
+// The theme mode is read per call through getenv, so setting changes apply to
+// the next render without a restart.
+func SendRichImageTool(getenv func(string) string) Tool {
 	return Tool{
 		name: SendRichImageToolName,
 		description: "Render content into a PNG image and send it to the active conversation. Use it when plain text cannot express the answer well: math derivations and formulas, tables, structured notes, code listings, or diagrams of abstract concepts. " +
@@ -77,10 +79,20 @@ func SendRichImageTool() Tool {
 			if err := decoder.Decode(&input); err != nil {
 				return textResult(""), fmt.Errorf("send_rich_image 参数不合法: %w", err)
 			}
+			// An invalid stored value cannot pass validation on save, so it can only
+			// come from a hand-edited environment; fall back to the model default.
+			var raw string
+			if getenv != nil {
+				raw = getenv(richimage.ThemeModeKey)
+			}
+			mode, err := richimage.ParseThemeMode(raw)
+			if err != nil {
+				mode = richimage.ThemeModeModel
+			}
 			data, err := richimage.RenderContext(ctx, richimage.Request{
 				Format:  input.Format,
 				Content: input.Content,
-				Theme:   input.Theme,
+				Theme:   richimage.EffectiveTheme(mode, input.Theme, time.Now()),
 				Width:   input.Width,
 				// Fonts are a deployment-level setting, read from the process environment.
 				FontPath: strings.TrimSpace(os.Getenv(richimage.FontEnvKey)),

@@ -205,7 +205,7 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 	registry[sendMsgTool.Name()] = sendMsgTool
 	qqTool := tools.QQTool()
 	registry[qqTool.Name()] = qqTool
-	richImageTool := tools.SendRichImageTool()
+	richImageTool := tools.SendRichImageTool(config.Get)
 	registry[richImageTool.Name()] = richImageTool
 	staySilentTool := tools.StaySilentTool()
 	registry[staySilentTool.Name()] = staySilentTool

@@ -25,7 +25,7 @@ func richImageContext(run llm.RunContext) context.Context {
 }
 
 func TestSendRichImageProducesInlineImageAction(t *testing.T) {
-	tool := SendRichImageTool()
+	tool := SendRichImageTool(nil)
 	args := `{"format":"markdown","content":"Solve $x^2-1=0$:\n\n$$x=\\pm 1$$"}`
 	result, err := tool.executeResult(richImageContext(llm.RunContext{SessionID: "s"}), args)
 	if err != nil {
@@ -60,7 +60,7 @@ func TestSendRichImageProducesInlineImageAction(t *testing.T) {
 }
 
 func TestSendRichImageRejectsUnavailableContexts(t *testing.T) {
-	tool := SendRichImageTool()
+	tool := SendRichImageTool(nil)
 	args := `{"format":"markdown","content":"hi"}`
 	for name, run := range map[string]llm.RunContext{
 		"proactive": {Proactive: true},
@@ -75,7 +75,7 @@ func TestSendRichImageRejectsUnavailableContexts(t *testing.T) {
 }
 
 func TestSendRichImageValidatesInput(t *testing.T) {
-	tool := SendRichImageTool()
+	tool := SendRichImageTool(nil)
 	ctx := richImageContext(llm.RunContext{SessionID: "s"})
 	for name, args := range map[string]string{
 		"bad json":      `{`,
@@ -96,7 +96,7 @@ func TestSendRichImageValidatesInput(t *testing.T) {
 }
 
 func TestSendRichImageMissingFontIsReported(t *testing.T) {
-	tool := SendRichImageTool()
+	tool := SendRichImageTool(nil)
 	ctx := richImageContext(llm.RunContext{SessionID: "s"})
 	t.Setenv(richimage.FontEnvKey, "/nonexistent/font.otf")
 	// The per-instance scope may not read process env; only assert that when it
@@ -108,7 +108,7 @@ func TestSendRichImageMissingFontIsReported(t *testing.T) {
 }
 
 func TestSendRichImageIsNotProactiveAllowed(t *testing.T) {
-	if SendRichImageTool().IsProactiveAllowed() {
+	if SendRichImageTool(nil).IsProactiveAllowed() {
 		t.Fatal("send_rich_image must not be callable during unaddressed proactive turns")
 	}
 }
@@ -116,7 +116,7 @@ func TestSendRichImageIsNotProactiveAllowed(t *testing.T) {
 func TestSendRichImageCanceledContextSendsNothing(t *testing.T) {
 	ctx, cancel := context.WithCancel(richImageContext(llm.RunContext{SessionID: "s"}))
 	cancel()
-	result, err := SendRichImageTool().executeResult(ctx, `{"format":"markdown","content":"hi"}`)
+	result, err := SendRichImageTool(nil).executeResult(ctx, `{"format":"markdown","content":"hi"}`)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
@@ -128,7 +128,7 @@ func TestSendRichImageCanceledContextSendsNothing(t *testing.T) {
 func TestSendRichImageRejectsSVGUse(t *testing.T) {
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><defs><g id="a"><use href="#a"/></g></defs><use href="#a"/></svg>`
 	args, _ := json.Marshal(map[string]string{"format": "svg", "content": svg})
-	if _, err := SendRichImageTool().executeResult(richImageContext(llm.RunContext{SessionID: "s"}), string(args)); err == nil {
+	if _, err := SendRichImageTool(nil).executeResult(richImageContext(llm.RunContext{SessionID: "s"}), string(args)); err == nil {
 		t.Fatal("cyclic <use> must be rejected")
 	}
 }

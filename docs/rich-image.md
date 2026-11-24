@@ -10,7 +10,19 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 | --- | --- |
 | `format` | `markdown` 或 `svg`。不支持 HTML。 |
 | `content` | 源文本。Markdown 最大 20000 字节，SVG 最大 100000 字节。 |
-| `theme` | `light`（默认）或 `dark`，仅对 Markdown 生效；SVG 固定白底。 |
+| `theme` | `light`（默认）或 `dark`，仅对 Markdown 生效；SVG 固定白底。是否生效取决于下面的 `RICH_IMAGE_THEME_MODE` 设置。 |
+
+### 深浅色模式（RICH_IMAGE_THEME_MODE）
+
+服务端设置，每次渲染时读取，修改后下一次调用即生效，无需重启。
+
+| 值 | 行为 |
+| --- | --- |
+| 留空或 `model`（默认） | 使用模型传入的 `theme`，未传则为 `light`。 |
+| `day_night` | 忽略模型传入的 `theme`。服务端本地时间 20:00 至次日 04:00 用 `dark`，其余时间用 `light`。 |
+
+- 夜间判定使用**服务端本地时区**。Docker 容器默认是 UTC，如需按本地时间切换，请设置 `TZ`。
+- 非法值会在保存时被拒绝；若环境变量被手动改成非法值，则按默认的 `model` 处理。
 | `width` | 版面宽度（CSS 像素，320–1200，默认 640）；PNG 为两倍宽度。 |
 
 渲染后高度超过限制时会返回错误，由模型拆成多张图重新发送。渲染失败同样以工具错误返回，
