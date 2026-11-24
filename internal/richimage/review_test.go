@@ -258,3 +258,26 @@ func TestRenderContextAlreadyCanceled(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// Review round 3: the validator must fail closed on decoder errors.
+func TestValidateSVGFailsClosed(t *testing.T) {
+	const body = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5" height="5"/></svg>`
+	cases := map[string]string{
+		"latin1 declaration":     `<?xml version="1.0" encoding="ISO-8859-1"?>` + body,
+		"latin1 hiding use":      `<?xml version="1.0" encoding="ISO-8859-1"?><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><use href="#a"/></svg>`,
+		"shift-jis declaration":  `<?xml version="1.0" encoding="Shift_JIS"?>` + body,
+		"truncated document":     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="5"`,
+		"unterminated attribute": `<svg viewBox="0 0 10 10"><rect width="5></svg>`,
+	}
+	for name, svg := range cases {
+		if err := validateSVG(svg); err == nil {
+			t.Errorf("%s: validator must reject, not pass through", name)
+		}
+		if _, err := Render(Request{Format: FormatSVG, Content: svg}); err == nil {
+			t.Errorf("%s: Render must fail", name)
+		}
+	}
+	if err := validateSVG(`<?xml version="1.0" encoding="UTF-8"?>` + body); err != nil {
+		t.Errorf("UTF-8 declaration must pass: %v", err)
+	}
+}

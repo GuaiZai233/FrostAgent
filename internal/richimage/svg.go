@@ -197,8 +197,14 @@ func validateSVG(content string) error {
 	elements := 0
 	for {
 		tok, err := dec.Token()
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
-			return nil // malformed XML is reported by the parser itself
+			// Fail closed: anything this pass cannot read completely (including
+			// non-UTF-8 encoding declarations the parser might still accept)
+			// must never reach oksvg unchecked.
+			return fmt.Errorf("SVG 不是有效的 UTF-8 XML: %v", err)
 		}
 		el, ok := tok.(xml.StartElement)
 		if !ok {
