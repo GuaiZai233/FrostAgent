@@ -2,12 +2,15 @@ package llm
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
@@ -15,10 +18,10 @@ import (
 
 const (
 	toolActivityTag = "recent_tool_activity"
-	// The fetch limit bounds archived bodies read per request; runs and calls
-	// bound what the model sees. Records beyond them stay in the archive and
-	// remain reachable through read_tool_history.
-	toolActivityFetchLimit     = 40
+	// A run is every call made for one source message. Selection reads only the
+	// covering scope index (reference and source message), so scanning many rows
+	// is cheap; archived bodies are read for the selected calls alone.
+	toolActivityScanLimit      = 500
 	toolActivityMaxRuns        = 5
 	toolActivityMaxCallsPerRun = 10
 )
@@ -37,28 +40,68 @@ type toolActivityLine struct {
 	Count           int    `json:"count,omitempty"`
 }
 
-// FormatToolActivityContext renders archived tool calls as transient request
-// context. It carries metadata only (never arguments or results) and is not
-// stored in session history, so the model cannot mistake it for its own output.
-func FormatToolActivityContext(records []toolhistory.Record) string {
-	type run struct {
-		id      string
-		records []toolhistory.Record
+// toolActivityRun is the selected window of one run, oldest call first.
+type toolActivityRun struct {
+	sourceMessageID string
+	records         []toolhistory.Record
+	omitted         int // older calls of this run left out of the window
+}
+
+// selectToolActivityRuns picks the newest toolActivityMaxRuns runs and, within
+// each, its newest toolActivityMaxCallsPerRun calls. Both limits apply before
+// any body is read, so one tool-heavy run can never crowd out earlier runs.
+func (e *Engine) selectToolActivityRuns(ctx context.Context, scope chathistory.Scope) ([]toolActivityRun, error) {
+	refs, err := e.ToolHistory.RecentRefs(ctx, scope, toolActivityScanLimit)
+	if err != nil {
+		return nil, err
 	}
-	var runs []*run
-	byID := map[string]*run{}
-	for _, record := range records {
-		item := byID[record.RunID]
+	type group struct {
+		source  string
+		refs    []string // newest first
+		omitted int
+	}
+	var groups []*group // newest run first
+	bySource := map[string]*group{}
+	for _, ref := range refs { // newest first
+		item := bySource[ref.SourceMessageID]
 		if item == nil {
-			item = &run{id: record.RunID}
-			byID[record.RunID] = item
-			runs = append(runs, item)
+			if len(groups) == toolActivityMaxRuns {
+				continue // An older run outside the window.
+			}
+			item = &group{source: ref.SourceMessageID}
+			bySource[ref.SourceMessageID] = item
+			groups = append(groups, item)
 		}
-		item.records = append(item.records, record)
+		if len(item.refs) < toolActivityMaxCallsPerRun {
+			item.refs = append(item.refs, ref.RefID)
+		} else {
+			item.omitted++
+		}
 	}
-	if len(runs) > toolActivityMaxRuns {
-		runs = runs[len(runs)-toolActivityMaxRuns:]
+	runs := make([]toolActivityRun, 0, len(groups))
+	for i := len(groups) - 1; i >= 0; i-- {
+		run := toolActivityRun{sourceMessageID: groups[i].source, omitted: groups[i].omitted}
+		for j := len(groups[i].refs) - 1; j >= 0; j-- {
+			record, err := e.ToolHistory.Read(ctx, scope, groups[i].refs[j])
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // Removed after the index scan.
+			}
+			if err != nil {
+				return nil, err
+			}
+			run.records = append(run.records, record)
+		}
+		if len(run.records) > 0 || run.omitted > 0 {
+			runs = append(runs, run)
+		}
 	}
+	return runs, nil
+}
+
+// formatToolActivityRuns renders selected runs as transient request context. It
+// carries metadata only (never arguments or results) and is not stored in
+// session history, so the model cannot mistake it for its own output.
+func formatToolActivityRuns(runs []toolActivityRun) string {
 	var lines []string
 	emit := func(line toolActivityLine) {
 		// Marshal escapes angle brackets, so no field can close the block.
@@ -66,13 +109,11 @@ func FormatToolActivityContext(records []toolhistory.Record) string {
 			lines = append(lines, string(data))
 		}
 	}
-	for _, item := range runs {
-		kept := item.records
-		if omitted := len(kept) - toolActivityMaxCallsPerRun; omitted > 0 {
-			emit(toolActivityLine{Kind: "omitted_tool_records", SourceMessageID: kept[0].SourceMessageID, Count: omitted})
-			kept = kept[omitted:]
+	for _, run := range runs {
+		if run.omitted > 0 {
+			emit(toolActivityLine{Kind: "omitted_tool_records", SourceMessageID: run.sourceMessageID, Count: run.omitted})
 		}
-		for _, record := range kept {
+		for _, record := range run.records {
 			line := toolActivityLine{
 				Kind:            "tool_record",
 				Time:            record.OccurredAt.Local().Format(time.DateTime),
@@ -123,12 +164,12 @@ func (e *Engine) withToolActivity(ctx context.Context, messages []ChatMessage, r
 	// Advisory context must never fail the run; the archive stays authoritative.
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	records, err := e.ToolHistory.Recent(readCtx, scope, toolActivityFetchLimit)
+	runs, err := e.selectToolActivityRuns(readCtx, scope)
 	if err != nil {
 		e.Log().Warn(logs.SYSTEM, fmt.Sprintf("近期工具记录读取失败，本轮不附带: session=%s err=%v", run.SessionID, err))
 		return result
 	}
-	block := FormatToolActivityContext(records)
+	block := formatToolActivityRuns(runs)
 	if block == "" {
 		return result
 	}

@@ -10,7 +10,7 @@ mcp__my_coffee__createOrder_20ac624f (ref_id: fa_toolcall_550e8400-e29b-41d4-a71
 
 ## 跨轮回查
 
-每次请求时，后端从当前会话的归档中取最近几轮执行记录，以 `recent_tool_activity` 标签包裹的 JSONL 块附加在当前用户消息末尾。每行是一次调用的元数据：`kind`（`tool_record`）、`tool`、`ref_id`、`source_message_id`、`time`，调用尚未完成时附 `state`；不包含参数和结果。窗口为最近 5 轮、每轮最多 10 次调用，超出部分以 `omitted_tool_records` 标明数量，原文仍可通过 `read_tool_history` 回查。
+每次请求时，后端从当前会话的归档中取最近几轮执行记录，以 `recent_tool_activity` 标签包裹的 JSONL 块附加在当前用户消息末尾。每行是一次调用的元数据：`kind`（`tool_record`）、`tool`、`ref_id`、`source_message_id`、`time`，调用尚未完成时附 `state`；不包含参数和结果。窗口为最近 5 轮、每轮最多 10 次调用（以来源消息区分轮次），超出部分以 `omitted_tool_records` 标明数量，原文仍可通过 `read_tool_history` 回查。两项限制在读取正文之前，只凭归档索引中的引用和来源消息就已应用，所以一次调用很多的轮次不会挤掉更早的轮次。
 
 这个块只存在于本次请求中：不写入会话历史，不发送到群聊，也不计为已送达回复，也不会另调用模型生成摘要。会话历史里只有真实的用户消息和已送达的助手回复，所以连续 20 轮搜索也不会让历史膨胀。
 

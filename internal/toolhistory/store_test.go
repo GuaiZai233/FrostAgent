@@ -95,7 +95,7 @@ func TestToolHistoryReferencesAndQuarantine(t *testing.T) {
 	}
 }
 
-func TestRecentReturnsNewestRecordsOfOneScopeOldestFirst(t *testing.T) {
+func TestRecentRefsReturnsNewestCallsOfOneScopeWithSources(t *testing.T) {
 	ctx := context.Background()
 	db, err := storage.Open(ctx, t.TempDir())
 	if err != nil {
@@ -109,8 +109,8 @@ func TestRecentReturnsNewestRecordsOfOneScopeOldestFirst(t *testing.T) {
 	}
 	scope := chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"}
 	base := time.Now().UTC().Truncate(time.Millisecond)
-	save := func(s *Store, sc chathistory.Scope, tool string, offset int) string {
-		r := Record{Scope: sc, RefID: NewRef(), RunID: "fixture-run", ActorID: "fixture-actor", Tool: tool,
+	save := func(s *Store, sc chathistory.Scope, source string, offset int) string {
+		r := Record{Scope: sc, RefID: NewRef(), RunID: "fixture-run", ActorID: "fixture-actor", Tool: "fixture-tool", SourceMessageID: source,
 			ArgumentsRaw: `{"secret":"fixture"}`, ResultRaw: "fixture-result", State: "complete", OccurredAt: base.Add(time.Duration(offset) * time.Second)}
 		if err := s.Save(ctx, r); err != nil {
 			t.Fatal(err)
@@ -118,27 +118,27 @@ func TestRecentReturnsNewestRecordsOfOneScopeOldestFirst(t *testing.T) {
 		return r.RefID
 	}
 	store := NewStore(db, "fixture-instance")
-	var refs []string
-	for i, tool := range []string{"first", "second", "third", "fourth"} {
-		refs = append(refs, save(store, scope, tool, i))
+	var want []RecentRef
+	for i, source := range []string{"source-a", "source-a", "source-b", ""} {
+		want = append(want, RecentRef{RefID: save(store, scope, source, i), SourceMessageID: source})
 	}
 	save(store, chathistory.Scope{Platform: "qq", MessageType: "group", TargetID: "fixture-user"}, "foreign-scope", 10)
 	save(NewStore(db, "fixture-other"), scope, "foreign-instance", 11)
 
-	got, err := store.Recent(ctx, scope, 3)
+	got, err := store.RecentRefs(ctx, scope, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0].RefID != refs[1] || got[1].RefID != refs[2] || got[2].RefID != refs[3] {
-		t.Fatalf("recent records are not the newest three in chronological order: %+v", got)
+	if len(got) != 3 || got[0] != want[3] || got[1] != want[2] || got[2] != want[1] {
+		t.Fatalf("not the newest three calls, newest first: %+v", got)
 	}
-	if all, err := store.Recent(ctx, scope, 50); err != nil || len(all) != 4 {
-		t.Fatalf("scope or instance leaked into recent records: %d %v", len(all), err)
+	if all, err := store.RecentRefs(ctx, scope, 50); err != nil || len(all) != 4 {
+		t.Fatalf("scope or instance leaked into recent references: %d %v", len(all), err)
 	}
-	if none, err := store.Recent(ctx, scope, 0); err != nil || len(none) != 0 {
+	if none, err := store.RecentRefs(ctx, scope, 0); err != nil || len(none) != 0 {
 		t.Fatalf("non-positive limit must return nothing: %d %v", len(none), err)
 	}
-	if _, err := store.Recent(ctx, chathistory.Scope{}, 3); err == nil {
+	if _, err := store.RecentRefs(ctx, chathistory.Scope{}, 3); err == nil {
 		t.Fatal("invalid scope must be rejected")
 	}
 }
