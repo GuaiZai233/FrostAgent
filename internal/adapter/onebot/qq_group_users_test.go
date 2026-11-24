@@ -131,4 +131,15 @@ func TestQQGroupUserLookupPropagatesPlatformFailure(t *testing.T) {
 	if _, err := runQQGroupUsers(42, tools.QQRequest{Action: "group_user_list"}, bad); err == nil {
 		t.Fatal("malformed list accepted")
 	}
+	for _, data := range []string{`null`, ``} {
+		null := func(model.OneBotAction) (oneBotAPIResponse, error) {
+			return oneBotAPIResponse{Status: "ok", Data: json.RawMessage(data)}, nil
+		}
+		for _, action := range []string{"group_user_list", "group_user_search", "group_user_count"} {
+			request := tools.QQRequest{Action: action, Arguments: tools.QQArguments{Query: "a"}}
+			if result, err := runQQGroupUsers(42, request, null); err == nil {
+				t.Fatalf("%s accepted data=%q: %s", action, data, result.Content)
+			}
+		}
+	}
 }

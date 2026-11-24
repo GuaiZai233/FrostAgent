@@ -126,8 +126,13 @@ func loadQQGroupMembers(groupID int64, call func(model.OneBotAction) (oneBotAPIR
 		Card     string      `json:"card"`
 		Role     string      `json:"role"`
 	}
+	// Unmarshal accepts null into a slice; a missing array is a malformed
+	// response, not an empty group.
 	if err := json.Unmarshal(response.Data, &raw); err != nil {
 		return nil, fmt.Errorf("群成员列表响应无效: %w", err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("群成员列表响应无效: data 不是数组")
 	}
 	members := make([]qqGroupMember, 0, len(raw))
 	for _, item := range raw {
