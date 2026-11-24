@@ -47,3 +47,32 @@ func TestOneBotSilentIgnoreDropsUserBeforeAnyProcessing(t *testing.T) {
 		t.Fatal("control user must be processed normally")
 	}
 }
+
+func TestSilentlyIgnoredCoversPokeAndFileNotices(t *testing.T) {
+	engine := newTestEngine(botLoopSilentProvider())
+	engine.Scope = newTestScopeWithEnv(t, map[string]string{"SILENT_IGNORE_USER_IDS": "11"})
+	adapter := &Adapter{engine: engine}
+	conn := &wsConnection{}
+	cases := []struct {
+		name  string
+		event model.OneBotEvent
+		want  bool
+	}{
+		{"message", model.OneBotEvent{PostType: "message", UserID: 11}, true},
+		{"poke", model.OneBotEvent{PostType: "notice", NoticeType: "notify", SubType: "poke", UserID: 11}, true},
+		{"group upload", model.OneBotEvent{PostType: "notice", NoticeType: "group_upload", UserID: 11, GroupID: 5}, true},
+		{"offline file", model.OneBotEvent{PostType: "notice", NoticeType: "offline_file", UserID: 11}, true},
+		{"other user", model.OneBotEvent{PostType: "message", UserID: 12}, false},
+		{"unrelated notice", model.OneBotEvent{PostType: "notice", NoticeType: "group_increase", UserID: 11}, false},
+		{"no user", model.OneBotEvent{PostType: "message"}, false},
+	}
+	for _, c := range cases {
+		if got := adapter.silentlyIgnored(conn, c.event); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+	conn.mock = true
+	if adapter.silentlyIgnored(conn, cases[0].event) {
+		t.Error("mock connections must never be filtered")
+	}
+}

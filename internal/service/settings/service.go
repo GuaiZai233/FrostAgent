@@ -78,7 +78,7 @@ var knownEnvVars = map[string]envEntry{
 	"BOT_NAME":                             {"机器人主名称，用于群聊文本唤醒", false, false, false},
 	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔；名称或别名忽略英文字母大小写和空格，纯英文按整词匹配", false, false, false},
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
-	"SILENT_IGNORE_USER_IDS":               {"完全静默屏蔽的 QQ 号（如 QQ 邮箱官方号），其消息与戳一戳在入口被直接丢弃：不回复、不记录；多个号码以英文逗号分隔，可用 platform:ID 限定平台", false, false, false},
+	"SILENT_IGNORE_USER_IDS":               {"完全静默屏蔽的 QQ 号（如 QQ 邮箱官方号），其消息、戳一戳与文件上传通知在入口被直接丢弃：不回复、不记录；多个号码以英文逗号分隔，可用 platform:ID 限定平台", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_RUNTIME_STATUS_COMMAND":        {"输出 FrostAgent 默认运行信息（#fa，默认开启）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},

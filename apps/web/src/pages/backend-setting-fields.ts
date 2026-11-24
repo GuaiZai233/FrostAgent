@@ -26,7 +26,7 @@ export const settingFields: Record<string, SettingField> = {
   LOG_STORAGE_MIB: { label: '持久化日志预算（MiB）', group: '日志与持久化', type: 'number', min: 1, max: 65536, step: 1, hot: true, hint: '默认每实例 128 MiB，包含日志及图片；超限删除最旧记录。会话和 Prompt 检查快照单独保存。' },
   MAX_CONTEXT_MESSAGES: { label: '保留消息条数', group: '对话与上下文', type: 'number', min: 4, step: 1, hot: true },
   ADMIN_QQ_IDS: { label: '管理员 QQ 号', group: '安全与权限', hint: '多个号码用英文逗号分隔', hot: true },
-  SILENT_IGNORE_USER_IDS: { label: '完全静默屏蔽的 QQ 号', group: '安全与权限', hint: '多个号码用英文逗号分隔；这些用户的消息和戳一戳会被直接丢弃，不回复也不记录', hot: true },
+  SILENT_IGNORE_USER_IDS: { label: '完全静默屏蔽的 QQ 号', group: '安全与权限', hint: '多个号码用英文逗号分隔；这些用户的消息、戳一戳和文件上传通知会被直接丢弃，不回复也不记录', hot: true },
   ADMIN_COMMAND_PREFIX: { label: '管理员指令前缀', group: '安全与权限', hot: true },
   GROUP_COMPACT_BUFFER_SIZE: { label: '上下文压缩每批消息数', group: '记忆与压缩', type: 'number', min: 1, step: 1, hint: '群聊和私聊自动压缩的消息条数阈值；私聊保留最近一轮' },
   GROUP_COMPACT_MAX_BUFFER_SIZE: { label: '群聊压缩最大积压消息数', group: '记忆与压缩', type: 'number', min: 1, step: 1, hint: '低于每批条数时自动抬高；积压溢出会淘汰消息' },

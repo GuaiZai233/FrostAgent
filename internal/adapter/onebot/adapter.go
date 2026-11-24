@@ -846,16 +846,33 @@ func validateOutboundMediaURL(rawURL string) error {
 	}
 }
 
-// silentlyIgnored drops messages and pokes from users in SILENT_IGNORE_USER_IDS
+// silentlyIgnored drops messages, pokes and file-upload notices from users in SILENT_IGNORE_USER_IDS
 // before any reply, history, memory or security processing. Direct Chat
 // (mock) connections are never filtered.
 func (a *Adapter) silentlyIgnored(conn *wsConnection, event model.OneBotEvent) bool {
 	if a.engine == nil || conn.mock || event.UserID == 0 {
 		return false
 	}
-	isPoke := event.PostType == "notice" && event.NoticeType == "notify" && event.SubType == "poke"
-	if event.PostType != "message" && !isPoke {
+	if !silentIgnoreEvent(event) {
 		return false
 	}
 	return silentignore.Parse(a.engine.Getenv).Ignored("onebot", strconv.FormatInt(event.UserID, 10))
+}
+
+// silentIgnoreEvent reports whether the event is user-originated content that
+// the ignore list covers: messages, pokes and file-upload notices (the latter
+// would otherwise populate the per-connection inbound file cache).
+func silentIgnoreEvent(event model.OneBotEvent) bool {
+	switch event.PostType {
+	case "message":
+		return true
+	case "notice":
+		switch event.NoticeType {
+		case "group_upload", "offline_file":
+			return true
+		case "notify":
+			return event.SubType == "poke"
+		}
+	}
+	return false
 }
