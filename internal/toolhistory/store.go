@@ -153,39 +153,72 @@ func (s *Store) References(ctx context.Context, scope chathistory.Scope, message
 	return refs, rows.Err()
 }
 
-// RecentRef locates one archived call without its body.
-type RecentRef struct {
-	RefID           string
+// RecentSource is the newest part of one source message's calls.
+type RecentSource struct {
 	SourceMessageID string
+	// Total counts every archived call of the source message in the scope.
+	Total int
+	// Refs holds at most the requested number of newest calls, newest first.
+	Refs []string
 }
 
-// RecentRefs lists up to limit calls of one conversation scope, newest first.
-// It is answered from the covering scope index alone, so a scope holding many
-// large tool results stays cheap; callers read only the bodies they select.
-func (s *Store) RecentRefs(ctx context.Context, scope chathistory.Scope, limit int) ([]RecentRef, error) {
+// RecentBySource returns the maxSources source messages with the newest calls in
+// one conversation scope (newest first), and for each its newest perSource
+// references. Selection is per source and answered from the covering scope index
+// alone, so one source with many calls can never crowd the others out and no
+// archived body is read.
+func (s *Store) RecentBySource(ctx context.Context, scope chathistory.Scope, maxSources, perSource int) ([]RecentSource, error) {
 	scope = scope.Canonical()
 	if err := scope.Validate(); err != nil {
 		return nil, err
 	}
-	refs := []RecentRef{}
-	if limit <= 0 {
-		return refs, nil
+	sources := []RecentSource{}
+	if maxSources <= 0 || perSource <= 0 {
+		return sources, nil
 	}
-	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT ref_id, source_message_id FROM tool_history
-		WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? ORDER BY occurred_at DESC, ref_id DESC LIMIT ?`),
-		s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, limit)
+	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT source_message_id, COUNT(*) FROM tool_history
+		WHERE instance_id=? AND platform=? AND message_type=? AND target_id=?
+		GROUP BY source_message_id ORDER BY MAX(occurred_at) DESC, source_message_id DESC LIMIT ?`),
+		s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, maxSources)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
-		var ref RecentRef
-		if err := rows.Scan(&ref.RefID, &ref.SourceMessageID); err != nil {
+		var source RecentSource
+		if err := rows.Scan(&source.SourceMessageID, &source.Total); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		refs = append(refs, ref)
+		sources = append(sources, source)
 	}
-	return refs, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	for i := range sources {
+		refs, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT ref_id FROM tool_history
+			WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND source_message_id=?
+			ORDER BY occurred_at DESC, ref_id DESC LIMIT ?`),
+			s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, sources[i].SourceMessageID, perSource)
+		if err != nil {
+			return nil, err
+		}
+		for refs.Next() {
+			var ref string
+			if err := refs.Scan(&ref); err != nil {
+				refs.Close()
+				return nil, err
+			}
+			sources[i].Refs = append(sources[i].Refs, ref)
+		}
+		err = refs.Err()
+		refs.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return sources, nil
 }
 
 // ReadForInspection is for the authenticated instance management API. Model

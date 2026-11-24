@@ -31,8 +31,8 @@ func TestToolHistoryNeverWritesSessionHistory(t *testing.T) {
 		t.Fatalf("tool execution must not add session history: %+v", history)
 	}
 	scope, _ := ToolHistoryScope(run)
-	if records, err := e.ToolHistory.RecentRefs(ctx, scope, 10); err != nil || len(records) != 3 {
-		t.Fatalf("executions must stay archived: %d %v", len(records), err)
+	if sources, err := e.ToolHistory.RecentBySource(ctx, scope, 5, 10); err != nil || len(sources) != 1 || sources[0].Total != 3 {
+		t.Fatalf("executions must stay archived: %+v %v", sources, err)
 	}
 }
 
@@ -150,7 +150,8 @@ func TestToolActivityHeavyRunDoesNotStarveEarlierRuns(t *testing.T) {
 		saved := saveActivityRun(t, e, ctx, run, source, []string{"fixture_tool", "fixture_tool"}, r*10)
 		earlier[source] = saved[0].RefID
 	}
-	heavy := make([]string, toolActivityScanLimit/2)
+	// Far beyond any fixed scan window: selection is per run, not global.
+	heavy := make([]string, 600)
 	for i := range heavy {
 		heavy[i] = "fixture_search"
 	}
@@ -221,7 +222,7 @@ func TestWithToolActivityAppendsOnlyToFinalUserTurnOfACopy(t *testing.T) {
 	parts := []core.ContentPart{{Type: "text", Text: "look"}, {Type: "image_url", ImageURL: &core.ImageURL{URL: "fixture-url"}}}
 	multimodal := e.withToolActivity(ctx, []ChatMessage{{Role: "user", Content: parts}}, run)
 	gotParts, ok := multimodal[0].Content.([]core.ContentPart)
-	if !ok || len(gotParts) != 3 || gotParts[2].Type != "text" || !strings.Contains(gotParts[2].Text, record.RefID) || len(parts) != 2 {
+	if !ok || len(gotParts) != 3 || gotParts[2].Type != "text" || !strings.HasPrefix(gotParts[2].Text, "\n\n<"+toolActivityTag+">") || !strings.Contains(gotParts[2].Text, record.RefID) || len(parts) != 2 {
 		t.Fatalf("multimodal turn must gain a text part on a copy: %+v", multimodal[0].Content)
 	}
 }

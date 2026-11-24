@@ -18,10 +18,8 @@ import (
 
 const (
 	toolActivityTag = "recent_tool_activity"
-	// A run is every call made for one source message. Selection reads only the
-	// covering scope index (reference and source message), so scanning many rows
-	// is cheap; archived bodies are read for the selected calls alone.
-	toolActivityScanLimit      = 500
+	// A run is every call made for one source message; calls without a source
+	// message (such as proactive awareness) share a single run.
 	toolActivityMaxRuns        = 5
 	toolActivityMaxCallsPerRun = 10
 )
@@ -48,41 +46,20 @@ type toolActivityRun struct {
 }
 
 // selectToolActivityRuns picks the newest toolActivityMaxRuns runs and, within
-// each, its newest toolActivityMaxCallsPerRun calls. Both limits apply before
-// any body is read, so one tool-heavy run can never crowd out earlier runs.
+// each, its newest toolActivityMaxCallsPerRun calls. The store applies both
+// limits per source message before any body is read, so one tool-heavy run can
+// never crowd out earlier runs, however many calls it made.
 func (e *Engine) selectToolActivityRuns(ctx context.Context, scope chathistory.Scope) ([]toolActivityRun, error) {
-	refs, err := e.ToolHistory.RecentRefs(ctx, scope, toolActivityScanLimit)
+	sources, err := e.ToolHistory.RecentBySource(ctx, scope, toolActivityMaxRuns, toolActivityMaxCallsPerRun)
 	if err != nil {
 		return nil, err
 	}
-	type group struct {
-		source  string
-		refs    []string // newest first
-		omitted int
-	}
-	var groups []*group // newest run first
-	bySource := map[string]*group{}
-	for _, ref := range refs { // newest first
-		item := bySource[ref.SourceMessageID]
-		if item == nil {
-			if len(groups) == toolActivityMaxRuns {
-				continue // An older run outside the window.
-			}
-			item = &group{source: ref.SourceMessageID}
-			bySource[ref.SourceMessageID] = item
-			groups = append(groups, item)
-		}
-		if len(item.refs) < toolActivityMaxCallsPerRun {
-			item.refs = append(item.refs, ref.RefID)
-		} else {
-			item.omitted++
-		}
-	}
-	runs := make([]toolActivityRun, 0, len(groups))
-	for i := len(groups) - 1; i >= 0; i-- {
-		run := toolActivityRun{sourceMessageID: groups[i].source, omitted: groups[i].omitted}
-		for j := len(groups[i].refs) - 1; j >= 0; j-- {
-			record, err := e.ToolHistory.Read(ctx, scope, groups[i].refs[j])
+	runs := make([]toolActivityRun, 0, len(sources))
+	for i := len(sources) - 1; i >= 0; i-- { // Oldest run first.
+		source := sources[i]
+		run := toolActivityRun{sourceMessageID: source.SourceMessageID, omitted: source.Total - len(source.Refs)}
+		for j := len(source.Refs) - 1; j >= 0; j-- { // Oldest call first.
+			record, err := e.ToolHistory.Read(ctx, scope, source.Refs[j])
 			if errors.Is(err, sql.ErrNoRows) {
 				continue // Removed after the index scan.
 			}
@@ -183,7 +160,9 @@ func appendToContent(content any, block string) any {
 		return value + "\n\n" + block
 	case []core.ContentPart:
 		parts := append([]core.ContentPart(nil), value...)
-		return append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: block})
+		// Providers and the inspector join text parts, so the part carries the
+		// same blank-line separator a string turn gets.
+		return append(parts, core.ContentPart{Type: string(core.ContentPartTypeText), Text: "\n\n" + block})
 	default:
 		return contentToText(content) + "\n\n" + block
 	}
