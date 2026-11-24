@@ -104,7 +104,7 @@ func TestWideTableFitsOrErrors(t *testing.T) {
 	sep := ""
 	row := ""
 	for i := 0; i < 6; i++ {
-		head += "| 非常非常长的列标题 header" + string(rune('A'+i)) + " "
+		head += "| very long column heading header" + string(rune('A'+i)) + " "
 		sep += "|---"
 		row += "| cell" + string(rune('A'+i)) + " "
 	}
