@@ -113,7 +113,7 @@ func qqGroupMemberCount(groupID int64, call func(model.OneBotAction) (oneBotAPIR
 }
 
 func loadQQGroupMembers(groupID int64, call func(model.OneBotAction) (oneBotAPIResponse, error)) ([]qqGroupMember, error) {
-	response, err := call(model.OneBotAction{Action: "get_group_member_list", Params: map[string]any{"group_id": groupID, "no_cache": true}})
+	response, err := call(model.OneBotAction{Action: "get_group_member_list", Params: map[string]any{"group_id": groupID}})
 	if err != nil {
 		return nil, err
 	}

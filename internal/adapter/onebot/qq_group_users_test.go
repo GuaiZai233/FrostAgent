@@ -30,6 +30,10 @@ func qqGroupUserCall(t *testing.T, list oneBotAPIResponse, info oneBotAPIRespons
 		}
 		switch action.Action {
 		case "get_group_member_list":
+			// OneBot v11 defines only group_id for this action.
+			if len(params) != 1 {
+				t.Errorf("unexpected member-list params: %+v", params)
+			}
 			return list, nil
 		case "get_group_info":
 			return info, nil
