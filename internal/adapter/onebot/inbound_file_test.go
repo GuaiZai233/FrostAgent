@@ -372,10 +372,9 @@ func TestInboundMissingURLResolvesGateway(t *testing.T) {
 				if len(infos) != 1 || infos[0].Status != "ready" {
 					t.Errorf("file URL resolution failed: %+v", infos)
 				}
-				return &core.ChatResponse{Message: sendMessageFinalMessage("文件已读取。")}, nil
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "文件已读取。"}}, nil
 			}}
 			engine := newTestEngine(provider)
-			installTestSendMessage(engine)
 			engine.SandboxBackend = backend
 			server, address := startInboundServer(t, engine, inboundFixtureClient([]byte("fixture"), &count))
 			defer server.Close()
@@ -472,10 +471,9 @@ func TestInboundFilePassiveGroupThenMention(t *testing.T) {
 						t.Errorf("passive group file unavailable: %+v", infos)
 					}
 				}
-				return &core.ChatResponse{Message: sendMessageFinalMessage("fixture reply")}, nil
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "fixture reply"}}, nil
 			}}
 			engine := newTestEngine(provider)
-			installTestSendMessage(engine)
 			engine.SandboxBackend = newInboundBackend()
 			engine.Security = security.NewController(t.TempDir())
 			engine.Security.SetMode(security.ControlModeAggressive)
@@ -561,10 +559,9 @@ func TestInboundFileThenImmediateQuestionThroughTools(t *testing.T) {
 		if !strings.Contains(result, "第一题") {
 			t.Errorf("document contents unavailable: %s", result)
 		}
-		return &core.ChatResponse{Message: sendMessageFinalMessage("第一题答案为 5。")}, nil
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "第一题答案为 5。"}}, nil
 	}}
 	engine := newTestEngine(provider)
-	installTestSendMessage(engine)
 	engine.SandboxBackend = backend
 	engine.ToolRegistry["execute_command"] = tools.ExecuteCommandTool(backend)
 	server, address := startInboundServer(t, engine, client)
@@ -615,10 +612,9 @@ func TestInboundQuotedFileViaGetMsg(t *testing.T) {
 				if len(infos) != 1 || infos[0].Status != "ready" || infos[0].MessageID != "101" {
 					t.Errorf("quoted file not imported: %+v", infos)
 				}
-				return &core.ChatResponse{Message: sendMessageFinalMessage("附件可读取。")}, nil
+				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "附件可读取。"}}, nil
 			}}
 			engine := newTestEngine(provider)
-			installTestSendMessage(engine)
 			engine.SandboxBackend = backend
 			server, address := startInboundServer(t, engine, inboundFixtureClient(data, &count))
 			defer server.Close()

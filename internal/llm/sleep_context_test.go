@@ -45,11 +45,9 @@ func TestSleepRefreshRunsBeforeNextThoughtAndPreservesTranscript(t *testing.T) {
 				if toolResults != 2 {
 					t.Errorf("lost tool trajectory: %s", all)
 				}
-				return sendMessageFinalResponse("finished"), nil
+				return finalInjection("finished"), nil
 			})
-			installSendMessage(e)
-			delivered := &deliveryCapture{}
-			result := e.RunMessagesWithContext(messages, RunContext{SessionID: s.ID(), Turn: turn, Epoch: turn.Epoch(), Mock: true, SendHook: delivered.hook, RefreshPrompt: func(context.Context) (PromptRefresh, error) {
+			result := e.RunMessagesWithContext(messages, RunContext{SessionID: s.ID(), Turn: turn, Epoch: turn.Epoch(), Mock: true, RefreshPrompt: func(context.Context) (PromptRefresh, error) {
 				refreshes++
 				return PromptRefresh{Content: "refreshed-background"}, nil
 			}})
@@ -57,7 +55,7 @@ func TestSleepRefreshRunsBeforeNextThoughtAndPreservesTranscript(t *testing.T) {
 			if toolErr != nil && !errors.Is(toolErr, timesleep.ErrTimeout) {
 				wantRefreshes = 0
 			}
-			if delivered.plainText() != "finished" || refreshes != wantRefreshes || e.TotalMessagesProcessed.Load() != 3 || turn.Interrupted() {
+			if result.Content != "finished" || refreshes != wantRefreshes || e.TotalMessagesProcessed.Load() != 3 || turn.Interrupted() {
 				t.Fatalf("changed execution or budget: %+v, refreshes=%d", result, refreshes)
 			}
 			if all := fmt.Sprint(turn.lane.transcript); strings.Contains(all, "background") || !strings.Contains(all, "durable-input") {

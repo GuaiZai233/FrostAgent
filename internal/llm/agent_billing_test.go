@@ -23,7 +23,10 @@ func (m *mockBillingLLMProvider) Chat(ctx context.Context, req core.ChatRequest)
 	defer m.mu.Unlock()
 	m.reqCount++
 	return &core.ChatResponse{
-		Message: sendMessageFinalMessage("Billing test response"),
+		Message: core.ChatMessage{
+			Role:    core.RoleAssistant,
+			Content: "Billing test response",
+		},
 		Usage: &core.Usage{
 			PromptTokens:     120,
 			CompletionTokens: 30,
@@ -108,9 +111,6 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 		},
 	}
 
-	installSendMessage(engine)
-	capture := &deliveryCapture{}
-	runCtx.SendHook = capture.hook
 	res := engine.RunMessagesWithContext([]ChatMessage{
 		{Role: "user", Content: "Hello with billing"},
 	}, runCtx)
@@ -118,8 +118,8 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 	if res.Error != nil {
 		t.Fatalf("unexpected agent error: %v", res.Error)
 	}
-	if capture.plainText() != "Billing test response" {
-		t.Errorf("unexpected content: %s", capture.plainText())
+	if res.Content != "Billing test response" {
+		t.Errorf("unexpected content: %s", res.Content)
 	}
 
 	mu.Lock()
@@ -156,8 +156,6 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 			BillingActive: true,
 		},
 	}
-	secondCapture := &deliveryCapture{}
-	runCtx2.SendHook = secondCapture.hook
 
 	res2 := engine.RunMessagesWithContext([]ChatMessage{
 		{Role: "user", Content: "Hello from fixture"},
@@ -165,9 +163,6 @@ func TestAgent_BillingReservationAndCommit(t *testing.T) {
 
 	if res2.Error != nil {
 		t.Fatalf("unexpected agent error: %v", res2.Error)
-	}
-	if secondCapture.plainText() != "Billing test response" {
-		t.Fatalf("unexpected fixture delivery: %q", secondCapture.plainText())
 	}
 
 	mu.Lock()

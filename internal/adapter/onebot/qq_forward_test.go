@@ -363,10 +363,9 @@ func TestQQReadForwardToolLoopAndSecurityGate(t *testing.T) {
 				return security.ClassificationResult{Category: security.RiskCategoryNone, RiskLevel: security.RiskLevelNone}, nil
 			}})
 			engine.Security = controller
-			delivered := &deliveryCapture{}
-			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture request"}}, llm.RunContext{SessionID: c.historyKey(event), ActorPlatform: "qq", ActorUserID: fmt.Sprint(testUserID), SendHook: delivered.hook, PlatformActionHook: c.qqActionHook(event, nil, func([]tools.Msg) { t.Error("read marked as a send") }, engine)})
-			if result.Error != nil || delivered.plainText() != "fixture summary" || providerCalls != 2 || !inspected {
-				t.Fatalf("result=%+v delivered=%q providerCalls=%d inspected=%v", result, delivered.plainText(), providerCalls, inspected)
+			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture request"}}, llm.RunContext{SessionID: c.historyKey(event), ActorPlatform: "qq", ActorUserID: fmt.Sprint(testUserID), PlatformActionHook: c.qqActionHook(event, nil, func([]tools.Msg) { t.Error("read marked as a send") }, engine)})
+			if result.Error != nil || result.Content != "fixture summary" || providerCalls != 2 || !inspected {
+				t.Fatalf("result=%+v providerCalls=%d inspected=%v", result, providerCalls, inspected)
 			}
 			if len(actions) != 1 || <-actions != "get_forward_msg" {
 				t.Fatal("read was sent twice or created a message delivery")

@@ -77,7 +77,7 @@ func (p *stickerActivityProvider) Chat(_ context.Context, req core.ChatRequest) 
 	p.requests = append(p.requests, req)
 	idx := len(p.requests) - 1
 	if idx >= len(p.responses) {
-		target := core.ChatMessage{Role: core.RoleAssistant}
+		target := core.ChatMessage{Role: core.RoleAssistant, Content: "done"}
 		return &core.ChatResponse{Message: target}, nil
 	}
 	return &core.ChatResponse{Message: p.responses[idx]}, nil
@@ -123,19 +123,19 @@ func TestStickerActivityIntervalsAndGrace(t *testing.T) {
 func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	p := &stickerActivityProvider{responses: []core.ChatMessage{
-		sendMessageTextMessage("first"),
-		sendMessageTextMessage("second"),
-		sendMessageTextMessage("third"),
-		sendMessageFinalMessage("after forgiveness"),
+		{Role: core.RoleAssistant, Content: "first"},
+		{Role: core.RoleAssistant, Content: "second"},
+		{Role: core.RoleAssistant, Content: "third"},
+		{Role: core.RoleAssistant, Content: "after forgiveness"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
 	input := []ChatMessage{{Role: "user", Content: "hello"}}
-	result, delivered := runDelivered(e, input, RunContext{})
-	if result.Error != nil || delivered.plainText() != "after forgiveness" || len(p.requests) != 4 {
-		t.Fatalf("result=%+v delivered=%q calls=%d", result, delivered.plainText(), len(p.requests))
+	result := e.RunMessagesWithContext(input, RunContext{})
+	if result.Content != "after forgiveness" || len(p.requests) != 4 {
+		t.Fatalf("result=%q calls=%d", result.Content, len(p.requests))
 	}
 	if input[0].Content != "hello" {
 		t.Fatalf("caller history was changed: %v", input[0].Content)
@@ -150,10 +150,8 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 		t.Fatal("missing transient countdown")
 	}
 	last := p.requests[3]
-	for _, tool := range last.Tools {
-		if tool.Name == "ignore_enforce_sticker" {
-			t.Fatal("internal forgiveness added a tool schema")
-		}
+	if len(last.Tools) != 1 || last.Tools[0].Name != "send_sticker" {
+		t.Fatal("internal forgiveness changed tool schemas")
 	}
 	var sawToolCall, sawReply bool
 	for _, msg := range last.Messages {
@@ -167,8 +165,8 @@ func TestStickerEnforcementAutoForgivesAfterThreeAttempts(t *testing.T) {
 	if !sawToolCall || !sawReply {
 		t.Fatalf("missing forgiveness pair: call=%v reply=%v", sawToolCall, sawReply)
 	}
-	if _, _, grace := e.stickerActivitySnapshot(); grace != 0 {
-		t.Fatalf("grace=%d, want 0 after the forgiveness reply consumed one grace turn", grace)
+	if _, _, grace := e.stickerActivitySnapshot(); grace != 2 {
+		t.Fatalf("grace=%d, want 2", grace)
 	}
 }
 
@@ -176,15 +174,15 @@ func TestStickerEnforcementMarkerForgivesImmediately(t *testing.T) {
 	t.Setenv(sticker.ActivityEnvKey, "10")
 	p := &stickerActivityProvider{responses: []core.ChatMessage{
 		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
-		sendMessageFinalMessage("ordinary reply"),
+		{Role: core.RoleAssistant, Content: "ordinary reply"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 4 {
 		e.RecordBotTurn()
 	}
-	result, delivered := runDelivered(e, []ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
-	if result.Error != nil || delivered.plainText() != "ordinary reply" || len(p.requests) != 2 {
-		t.Fatalf("result=%+v delivered=%q calls=%d", result, delivered.plainText(), len(p.requests))
+	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
+	if result.Content != "ordinary reply" || len(p.requests) != 2 {
+		t.Fatalf("result=%q calls=%d", result.Content, len(p.requests))
 	}
 }
 
@@ -196,18 +194,18 @@ func TestStickerEnforcementConflictStillReachesForgiveness(t *testing.T) {
 	}}
 	p := &stickerActivityProvider{responses: []core.ChatMessage{
 		conflict, conflict, conflict,
-		sendMessageFinalMessage("after forgiveness"),
+		{Role: core.RoleAssistant, Content: "after forgiveness"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 1, ToolRegistry: map[string]ToolExecutor{"send_sticker": &staticTool{name: "send_sticker"}}}
 	for range 5 {
 		e.RecordBotTurn()
 	}
-	result, delivered := runDelivered(e, []ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
-	if result.Error != nil || delivered.plainText() != "after forgiveness" || len(p.requests) != 4 {
-		t.Fatalf("result=%+v delivered=%q calls=%d", result, delivered.plainText(), len(p.requests))
+	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{})
+	if result.Content != "after forgiveness" || len(p.requests) != 4 {
+		t.Fatalf("result=%q calls=%d", result.Content, len(p.requests))
 	}
-	if _, _, grace := e.stickerActivitySnapshot(); grace != 1 {
-		t.Fatalf("grace=%d, want 1 after one ordinary reply", grace)
+	if _, _, grace := e.stickerActivitySnapshot(); grace != 2 {
+		t.Fatalf("grace=%d, want 2", grace)
 	}
 }
 
@@ -218,7 +216,7 @@ func TestAddressedStickerDeliverySatisfiesQuota(t *testing.T) {
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
 			ID: "sticker_call", Type: "function", Function: core.ToolCallFunction{Name: "send_sticker", Arguments: `{"query":"开心"}`},
 		}}},
-		{Role: core.RoleAssistant},
+		{Role: core.RoleAssistant, Content: "done"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
 		"send_sticker": &staticTool{name: "send_sticker", result: payload},
@@ -234,8 +232,8 @@ func TestAddressedStickerDeliverySatisfiesQuota(t *testing.T) {
 			return nil
 		},
 	})
-	if result.Error != nil || len(p.requests) != 2 {
-		t.Fatalf("result=%+v calls=%d", result, len(p.requests))
+	if result.Content != "done" || len(p.requests) != 2 {
+		t.Fatalf("result=%q calls=%d", result.Content, len(p.requests))
 	}
 	if len(p.requests[0].Tools) != 1 || p.requests[0].Tools[0].Name != "send_sticker" {
 		t.Fatalf("addressed sticker tool unavailable: %+v", p.requests[0].Tools)
@@ -252,7 +250,7 @@ func TestMultipleMessagesInOneBotTurnCountOnce(t *testing.T) {
 			{ID: "first", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
 			{ID: "second", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`}},
 		}},
-		{Role: core.RoleAssistant},
+		{Role: core.RoleAssistant, Content: "done"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
 		"send_message": &staticTool{name: "send_message", result: `{"messages":[{"type":"plain","text":"hello","is_sticker":true}]}`},
@@ -264,8 +262,8 @@ func TestMultipleMessagesInOneBotTurnCountOnce(t *testing.T) {
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		SendHook: func(string) error { delivered++; return nil },
 	})
-	if result.Error != nil || delivered != 2 || len(p.requests) != 2 {
-		t.Fatalf("result=%+v delivered=%d calls=%d", result, delivered, len(p.requests))
+	if result.Content != "done" || delivered != 2 || len(p.requests) != 2 {
+		t.Fatalf("result=%q delivered=%d calls=%d", result.Content, delivered, len(p.requests))
 	}
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 1 {
 		t.Fatalf("one dialogue counted multiple sends or iterations: remaining=%d", remaining)
@@ -432,7 +430,7 @@ func TestSendMessageStickerPayloadResetsQuota(t *testing.T) {
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
 			ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{}`},
 		}}},
-		{Role: core.RoleAssistant},
+		{Role: core.RoleAssistant, Content: "done"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 2, ToolRegistry: map[string]ToolExecutor{
 		"send_message": &staticTool{name: "send_message", result: payload},
@@ -448,8 +446,8 @@ func TestSendMessageStickerPayloadResetsQuota(t *testing.T) {
 			return nil
 		},
 	})
-	if result.Error != nil {
-		t.Fatalf("result=%+v", result)
+	if result.Content != "done" {
+		t.Fatalf("result=%q", result.Content)
 	}
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 5 {
 		t.Fatalf("send_message sticker did not reset quota: remaining=%d", remaining)
@@ -559,7 +557,7 @@ func TestFailedStickerDeliveryDoesNotResetQuota(t *testing.T) {
 			ID: "sticker", Type: "function", Function: core.ToolCallFunction{Name: "send_sticker", Arguments: `{}`},
 		}}},
 		{Role: core.RoleAssistant, Content: ignoreEnforceStickerMarker},
-		{Role: core.RoleAssistant},
+		{Role: core.RoleAssistant, Content: "done"},
 	}}
 	e := &Engine{Provider: p, MaxIterations: 3, ToolRegistry: map[string]ToolExecutor{
 		"send_sticker": &staticTool{name: "send_sticker", result: payload},
@@ -570,8 +568,8 @@ func TestFailedStickerDeliveryDoesNotResetQuota(t *testing.T) {
 	result := e.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, RunContext{
 		SendHook: func(string) error { return context.DeadlineExceeded },
 	})
-	if result.Error != nil {
-		t.Fatalf("result=%+v", result)
+	if result.Content != "done" {
+		t.Fatalf("result=%q", result.Content)
 	}
 	if _, remaining, _ := e.stickerActivitySnapshot(); remaining != 0 {
 		t.Fatalf("failed delivery changed quota: remaining=%d", remaining)

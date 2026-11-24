@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/actionscat"
@@ -43,15 +42,6 @@ type ToolExecutor interface {
 const (
 	StaySilentToolName    = "stay_silent"
 	AssistantSilentMarker = "<assistant_silent />"
-
-	// PlainTextNotDeliveredNotice is returned to the model when it writes plain
-	// text instead of calling a delivery tool. The rejected text is never sent
-	// or saved as assistant history.
-	PlainTextNotDeliveredNotice = "Attention: plain text is not delivered. Use send_message (if you want to speak more) or stay_silent (if you want to finish loop) instead."
-	// maxPlainTextRejections bounds retries; beyond it the turn ends silently
-	// rather than sending an error or looping until the iteration cap.
-	maxPlainTextRejections = 2
-	sendMessageToolName    = "send_message"
 
 	// DefaultMaxIterations is the fallback loop iteration limit for LLM execution.
 	DefaultMaxIterations = 35
@@ -387,7 +377,7 @@ func (e *Engine) RunMessagesWithContext(
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
 
-	if runContext.Awareness || !hasPrimarySystemPrompt(messages) {
+	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
 		basePrompt := systemPrompt
@@ -955,8 +945,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	}
 	var specificReplyEchoes proactive.ReplyEchoGuard
 	specificReplyDelivered := false
-	declareFinalDelivered := false
-	plainTextRejections := 0
 	refreshPromptPending := false
 	for i := 0; i < maxIterations; i++ {
 		if runCanceled(ctx) {
@@ -1301,31 +1289,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		// 是否给出最终答案
 		if len(responseMsg.ToolCalls) == 0 {
 			contentStr, _ := responseMsg.Content.(string)
-			// Internal control markers are protocol signals, not user-visible text,
-			// so they are handled before the plain-text delivery rejection.
-			if enforceStickerActivity() && strings.TrimSpace(contentStr) == ignoreEnforceStickerMarker && (stickerEnforcing || e.stickerNeededBeforeReply()) {
-				messages = messages[:len(messages)-1]
-				messages = appendStickerForgiveness(messages, i)
-				e.grantStickerGrace()
-				stickerEnforcing = false
-				stickerAttempts = 0
-				addStickerIteration()
-				continue
-			}
-			if strings.TrimSpace(contentStr) != "" && !isStandaloneAssistantSilentMarker(contentStr) {
-				// Plain text never reaches the user. Drop the rejected turn so it is
-				// not replayed as the bot's own speech, then retry with a notice.
-				// Rejected text intentionally bypasses the security filter: it is
-				// never delivered, only logged here.
-				messages = messages[:len(messages)-1]
-				plainTextRejections++
-				e.Log().WarnWithConsoleSummary(logs.SYSTEM, "模型输出了未通过 send_message 的纯文本，已拒绝送达", "纯文本未送达已拒绝")
-				if plainTextRejections > maxPlainTextRejections {
-					return AgentRunResult{MemoryWritten: memoryWritten, Silent: true, SilenceReason: "plain_text_not_delivered", Usage: totalUsage}
-				}
-				messages = append(messages, ChatMessage{Role: "system", Content: PlainTextNotDeliveredNotice})
-				continue
-			}
 			outputBlocked := false
 			if blocked, decision := e.securityEvaluate(runCtx, security.StageModelOutput, security.SourceModelOutput, contentStr, ""); blocked || decision.Action == security.WatchdogFilter {
 				if decision.IsFailure {
@@ -1618,14 +1581,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				deliverySticker := hasStickerImage(stickerPayload)
 				if enforceStickerActivity() && stickerPayload != "" && !deliverySticker {
 					if e.stickerNeededBeforeReply() {
-						stickerEnforcing = true
-						stickerAttempts++
-						forgive := stickerAttempts >= 3
-						if forgive {
-							stickerEnforcing = false
-							stickerAttempts = 0
-						}
-						addStickerIteration()
 						toolResult = WrapRuntimeGuidance("表情包额度已到期，请先发送表情包或输出 <ignore_enforce_sticker /> 请求宽容。")
 						var archiveErr error
 						toolResult, archiveErr = e.finishToolHistory(ctx, execution, toolResult, historyRestricted)
@@ -1633,18 +1588,11 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 							return AgentRunResult{Error: archiveErr}
 						}
 						messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: tc.ID, ToolHistoryRefID: execution.HistoryRefID})
-						if forgive {
-							messages = appendStickerForgiveness(messages, i)
-							e.grantStickerGrace()
-						}
 						continue
 					}
 				}
 				var delivered bool
 				toolResult, delivered = e.deliverToolResult(ctx, execution, toolResult)
-				if delivered && tc.Function.Name == sendMessageToolName && declaresFinalMessage(tc.Function.Arguments) {
-					declareFinalDelivered = true
-				}
 				if delivered && hasRunCtx && runCtx.Proactive && tc.Function.Name == "send_message" {
 					specificReplyDelivered = true
 					specificReplyEchoes.Record(execution.MessagePayload)
@@ -1666,11 +1614,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				ToolCallID:       tc.ID,
 			}
 			messages = append(messages, toolMsg)
-		}
-		if declareFinalDelivered {
-			// The model declared the turn finished in the send_message call that was
-			// just delivered, so no further iteration is needed (awareness included).
-			return AgentRunResult{MemoryWritten: memoryWritten, Usage: totalUsage}
 		}
 		if specificReplyDelivered && !runCtx.Awareness {
 			// Finish the validated batch and its memory/transcript bookkeeping,
@@ -1730,9 +1673,6 @@ func staySilentConflict(toolCalls []ToolCall) string {
 	for _, toolCall := range toolCalls {
 		if IsStaySilentTool(toolCall.Function.Name) {
 			return "工具调用冲突：stay_silent 必须单独调用，不能与其他工具同时使用；请重新选择要执行的动作"
-		}
-		if toolCall.Function.Name == sendMessageToolName && declaresFinalMessage(toolCall.Function.Arguments) {
-			return "工具调用冲突：declare_final_message=true 的 send_message 必须单独调用；请拆分，或去掉该参数后继续"
 		}
 	}
 	return ""
@@ -1882,7 +1822,6 @@ func convertToCoreMessages(msgs []ChatMessage) []core.ChatMessage {
 			Content:       m.Content,
 			ToolCallID:    m.ToolCallID,
 			ProviderState: m.ProviderState,
-			ToolRecord:    m.Role == "system" && m.ToolHistoryRunID != "",
 		}
 		if len(m.ToolCalls) > 0 {
 			coreMsg.ToolCalls = make([]core.ToolCall, len(m.ToolCalls))
@@ -1956,22 +1895,4 @@ func userContentText(content any) string {
 		return strings.Join(lines, "\n")
 	}
 	return ""
-}
-
-// hasPrimarySystemPrompt reports whether history starts with the assembled system
-// prompt. Tool execution records are also system-role but are timeline entries:
-// after trimming, a record can become the first message, and it must not stop
-// the prompt (persona, memory) from being rebuilt.
-func hasPrimarySystemPrompt(messages []ChatMessage) bool {
-	return len(messages) > 0 && messages[0].Role == "system" && messages[0].ToolHistoryRunID == ""
-}
-
-// declaresFinalMessage reports whether a send_message call asks the turn to end
-// after its delivery succeeds. The tools package depends on llm, so the argument
-// is parsed here rather than imported.
-func declaresFinalMessage(args string) bool {
-	var probe struct {
-		DeclareFinalMessage bool `json:"declare_final_message"`
-	}
-	return json.Unmarshal([]byte(args), &probe) == nil && probe.DeclareFinalMessage
 }

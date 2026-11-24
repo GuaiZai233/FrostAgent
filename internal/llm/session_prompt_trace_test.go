@@ -17,7 +17,8 @@ func (m *mockTraceProvider) Chat(ctx context.Context, req core.ChatRequest) (*co
 	m.lastRequest = req
 	return &core.ChatResponse{
 		Message: core.ChatMessage{
-			Role: core.RoleAssistant,
+			Role:    core.RoleAssistant,
+			Content: "Mock reply",
 		},
 	}, nil
 }

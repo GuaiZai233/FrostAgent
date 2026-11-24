@@ -71,7 +71,7 @@ func (p *balanceModelProvider) Chat(_ context.Context, req core.ChatRequest) (*c
 	if last.Role != core.RoleTool || last.Content != `{"balance":42}` {
 		p.t.Fatal("model did not receive raw balance result")
 	}
-	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "checked"}}, nil
 }
 
 func TestBalanceQueryModelRoundTripNeverExposesRequestMaterial(t *testing.T) {
@@ -86,7 +86,7 @@ func TestBalanceQueryModelRoundTripNeverExposesRequestMaterial(t *testing.T) {
 	})
 	provider := &balanceModelProvider{t: t, key: key, endpoint: server.URL}
 	engine := &llm.Engine{Scope: scope, MaxIterations: 2, Provider: provider, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool}}
-	if got := engine.Run("query synthetic balance"); got != "" || provider.rounds != 2 {
+	if got := engine.Run("query synthetic balance"); got != "checked" || provider.rounds != 2 {
 		t.Fatalf("roundtrip failed: %q, rounds=%d", got, provider.rounds)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/gorilla/websocket"
 )
@@ -27,9 +26,8 @@ func TestResponseContextGuidanceTime(t *testing.T) {
 }
 
 func TestPrivateResponseGuidanceTime(t *testing.T) {
-	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: sendMessageFinalMessage("guidance answer")}}}
+	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
-	installTestSendMessage(engine)
 	t.Cleanup(engine.Cancel)
 	server, url := startReplyWSTestServer(t, engine)
 	defer server.Close()
@@ -63,7 +61,7 @@ func TestPrivateResponseGuidanceTime(t *testing.T) {
 		}
 	}
 	content, _ := request.Messages[len(request.Messages)-1].Content.(string)
-	if !strings.Contains(content, `"guidance":"请结合用户消息`) || !strings.Contains(content, "必须通过 send_message 发送") || !strings.Contains(content, "正常回答。当前系统时间：") || strings.Count(content, "当前系统时间：") != 1 {
+	if !strings.Contains(content, `"guidance":"请结合用户消息`) || !strings.Contains(content, "必须最终调用 stay_silent 中止此轮对话") || !strings.Contains(content, "正常回答。当前系统时间：") || strings.Count(content, "当前系统时间：") != 1 {
 		t.Fatalf("time must appear once in user guidance: %s", content)
 	}
 }

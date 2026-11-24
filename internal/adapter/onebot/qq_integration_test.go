@@ -132,9 +132,7 @@ func TestQQToolDeliveryAndRecallThroughAdapter(t *testing.T) {
 }
 
 func TestQQFinalStructuredMediaUsesNativeUpload(t *testing.T) {
-	engine := newTestEngine(&mockLLMProvider{responses: []*core.ChatResponse{{
-		Message: sendMessageArgsMessage(`{"messages":[{"type":"file","url":"https://example.invalid/shown.txt"}]}`),
-	}}})
+	engine := newTestEngine(&mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: `{"messages":[{"type":"file","url":"https://example.invalid/fixture","name":"shown.txt"}]}`}}}})
 	srv, address := startReplyWSTestServer(t, engine)
 	defer srv.Close()
 	ws, _, err := websocket.DefaultDialer.Dial(address, nil)
@@ -163,7 +161,7 @@ func TestQQFinalStructuredMediaUsesNativeUpload(t *testing.T) {
 func TestQQCrossSessionToolKeepsSourceAndTargetRepliesSeparate(t *testing.T) {
 	provider := &mockLLMProvider{responses: []*core.ChatResponse{
 		{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "external-fixture", Type: "function", Function: core.ToolCallFunction{Name: qqextend.ToolName, Arguments: `{"action":"send","arguments":{"target_group_id":"42","messages":[{"type":"plain","text":"external fixture"}]}}`}}}}},
-		{Message: sendMessageFinalMessage("source acknowledgement")},
+		{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "source acknowledgement"}},
 	}}
 	engine := newTestEngine(provider)
 	engine.Scope = newTestScopeWithEnv(t, map[string]string{qqextend.TargetGroupsKey: "42", "ENABLE_AT_IN_GROUP_MSG": "true", "ENABLE_REPLY_IN_GROUP_MSG": "true"})

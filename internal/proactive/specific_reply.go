@@ -18,10 +18,6 @@ func SpecificReplyParameters() map[string]any {
 				"type": "boolean", "default": true,
 				"description": "Set false to skip automatic sender mentions and reply quotes; explicit message components are preserved. Omit or set true to keep existing decoration rules.",
 			},
-			"declare_final_message": map[string]any{
-				"type": "boolean", "default": false,
-				"description": "Set true only on the final send_message of this turn: the turn ends right after this delivery succeeds. Omit or set false to continue the loop. Must be the only tool call in its batch.",
-			},
 			"messages": map[string]any{
 				"type": "array", "minItems": 2,
 				"description": "Exactly one mention_specific component first, followed by one or more plain components.",
@@ -45,7 +41,6 @@ func SpecificReplyParameters() map[string]any {
 func IsSpecificReply(args string) bool {
 	var payload struct {
 		UseFrostAgentDecoration *bool `json:"use_frostagent_decoration"`
-		DeclareFinalMessage     *bool `json:"declare_final_message"`
 		Messages                []struct {
 			Type      string `json:"type"`
 			MessageID string `json:"message_id,omitempty"`
