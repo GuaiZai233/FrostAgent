@@ -14,6 +14,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// toolHistoryNotice closes every injected tool record so the model does not
+// mistake the placeholder for ordinary assistant output and imitate it.
+const toolHistoryNotice = "此为内部占位元数据，由后端自动生成，非常规Assistant输出结果，禁止模仿该格式输出！"
+
 var errToolHistoryStorage = errors.New("工具历史存储失败，已停止执行；请检查操作状态，勿自动重复执行")
 
 // ToolHistoryScope derives archive authority exclusively from trusted adapter state.
@@ -181,7 +185,8 @@ func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
 	}
 	for i := range session.History {
 		if session.History[i].ToolHistoryRunID == record.RunID {
-			session.History[i].Content = contentToText(session.History[i].Content) + "\n" + line
+			body := strings.TrimSuffix(contentToText(session.History[i].Content), "\n"+toolHistoryNotice)
+			session.History[i].Content = body + "\n" + line + "\n" + toolHistoryNotice
 			return
 		}
 	}
@@ -190,6 +195,6 @@ func (e *Engine) noteToolHistory(run RunContext, record toolhistory.Record) {
 		encoded, _ := json.Marshal(record.SourceMessageID)
 		header += "\n来源消息: " + string(encoded)
 	}
-	session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: header + "\n" + strings.TrimSpace(line)})
+	session.addMessageLocked(core.ChatMessage{Role: core.RoleAssistant, Content: header + "\n" + strings.TrimSpace(line) + "\n" + toolHistoryNotice})
 	session.History[len(session.History)-1].ToolHistoryRunID = record.RunID
 }

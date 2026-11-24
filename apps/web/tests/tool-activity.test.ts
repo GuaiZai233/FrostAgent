@@ -30,8 +30,15 @@ assert.equal(
   parseToolHistoryNote(current)?.entries[1].readTargetRefId,
   originalRef,
 );
+const notice =
+  '此为内部占位元数据，由后端自动生成，非常规Assistant输出结果，禁止模仿该格式输出！';
+assert.equal(
+  parseToolHistoryNote(`${current}\n${notice}`)?.entries.length,
+  2,
+);
 for (const content of [
   'I can use read_tool_history',
+  notice,
   `send_message (ref_id: ${originalRef})`,
   `${legacy}\nordinary quoted text`,
   '【工具执行记录】\nnot an entry',
