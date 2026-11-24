@@ -9,6 +9,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/silentignore"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -385,6 +386,9 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 
 		if event.MetaEventType == "heartbeat" {
+			continue
+		}
+		if a.silentlyIgnored(wsConn, event) {
 			continue
 		}
 		wsConn.rememberInboundFileNotice(event)
@@ -840,4 +844,35 @@ func validateOutboundMediaURL(rawURL string) error {
 	default:
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
+}
+
+// silentlyIgnored drops messages, pokes and file-upload notices from users in SILENT_IGNORE_USER_IDS
+// before any reply, history, memory or security processing. Direct Chat
+// (mock) connections are never filtered.
+func (a *Adapter) silentlyIgnored(conn *wsConnection, event model.OneBotEvent) bool {
+	if a.engine == nil || conn.mock || event.UserID == 0 {
+		return false
+	}
+	if !silentIgnoreEvent(event) {
+		return false
+	}
+	return silentignore.Parse(a.engine.Getenv).Ignored("onebot", strconv.FormatInt(event.UserID, 10))
+}
+
+// silentIgnoreEvent reports whether the event is user-originated content that
+// the ignore list covers: messages, pokes and file-upload notices (the latter
+// would otherwise populate the per-connection inbound file cache).
+func silentIgnoreEvent(event model.OneBotEvent) bool {
+	switch event.PostType {
+	case "message":
+		return true
+	case "notice":
+		switch event.NoticeType {
+		case "group_upload", "offline_file":
+			return true
+		case "notify":
+			return event.SubType == "poke"
+		}
+	}
+	return false
 }

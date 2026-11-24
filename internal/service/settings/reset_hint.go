@@ -36,6 +36,7 @@ var resetHints = map[string]string{
 	"LOG_STORAGE_MIB":                      "128",
 	"MAX_CONTEXT_MESSAGES":                 "50",
 	"ADMIN_QQ_IDS":                         "未配置管理员",
+	"SILENT_IGNORE_USER_IDS":               "未屏蔽任何用户",
 	"ADMIN_COMMAND_PREFIX":                 "/",
 	"ENABLE_RUNTIME_STATUS_COMMAND":        "开启",
 	"GROUP_COMPACT_BUFFER_SIZE":            "20",
