@@ -13,11 +13,13 @@ func TestEmojiWithoutFontFailsLoudly(t *testing.T) {
 	old := fontDownloadEnabled
 	fontDownloadEnabled = false
 	t.Cleanup(func() { fontDownloadEnabled = old })
-	_, err := Render(Request{Format: FormatMarkdown, Content: "验证 ✅ 通过", FontDir: t.TempDir()})
+	// Latin-only content: a CJK character would fail first on machines without
+	// a body font, hiding the emoji error this test is about.
+	_, err := Render(Request{Format: FormatMarkdown, Content: "ok ✅ done", FontDir: t.TempDir()})
 	if err == nil {
 		t.Fatal("emoji without a font must not render as a notdef box")
 	}
-	if !strings.Contains(err.Error(), "✅") && !strings.Contains(err.Error(), "没有可用字形") {
+	if !strings.Contains(err.Error(), "✅") {
 		t.Fatalf("error should name the missing glyph: %v", err)
 	}
 }
