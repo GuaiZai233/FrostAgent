@@ -266,7 +266,7 @@ func newManager(root string, global *instanceconfig.Store, db *storage.DB, build
 }
 func (m *Manager) dir(id string) string { return filepath.Join(m.root, "instance_"+id) }
 
-var mcpBuiltinNames = []string{"send_message", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "inspect_message_image", "execute_command", "load_skill", "read_skill_resource", "run_skill"}
+var mcpBuiltinNames = []string{"send_message", "send_rich_image", "stay_silent", "use_subagent", "memory", "send_sticker", "steal_sticker", "inspect_message_image", "execute_command", "load_skill", "read_skill_resource", "run_skill"}
 
 func (m *Manager) ensureInstanceMCP(i *managed) {
 	i.mu.Lock()
