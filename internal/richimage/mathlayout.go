@@ -93,6 +93,8 @@ func (m *mathLayout) lay(n mnode, st mstyle) mbox {
 		return m.laySqrt(n, st)
 	case *mDelim:
 		return m.layDelim(n, st)
+	case *mBoxed:
+		return m.layBoxed(n, st)
 	case *mAccent:
 		return m.layAccent(n, st)
 	case *mMatrix:
@@ -386,7 +388,15 @@ func (m *mathLayout) layScripts(n *mScripts, st mstyle) mbox {
 		down = math.Max(down, sub.asc-0.35*s)
 	}
 	italic := 0.04 * s
-	w := base.w + italic + math.Max(sup.w, sub.w)
+	// TeX pulls the subscript of an integral sign back under its slanted foot.
+	subBack := 0.0
+	if a, ok := n.base.(*mAtom); ok && a.big && a.kind == kOp && !a.limits && hasSub {
+		subBack = math.Min(0.3*s*float64(len([]rune(a.text))), base.w*0.5)
+		if !hasSup {
+			subBack *= 0.8
+		}
+	}
+	w := base.w + italic + math.Max(sup.w, sub.w) - subBack
 	out := mbox{w: w, asc: base.asc, desc: base.desc}
 	if hasSup {
 		out.asc = math.Max(out.asc, up+sup.asc)
@@ -400,7 +410,7 @@ func (m *mathLayout) layScripts(n *mScripts, st mstyle) mbox {
 			sup.draw(dst, x+base.w+italic, b-up)
 		}
 		if hasSub {
-			sub.draw(dst, x+base.w+italic, b+down)
+			sub.draw(dst, x+base.w+italic-subBack, b+down)
 		}
 	}
 	return out
@@ -658,4 +668,21 @@ func strokeSeg(dst *image.RGBA, x0, y0, x1, y1, th float64, col color.RGBA) {
 	}
 	z.ClosePath()
 	z.Draw(dst, full, image.NewUniform(col), image.Point{})
+}
+
+func (m *mathLayout) layBoxed(n *mBoxed, st mstyle) mbox {
+	body := m.lay(n.body, st)
+	s := st.size
+	pad, th := 0.25*s, math.Max(1.2, 0.045*s)
+	box := mbox{w: body.w + 2*pad, asc: body.asc + pad, desc: body.desc + pad}
+	col := m.col
+	box.draw = func(dst *image.RGBA, x, b float64) {
+		body.draw(dst, x+pad, b)
+		top, bot := b-box.asc, b+box.desc
+		strokeSeg(dst, x, top, x+box.w, top, th, col)
+		strokeSeg(dst, x, bot, x+box.w, bot, th, col)
+		strokeSeg(dst, x, top, x, bot, th, col)
+		strokeSeg(dst, x+box.w, top, x+box.w, bot, th, col)
+	}
+	return box
 }

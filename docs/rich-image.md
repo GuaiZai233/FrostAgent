@@ -27,7 +27,7 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 - `\sum` `\prod` `\int` `\lim` 等大型运算符及上下限
 - 希腊字母、常见运算符与关系符、`\left...\right`、`\text{}`、`\mathbf{}`、`\mathbb{}`
 - 重音（`\hat` `\bar` `\vec` `\overline` `\tilde` `\dot`）
-- `matrix` `pmatrix` `bmatrix` `vmatrix` `cases` `aligned` 环境
+- `boxed{}`、`matrix` `pmatrix` `bmatrix` `vmatrix` `cases` `aligned` 环境
 
 不支持的命令不会让整张图失败，而是把公式源码以代码样式显示。
 

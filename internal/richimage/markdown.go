@@ -120,7 +120,7 @@ func extractMathSegment(s string, items *[]mathItem) string {
 			valid := end > i+1
 			if valid {
 				expr := s[i+1 : end]
-				valid = strings.TrimSpace(expr) == expr
+				valid = validInlineMath(expr)
 				if valid && end+1 < len(s) && s[end+1] >= '0' && s[end+1] <= '9' {
 					valid = false
 				}
@@ -627,4 +627,14 @@ func (m *mdRenderer) textWithMath(s string, raw bool, st style, size float64) []
 		i = j
 	}
 	return append(out, m.c.textAtoms(piece(string(runes[start:])), st, size)...)
+}
+
+// validInlineMath applies the usual rule (no space just inside the dollars)
+// but accepts an escaped space ("\ ") at the trailing edge, as in $\ x\ $.
+func validInlineMath(expr string) bool {
+	if strings.TrimSpace(expr) == "" || strings.TrimLeft(expr, " ") != expr {
+		return false
+	}
+	trail := strings.TrimRight(expr, " ")
+	return trail == expr || strings.HasSuffix(trail, "\\")
 }

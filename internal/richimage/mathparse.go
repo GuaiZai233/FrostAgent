@@ -58,6 +58,8 @@ type mDelim struct {
 
 type mText struct{ text string }
 
+type mBoxed struct{ body mnode }
+
 type mAccent struct {
 	kind string
 	body mnode
@@ -350,6 +352,8 @@ func (p *mparser) command(cmd string) mnode {
 			}
 		}
 		return &mText{text: sb.String()}
+	case "boxed", "fbox":
+		return &mBoxed{body: p.parseArg()}
 	case "hat", "widehat", "bar", "overline", "underline", "vec", "overrightarrow", "tilde", "widetilde", "dot", "ddot":
 		return &mAccent{kind: cmd, body: p.parseArg()}
 	case "displaystyle", "textstyle", "scriptstyle", "limits", "nolimits", "big", "Big", "bigg", "Bigg":
@@ -500,7 +504,7 @@ func buildMathSymbols() map[string]mathSym {
 		"uparrow", "↑", "downarrow", "↓", "lbrace", "{", "rbrace", "}", "langle", "⟨", "rangle", "⟩",
 		"lfloor", "⌊", "rfloor", "⌋", "lceil", "⌈", "rceil", "⌉", "vert", "|", "Vert", "‖", "backslash", "\\",
 		"blacksquare", "■", "square", "□", "Box", "□", "qed", "■")
-	add(kBin, fontRoman, "pm", "±", "mp", "∓", "times", "×", "div", "÷", "cdot", "∙", "ast", "∗", "star", "⋆",
+	add(kBin, fontRoman, "pm", "±", "mp", "∓", "times", "×", "div", "÷", "cdot", "⋅", "ast", "∗", "star", "⋆",
 		"circ", "∘", "bullet", "•", "cap", "∩", "cup", "∪", "wedge", "∧", "land", "∧", "vee", "∨", "lor", "∨",
 		"oplus", "⊕", "otimes", "⊗", "setminus", "∖")
 	add(kRel, fontRoman, "leq", "≤", "le", "≤", "geq", "≥", "ge", "≥", "neq", "≠", "ne", "≠", "approx", "≈",
