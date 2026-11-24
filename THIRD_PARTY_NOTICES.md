@@ -328,7 +328,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## chroma v2.23.1 (syntax highlighting)
 
-Source: https://github.com/alecthomas/chroma (v2.23.1). The embedded XML rules in `internal/richimage/syntaxdata/` are copied from `lexers/embedded/`; the Go rules in `syntax_go.go` are adapted from `lexers/go.go`. Both are MIT licensed.
+Source: https://github.com/alecthomas/chroma (v2.23.1), used as an unmodified Go module dependency, including its bundled lexer rules.
 
 ```text
 Copyright (C) 2017 Alec Thomas

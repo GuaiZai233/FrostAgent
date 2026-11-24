@@ -37,12 +37,12 @@ func TestClassifyToken(t *testing.T) {
 }
 
 func TestSyntaxLexerSelection(t *testing.T) {
-	for _, info := range []string{"python", "py", "Python title=x", "go", "golang", "js", "ts", "json", "bash", "sh"} {
+	for _, info := range []string{"python", "py", "Python title=x", "go", "golang", "js", "ts", "json", "bash", "sh", "rust", "yaml", "sql"} {
 		if syntaxLexer(info) == nil {
 			t.Errorf("%q must be highlighted", info)
 		}
 	}
-	for _, info := range []string{"", "cobol", "rust", "   "} {
+	for _, info := range []string{"", "   ", "not-a-real-language"} {
 		if syntaxLexer(info) != nil {
 			t.Errorf("%q must fall back to plain text", info)
 		}
@@ -55,7 +55,7 @@ func TestCodeColorsFallBackToNil(t *testing.T) {
 	if codeColors(th, "", "x = 1") != nil {
 		t.Fatal("no language must not colour tokens")
 	}
-	if codeColors(th, "cobol", "MOVE 1 TO X") != nil {
+	if codeColors(th, "not-a-real-language", "MOVE 1 TO X") != nil {
 		t.Fatal("unknown language must not colour tokens")
 	}
 }
@@ -76,6 +76,18 @@ func TestCodeColorsCoverEveryRune(t *testing.T) {
 	}
 	if len(distinct) < 3 {
 		t.Fatalf("expected several token colours, got %d", len(distinct))
+	}
+}
+
+// A language outside the original six works too, with no files copied in.
+func TestRustHighlighted(t *testing.T) {
+	code := "fn main() { let x = 1; }\n"
+	colors := codeColors(lightTheme, "rust", code)
+	if colors == nil {
+		t.Fatal("rust must be highlighted")
+	}
+	if colors[0] != lightTheme.syntax[synKeyword] {
+		t.Error("'fn' must use the keyword colour")
 	}
 }
 

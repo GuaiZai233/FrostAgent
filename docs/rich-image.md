@@ -32,10 +32,10 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 - `\checkmark`、`\oint`、`\oiint`、`\bigotimes`、`\leqslant`、`\impliedby`、`\longrightarrow` 等常用符号
 - `matrix` `pmatrix` `bmatrix` `vmatrix` `Vmatrix` `Bmatrix` `cases` `aligned` `align*` `gather` 环境
 
-代码块可以用围栏语言标记着色（语法高亮基于 chroma，只内嵌下列语言的规则）：
+代码块可以用围栏语言标记着色。语法高亮使用 chroma，凡是 chroma 认识的语言名或别名
+（如 `python` `go` `js` `ts` `bash` `json` `rust` `yaml` `sql` 等几百种）都会着色：
 
-- `python` / `py`、`go`、`javascript` / `js` / `jsx`、`typescript` / `ts`、`bash` / `sh` / `shell` / `zsh`、`json`
-- 没有语言标记或语言不在列表中的代码块保持单色。
+- 没有语言标记或语言 chroma 不认识的代码块保持单色。
 - 亮色与暗色主题各有一套配色。
 
 已知局限（如遇到请反馈）：

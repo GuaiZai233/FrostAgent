@@ -1,60 +1,24 @@
 package richimage
 
 import (
-	"embed"
 	"image/color"
 	"strings"
-	"sync"
 
 	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 )
 
-// Syntax highlighting uses chroma's lexers (MIT, see THIRD_PARTY_NOTICES.md)
-// for a fixed set of languages. Only those rule files are embedded, which keeps
-// the binary small compared with pulling in every lexer.
-
-//go:embed syntaxdata/*.xml
-var syntaxFS embed.FS
-
-// xmlLexerFiles maps a fence language name or alias to an embedded rule file.
-// Go is handled by syntax_go.go because its upstream rules are Go code.
-var xmlLexerFiles = map[string]string{
-	"python": "syntaxdata/python.xml", "py": "syntaxdata/python.xml", "python3": "syntaxdata/python.xml",
-	"javascript": "syntaxdata/javascript.xml", "js": "syntaxdata/javascript.xml", "jsx": "syntaxdata/javascript.xml",
-	"typescript": "syntaxdata/typescript.xml", "ts": "syntaxdata/typescript.xml",
-	"bash": "syntaxdata/bash.xml", "sh": "syntaxdata/bash.xml", "shell": "syntaxdata/bash.xml", "zsh": "syntaxdata/bash.xml",
-	"json": "syntaxdata/json.xml",
-}
-
-// xmlLexers caches the parsed rule files; each is parsed at most once.
-var xmlLexers sync.Map // file name -> *sync.OnceValue[chroma.Lexer]
-
-func cachedXMLLexer(file string) chroma.Lexer {
-	once, _ := xmlLexers.LoadOrStore(file, sync.OnceValue(func() chroma.Lexer {
-		l, err := chroma.NewXMLLexer(syntaxFS, file)
-		if err != nil {
-			return nil
-		}
-		return l
-	}))
-	return once.(func() chroma.Lexer)()
-}
+// Syntax highlighting uses chroma's own lexer registry (MIT, see
+// THIRD_PARTY_NOTICES.md), so every language chroma knows is highlighted.
 
 // syntaxLexer returns the lexer for a fence info string such as "python" or
-// "python title=x", or nil when the language is not highlighted.
+// "python title=x", or nil when chroma has no lexer for it.
 func syntaxLexer(info string) chroma.Lexer {
 	fields := strings.Fields(info)
 	if len(fields) == 0 {
 		return nil
 	}
-	name := strings.ToLower(fields[0])
-	if name == "go" || name == "golang" {
-		return goSyntaxLexer()
-	}
-	if file, ok := xmlLexerFiles[name]; ok {
-		return cachedXMLLexer(file)
-	}
-	return nil
+	return lexers.Get(strings.ToLower(fields[0]))
 }
 
 // syntaxClass groups token types into the few colours a theme provides.
