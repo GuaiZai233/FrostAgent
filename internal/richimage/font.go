@@ -74,9 +74,14 @@ func pinnedFont(ctx context.Context, rf remoteFont, dir string) (*sfnt.Font, err
 	if f, ok := pinnedFonts[key]; ok {
 		return f, nil
 	}
+	fontMu.Unlock() // never hold the lock while waiting on the network
 	data, err := ensureFont(ctx, rf, dir)
+	fontMu.Lock()
 	if err != nil {
 		return nil, err
+	}
+	if f, ok := pinnedFonts[key]; ok {
+		return f, nil
 	}
 	f, err := sfnt.Parse(data)
 	if err != nil {
@@ -123,6 +128,9 @@ func loadFonts(ctx context.Context, override, dir string) (*fontSet, error) {
 		set.math = m
 	} else {
 		fetchErrs = append(fetchErrs, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	set.fetchErr = errors.Join(fetchErrs...)
 	for _, f := range []struct {

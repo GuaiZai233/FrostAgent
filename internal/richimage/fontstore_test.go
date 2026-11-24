@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testRemote(body []byte) remoteFont {
@@ -202,5 +203,84 @@ func TestMathAlnum(t *testing.T) {
 		if got := mathAlnum(tc.in, tc.bold); got != tc.want {
 			t.Errorf("mathAlnum(%U, bold=%v) = %U, want %U", tc.in, tc.bold, got, tc.want)
 		}
+	}
+}
+
+// A canceled waiter must return promptly while another caller's download is
+// still in flight, and must not disturb that download.
+func TestEnsureFontCanceledWaiterDoesNotBlock(t *testing.T) {
+	withDownloads(t)
+	body := []byte("slow font")
+	release := make(chan struct{})
+	started := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		started <- struct{}{}
+		<-release
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	rf := testRemote(body)
+	rf.url = srv.URL
+	dir := t.TempDir()
+
+	first := make(chan error, 1)
+	go func() { _, err := ensureFont(context.Background(), rf, dir); first <- err }()
+	<-started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	second := make(chan error, 1)
+	go func() { _, err := ensureFont(ctx, rf, dir); second <- err }()
+	cancel()
+	select {
+	case err := <-second:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled waiter stayed blocked behind the download")
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatalf("first download failed: %v", err)
+	}
+	if len(started) != 0 {
+		t.Fatal("waiters must share one download")
+	}
+}
+
+// RenderContext releases its render slot when canceled during font loading.
+func TestRenderContextCanceledDuringFontLoad(t *testing.T) {
+	withDownloads(t)
+	release := make(chan struct{})
+	started := make(chan struct{}, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		started <- struct{}{}
+		<-release
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	defer close(release)
+	oldBody, oldMath := lxgwZhenKai, stixTwoMath
+	lxgwZhenKai.url, stixTwoMath.url = srv.URL, srv.URL
+	defer func() { lxgwZhenKai, stixTwoMath = oldBody, oldMath }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := RenderContext(ctx, Request{Format: FormatMarkdown, Content: "x", FontDir: t.TempDir()})
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("render stayed blocked on font loading")
+	}
+	if len(renderSlots) != 0 {
+		t.Fatalf("render slot leaked: %d in use", len(renderSlots))
 	}
 }

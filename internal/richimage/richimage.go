@@ -84,6 +84,9 @@ func RenderContext(ctx context.Context, req Request) (data []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	fs := newFaces(fonts)
 	defer fs.close()
 	c := &canvas{fs: fs, th: lightTheme, scale: scale, mathBudget: maxMathPixels}

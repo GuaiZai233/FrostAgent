@@ -56,8 +56,10 @@ var (
 	fontDownloadEnabled = true
 	fontHTTPClient      = &http.Client{}
 
+	// fetchMu guards only these maps and is never held across I/O.
 	fetchMu   sync.Mutex
 	fetchFail = map[string]fetchFailure{}
+	flights   = map[string]*flight{}
 )
 
 type fetchFailure struct {
@@ -100,8 +102,17 @@ func readCachedFont(path string, rf remoteFont) ([]byte, bool) {
 	return data, true
 }
 
+// flight is one shared in-progress download. The download runs detached from
+// any single caller, so a canceled caller never aborts it for the others.
+type flight struct {
+	done chan struct{}
+	data []byte
+	err  error
+}
+
 // ensureFont returns the verified bytes of rf, downloading them into dir on
 // first use. Corrupt or tampered cache files are replaced, never used.
+// Waiting is always cancellable and no lock is held across network I/O.
 func ensureFont(ctx context.Context, rf remoteFont, dir string) ([]byte, error) {
 	path := filepath.Join(dir, rf.name)
 	if data, ok := readCachedFont(path, rf); ok {
@@ -110,28 +121,47 @@ func ensureFont(ctx context.Context, rf remoteFont, dir string) ([]byte, error) 
 	if !fontDownloadEnabled {
 		return nil, fmt.Errorf("字体 %s 不在缓存目录 %s 中，且已禁用下载", rf.name, dir)
 	}
-	fetchMu.Lock()
-	defer fetchMu.Unlock()
-	// Another render may have finished the download while this one waited.
-	if data, ok := readCachedFont(path, rf); ok {
-		return data, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	key := path
+	fetchMu.Lock()
 	if f, ok := fetchFail[rf.name]; ok && time.Since(f.at) < fontRetryCooldown {
+		fetchMu.Unlock()
 		return nil, fmt.Errorf("字体 %s 最近下载失败，稍后重试: %w", rf.name, f.err)
 	}
-	data, err := downloadFont(ctx, rf)
+	fl, running := flights[key]
+	if !running {
+		fl = &flight{done: make(chan struct{})}
+		flights[key] = fl
+		go runFlight(key, fl, rf, dir)
+	}
+	fetchMu.Unlock()
+	select {
+	case <-fl.done:
+		return fl.data, fl.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func runFlight(key string, fl *flight, rf remoteFont, dir string) {
+	data, err := downloadFont(context.Background(), rf)
 	if err == nil {
 		err = storeFont(dir, rf, data)
 	}
+	fetchMu.Lock()
 	if err != nil {
-		// A canceled caller says nothing about the network; do not start a cooldown.
-		if ctx.Err() == nil {
-			fetchFail[rf.name] = fetchFailure{at: time.Now(), err: err}
-		}
-		return nil, fmt.Errorf("下载字体 %s 失败: %w", rf.name, err)
+		err = fmt.Errorf("下载字体 %s 失败: %w", rf.name, err)
+		fetchFail[rf.name] = fetchFailure{at: time.Now(), err: err}
+	} else {
+		delete(fetchFail, rf.name)
+		fl.data = data
 	}
-	delete(fetchFail, rf.name)
-	return data, nil
+	fl.err = err
+	delete(flights, key)
+	fetchMu.Unlock()
+	close(fl.done)
 }
 
 func downloadFont(ctx context.Context, rf remoteFont) ([]byte, error) {
