@@ -95,8 +95,10 @@ export function parseToolHistoryNote(
 // The backend neutralizes every lookalike tag, then appends one genuine block at
 // the very end of the final user turn. Only that trailing block is trusted, so
 // text a user typed earlier in a message can never render as tool activity.
+// The block is preceded by a blank line; a multimodal request adds the newline
+// that joins its text parts, so the whole run of newlines belongs to the separator.
 const toolActivityBlockPattern =
-  /\n\n<recent_tool_activity>\n([\s\S]*?)\n<\/recent_tool_activity>\s*$/;
+  /\n{2,}<recent_tool_activity>\n([\s\S]*?)\n<\/recent_tool_activity>\s*$/;
 const refMatcher = new RegExp(`^${refPattern}$`);
 
 export function extractToolActivityBlock(
