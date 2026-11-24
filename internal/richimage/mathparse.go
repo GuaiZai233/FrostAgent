@@ -297,6 +297,10 @@ func (p *mparser) delimiter() string {
 		return "⌈"
 	case "rceil":
 		return "⌉"
+	case "lvert", "rvert":
+		return "|"
+	case "lVert", "rVert":
+		return "‖"
 	case "vert":
 		return "|"
 	default:
@@ -306,6 +310,9 @@ func (p *mparser) delimiter() string {
 }
 
 func (p *mparser) command(cmd string) mnode {
+	if n, ok := p.extraCommand(cmd); ok {
+		return n
+	}
 	switch cmd {
 	case "frac", "dfrac", "tfrac":
 		num := p.parseArg()
@@ -512,6 +519,7 @@ func buildMathSymbols() map[string]mathSym {
 		"subset", "⊂", "supset", "⊃", "subseteq", "⊆", "supseteq", "⊇", "ll", "≪", "gg", "≫", "perp", "⊥",
 		"parallel", "∥", "to", "→", "rightarrow", "→", "leftarrow", "←", "leftrightarrow", "↔", "Rightarrow", "⇒",
 		"Leftarrow", "⇐", "Leftrightarrow", "⇔", "implies", "⇒", "iff", "⇔", "mapsto", "↦", "gets", "←")
+	addExtraSymbols(m)
 	for name, text := range map[string]string{"sum": "∑", "prod": "∏", "coprod": "∐", "int": "∫", "iint": "∬",
 		"iiint": "∭", "oint": "∮", "bigcup": "⋃", "bigcap": "⋂", "bigoplus": "⨁", "bigwedge": "⋀", "bigvee": "⋁"} {
 		m[name] = mathSym{text: text, kind: kOp, font: fontRoman, big: true,

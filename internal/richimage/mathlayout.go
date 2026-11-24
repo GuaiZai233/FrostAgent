@@ -100,6 +100,9 @@ func (m *mathLayout) lay(n mnode, st mstyle) mbox {
 	case *mMatrix:
 		return m.layMatrix(n, st)
 	}
+	if b, ok := m.layExtra(n, st); ok {
+		return b
+	}
 	m.fail("内部错误: 未知节点 %T", n)
 	return mbox{draw: func(*image.RGBA, float64, float64) {}}
 }
@@ -132,6 +135,8 @@ func kindOf(n mnode) int {
 	case *mAtom:
 		return v.kind
 	case *mScripts:
+		return kindOf(v.base)
+	case *mStack:
 		return kindOf(v.base)
 	}
 	return kOrd
@@ -351,7 +356,7 @@ func (m *mathLayout) layScripts(n *mScripts, st mstyle) mbox {
 	if hasSub {
 		sub = m.lay(n.sub, ss)
 	}
-	if a, ok := n.base.(*mAtom); ok && a.limits && st.display {
+	if centeredLabels(n.base, st) {
 		w := math.Max(base.w, math.Max(sup.w, sub.w))
 		out := mbox{w: w, asc: base.asc, desc: base.desc}
 		supUp, subDown := 0.0, 0.0

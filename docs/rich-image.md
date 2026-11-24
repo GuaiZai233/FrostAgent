@@ -27,7 +27,19 @@ SVG 图示渲染成 PNG，并作为一条图片消息发送到当前 OneBot 会�
 - `\sum` `\prod` `\int` `\lim` 等大型运算符及上下限
 - 希腊字母、常见运算符与关系符、`\left...\right`、`\text{}`、`\mathbf{}`、`\mathbb{}`
 - 重音（`\hat` `\bar` `\vec` `\overline` `\tilde` `\dot`）
-- `boxed{}`、`matrix` `pmatrix` `bmatrix` `vmatrix` `cases` `aligned` 环境
+- `\boxed{}`、`\cancel{}`、`\underbrace{}_{}`、`\overbrace{}^{}`、`\stackrel`、`\overset`、`\underset`、`\xrightarrow`、`\xleftarrow`、`\not`
+- `\bigl \Bigl \biggl \Biggl` 等大小定界符，`\lvert \rVert` 等绝对值/范数记号
+- `\checkmark`、`\oint`、`\oiint`、`\bigotimes`、`\leqslant`、`\impliedby`、`\longrightarrow` 等常用符号
+- `matrix` `pmatrix` `bmatrix` `vmatrix` `Vmatrix` `Bmatrix` `cases` `aligned` `align*` `gather` 环境
+
+已知局限（如遇到请反馈）：
+
+- 大括号画成横线加端点，不是曲线花括号；`\cancel` 只是一条斜线。
+- 排版是简化实现，上下标位置、间距和 TeX 有细微差别，没有 `\color`、`\label`、`\tag`、`\nonumber`、`\hspace`。
+- `array` 忽略列格式，统一居中。
+- 符号若两个字体都没有，会显示为源码而不是整张图失败。
+
+`go test` 中的 `TestCommonCommandsParse` 和 `TestCommonCommandsLayout` 会检查一份常用命令清单，任何不支持的写法都会一次性列出。
 
 不支持的命令不会让整张图失败，而是把公式源码以代码样式显示。
 
