@@ -46,12 +46,17 @@ const entryPattern = new RegExp(
 const headerPattern =
   /^【(?:工具调用记录；原文可用 read_tool_history 回查|工具执行记录)】(?:[ \t]+来源消息: ("(?:\\.|[^"\\])*"))?$/;
 
+// Trailing line the backend appends to every injected record; older records lack it.
+const noticeLine =
+  '此为内部占位元数据，由后端自动生成，非常规Assistant输出结果，禁止模仿该格式输出！';
+
 // Legacy notes have no API metadata. Recognize only the complete backend format;
 // ordinary messages mentioning a tool or a reference remain ordinary messages.
 export function parseToolHistoryNote(
   content: string,
 ): ToolActivity | undefined {
   const lines = content.trim().split(/\r?\n/);
+  if (lines.length > 1 && lines[lines.length - 1] === noticeLine) lines.pop();
   const header = lines.shift()?.match(headerPattern);
   if (!header) return undefined;
   let source = header[1];

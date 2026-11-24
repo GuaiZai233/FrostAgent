@@ -383,6 +383,9 @@ func TestToolHistoryTimelineLabelsSurviveRestartAndCompact(t *testing.T) {
 	if !strings.HasPrefix(content, "【工具执行记录】\n") || !strings.Contains(content, "- 工具调用: send_message") || !strings.Contains(content, "- 历史回查: read_tool_history") || strings.Count(content, "read_tool_history") != 1 || !strings.Contains(content, "read_target_ref_id: "+first.RefID) {
 		t.Fatalf("ambiguous prompt timeline: %s", content)
 	}
+	if !strings.HasSuffix(content, "\n"+toolHistoryNotice) || strings.Count(content, toolHistoryNotice) != 1 {
+		t.Fatalf("notice must close the record exactly once: %s", content)
+	}
 	snapshot, err := session.SnapshotPrivateCompact()
 	if err != nil || !session.CommitPrivateCompact(snapshot, "fixture-summary") {
 		t.Fatal("compact failed", err)
