@@ -92,6 +92,57 @@ export function parseToolHistoryNote(
     : undefined;
 }
 
+// The backend neutralizes every lookalike tag, then appends one genuine block at
+// the very end of the final user turn. Only that trailing block is trusted, so
+// text a user typed earlier in a message can never render as tool activity.
+const toolActivityBlockPattern =
+  /\n\n<recent_tool_activity>\n([\s\S]*?)\n<\/recent_tool_activity>\s*$/;
+const refMatcher = new RegExp(`^${refPattern}$`);
+
+export function extractToolActivityBlock(
+  content: string,
+): { rest: string; activities: ToolActivity[] } | undefined {
+  const match = content.match(toolActivityBlockPattern);
+  if (!match || match.index === undefined) return undefined;
+  const activities: ToolActivity[] = [];
+  let omitted = 0;
+  for (const line of match[1].split(/\r?\n/)) {
+    if (!line.startsWith('{')) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!value || typeof value !== 'object') continue;
+    const record = value as Record<string, unknown>;
+    if (record.kind === 'omitted_tool_records') {
+      if (typeof record.count === 'number') omitted += record.count;
+      continue;
+    }
+    if (
+      record.kind !== 'tool_record' ||
+      typeof record.tool !== 'string' ||
+      typeof record.ref_id !== 'string' ||
+      !refMatcher.test(record.ref_id)
+    )
+      continue;
+    const sourceMessageId =
+      typeof record.source_message_id === 'string' && record.source_message_id
+        ? record.source_message_id
+        : undefined;
+    const entry: ToolActivityEntry = { tool: record.tool, refId: record.ref_id };
+    const last = activities[activities.length - 1];
+    if (last && last.sourceMessageId === sourceMessageId)
+      last.entries.push(entry);
+    else activities.push({ entries: [entry], sourceMessageId });
+  }
+  if (!activities.length) return undefined;
+  if (omitted)
+    activities[0].placementHint = `另有 ${omitted} 条较早记录未列出`;
+  return { rest: content.slice(0, match.index), activities };
+}
+
 export function readTargetFromArguments(
   tool: string,
   args: string,

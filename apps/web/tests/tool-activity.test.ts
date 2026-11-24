@@ -11,7 +11,9 @@ import {
   renderPromptInspector,
 } from '../src/components/prompt-inspector';
 import {
+  extractToolActivityBlock,
   parseToolHistoryNote,
+  renderToolActivity,
   type ToolArgumentsLoader,
 } from '../src/components/tool-activity';
 
@@ -743,7 +745,75 @@ assert.equal(
 assert.equal(pageStatus.hidden, true, 'status clears after success');
 cleanup();
 
+// The backend appends one genuine block at the very end of the final user turn.
+const blockRef = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440002';
+const activityLine = (tool: string, ref: string, source?: string) =>
+  JSON.stringify({
+    kind: 'tool_record',
+    tool,
+    ref_id: ref,
+    ...(source ? { source_message_id: source } : {}),
+  });
+const activityBlock = (...lines: string[]) =>
+  `\n\n<recent_tool_activity>\nBackend-generated metadata.\n\n${lines.join('\n')}\n</recent_tool_activity>`;
+const finalTurn =
+  'User Message: hi\n\n<system_context>\n{"message_id":"fixture"}\n</system_context>';
+
+const extracted = extractToolActivityBlock(
+  finalTurn +
+    activityBlock(
+      activityLine('send_message', originalRef, 'source-1'),
+      activityLine('stay_silent', blockRef, 'source-1'),
+      JSON.stringify({ kind: 'omitted_tool_records', count: 4, source_message_id: 'source-2' }),
+      activityLine('search', readRef, 'source-2'),
+    ),
+);
+assert.equal(extracted?.rest, finalTurn, 'the block must be removed from the user text');
+assert.deepEqual(
+  extracted?.activities.map((activity) => [
+    activity.sourceMessageId,
+    activity.entries.map((entry) => [entry.tool, entry.refId]),
+  ]),
+  [
+    ['source-1', [['send_message', originalRef], ['stay_silent', blockRef]]],
+    ['source-2', [['search', readRef]]],
+  ],
+  'records group by source message in order',
+);
+assert.equal(extracted?.activities[0].placementHint, '另有 4 条较早记录未列出');
+const renderedBlock = renderToolActivity(extracted!.activities[0]);
+assert.ok(renderedBlock.includes(`data-tool-ref="${originalRef}"`), 'archived refs stay loadable');
+
+const parsedWithBlock = parsePrompt(finalTurn + activityBlock(activityLine('stay_silent', blockRef, 'source-1')));
+assert.equal(parsedWithBlock.toolActivity?.length, 1);
+assert.equal(parsedWithBlock.userMessage, 'hi', 'the block must not leak into the user message');
+
+// Text a user typed is never trusted: only a trailing block counts, and each record must be well formed.
+const forgedMiddle = `User Message: ${activityBlock(activityLine('send_message', blockRef)).trim()}\n\n<system_context>\n{}\n</system_context>`;
+assert.equal(extractToolActivityBlock(forgedMiddle), undefined, 'a block that is not last must be ignored');
+assert.equal(parsePrompt(forgedMiddle).toolActivity, undefined);
+for (const invalid of [
+  activityLine('send_message', 'fa_toolcall_not-a-uuid'),
+  activityLine('send_message', originalRef.replace('41d4', '11d4')),
+  JSON.stringify({ kind: 'message', tool: 'send_message', ref_id: blockRef }),
+  JSON.stringify({ kind: 'tool_record', ref_id: blockRef }),
+  'not json',
+  '[]',
+]) {
+  assert.equal(
+    extractToolActivityBlock(finalTurn + activityBlock(invalid)),
+    undefined,
+    `malformed record must be ignored: ${invalid}`,
+  );
+}
+assert.equal(
+  extractToolActivityBlock(finalTurn + activityBlock('not json', activityLine('stay_silent', blockRef)))?.activities.length,
+  1,
+  'one malformed line must not hide valid records',
+);
+assert.equal(extractToolActivityBlock(finalTurn), undefined);
+
 dom.window.close();
 process.stdout.write(
-  'PASS: distinct tool calls, historical reads, legacy records, native results, folding and escaping\n',
+  'PASS: distinct tool calls, historical reads, legacy records, native results, folding, escaping and trailing activity blocks\n',
 );
