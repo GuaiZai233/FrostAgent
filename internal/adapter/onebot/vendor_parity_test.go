@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
@@ -572,11 +573,17 @@ func TestVendorParity_OutgoingPreflightFailure(t *testing.T) {
 
 func TestVendorParity_SendFailure_LuckyLilliaErrorModel(t *testing.T) {
 	// LuckyLillia throws exception on media converter error and returns retcode != 0
+	var failureReported bool
 	provider := &mockLLMProvider{
-		responses: []*core.ChatResponse{
-			{
-				Message: core.ChatMessage{Role: core.RoleAssistant, Content: "replying"},
-			},
+		customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			if len(req.Messages) > 0 {
+				last := fmt.Sprint(req.Messages[len(req.Messages)-1].Content)
+				if strings.Contains(last, "[FrostAgent 错误] 消息发送失败") {
+					failureReported = true
+					return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant}}, nil
+				}
+			}
+			return &core.ChatResponse{Message: sendMessageFinalMessage("replying")}, nil
 		},
 	}
 	engine := newTestEngine(provider)
@@ -629,10 +636,10 @@ func TestVendorParity_SendFailure_LuckyLilliaErrorModel(t *testing.T) {
 			t.Fatalf("LuckyLillia error must prevent committing assistant history, found: %+v", m)
 		}
 	}
-	// Verify delivery failure was recorded
-	fail := session.TakeDeliveryFailure()
-	if fail == nil || fail.RetCode != 1200 {
-		t.Fatalf("expected DeliveryFailure with RetCode=1200, got: %+v", fail)
+	// send_message 投递失败后不会提交历史，并把失败原因作为工具结果回传给模型
+	// 供其决定重试或沉默。
+	if !failureReported {
+		t.Fatal("expected the delivery failure to be reported back to the model")
 	}
 }
 

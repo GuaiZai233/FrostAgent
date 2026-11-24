@@ -88,6 +88,7 @@ func TestWSPokeWakesAndBillsActor(t *testing.T) {
 	t.Setenv("ENABLE_PROACTIVE_REPLY", "false")
 	provider := &mockLLMProvider{}
 	engine := newTestEngine(provider)
+	sequence := 0
 	billSrv, state := mockAlcyoneBillingServer(t)
 	defer billSrv.Close()
 	var tasks []string
@@ -113,7 +114,7 @@ func TestWSPokeWakesAndBillsActor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	for range 2 {
+	for sequence = 0; sequence < 2; sequence++ {
 		if err := conn.WriteJSON(pokeNotice()); err != nil {
 			t.Fatal(err)
 		}
@@ -140,6 +141,25 @@ func TestWSPokeWakesAndBillsActor(t *testing.T) {
 			if action.Action == "send_group_msg" {
 				break
 			}
+		}
+		// send_message 在轮次中途送达，等本次请求真正落库后再发下一次 poke，
+		// 否则同一 lane 会把两次 notice 合并成一轮。
+		// A provider request starts the round; the round is only finished once its
+		// billing commit has settled. Waiting on request count alone can let the
+		// next poke's ledger entry be mistaken for this round's answer.
+		want := int(sequence + 1)
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			provider.mu.Lock()
+			requests := len(provider.requests)
+			provider.mu.Unlock()
+			state.mu.Lock()
+			commits := state.commitCount
+			state.mu.Unlock()
+			if requests >= want && commits >= want {
+				break
+			}
+			time.Sleep(time.Millisecond)
 		}
 	}
 	provider.mu.Lock()

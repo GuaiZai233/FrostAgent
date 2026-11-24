@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -110,31 +109,27 @@ func TestEngine_SendHookTriggeredByMessagePayload(t *testing.T) {
 				},
 			},
 			{
-				Message: core.ChatMessage{
-					Role:    "assistant",
-					Content: "已发送表情包",
-				},
+				Message: sendMessageFinalMessage("已发送表情包"),
 			},
 		},
 	}
 
 	tool := &staticTool{name: "send_sticker", result: stickerPayload}
 
-	var hookCalled bool
-	var hookPayload string
+	var hookPayloads []string
 
 	engine := &Engine{
 		MaxIterations: 5,
 		Provider:      provider,
 		ToolRegistry:  map[string]ToolExecutor{"send_sticker": tool},
 	}
+	installSendMessage(engine)
 
 	ctx := WithRunContext(context.Background(), RunContext{
 		SessionID: "test-session",
 		Owner:     "test-owner",
 		SendHook: func(toolResultJSON string) error {
-			hookCalled = true
-			hookPayload = toolResultJSON
+			hookPayloads = append(hookPayloads, toolResultJSON)
 			return nil
 		},
 	})
@@ -147,14 +142,21 @@ func TestEngine_SendHookTriggeredByMessagePayload(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("unexpected error: %v", result.Error)
 	}
-	if !hookCalled {
-		t.Fatal("SendHook was not called")
+	foundSticker := false
+	foundText := false
+	for _, payload := range hookPayloads {
+		if payload == stickerPayload {
+			foundSticker = true
+		}
+		if deliveredPlainText(payload) == "已发送表情包" {
+			foundText = true
+		}
 	}
-	if hookPayload != stickerPayload {
-		t.Errorf("SendHook payload = %q, want %q", hookPayload, stickerPayload)
+	if !foundSticker {
+		t.Fatal("SendHook was not called with the sticker payload")
 	}
-	if !strings.Contains(result.Content, "已发送") {
-		t.Errorf("expected final content to contain '已发送', got %q", result.Content)
+	if !foundText {
+		t.Fatalf("expected the final send_message delivery, got %v", hookPayloads)
 	}
 }
 

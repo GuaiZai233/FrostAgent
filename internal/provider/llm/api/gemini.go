@@ -48,6 +48,7 @@ func geminiContent(content any) ([]any, error) {
 func geminiRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	contents := make([]map[string]any, 0)
 	system := make([]any, 0)
+	seenConversation := false
 	names := make(map[string]string)
 	nativeIDs := make(map[string]string)
 	for _, msg := range req.Messages {
@@ -55,10 +56,13 @@ func geminiRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if msg.Role == core.RoleSystem {
+		// Only leading system messages become systemInstruction; later ones are
+		// FrostAgent-injected context and stay in place as user turns.
+		if msg.Role == core.RoleSystem && !msg.ToolRecord && !seenConversation {
 			system = append(system, parts...)
 			continue
 		}
+		seenConversation = true
 		role := "user"
 		if msg.Role == core.RoleAssistant {
 			role = "model"

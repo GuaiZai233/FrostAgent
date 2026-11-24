@@ -95,6 +95,7 @@ func TestRunMessagesWithContextWithoutTurn(t *testing.T) {
 				return "tool-result", nil
 			}}
 			engine.ToolRegistry = map[string]ToolExecutor{tool.Name(): tool}
+			installSendMessage(engine)
 			engine.Provider = injectionProvider(func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
 				got, ok := RunContextFromContext(ctx)
 				if !ok || got.Turn != nil {
@@ -110,12 +111,14 @@ func TestRunMessagesWithContextWithoutTurn(t *testing.T) {
 				if last.Role != core.RoleTool || last.ToolCallID != tool.Name() || last.Content != "tool-result" {
 					t.Errorf("tool result was not retained in the next model request: %+v", last)
 				}
-				return finalInjection("done"), nil
+				return sendMessageFinalResponse("done"), nil
 			})
 
+			delivered := &deliveryCapture{}
+			run.SendHook = delivered.hook
 			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "test"}}, run)
-			if result.Error != nil || result.LLMFailed || result.Silent || result.Content != "done" {
-				t.Fatalf("run without Turn = %+v", result)
+			if result.Error != nil || result.LLMFailed || result.Silent || delivered.plainText() != "done" {
+				t.Fatalf("run without Turn = %+v, delivered=%q", result, delivered.plainText())
 			}
 			if modelCalls.Load() != 2 || toolCalls.Load() != 1 {
 				t.Fatalf("model calls = %d, tool calls = %d; want 2 and 1", modelCalls.Load(), toolCalls.Load())

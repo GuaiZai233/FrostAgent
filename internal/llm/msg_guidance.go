@@ -12,12 +12,11 @@ const messageGuidancePrefix = "<frostagent_msg_guidance>\n"
 func messageGuidance(limit int) string {
 	limitGuidance := ""
 	if limit > 1 {
-		limitGuidance = fmt.Sprintf("你不是无限分段的，你被允许插入<FROSTAGENT_SEGMENT_MARK>的数量是 **%d**。", limit-1)
+		limitGuidance = fmt.Sprintf("你一次最多发送 **%d** 个 plain 组件。", limit)
 	}
 	return messageGuidancePrefix +
 		"为保证拟真的对话效果，你被允许多段回复用户消息。" + limitGuidance +
-		"在正常回复中插入<FROSTAGENT_SEGMENT_MARK>，FrostAgent 后端会自动解析并分段将你的消息发出。请根据语境决定是否这样输出。\n" +
-		"如因特殊需求，你想完整输出 mark 的整个原文，请用反引号``包裹它，这样后端不会解析。\n" +
+		"需要分段时，请把每一段分别放进 send_message 的 messages 数组：按发送顺序使用多个 plain 组件，FrostAgent 后端会按顺序发送这些组件。请根据语境决定是否这样输出，不要在文本里插入分段标记。\n" +
 		"</frostagent_msg_guidance>"
 }
 

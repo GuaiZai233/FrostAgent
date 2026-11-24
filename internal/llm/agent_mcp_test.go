@@ -132,12 +132,9 @@ func TestAgentLoopMCPIntegration_NormalCall(t *testing.T) {
 					},
 				},
 			},
-			// Round 2: answers the user
+			// Round 2: answers the user through the delivery tool.
 			{
-				Message: core.ChatMessage{
-					Role:    core.RoleAssistant,
-					Content: "Issue 123 is currently open.",
-				},
+				Message: sendMessageFinalMessage("Issue 123 is currently open."),
 			},
 		},
 	}
@@ -150,9 +147,11 @@ func TestAgentLoopMCPIntegration_NormalCall(t *testing.T) {
 		SessionManager: NewSessionManager(),
 	}
 
-	result := engine.Run("check issue 123")
-	if result != "Issue 123 is currently open." {
-		t.Fatalf("unexpected engine result: %q", result)
+	installSendMessage(engine)
+	delivered := &deliveryCapture{}
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "check issue 123"}}, RunContext{SendHook: delivered.hook})
+	if delivered.plainText() != "Issue 123 is currently open." {
+		t.Fatalf("unexpected delivered result: %q", delivered.plainText())
 	}
 
 	if provider.rounds != 2 {
@@ -217,10 +216,7 @@ func TestAgentLoopMCPIntegration_ServerHotDisableAndDoubleCheck(t *testing.T) {
 		},
 		// Round 2: LLM receives the disabled notice and tells the user
 		{
-			Message: core.ChatMessage{
-				Role:    core.RoleAssistant,
-				Content: "GitHub server is currently disabled, so I cannot fetch the issue.",
-			},
+			Message: sendMessageFinalMessage("GitHub server is currently disabled, so I cannot fetch the issue."),
 		},
 	}
 
@@ -235,9 +231,11 @@ func TestAgentLoopMCPIntegration_ServerHotDisableAndDoubleCheck(t *testing.T) {
 	// Disable the server right before execution (simulating race)
 	_ = mgr.SetServerEnabled(ctx, "github", false)
 
-	res := engine.Run("check issue")
-	if !strings.Contains(res, "disabled") {
-		t.Fatalf("unexpected engine response: %q", res)
+	installSendMessage(engine)
+	delivered := &deliveryCapture{}
+	_ = engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "check issue"}}, RunContext{SendHook: delivered.hook})
+	if !strings.Contains(delivered.plainText(), "disabled") {
+		t.Fatalf("unexpected delivered response: %q", delivered.plainText())
 	}
 
 	// In Round 2, tools must NOT contain mcp__github__get_issue because server was disabled!

@@ -885,7 +885,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				})
 			}
 		}
-		sendHook := func(toolResultJSON string) error {
+		var sendHook func(toolResultJSON string) error
+		sendHook = func(toolResultJSON string) error {
 			var toolOutput struct {
 				Messages                []tools.Msg `json:"messages"`
 				SuppressAutoMention     bool        `json:"suppress_auto_mention"`
@@ -898,6 +899,34 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if err := validateQuoteMessages(conn, toolOutput.Messages, conn.historyKey(event)); err != nil {
 				engine.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("SendHook: 引用消息校验未通过: %v", err))
 				return err
+			}
+			if replyformat.Enabled(engine.Getenv) {
+				// Validate the whole batch before sending any segment, so a rejected
+				// batch delivers nothing.
+				kind := func(m tools.Msg) string { return m.Type }
+				if err := replyformat.CheckPlainLimit(replyformat.CountPlain(toolOutput.Messages, kind), replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))); err != nil {
+					return err
+				}
+				if groups := replyformat.GroupPlainSegments(toolOutput.Messages, kind); len(groups) > 1 {
+					// Each plain segment is its own OneBot message with its own ACK.
+					// Only the first keeps reply quote and automatic mention.
+					for i, group := range groups {
+						part := toolOutput
+						part.Messages = group
+						if i > 0 {
+							off := false
+							part.UseFrostAgentDecoration = &off
+						}
+						raw, err := json.Marshal(part)
+						if err != nil {
+							return fmt.Errorf("分段消息序列化失败: %w", err)
+						}
+						if err := sendHook(string(raw)); err != nil {
+							return err
+						}
+					}
+					return nil
+				}
 			}
 			oneBotSegments, err := tools.BuildOneBotMessage(toolOutput.Messages)
 			if err != nil {

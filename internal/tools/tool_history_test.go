@@ -67,7 +67,7 @@ func TestToolHistoryCrossTurnAndReadOfRead(t *testing.T) {
 			if last.Role != core.RoleTool || !strings.Contains(body, "7700000000000000001") || !strings.Contains(body, "(ref_id: fa_toolcall_") {
 				t.Fatalf("tool original/reference missing: %s", body)
 			}
-			return core.ChatMessage{Role: core.RoleAssistant, Content: "fixture-final"}
+			return core.ChatMessage{Role: core.RoleAssistant}
 		}}
 		run.Turn = turn
 		run.MemorySource.MessageID = fmt.Sprintf("fixture-message-%d", phase)
@@ -232,7 +232,7 @@ func TestToolHistoryOversizedStickerPairReadStaysQuarantined(t *testing.T) {
 				engine.Provider = specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
 					calls++
 					if calls > 1 {
-						return core.ChatMessage{Role: core.RoleAssistant, Content: "fixture-final"}
+						return core.ChatMessage{Role: core.RoleAssistant}
 					}
 					var batch []core.ToolCall
 					for _, name := range []string{"send_message", "send_sticker"} {

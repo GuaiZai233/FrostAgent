@@ -245,15 +245,17 @@ func TestQQForwardImageToolLoop(t *testing.T) {
 			}
 			engine.ToolRegistry[qqextend.ToolName] = tools.QQTool()
 			engine.ToolRegistry[tools.InspectMessageImageToolName] = tools.InspectMessageImageTool(engine)
+			delivered := &deliveryCapture{}
 			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture request"}}, llm.RunContext{
 				SessionID: c.historyKey(event), ActorPlatform: "qq", ActorUserID: fmt.Sprint(testUserID),
+				SendHook: delivered.hook,
 				PlatformActionHook: c.qqActionHook(event, nil, func([]tools.Msg) { t.Error("image read counted as delivery") }, engine),
 				LoadObservedImage: func(ctx context.Context, id string, index int) ([]byte, error) {
 					return c.loadObservedImage(ctx, event, resolvedReplyContext{}, nil, id, index)
 				},
 			})
-			if result.Error != nil || result.Content != "fixture summary" || providerCalls != 3 || imageCalls != 1 || imageRef == "" {
-				t.Fatalf("result=%+v dialogue=%d images=%d ref=%q", result, providerCalls, imageCalls, imageRef)
+			if result.Error != nil || delivered.plainText() != "fixture summary" || providerCalls != 3 || imageCalls != 1 || imageRef == "" {
+				t.Fatalf("result=%+v delivered=%q dialogue=%d images=%d ref=%q", result, delivered.plainText(), providerCalls, imageCalls, imageRef)
 			}
 		})
 	}

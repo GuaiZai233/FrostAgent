@@ -69,7 +69,7 @@ func TestOneBotQueuedPokeStartsIndependentTask(t *testing.T) {
 					case <-ctx.Done():
 						return nil, ctx.Err()
 					}
-					response.Message = core.ChatMessage{Role: core.RoleAssistant, Content: "first-answer"}
+					response.Message = sendMessageFinalMessage("first-answer")
 				case 3:
 					all := fmt.Sprint(req.Messages)
 					if strings.Contains(all, "private-tool-result") || !strings.Contains(all, "first-answer") {
@@ -80,14 +80,15 @@ func TestOneBotQueuedPokeStartsIndependentTask(t *testing.T) {
 							t.Errorf("queued task inherited completed private trajectory: %+v", msg)
 						}
 					}
-					response.Message = core.ChatMessage{Role: core.RoleAssistant, Content: "poke-answer"}
+					response.Message = sendMessageFinalMessage("poke-answer")
 					response.Usage = &core.Usage{PromptTokens: 300, CompletionTokens: 30, TotalTokens: 330}
 				default:
 					t.Error("unexpected model call")
-					response.Message = core.ChatMessage{Role: core.RoleAssistant, Content: "unexpected-answer"}
+					response.Message = core.ChatMessage{Role: core.RoleAssistant}
 				}
 				return response, nil
 			}))
+			installTestSendMessage(engine)
 			engine.ToolRegistry["synthetic-tool"] = &mockTestTool{name: "synthetic-tool", result: "private-tool-result"}
 			engine.Scope = newTestScopeWithEnv(t, map[string]string{"ENABLE_POKE": "true", "POKE_COOLDOWN_SECONDS": "0", "ENABLE_PROACTIVE_REPLY": "false", "PROACTIVE_REPLY_PROBABILITY": "0"})
 			engine.BillingClient = billing.NewClient(billingServer.URL, "synthetic-token", time.Second)
@@ -152,14 +153,17 @@ func TestOneBotQueuedPokeStartsIndependentTask(t *testing.T) {
 				t.Fatalf("poke interrupted or overlapped its predecessor: err=%v calls=%d", oldCtx.Err(), calls.Load())
 			}
 			releaseOnce.Do(func() { close(release) })
+			// The delivered answer and its billing receipt are separate outbound
+			// messages, so collect both before asserting.
+			var combined strings.Builder
 			for _, want := range []struct{ answer, usage string }{{"first-answer", "输入: 200, 输出: 20"}, {"poke-answer", "输入: 300, 输出: 30"}} {
-				select {
-				case got := <-replies:
-					if !strings.Contains(got, want.answer) || !strings.Contains(got, want.usage) {
-						t.Fatalf("want %s with separate usage %s, got %s", want.answer, want.usage, got)
+				for !strings.Contains(combined.String(), want.answer) || !strings.Contains(combined.String(), want.usage) {
+					select {
+					case got := <-replies:
+						combined.WriteString(got)
+					case <-time.After(3 * time.Second):
+						t.Fatalf("want %s with separate usage %s, got %s", want.answer, want.usage, combined.String())
 					}
-				case <-time.After(3 * time.Second):
-					t.Fatalf("missing %s", want.answer)
 				}
 			}
 			billingState.mu.Lock()
@@ -184,7 +188,7 @@ func TestOneBotInjectionEarlyRejectionRetainsBillingReceipt(t *testing.T) {
 				calls.Add(1)
 				close(started)
 				<-release
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "discarded-old-answer"}, Usage: &core.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150}}, nil
+				return &core.ChatResponse{Message: sendMessageFinalMessage("discarded-old-answer"), Usage: &core.Usage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150}}, nil
 			}))
 			engine.BillingClient = billing.NewClient(alcyone.URL, "synthetic-token", time.Second)
 			engine.BillingConfig = billing.Config{Enabled: true, Timeout: time.Second, MaxOutputTokens: 100, SafetyMultiplier: 1.2}
@@ -293,10 +297,10 @@ func TestOneBotInjectionDoesNotWaitForBlockedSocketWrite(t *testing.T) {
 					if phase == "tool" {
 						return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "send", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: `{"messages":[{"type":"plain","text":"old-inflight"}]}`}}}}}, nil
 					}
-					return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "old-inflight"}}, nil
+					return &core.ChatResponse{Message: sendMessageFinalMessage("old-inflight")}, nil
 				}
 				close(next)
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "new-answer"}}, nil
+				return &core.ChatResponse{Message: sendMessageFinalMessage("new-answer")}, nil
 			}))
 			engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 			disableTestThinkingStatus(t, engine)
@@ -378,7 +382,7 @@ func TestOneBotInjectionDoesNotWaitForOldToolACK(t *testing.T) {
 		if !strings.Contains(fmt.Sprint(req.Messages), "outcome unknown") {
 			t.Errorf("missing unknown delivery status: %+v", req.Messages)
 		}
-		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "resumed-without-ack"}}, nil
+		return &core.ChatResponse{Message: sendMessageFinalMessage("resumed-without-ack")}, nil
 	}))
 	engine.ToolRegistry["send_message"] = tools.SendMsgTool()
 	srv, url := startReplyWSTestServer(t, engine)
@@ -439,9 +443,10 @@ func TestOneBotRuntimeInjectionAtAliasAndPrivate(t *testing.T) {
 						t.Error("injected run lost old input")
 					}
 				}
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: answer}}, nil
+				return &core.ChatResponse{Message: sendMessageFinalMessage(answer)}, nil
 			})
 			engine := newTestEngine(provider)
+			installTestSendMessage(engine)
 			engine.Scope = newTestScopeWithEnv(t, map[string]string{"BOT_ALIASES": "synthetic-bot", "ENABLE_PROACTIVE_REPLY": "false"})
 			srv, url := startReplyWSTestServer(t, engine)
 			defer srv.Close()

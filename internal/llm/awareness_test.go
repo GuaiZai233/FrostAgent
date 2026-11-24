@@ -46,6 +46,16 @@ func awarenessFixture(t *testing.T) (*Engine, *AwarenessService, *instanceconfig
 	return e, service, config, &sends
 }
 
+// awarenessSendCall registers a send_message tool and returns a model response
+// that delivers text through it. Awareness output is only delivered this way;
+// plain final text is rejected by the agent loop.
+func awarenessSendCall(e *Engine, text string) *core.ChatResponse {
+	args := fmt.Sprintf(`{"messages":[{"type":"plain","text":%q}],"declare_final_message":true}`, text)
+	tool := &proactiveMessageTool{structuredResultTool: structuredResultTool{staticTool: staticTool{name: "send_message"}, output: core.ToolExecutionResult{Content: args, MessagePayload: args}}}
+	e.ToolRegistry = map[string]ToolExecutor{"send_message": tool}
+	return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "fixture-call", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: args}}}}}
+}
+
 func TestAwarenessPrivateUsesHistoryWithoutInventingUserInput(t *testing.T) {
 	e, service, _, sends := awarenessFixture(t)
 	target := AwarenessTargetFor("fixture-platform", "private", "fixture-user")
@@ -61,7 +71,7 @@ func TestAwarenessPrivateUsesHistoryWithoutInventingUserInput(t *testing.T) {
 		if len(req.Messages) != 3 || req.Messages[1].Content != "We are discussing a garden" {
 			t.Fatalf("lost private history: %+v", req.Messages)
 		}
-		return finalInjection("How is the garden?"), nil
+		return awarenessSendCall(e, "How is the garden?"), nil
 	})
 	service.Trigger(e.Context(), target)
 	if len(*sends) != 1 || (*sends)[0][0].Text != "How is the garden?" {
@@ -131,7 +141,7 @@ func TestAwarenessGroupUsesCompactWithoutPrivateHistoryOrBystanderActor(t *testi
 		if run.ActorUserID == "fixture-member" || run.ActorPlatform != "system" || run.OwnerType != memory.OwnerGroup {
 			t.Fatalf("borrowed human authority: %+v", run)
 		}
-		return finalInjection("Let's talk gardens"), nil
+		return awarenessSendCall(e, "Let's talk gardens"), nil
 	})
 	service.Trigger(e.Context(), target)
 	if len(*sends) != 1 {
@@ -202,7 +212,7 @@ func TestAwarenessWorkerTriggersWhitelistedPrivateWithoutIncomingMessage(t *test
 		}, true
 	}
 	e.Provider = injectionProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
-		return finalInjection("How are you?"), nil
+		return awarenessSendCall(e, "How are you?"), nil
 	})
 	ctx, cancel := context.WithCancel(e.Context())
 	done := make(chan struct{})
@@ -239,7 +249,7 @@ func TestAwarenessKeepsConfiguredCompactBufferAndIsolatesSkills(t *testing.T) {
 		if state == nil || state == session || len(state.skillSnapshot()) != 0 {
 			t.Fatal("system trigger inherited shared skill state")
 		}
-		return finalInjection("A new thought"), nil
+		return awarenessSendCall(e, "A new thought"), nil
 	})
 	service.Trigger(e.Context(), target)
 	if count := session.GroupCompactBufferCount(); count != 221 {
@@ -384,7 +394,7 @@ func TestAwarenessWorkerRestoresPersistedGroups(t *testing.T) {
 		}, true
 	}
 	e.Provider = injectionProvider(func(context.Context, core.ChatRequest) (*core.ChatResponse, error) {
-		return finalInjection("A shared topic"), nil
+		return awarenessSendCall(e, "A shared topic"), nil
 	})
 	ctx, cancel := context.WithCancel(e.Context())
 	defer cancel()

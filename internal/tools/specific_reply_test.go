@@ -253,21 +253,18 @@ func TestProactiveSpecificReplyCompletionStateIsRunLocal(t *testing.T) {
 	engine := &llm.Engine{MaxIterations: 2, ToolRegistry: map[string]llm.ToolExecutor{tool.Name(): tool},
 		Provider: specificReplyProvider{chat: func(core.ChatRequest) core.ChatMessage {
 			calls++
-			if calls == 1 {
-				return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}}}}
-			}
-			return core.ChatMessage{Role: core.RoleAssistant, Content: "reply to earlier topic"}
+			return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: specificReplyArgs}}}}
 		}},
 	}
 	run := specificReplyContext(true)
 	run.SendHook = func(string) error { deliveries++; return nil }
-	for i, want := range []string{"", "reply to earlier topic"} {
+	for i := 0; i < 2; i++ {
 		result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture turn"}}, run)
-		if result.Content != want || result.Error != nil {
+		if result.Content != "" || result.Error != nil {
 			t.Fatalf("run %d leaked echo state: %+v", i, result)
 		}
 	}
-	if calls != 2 || deliveries != 1 {
+	if calls != 2 || deliveries != 2 {
 		t.Fatalf("calls=%d sends=%d", calls, deliveries)
 	}
 }
@@ -323,13 +320,17 @@ func TestSpecificReplyCompletionScope(t *testing.T) {
 	for _, tc := range []struct {
 		name                                       string
 		proactive, awareness, failDelivery, noHook bool
-		wantCalls                                  int
+		followUp                                   core.ChatMessage
+		wantCalls, wantDeliveries                  int
+		wantSilent                                 bool
 	}{
-		{name: "proactive reply", proactive: true, wantCalls: 1},
-		{name: "delivery failed", proactive: true, failDelivery: true, wantCalls: 2},
-		{name: "no delivery hook", proactive: true, noHook: true, wantCalls: 2},
-		{name: "explicit wake", wantCalls: 2},
-		{name: "awareness", proactive: true, awareness: true, wantCalls: 2},
+		{name: "proactive reply", proactive: true, wantCalls: 1, wantDeliveries: 1},
+		{name: "delivery failed", proactive: true, failDelivery: true, wantCalls: 2, wantDeliveries: 2},
+		{name: "no delivery hook", proactive: true, noHook: true, wantCalls: 2, wantDeliveries: 0, wantSilent: true},
+		{name: "explicit wake", wantCalls: 2, wantDeliveries: 2,
+			followUp: sendMessageFinalMessage("follow-up content")},
+		{name: "awareness", proactive: true, awareness: true, wantCalls: 2, wantDeliveries: 1,
+			followUp: core.ChatMessage{Role: core.RoleAssistant}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls, deliveries := 0, 0
@@ -344,7 +345,10 @@ func TestSpecificReplyCompletionScope(t *testing.T) {
 					if calls == 1 {
 						return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: args}}}}
 					}
-					return core.ChatMessage{Role: core.RoleAssistant, Content: "follow-up content"}
+					if tc.followUp.ToolCalls != nil || tc.followUp.Content != nil {
+						return tc.followUp
+					}
+					return core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "specific", Type: "function", Function: core.ToolCallFunction{Name: "send_message", Arguments: args}}}}
 				}},
 			}
 			run := specificReplyContext(tc.proactive)
@@ -352,22 +356,18 @@ func TestSpecificReplyCompletionScope(t *testing.T) {
 			if !tc.noHook {
 				run.SendHook = func(string) error {
 					deliveries++
-					if tc.failDelivery {
+					if tc.failDelivery && deliveries == 1 {
 						return errors.New("fixture delivery failed")
 					}
 					return nil
 				}
 			}
 			result := engine.RunMessagesWithContext([]llm.ChatMessage{{Role: "user", Content: "fixture turn"}}, run)
-			wantContent, wantDeliveries := "follow-up content", 1
-			if tc.wantCalls == 1 {
-				wantContent = ""
-			}
-			if tc.noHook {
-				wantDeliveries = 0
-			}
-			if result.Content != wantContent || result.Error != nil || result.Silent || calls != tc.wantCalls || deliveries != wantDeliveries {
+			if result.Content != "" || result.Silent != tc.wantSilent || calls != tc.wantCalls || deliveries != tc.wantDeliveries {
 				t.Fatalf("result=%+v calls=%d sends=%d", result, calls, deliveries)
+			}
+			if !tc.wantSilent && result.Error != nil {
+				t.Fatalf("unexpected error: %+v", result)
 			}
 		})
 	}

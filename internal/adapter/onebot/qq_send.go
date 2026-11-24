@@ -18,6 +18,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
@@ -84,7 +85,9 @@ type qqItemResult struct {
 // qqSender is bound to one request's connection, conversation and turn authority.
 // Tests replace call, while production always uses the ACK-correlated transport.
 type qqSender struct {
-	event       model.OneBotEvent
+	event model.OneBotEvent
+	// splitPlain sends each plain component as its own message (multi-segment replies).
+	splitPlain  bool
 	call        func(model.OneBotAction) (oneBotAPIResponse, error)
 	reference   func(string) bool
 	own         func(string) bool
@@ -224,6 +227,17 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		for _, m := range request.Arguments.Messages {
 			if (m.IsSticker || m.Type == "mface") && sticker.ActivityLevel(c.Scope.Getenv(sticker.ActivityEnvKey)) == 0 {
 				return core.PlatformActionResult{}, fmt.Errorf("表情包发送功能已被禁用")
+			}
+		}
+		if request.Action == "send" && engine != nil && replyformat.Enabled(engine.Getenv) {
+			plainKind := func(m tools.Msg) string { return m.Type }
+			if plains := replyformat.CountPlain(request.Arguments.Messages, plainKind); plains > 1 {
+				// Validate the whole batch against the cap before any write; prepare
+				// then checks every part before the first send.
+				if err := replyformat.CheckPlainLimit(plains, replyformat.ParseLimit(engine.Getenv(replyformat.LimitEnvKey))); err != nil {
+					return core.PlatformActionResult{}, err
+				}
+				sender.splitPlain = true
 			}
 		}
 		result, err := sender.execute(request)
@@ -568,12 +582,18 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 			return nil, fmt.Errorf("引用消息不在当前可信会话")
 		}
 	}
+	// Logical segment boundaries are fixed over the whole batch before any physical
+	// split, so a file or other standalone component cannot reset the grouping.
+	var segmentOf []int
+	if s.splitPlain {
+		segmentOf = replyformat.PlainGroupIDs(messages, func(m tools.Msg) string { return m.Type })
+	}
 	parts := []qqSendPart{}
 	inlineBudget := maxQQInlineBytes
 	for start := 0; start < len(messages); {
 		end := start + 1
-		if !qqSeparateMessage(messages[start]) {
-			for end < len(messages) && !qqSeparateMessage(messages[end]) {
+		if !s.separate(messages[start]) {
+			for end < len(messages) && !s.separate(messages[end]) && (segmentOf == nil || segmentOf[end] == segmentOf[start]) {
 				end++
 			}
 			prefixOnly := true
@@ -582,13 +602,16 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 					prefixOnly = false
 				}
 			}
-			if prefixOnly && end < len(messages) {
+			// The prefix may absorb the next component only inside the same logical
+			// segment; a body in a later segment does not belong to this prefix.
+			sameSegment := end < len(messages) && (segmentOf == nil || segmentOf[end] == segmentOf[start])
+			if prefixOnly && sameSegment {
 				if messages[end].Type == "file" && messages[end].FolderID != "" {
 					return nil, fmt.Errorf("带引用或提及前缀的文件不能同时选择上传目录")
 				}
 				end++
 			}
-			if prefixOnly && end == len(messages) && messages[end-1].Type == "quote" {
+			if prefixOnly && messages[end-1].Type == "quote" && (end == len(messages) || !sameSegment) {
 				return nil, fmt.Errorf("引用消息必须附带正文")
 			}
 		}
@@ -690,6 +713,11 @@ func (s qqSender) send(messages []tools.Msg) (core.PlatformActionResult, error) 
 			s.confirmed(response, part.messages)
 		}
 	}
+	for _, item := range items {
+		if item.Status != "confirmed" {
+			result.Incomplete = true
+		}
+	}
 	result.Content = encodeQQResults(items)
 	return result, nil
 }
@@ -730,7 +758,7 @@ func (s qqSender) sendPart(part qqSendPart) (oneBotAPIResponse, string, string, 
 			fallback = "inline"
 		}
 	}
-	if len(part.messages) == 1 || qqSeparateMessage(part.messages[len(part.messages)-1]) {
+	if len(part.messages) == 1 || s.separate(part.messages[len(part.messages)-1]) {
 		m := part.messages[len(part.messages)-1]
 		// Uploading a quoted file would discard its explicit reply prefix.
 		if m.Type == "file" && len(part.messages) > 1 {
@@ -932,4 +960,11 @@ func qqInlineFileLimit(path string, limit int64) (string, error) {
 		return "", fmt.Errorf("inline media exceeds 30 MiB or is empty")
 	}
 	return "base64://" + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// separate reports whether m must start its own outbound message. Plain text is
+// separate only when the reply is split into segments; otherwise consecutive
+// plain components share one message as before.
+func (s qqSender) separate(m tools.Msg) bool {
+	return qqSeparateMessage(m)
 }

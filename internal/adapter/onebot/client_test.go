@@ -39,8 +39,9 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "synthetic-answer"}}}}
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{{Message: sendMessageFinalMessage("synthetic-answer")}}}
 	engine := newTestEngine(provider)
+	installTestSendMessage(engine)
 	engine.Scope = runtimescope.New(nil, nil, nil)
 	engine.Version = "synthetic-forward-version"
 	adapter := NewAdapter(engine)
@@ -106,12 +107,22 @@ func TestOneBotForwardConnectionRoundTripAndScopeCancellation(t *testing.T) {
 	if err := adapter.Send(context.Background(), core.OutgoingMessage{Platform: "onebot", MessageType: "private", TargetID: "22", Content: "synthetic-push"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := peer.ReadJSON(&action); err != nil {
-		t.Fatal(err)
+	// The thinking worker may write set_input_status frames asynchronously. Answer
+	// those control frames until the push itself arrives, then check its content.
+	for {
+		if err := peer.ReadJSON(&action); err != nil {
+			t.Fatal(err)
+		}
+		if action.Action != "set_input_status" {
+			break
+		}
+		if err := peer.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": nil}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	encoded, _ = json.Marshal(action.Params)
 	if !strings.Contains(string(encoded), "synthetic-push") {
-		t.Fatal("server role upstream did not receive an FA-initiated push")
+		t.Fatalf("server role upstream did not receive an FA-initiated push: next frame action=%q params=%s", action.Action, encoded)
 	}
 	duplicate := make(chan struct{})
 	go func() { defer close(duplicate); adapter.RunClient(context.Background()) }()
