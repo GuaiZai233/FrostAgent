@@ -120,6 +120,9 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 | `reaction` | `message_id`, `emoji_id`, `set` | 当前群，`set=false` 取消回应，默认 true |
 | `recall` | `message_id` | 仅当前连接、当前对话已获发送回执的机器人消息 |
 | `read_forward` | `message_id`, `forward_index`, `offset/limit`, `path` | 查看当前对话中观察过的合并转发聊天记录 |
+| `group_user_count` | 无 | 仅当前群：返回群成员人数（只读） |
+| `group_user_list` | 无 | 仅当前群：群成员 ≤ 35 人时返回成员列表（QQ 号、昵称、群名片、角色）；超过时返回错误“当前群人数过多，请使用group_user_search搜索特定群友的昵称。” |
+| `group_user_search` | `query`（必填，≤ 64 字符）, `limit`（1..20，默认 10；0 同样使用默认值） | 仅当前群：按昵称/群名片模糊搜索（不区分大小写，精确 > 前缀 > 子串 > 顺序子序列），返回真实 QQ 号 `user_id`，可用于 `poke` / `mention_user` |
 | `forward_message` | `message_id` | 当前对话观察过的消息 |
 | `forward_bundle` | `nodes`, `source/summary/prompt/news` | 合并转发，最多 50 个节点 |
 
