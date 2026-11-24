@@ -56,3 +56,18 @@ func TestConvertToCoreMessagesMarksToolRecords(t *testing.T) {
 		t.Fatalf("unexpected ToolRecord flags: %v %v %v", out[0].ToolRecord, out[1].ToolRecord, out[2].ToolRecord)
 	}
 }
+
+// The protocol must not depend on the wire role: OpenAI-style endpoints send
+// the record as assistant, others as user or system.
+func TestRuntimeGuidanceIdentifiesToolRecordsByFormat(t *testing.T) {
+	if strings.Contains(frostAgentSystemPrompt, "role=system 的【工具执行记录】") {
+		t.Fatal("prompt ties tool records to role=system")
+	}
+	if !strings.Contains(frostAgentSystemPrompt, "以【工具执行记录】开头的上下文由 FrostAgent 注入") {
+		t.Fatal("prompt does not identify backend-generated tool records")
+	}
+	record := convertToCoreMessages([]ChatMessage{{Role: "system", Content: "【工具执行记录】", ToolHistoryRunID: "run-1"}})[0]
+	if !record.ToolRecord || !strings.HasPrefix(record.Content.(string), "【工具执行记录】") {
+		t.Fatal("tool record must keep its header and marker")
+	}
+}

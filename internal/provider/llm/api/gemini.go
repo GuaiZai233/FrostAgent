@@ -58,7 +58,7 @@ func geminiRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 		}
 		// Only leading system messages become systemInstruction; later ones are
 		// FrostAgent-injected context and stay in place as user turns.
-		if msg.Role == core.RoleSystem && !seenConversation {
+		if msg.Role == core.RoleSystem && !msg.ToolRecord && !seenConversation {
 			system = append(system, parts...)
 			continue
 		}

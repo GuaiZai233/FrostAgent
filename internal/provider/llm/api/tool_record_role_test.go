@@ -79,3 +79,46 @@ func TestToolRecordWireRole(t *testing.T) {
 		})
 	}
 }
+
+// History trimming can leave a tool record right after the primary system
+// prompt. It must stay conversation data, never join the instruction prefix.
+func TestLeadingToolRecordStaysOutOfSystemInstruction(t *testing.T) {
+	for _, tc := range []struct {
+		format Format
+		field  string
+		reply  string
+	}{
+		{Anthropic, "system", `{"content":[{"type":"text","text":"ok"}]}`},
+		{Gemini, "systemInstruction", `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`},
+	} {
+		t.Run(string(tc.format), func(t *testing.T) {
+			var raw string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				raw = string(data)
+				fmt.Fprint(w, tc.reply)
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, "key", tc.format, time.Second)
+			_, err := client.Chat(t.Context(), core.ChatRequest{Model: "m", Messages: []core.ChatMessage{
+				{Role: core.RoleSystem, Content: "primary prompt"},
+				{Role: core.RoleSystem, Content: "synthetic tool record", ToolRecord: true},
+				{Role: core.RoleUser, Content: "hi"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+				t.Fatal(err)
+			}
+			system := string(payload[tc.field])
+			if !strings.Contains(system, "primary prompt") || strings.Contains(system, "synthetic tool record") {
+				t.Fatalf("%s = %s", tc.field, system)
+			}
+			if !strings.Contains(raw, "synthetic tool record") {
+				t.Fatalf("tool record missing from conversation: %s", raw)
+			}
+		})
+	}
+}

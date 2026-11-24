@@ -44,7 +44,7 @@ func anthropicRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 		// Only leading system messages become the top-level system prompt. A later
 		// system message is FrostAgent-injected context kept at its position: moving
 		// it to the head would change the prefix that cached and signed blocks cover.
-		if msg.Role == core.RoleSystem && !seenConversation {
+		if msg.Role == core.RoleSystem && !msg.ToolRecord && !seenConversation {
 			system = append(system, content...)
 			continue
 		}
