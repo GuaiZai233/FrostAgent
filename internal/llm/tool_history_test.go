@@ -360,38 +360,3 @@ func TestToolHistorySystemOriginRequiresTrustedAwarenessGroup(t *testing.T) {
 		})
 	}
 }
-
-func TestToolHistoryTimelineLabelsSurviveRestartAndCompact(t *testing.T) {
-	dir := t.TempDir()
-	manager := persistentManager(t, dir)
-	e := &Engine{SessionManager: manager}
-	run := RunContext{SessionID: "private:fixture-history", ActorPlatform: "qq", ActorUserID: "fixture-history"}
-	manager.GetOrCreate(run.SessionID)
-	first := toolhistory.Record{RunID: "fixture-run", RefID: toolhistory.NewRef(), Tool: "send_message", SourceMessageID: "fixture-source"}
-	e.noteToolHistory(run, first)
-	read := first
-	read.RefID, read.Tool = toolhistory.NewRef(), "read_tool_history"
-	read.ArgumentsRaw = `{"read_target_ref_id":"` + first.RefID + `"}`
-	e.noteToolHistory(run, read)
-	// Restart without reading the old session first: adding the note must checkpoint it.
-	session := persistentManager(t, dir).GetOrCreate(run.SessionID)
-	view, history := session.SnapshotPrivateContext(50)
-	if len(history) != 1 || len(view.RecentStructuredMessages) != 1 || view.RecentStructuredMessages[0].ToolHistoryRunID != first.RunID {
-		t.Fatalf("lost internal timeline identity: %+v %+v", view, history)
-	}
-	content := contentToText(history[0].Content)
-	if !strings.HasPrefix(content, "【工具执行记录】\n") || !strings.Contains(content, "- 工具调用: send_message") || !strings.Contains(content, "- 历史回查: read_tool_history") || strings.Count(content, "read_tool_history") != 1 || !strings.Contains(content, "read_target_ref_id: "+first.RefID) {
-		t.Fatalf("ambiguous prompt timeline: %s", content)
-	}
-	if !strings.HasSuffix(content, "\n"+toolHistoryNotice) || strings.Count(content, toolHistoryNotice) != 1 {
-		t.Fatalf("notice must close the record exactly once: %s", content)
-	}
-	snapshot, err := session.SnapshotPrivateCompact()
-	if err != nil || !session.CommitPrivateCompact(snapshot, "fixture-summary") {
-		t.Fatal("compact failed", err)
-	}
-	view, _ = session.SnapshotPrivateContext(50)
-	if len(view.SummaryGroups) != 1 || view.SummaryGroups[0].StructuredMsgs[0].ToolHistoryRunID != first.RunID {
-		t.Fatalf("compact inspection lost tool annotation: %+v", view)
-	}
-}

@@ -94,3 +94,51 @@ func TestToolHistoryReferencesAndQuarantine(t *testing.T) {
 		t.Fatal("uninspected results must remain quarantined")
 	}
 }
+
+func TestRecentReturnsNewestRecordsOfOneScopeOldestFirst(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, id := range []string{"fixture-instance", "fixture-other"} {
+		if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: id, Name: id, CreatedAt: time.Now()}, 3); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"}
+	base := time.Now().UTC().Truncate(time.Millisecond)
+	save := func(s *Store, sc chathistory.Scope, tool string, offset int) string {
+		r := Record{Scope: sc, RefID: NewRef(), RunID: "fixture-run", ActorID: "fixture-actor", Tool: tool,
+			ArgumentsRaw: `{"secret":"fixture"}`, ResultRaw: "fixture-result", State: "complete", OccurredAt: base.Add(time.Duration(offset) * time.Second)}
+		if err := s.Save(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+		return r.RefID
+	}
+	store := NewStore(db, "fixture-instance")
+	var refs []string
+	for i, tool := range []string{"first", "second", "third", "fourth"} {
+		refs = append(refs, save(store, scope, tool, i))
+	}
+	save(store, chathistory.Scope{Platform: "qq", MessageType: "group", TargetID: "fixture-user"}, "foreign-scope", 10)
+	save(NewStore(db, "fixture-other"), scope, "foreign-instance", 11)
+
+	got, err := store.Recent(ctx, scope, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].RefID != refs[1] || got[1].RefID != refs[2] || got[2].RefID != refs[3] {
+		t.Fatalf("recent records are not the newest three in chronological order: %+v", got)
+	}
+	if all, err := store.Recent(ctx, scope, 50); err != nil || len(all) != 4 {
+		t.Fatalf("scope or instance leaked into recent records: %d %v", len(all), err)
+	}
+	if none, err := store.Recent(ctx, scope, 0); err != nil || len(none) != 0 {
+		t.Fatalf("non-positive limit must return nothing: %d %v", len(none), err)
+	}
+	if _, err := store.Recent(ctx, chathistory.Scope{}, 3); err == nil {
+		t.Fatal("invalid scope must be rejected")
+	}
+}

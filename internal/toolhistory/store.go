@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -151,6 +152,51 @@ func (s *Store) References(ctx context.Context, scope chathistory.Scope, message
 		refs = append(refs, ref)
 	}
 	return refs, rows.Err()
+}
+
+// Recent returns the newest records of one conversation scope, oldest first.
+// Records are located through the covering scope index before any archived
+// body is read, so a scope with many large tool results stays cheap to query.
+func (s *Store) Recent(ctx context.Context, scope chathistory.Scope, limit int) ([]Record, error) {
+	scope = scope.Canonical()
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return []Record{}, nil
+	}
+	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT ref_id FROM tool_history
+		WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? ORDER BY occurred_at DESC, ref_id DESC LIMIT ?`),
+		s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, limit)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]string, 0, limit)
+	for rows.Next() {
+		var ref string
+		if err := rows.Scan(&ref); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	records := make([]Record, 0, len(refs))
+	for i := len(refs) - 1; i >= 0; i-- {
+		record, err := s.Read(ctx, scope, refs[i])
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue // Removed between the two reads.
+			}
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 // ReadForInspection is for the authenticated instance management API. Model
