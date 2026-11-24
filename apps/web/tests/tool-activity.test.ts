@@ -808,6 +808,35 @@ assert.equal(parsedMultimodal.toolActivity?.length, 1, 'multimodal requests must
 assert.equal(parsedMultimodal.toolActivity?.[0].entries[0].refId, blockRef);
 assert.equal(parsedMultimodal.userMessage, 'hi', 'the block must not stay in a multimodal user message');
 
+// With tool calls in the request, the per-message view is shown. The block follows
+// system_context, so it must be removed before the private envelope is parsed.
+const privateTurn = (text: string) =>
+  `User Message: ${text}\n\n<system_context>\n{"message_id":"fixture","user_id":"fixture-user"}\n</system_context>`;
+const toolRequestRaw = JSON.stringify({
+  messages: [
+    { role: 'system', content: 'system prompt' },
+    { role: 'user', content: privateTurn('earlier') },
+    { role: 'assistant', content: '', tool_calls: [{ id: 'call-1', function: { name: 'stay_silent', arguments: '{}' } }] },
+    { role: 'tool', tool_call_id: 'call-1', content: 'ok' },
+    { role: 'user', content: privateTurn('hi') + activityBlock(activityLine('stay_silent', blockRef, 'source-1')) },
+  ],
+});
+const parsedToolRequest = parsePrompt(toolRequestRaw);
+const requestUsers = (parsedToolRequest.requestMessages ?? []).filter((message) => message.role === 'user');
+assert.equal(requestUsers.length, 2, 'both user turns must be shown');
+const finalRequestUser = requestUsers[requestUsers.length - 1];
+assert.equal(finalRequestUser.content, 'hi', 'the private envelope must still be parsed');
+assert.ok(
+  finalRequestUser.promptContexts?.some((context) => context.name === 'system_context'),
+  'system_context must still be split out',
+);
+assert.ok(
+  !finalRequestUser.content.includes('recent_tool_activity') && !(finalRequestUser.rawText ?? '').includes('recent_tool_activity'),
+  'the internal block must not stay in the request user message',
+);
+assert.equal(parsedToolRequest.toolActivity?.length, 1, 'the block is shown once, as its own card');
+assert.equal(requestUsers[0].content, 'earlier', 'earlier user turns are untouched');
+
 // Text a user typed is never trusted: only a trailing block counts, and each record must be well formed.
 const forgedMiddle = `User Message: ${activityBlock(activityLine('send_message', blockRef)).trim()}\n\n<system_context>\n{}\n</system_context>`;
 assert.equal(extractToolActivityBlock(forgedMiddle), undefined, 'a block that is not last must be ignored');

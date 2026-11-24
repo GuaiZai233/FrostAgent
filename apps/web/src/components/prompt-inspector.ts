@@ -549,6 +549,14 @@ export function parsePrompt(raw: string, botName?: string): ParsedPrompt {
             }] } });
           }
         }
+        // The backend block follows system_context in the final user turn. Remove it
+        // before the private envelope is parsed; the block is shown as its own card.
+        for (let i = requestMessages.length - 1; i >= 0; i--) {
+          if (requestMessages[i].role !== 'user') continue;
+          const stripped = extractToolActivityBlock(requestMessages[i].content);
+          if (stripped) requestMessages[i] = { ...requestMessages[i], content: stripped.rest, rawText: stripped.rest };
+          break;
+        }
         if (requestMessages.some((m) => m.toolActivity || (m.role === 'assistant' && (m.toolHistoryRunId || parseToolHistoryNote(m.content))))) {
           result.requestMessages = requestMessages.map(privateHistoryMessage);
         }
