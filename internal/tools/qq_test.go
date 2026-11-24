@@ -30,7 +30,7 @@ func TestQQDiscoveryAndPreparation(t *testing.T) {
 	if len(definition) > 1500 {
 		t.Fatalf("QQ schema grew to %d bytes", len(definition))
 	}
-	for _, capability := range []string{"", "read_forward", "send", "forward_bundle", "forward_message", "poke", "reaction", "recall"} {
+	for _, capability := range []string{"", "read_forward", "group_user_count", "group_user_list", "group_user_search", "send", "forward_bundle", "forward_message", "poke", "reaction", "recall"} {
 		args, _ := json.Marshal(map[string]any{"action": "discover", "capability": capability})
 		result, err := tool.ExecuteResult(context.Background(), string(args))
 		if err != nil || result.PlatformActionPayload != "" || !json.Valid([]byte(result.Content)) {
@@ -102,6 +102,14 @@ func TestQQRejectsInvalidRequestsAndRawActions(t *testing.T) {
 		`{"action":"reaction","arguments":{"target_group_id":"42","message_id":"101","emoji_id":"14"}}`,
 		`{"action":"recall","arguments":{"target_group_id":"42","message_id":"101"}}`,
 		`{"action":"read_forward","arguments":{}}`,
+		`{"action":"group_user_search","arguments":{}}`,
+		`{"action":"group_user_search","arguments":{"query":"   "}}`,
+		`{"action":"group_user_search","arguments":{"query":"a","limit":21}}`,
+		`{"action":"group_user_search","arguments":{"query":"a","limit":-1}}`,
+		`{"action":"group_user_search","arguments":{"query":"a","target_group_id":"42"}}`,
+		`{"action":"group_user_list","arguments":{"target_group_id":"42"}}`,
+		`{"action":"group_user_list","arguments":{"query":"a"}}`,
+		`{"action":"group_user_count","arguments":{"limit":5}}`,
 		`{"action":"read_forward","arguments":{"message_id":"101","forward_id":"arbitrary"}}`,
 		`{"action":"read_forward","arguments":{"message_id":"101","target_group_id":"42"}}`,
 		`{"action":"read_forward","arguments":{"message_id":"101","forward_index":-1}}`,
@@ -232,5 +240,30 @@ func TestQQBuildNativeComponents(t *testing.T) {
 	}
 	if len(segments) != len(msgs) || segments[3].Type != "at" || segments[3].Data["qq"] != "all" || segments[8].Data["summary"] != "sample" || segments[9].Data["thumb"] != "https://example.invalid/thumb" {
 		t.Fatalf("segments: %+v", segments)
+	}
+}
+
+func TestQQGroupUserActionsReturnOrdinaryToolOutput(t *testing.T) {
+	for _, raw := range []string{
+		`{"action":"group_user_count","arguments":{}}`,
+		`{"action":"group_user_list","arguments":{}}`,
+		`{"action":"group_user_search","arguments":{"query":"fixture","limit":5}}`,
+	} {
+		calls := 0
+		ctx := llm.WithRunContext(context.Background(), llm.RunContext{PlatformActionHook: func(_ context.Context, payload string) (core.PlatformActionResult, error) {
+			calls++
+			return core.PlatformActionResult{Content: `{"status":"ok"}`}, nil
+		}})
+		result, err := QQTool().ExecuteResult(ctx, raw)
+		if err != nil || calls != 1 || result.Content != `{"status":"ok"}` || result.PlatformActionPayload != "" || result.MessagePayload != "" {
+			t.Fatalf("%s: %+v calls=%d err=%v", raw, result, calls, err)
+		}
+	}
+	proactive := llm.WithRunContext(context.Background(), llm.RunContext{Proactive: true, PlatformActionHook: func(context.Context, string) (core.PlatformActionResult, error) {
+		t.Fatal("proactive turn reached platform")
+		return core.PlatformActionResult{}, nil
+	}})
+	if _, err := QQTool().ExecuteResult(proactive, `{"action":"group_user_list","arguments":{}}`); err == nil {
+		t.Fatal("proactive turn read group users")
 	}
 }

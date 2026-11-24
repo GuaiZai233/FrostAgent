@@ -108,6 +108,9 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 		if request.Action == "read_forward" {
 			return c.readQQForward(ctx, event, turn, request.Arguments)
 		}
+		if qqGroupUserAction(request.Action) {
+			return c.readQQGroupUsers(ctx, event, turn, request)
+		}
 		sourceSessionID := c.historyKey(event)
 		sessionID := sourceSessionID
 		destination := event
