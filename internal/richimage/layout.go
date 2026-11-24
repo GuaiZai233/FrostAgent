@@ -15,18 +15,40 @@ import (
 
 type theme struct {
 	bg, fg, muted, border, codeBG, accent color.RGBA
+	// syntax colours code tokens by class; synPlain uses fg.
+	syntax [synClasses]color.RGBA
 }
 
 var lightTheme = theme{
 	bg: color.RGBA{255, 255, 255, 255}, fg: color.RGBA{31, 35, 40, 255},
 	muted: color.RGBA{89, 99, 110, 255}, border: color.RGBA{208, 215, 222, 255},
 	codeBG: color.RGBA{246, 248, 250, 255}, accent: color.RGBA{9, 105, 218, 255},
+	syntax: [synClasses]color.RGBA{
+		synPlain:    {31, 35, 40, 255},
+		synKeyword:  {207, 34, 46, 255},
+		synString:   {10, 48, 105, 255},
+		synComment:  {110, 119, 129, 255},
+		synNumber:   {5, 80, 174, 255},
+		synFunction: {130, 80, 223, 255},
+		synBuiltin:  {149, 56, 0, 255},
+		synOperator: {207, 34, 46, 255},
+	},
 }
 
 var darkTheme = theme{
 	bg: color.RGBA{13, 17, 23, 255}, fg: color.RGBA{230, 237, 243, 255},
 	muted: color.RGBA{145, 152, 161, 255}, border: color.RGBA{48, 54, 61, 255},
 	codeBG: color.RGBA{22, 27, 34, 255}, accent: color.RGBA{88, 166, 255, 255},
+	syntax: [synClasses]color.RGBA{
+		synPlain:    {230, 237, 243, 255},
+		synKeyword:  {255, 123, 114, 255},
+		synString:   {165, 214, 255, 255},
+		synComment:  {139, 148, 158, 255},
+		synNumber:   {121, 192, 255, 255},
+		synFunction: {210, 168, 255, 255},
+		synBuiltin:  {255, 166, 87, 255},
+		synOperator: {255, 123, 114, 255},
+	},
 }
 
 type style struct {

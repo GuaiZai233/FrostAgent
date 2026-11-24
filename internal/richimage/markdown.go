@@ -3,6 +3,7 @@ package richimage
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"strconv"
 	"strings"
@@ -291,43 +292,73 @@ func (m *mdRenderer) codeBlock(n ast.Node) {
 	var lines []string
 	for i := 0; i < n.Lines().Len(); i++ {
 		seg := n.Lines().At(i)
-		lines = append(lines, strings.TrimRight(string(seg.Value(m.src)), "\r\n"))
+		// Tabs become spaces before measuring so columns line up.
+		lines = append(lines, strings.ReplaceAll(strings.TrimRight(string(seg.Value(m.src)), "\r\n"), "\t", "    "))
 	}
+	info := ""
+	if fcb, ok := n.(*ast.FencedCodeBlock); ok {
+		info = string(fcb.Language(m.src))
+	}
+	code := strings.Join(lines, "\n")
+	if c.err == nil {
+		c.err = c.fs.checkText(code)
+	}
+	// colors has one entry per rune of code, or is nil when the language is not highlighted.
+	colors := codeColors(c.th, info, code)
 	bg := c.deferRect()
 	top := m.y
 	m.y += pad
 	st := style{code: true}
-	if c.err == nil {
-		c.err = c.fs.checkText(strings.Join(lines, "\n"))
-	}
+	at := 0 // rune offset into code
 	for _, line := range lines {
-		line = strings.ReplaceAll(line, "\t", "    ")
 		var chunk []rune
+		var chunkCol []color.RGBA
 		cw := 0.0
 		emit := func() {
-			s := string(chunk)
-			y := m.y
+			runes, cols := chunk, chunkCol
 			x := m.left + pad
 			ls := size * 1.5
+			baseline := m.y + ls/2 + size*0.33
 			c.ops = append(c.ops, func(d *image.RGBA) {
-				c.drawText(d, x, y+ls/2+size*0.33, s, st, size, c.th.fg)
+				drawCodeRuns(c, d, x, baseline, runes, cols, st, size)
 			})
 			m.y += ls
-			chunk, cw = nil, 0
+			chunk, chunkCol, cw = nil, nil, 0
 		}
 		for _, r := range line {
 			w := c.measure(string(r), st, size)
 			if cw+w > m.width()-2*pad && len(chunk) > 0 {
 				emit()
 			}
+			col := c.th.fg
+			if colors != nil {
+				col = colors[at]
+			}
 			chunk = append(chunk, r)
+			chunkCol = append(chunkCol, col)
 			cw += w
+			at++
 		}
 		emit()
+		at++ // the newline that joins lines
 	}
 	m.y += pad
 	*bg = rect{x: m.left, y: top, w: m.width(), h: m.y - top, col: c.th.codeBG, set: true}
 	m.gap(0.6)
+}
+
+// drawCodeRuns draws runes in runs of equal colour, advancing by measured width.
+func drawCodeRuns(c *canvas, d *image.RGBA, x, baseline float64, runes []rune, cols []color.RGBA, st style, size float64) {
+	for i := 0; i < len(runes); {
+		j := i + 1
+		for j < len(runes) && cols[j] == cols[i] {
+			j++
+		}
+		s := string(runes[i:j])
+		c.drawText(d, x, baseline, s, st, size, cols[i])
+		x += c.measure(s, st, size)
+		i = j
+	}
 }
 
 func (m *mdRenderer) table(t *east.Table) {
