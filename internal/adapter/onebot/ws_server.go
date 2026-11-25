@@ -550,6 +550,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	// 2. Build the implicit context as a JSON string, replicating the OneBotEvent structure
+	replyToBotMentionOnly := false
 	contextMap := map[string]interface{}{
 		"self_id":    event.SelfID,
 		"post_type":  event.PostType,
@@ -611,6 +612,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		} else {
 			mentionOnly = parity.IsMentionOnlyOneBot(event.MessageType == "group", event.SelfID, IsMentionedBot(event), userText, currentHasImage || replyHasImage || replyContext.Prompt != "", hasReply)
 		}
+		replyToBotMentionOnly = parity.IsReplyToBotMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage, replyContext.SenderID)
 		contextMap["mention_only"] = mentionOnly
 		if mentionOnly {
 			contextMap["interaction_guidance"] = parity.MentionOnlyGuidance
@@ -1098,13 +1100,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
 				return conn.loadObservedImage(ctx, event, replyContext, segments, messageID, imageIndex)
 			},
-			Billing:              billingState,
-			RouteScope:           routeScope,
-			RouteSnapshot:        routeSnapshot,
-			SecurityNotice:       notice,
-			Mock:                 conn.mock,
-			Proactive:            wakeSignals.Proactive,
-			ProactiveStickerOnly: wakeSignals.StickerOnly,
+			Billing:               billingState,
+			RouteScope:            routeScope,
+			RouteSnapshot:         routeSnapshot,
+			SecurityNotice:        notice,
+			Mock:                  conn.mock,
+			Proactive:             wakeSignals.Proactive,
+			ProactiveStickerOnly:  wakeSignals.StickerOnly,
+			ReplyToBotMentionOnly: replyToBotMentionOnly,
 		})
 		stopThinking()
 		deliveries.SetFinalMessage(runResult.FinalMessage)

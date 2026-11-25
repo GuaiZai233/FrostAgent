@@ -83,6 +83,26 @@ func IsMentionOnlyOneBot(isGroup bool, selfID int64, mentionedBot bool, userText
 	})
 }
 
+// IsReplyToBotMentionOnlyOneBotSegments reports whether a group message replies to
+// a message sent by the bot and otherwise contains only the @Bot mention. The reply
+// segment itself is required, and quotedSenderID must equal selfID; the quoted
+// content is not inspected. Any other mention, text, image or media disqualifies it.
+func IsReplyToBotMentionOnlyOneBotSegments(isGroup bool, selfID int64, segments []tools.OneBotSegment, hasImages bool, quotedSenderID int64) bool {
+	if selfID == 0 || quotedSenderID != selfID {
+		return false
+	}
+	hasReply := false
+	current := make([]tools.OneBotSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.Type == "reply" {
+			hasReply = true
+			continue
+		}
+		current = append(current, seg)
+	}
+	return hasReply && IsMentionOnlyOneBotSegments(isGroup, selfID, current, hasImages, false)
+}
+
 // IsMentionOnlyOneBotSegments checks whether raw OneBot message segments constitute
 // a pure @Bot mention-only interaction:
 //  1. isGroup is true.
