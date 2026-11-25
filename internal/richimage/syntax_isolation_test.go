@@ -25,9 +25,9 @@ func withHighlighter(t *testing.T, fn func()) {
 // Every lookup path must miss Raku: name, alias, case variants, filename and
 // the patterns Raku itself declares.
 func TestRakuUnreachableFromAllLookupPaths(t *testing.T) {
-	raku := lexers.GlobalLexerRegistry.Get("raku")
-	if raku == nil {
-		t.Fatal("chroma must know Raku for this test to mean anything")
+	raku := lexers.Raku // the object itself, which no lookup may return any more
+	if raku == nil || raku.Config().Name != "Raku" {
+		t.Fatal("chroma must provide the Raku lexer for this test to mean anything")
 	}
 	withHighlighter(t, func() {
 		reg := highlightRegistry()
@@ -44,8 +44,11 @@ func TestRakuUnreachableFromAllLookupPaths(t *testing.T) {
 		}
 		for _, l := range reg.Lexers {
 			if excludedLexer(l) {
-				t.Fatal("private registry must not contain Raku")
+				t.Fatal("the installed registry must not contain Raku")
 			}
+		}
+		if lexers.Get("raku") != nil || lexers.Get("perl6") != nil {
+			t.Fatal("package-level lexers.Get must not reach Raku")
 		}
 	})
 }
@@ -57,10 +60,7 @@ func TestNestedRakuFenceIsNotDispatched(t *testing.T) {
 	body := "say q{a};\n"
 	// Control: when Raku is reachable it colours this body, so the check below
 	// is meaningful and would fail if the exclusion were bypassed.
-	raku := lexers.GlobalLexerRegistry.Get("raku")
-	if raku == nil {
-		t.Fatal("chroma must know Raku")
-	}
+	raku := lexers.Raku
 	ctl, err := chroma.Tokenise(raku, nil, body)
 	if err != nil {
 		t.Fatal(err)
