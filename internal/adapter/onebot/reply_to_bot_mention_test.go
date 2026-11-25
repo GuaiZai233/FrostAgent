@@ -2,6 +2,8 @@ package onebot
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -103,8 +105,8 @@ func TestReplyToBotMentionOnlyForcesBackendSleep(t *testing.T) {
 			if len(sleeps) != 1 || sleeps[0] != `{"seconds":10}` {
 				t.Fatalf("backend sleep calls = %v, want one {\"seconds\":10}", sleeps)
 			}
-			if !requestHasSleepExchange(requests[0].Messages) {
-				t.Fatalf("model request lacks the backend sleep exchange: %+v", requests[0].Messages)
+			if requestHasSleepExchange(requests[0].Messages) {
+				t.Fatalf("backend wait leaked into the provider conversation as a tool call: %+v", requests[0].Messages)
 			}
 		})
 	}
@@ -158,3 +160,129 @@ func requestHasSleepExchange(messages []core.ChatMessage) bool {
 }
 
 var _ llm.ToolExecutor = (*replyBotSleepStub)(nil)
+
+// blockingSleepStub signals when the backend wait starts and holds it until released.
+type blockingSleepStub struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	calls   int
+}
+
+func (s *blockingSleepStub) Name() string               { return timesleep.ToolName }
+func (s *blockingSleepStub) Description() string        { return "synthetic blocking sleep" }
+func (s *blockingSleepStub) Parameters() map[string]any { return nil }
+func (s *blockingSleepStub) Execute(string) (string, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	return "已挂起 10 秒", nil
+}
+
+func TestReplyToBotMentionWaitInterruptedBySameSender(t *testing.T) {
+	t.Setenv("ENABLE_QUOTE_TRACE", "true")
+	t.Setenv("QUOTE_TRACE_DEPTH", "1")
+	const selfID = 9
+	dialogue := &mockLLMProvider{responses: []*core.ChatResponse{{
+		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "收到新消息"},
+	}}}
+	engine := newTestEngine(dialogue)
+	stub := &blockingSleepStub{started: make(chan struct{}), release: make(chan struct{})}
+	defer close(stub.release)
+	engine.ToolRegistry[timesleep.ToolName] = stub
+
+	srv, wsURL := startReplyWSTestServer(t, engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Answer every adapter lookup from a reader goroutine so the test can wait on the wait itself.
+	sent := make(chan model.OneBotAction, 8)
+	var writeMu sync.Mutex
+	write := func(v any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteJSON(v)
+	}
+	go func() {
+		for {
+			var action model.OneBotAction
+			if err := conn.ReadJSON(&action); err != nil {
+				close(sent)
+				return
+			}
+			var data any = map[string]any{}
+			switch action.Action {
+			case "get_group_info":
+				data = map[string]any{"group_id": 7, "group_name": "synthetic-room"}
+			case "get_msg":
+				data = map[string]any{
+					"message_id": 44, "message_type": "group", "group_id": 7, "user_id": selfID,
+					"message": []map[string]any{{"type": "text", "data": map[string]any{"text": "Bot: 上一条"}}},
+				}
+			case "send_group_msg":
+				sent <- action
+			}
+			_ = write(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": data})
+		}
+	}()
+
+	first := model.OneBotEvent{
+		SelfID: selfID, PostType: "message", MessageType: "group", UserID: 8, GroupID: 7, MessageID: 45,
+		Message: json.RawMessage(`[{"type":"reply","data":{"id":"44"}},{"type":"at","data":{"qq":"9"}}]`),
+	}
+	if err := write(first); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stub.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend wait did not start")
+	}
+
+	// The same sender interrupts the wait with a new @bot message.
+	second := model.OneBotEvent{
+		SelfID: selfID, PostType: "message", MessageType: "group", UserID: 8, GroupID: 7, MessageID: 46,
+		Message: json.RawMessage(`[{"type":"at","data":{"qq":"9"}},{"type":"text","data":{"text":" 新消息"}}]`),
+	}
+	if err := write(second); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case action, ok := <-sent:
+		if !ok {
+			t.Fatal("connection closed before any reply")
+		}
+		raw, _ := json.Marshal(action.Params)
+		if !strings.Contains(string(raw), "收到新消息") {
+			t.Fatalf("first reply should come from the interrupting message only: %s", raw)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("interrupting message produced no reply")
+	}
+
+	dialogue.mu.Lock()
+	reqCount := dialogue.reqCount
+	var lastUser string
+	if reqCount > 0 {
+		for _, msg := range dialogue.requests[reqCount-1].Messages {
+			if msg.Role == core.RoleUser {
+				lastUser = fmt.Sprint(msg.Content)
+			}
+		}
+	}
+	dialogue.mu.Unlock()
+	if reqCount != 1 {
+		t.Fatalf("dialogue calls = %d, want 1 (only the interrupting turn)", reqCount)
+	}
+	if !strings.Contains(lastUser, "新消息") {
+		t.Fatalf("model answered a stale turn: %s", lastUser)
+	}
+}

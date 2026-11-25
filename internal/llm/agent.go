@@ -948,19 +948,6 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	var specificReplyEchoes proactive.ReplyEchoGuard
 	specificReplyDelivered := false
 	refreshPromptPending := false
-	// Backend-owned wait for "reply to bot + only @bot": runs before the first model call.
-	if hasRunCtx && runCtx.ReplyToBotMentionOnly {
-		var forcedSleepRan bool
-		var abort *AgentRunResult
-		messages, forcedSleepRan, abort = e.runForcedMentionSleep(ctx, runCtx, messages, startedTools)
-		if abort != nil {
-			abort.Usage = totalUsage
-			abort.MemoryWritten = memoryWritten
-			return *abort
-		}
-		// Same as a model-issued time_sleep: messages that arrived during the wait are refreshed.
-		refreshPromptPending = forcedSleepRan
-	}
 	for i := 0; i < maxIterations; i++ {
 		if runCanceled(ctx) {
 			return AgentRunResult{Silent: true, Error: context.Canceled}
@@ -979,6 +966,18 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 					}
 				}
 			}
+		}
+		// Backend-owned wait for "reply to bot + only @bot". It runs on the first pass only,
+		// after every validity guard above, so an interrupted or stale turn never waits or records it.
+		if i == 0 && hasRunCtx && runCtx.ReplyToBotMentionOnly {
+			ran, abort := e.runForcedMentionSleep(ctx)
+			if abort != nil {
+				abort.Usage = totalUsage
+				abort.MemoryWritten = memoryWritten
+				return *abort
+			}
+			// Like a model-issued time_sleep: messages that arrived during the wait are refreshed.
+			refreshPromptPending = ran
 		}
 		if refreshPromptPending && runCtx.RefreshPrompt != nil {
 			refreshed, err := runCtx.RefreshPrompt(ctx)

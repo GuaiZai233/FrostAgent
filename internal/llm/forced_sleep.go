@@ -15,18 +15,26 @@ import (
 // of the bot's own messages. The model neither chooses nor can skip this wait.
 const ForcedMentionSleepSeconds = 10
 
-// runForcedMentionSleep executes time_sleep on the model's behalf and records the
-// exchange in messages exactly as a model-issued call would be recorded, so
-// history, tool activity and interruption handling stay identical.
+// runForcedMentionSleep performs the backend-owned wait and records it in tool
+// history like a model-issued time_sleep. It deliberately does not add a
+// synthetic assistant tool call to the model conversation: providers such as
+// Gemini require a thought signature for model-generated function calls, which a
+// backend-issued call cannot carry. Messages that arrived during the wait reach
+// the model through the adapter's RefreshPrompt, as for a model-issued sleep.
 //
-// executed reports whether the exchange was recorded. When time_sleep is not
-// registered (for example disabled by an administrator), nothing is recorded and
-// the turn proceeds without the wait. A non-nil abort must be returned as the run result.
-func (e *Engine) runForcedMentionSleep(ctx context.Context, runCtx RunContext, messages []ChatMessage, startedTools map[string]bool) (updated []ChatMessage, executed bool, abort *AgentRunResult) {
+// ran reports whether the wait completed (including a Timeout result). When
+// time_sleep is not registered the wait is skipped and ran is false. A non-nil
+// abort must be returned as the run result.
+func (e *Engine) runForcedMentionSleep(ctx context.Context) (ran bool, abort *AgentRunResult) {
+	// Re-check interruption immediately before anything is persisted: an
+	// interrupted turn must not leave a tool record for a wait that never started.
+	if runCanceled(ctx) {
+		return false, &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
+	}
 	tool, ok := e.findToolExecutor(timesleep.ToolName)
 	if !ok {
 		e.Log().WarnWithConsoleSummary(logs.TOOL, "后端强制挂起已跳过：time_sleep 工具未启用", "强制挂起已跳过")
-		return messages, false, nil
+		return false, nil
 	}
 	call := ToolCall{
 		ID:   "forced_time_sleep_" + uuid.NewString(),
@@ -36,31 +44,25 @@ func (e *Engine) runForcedMentionSleep(ctx context.Context, runCtx RunContext, m
 			Arguments: fmt.Sprintf(`{"seconds":%d}`, ForcedMentionSleepSeconds),
 		},
 	}
-	messages = append(messages, ChatMessage{Role: "assistant", ToolCalls: []ToolCall{call}})
-	startedTools[call.ID] = true
 	e.Log().InfoWithConsoleSummary(logs.TOOL, fmt.Sprintf("后端强制挂起 %d 秒：引用 Bot 消息且仅 @Bot", ForcedMentionSleepSeconds), "【后端强制挂起】")
 
 	execution, err := e.executeRecordedTool(ctx, tool, call)
 	if errors.Is(err, errToolHistoryStorage) {
-		return messages, false, &AgentRunResult{Error: err}
+		return false, &AgentRunResult{Error: err}
 	}
 	if runCanceled(ctx) {
-		return messages, false, &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: ctx.Err()}
+		return false, &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 	}
-
-	var toolResult string
-	switch {
-	case err == nil:
-		toolResult = execution.Content
-	case errors.Is(err, timesleep.ErrTimeout):
-		toolResult = e.Log().ReportError(logs.TOOL, "Timeout", err, runCtx.SessionID)
-	default:
-		toolResult = e.Log().ReportError(logs.TOOL, "工具执行失败", fmt.Errorf("tool=%s: %w", call.Function.Name, err), runCtx.SessionID)
+	content := execution.Content
+	if err != nil {
+		content = "Timeout"
+		if !errors.Is(err, timesleep.ErrTimeout) {
+			content = fmt.Sprintf("后端强制挂起失败: %v", err)
+			e.Log().WarnWithConsoleSummary(logs.TOOL, content, "强制挂起失败")
+		}
 	}
-	toolResult, archiveErr := e.finishToolHistory(ctx, execution, toolResult, false)
-	if archiveErr != nil {
-		return messages, false, &AgentRunResult{Error: archiveErr}
+	if _, archiveErr := e.finishToolHistory(ctx, execution, content, false); archiveErr != nil {
+		return false, &AgentRunResult{Error: archiveErr}
 	}
-	messages = append(messages, ChatMessage{Role: "tool", Content: toolResult, ToolCallID: call.ID, ToolHistoryRefID: execution.HistoryRefID})
-	return messages, true, nil
+	return true, nil
 }
