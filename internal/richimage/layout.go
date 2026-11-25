@@ -1,6 +1,7 @@
 package richimage
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -76,6 +77,8 @@ type rect struct {
 
 // canvas collects layout operations; drawing happens once the height is known.
 type canvas struct {
+	// ctx is the render's context; cancellable waits check it.
+	ctx   context.Context
 	fs    *faces
 	th    theme
 	scale float64

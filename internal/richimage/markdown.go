@@ -304,7 +304,11 @@ func (m *mdRenderer) codeBlock(n ast.Node) {
 		c.err = c.fs.checkText(code)
 	}
 	// colors has one entry per rune of code, or is nil when the language is not highlighted.
-	colors := codeColors(c.th, info, code)
+	colors, err := codeColors(c.ctx, c.th, info, code)
+	if err != nil {
+		c.fail(err)
+		return
+	}
 	bg := c.deferRect()
 	top := m.y
 	m.y += pad

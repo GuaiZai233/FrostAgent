@@ -89,7 +89,7 @@ func RenderContext(ctx context.Context, req Request) (data []byte, err error) {
 	}
 	fs := newFaces(fonts)
 	defer fs.close()
-	c := &canvas{fs: fs, th: lightTheme, scale: scale, mathBudget: maxMathPixels}
+	c := &canvas{ctx: ctx, fs: fs, th: lightTheme, scale: scale, mathBudget: maxMathPixels}
 	pxWidth := width * scale
 
 	switch req.Format {

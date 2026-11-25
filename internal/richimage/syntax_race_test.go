@@ -21,7 +21,7 @@ func TestRakuIsNotHighlighted(t *testing.T) {
 		"my $s = q{ unfinished",
 	}
 	for _, s := range snippets {
-		if codeColors(lightTheme, "raku", s) != nil {
+		if colorsOf(lightTheme, "raku", s) != nil {
 			t.Errorf("raku snippet %q must not be coloured", s)
 		}
 	}
@@ -43,7 +43,7 @@ func TestConcurrentHighlightingIsDeterministic(t *testing.T) {
 	}
 	want := make([][]color.RGBA, len(samples))
 	for i, s := range samples {
-		want[i] = codeColors(lightTheme, s.info, s.code)
+		want[i] = colorsOf(lightTheme, s.info, s.code)
 	}
 
 	var wg sync.WaitGroup
@@ -55,7 +55,7 @@ func TestConcurrentHighlightingIsDeterministic(t *testing.T) {
 			for round := 0; round < 30; round++ {
 				// Rotate the order so goroutines interleave different languages.
 				i := (g + round) % len(samples)
-				got := codeColors(lightTheme, samples[i].info, samples[i].code)
+				got := colorsOf(lightTheme, samples[i].info, samples[i].code)
 				if !sameColors(got, want[i]) {
 					select {
 					case errs <- samples[i].info:

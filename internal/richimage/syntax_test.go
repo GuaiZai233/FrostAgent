@@ -52,10 +52,10 @@ func TestSyntaxLexerSelection(t *testing.T) {
 // Unknown languages and missing info strings keep the single plain colour.
 func TestCodeColorsFallBackToNil(t *testing.T) {
 	th := lightTheme
-	if codeColors(th, "", "x = 1") != nil {
+	if colorsOf(th, "", "x = 1") != nil {
 		t.Fatal("no language must not colour tokens")
 	}
-	if codeColors(th, "not-a-real-language", "MOVE 1 TO X") != nil {
+	if colorsOf(th, "not-a-real-language", "MOVE 1 TO X") != nil {
 		t.Fatal("unknown language must not colour tokens")
 	}
 }
@@ -63,7 +63,7 @@ func TestCodeColorsFallBackToNil(t *testing.T) {
 // Every rune gets exactly one colour, so the colour slice indexes the code.
 func TestCodeColorsCoverEveryRune(t *testing.T) {
 	code := "def f(x):\n    return x + 1  # 注释\n"
-	colors := codeColors(lightTheme, "python", code)
+	colors := colorsOf(lightTheme, "python", code)
 	if colors == nil {
 		t.Fatal("python must be highlighted")
 	}
@@ -82,7 +82,7 @@ func TestCodeColorsCoverEveryRune(t *testing.T) {
 // A language outside the original six works too, with no files copied in.
 func TestRustHighlighted(t *testing.T) {
 	code := "fn main() { let x = 1; }\n"
-	colors := codeColors(lightTheme, "rust", code)
+	colors := colorsOf(lightTheme, "rust", code)
 	if colors == nil {
 		t.Fatal("rust must be highlighted")
 	}
@@ -93,7 +93,7 @@ func TestRustHighlighted(t *testing.T) {
 
 func TestGoLexerHighlights(t *testing.T) {
 	code := "package main\n\nfunc main() {\n\tfmt.Println(\"hi\", 42)\n}\n"
-	colors := codeColors(darkTheme, "go", code)
+	colors := colorsOf(darkTheme, "go", code)
 	if colors == nil {
 		t.Fatal("go must be highlighted")
 	}
@@ -128,7 +128,7 @@ func TestCodeBlockDrawsSeveralColours(t *testing.T) {
 
 // A plain-text block must still render with a single text colour.
 func TestPlainCodeBlockStaysMonochrome(t *testing.T) {
-	colors := codeColors(lightTheme, "", "a b c")
+	colors := colorsOf(lightTheme, "", "a b c")
 	if colors != nil {
 		t.Fatal("plain block must not allocate per-rune colours")
 	}
