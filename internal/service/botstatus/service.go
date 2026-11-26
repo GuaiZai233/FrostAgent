@@ -481,9 +481,6 @@ func (s *Service) GetSessionContext(
 	if toolNotesErr != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("会话工具时间线读取失败，请稍后重试"))
 	}
-	historyMsgs = append(historyMsgs, toolNotes...)
-	resp.History = historyMsgs
-
 	if isPrivateSession(sessionID) {
 		// Private compaction is injected into ordinary history, not group XML.
 		// This is a context preview, not a reconstruction of the last LLM request.
@@ -502,6 +499,7 @@ func (s *Service) GetSessionContext(
 			Messages []*v1.SessionHistoryMessageProto `json:"messages"`
 		}{Model: resp.Model, Messages: messages}, "", "  ")
 		resp.PromptText = string(preview)
+		resp.History = append(historyMsgs, toolNotes...)
 		return connect.NewResponse(resp), nil
 	}
 
@@ -523,6 +521,7 @@ func (s *Service) GetSessionContext(
 	}
 	promptBuilder.WriteString(fmt.Sprintf("<response_context>\n当前会话: %s\n平台: %s\n</response_context>", sessionID, platform))
 	resp.PromptText = promptBuilder.String()
+	resp.History = append(historyMsgs, toolNotes...)
 
 	return connect.NewResponse(resp), nil
 }
