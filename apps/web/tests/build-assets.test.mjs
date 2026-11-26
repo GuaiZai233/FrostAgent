@@ -37,7 +37,7 @@ function visitStaticImports(chunk) {
   }
 }
 visitStaticImports(entry);
-for (const page of ['backend-settings', 'model-router']) {
+for (const page of ['backend-settings', 'model-router', 'frontend-settings']) {
   const suffix = `/src/pages/${page}.ts`;
   assert.ok(
     ![...eagerModules].some((id) => id.endsWith(suffix)),

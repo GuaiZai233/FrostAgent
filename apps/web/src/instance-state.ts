@@ -8,9 +8,21 @@ export interface InstanceInfo {
   deleting?: boolean;
   error?: string;
 }
+
+const SELECTED_INSTANCE_KEY = 'frostagent_selected_instance';
 let selected: InstanceInfo | null = null;
 let controller = new AbortController();
 let logSource: 'instance' | 'control-plane' = 'instance';
+
+function rememberSelection(id: string | null): void {
+  try {
+    if (id) window.sessionStorage.setItem(SELECTED_INSTANCE_KEY, id);
+    else window.sessionStorage.removeItem(SELECTED_INSTANCE_KEY);
+  } catch {
+    // Selection still works in memory if browser storage is unavailable.
+  }
+}
+
 export const instanceState = {
   get selected() {
     return selected;
@@ -28,12 +40,32 @@ export const instanceState = {
     controller.abort();
     controller = new AbortController();
     selected = value;
+    rememberSelection(value?.id ?? null);
     document
       .querySelectorAll<HTMLDialogElement>('dialog')
       .forEach((dialog) =>
         dialog.dispatchEvent(new Event('cancel', { cancelable: true })),
       );
     window.dispatchEvent(new Event('instance-selected'));
+  },
+  async restoreSelection() {
+    if (selected) return;
+
+    let id: string | null;
+    try {
+      id = window.sessionStorage.getItem(SELECTED_INSTANCE_KEY);
+    } catch {
+      return;
+    }
+    if (!id) return;
+
+    const signal = controller.signal;
+    const { instances } = await this.refresh();
+    if (signal.aborted) return;
+
+    const instance = instances.find((item) => item.id === id && !item.deleting);
+    if (instance) this.select(instance);
+    else rememberSelection(null);
   },
   async refresh() {
     const selectedAtStart = selected?.id;
