@@ -1334,11 +1334,44 @@ func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot
 }
 
 func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
-	item := GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID}
+	content := InspectionContent(msg.Content)
+	item := GroupCompactMessage{
+		Role: msg.Role, Content: content, ToolHistoryRunID: msg.ToolHistoryRunID,
+		MessageID: inspectionMessageID(msg.Role, content),
+	}
 	if !msg.RecordedAt.IsZero() {
 		item.Time = msg.RecordedAt.Format("15:04:05")
 	}
 	return item
+}
+
+// inspectionMessageID recovers the adapter-owned source ID from the trailing
+// private system_context envelope. User-authored lookalikes in the message body
+// are ignored; the adapter appends this envelope after the user's text.
+func inspectionMessageID(role, content string) string {
+	if role != "user" || !strings.HasPrefix(content, "User Message: ") {
+		return ""
+	}
+	const opening = "\n\n<system_context>\n"
+	const closing = "\n</system_context>"
+	if !strings.HasSuffix(content, closing) {
+		return ""
+	}
+	start := strings.LastIndex(content, opening)
+	if start < 0 {
+		return ""
+	}
+	var metadata struct {
+		MessageID string `json:"message_id"`
+		UserID    string `json:"user_id"`
+		SenderID  string `json:"sender_id"`
+	}
+	raw := content[start+len(opening) : len(content)-len(closing)]
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil ||
+		metadata.MessageID == "" || (metadata.UserID == "" && metadata.SenderID == "") {
+		return ""
+	}
+	return metadata.MessageID
 }
 
 // CancelPrivateCompact releases the private compaction lock if compaction fails.
