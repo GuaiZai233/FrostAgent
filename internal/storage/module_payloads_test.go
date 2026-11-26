@@ -3,8 +3,10 @@ package storage
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestModulePayloadRoundTripAndWriteProtection(t *testing.T) {
@@ -138,6 +140,101 @@ func TestModulePayloadBoundsAndInsertOnly(t *testing.T) {
 	p.SHA256 = ModulePayloadDigest(nil)
 	if err := db.SaveModulePayload(context.Background(), "synthetic-a", p, nil); err == nil {
 		t.Fatal("record quota ignored on write")
+	}
+}
+
+func TestModulePayloadPostgresConcurrentWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing int
+		restore  bool
+		wantErr  string
+	}{
+		{"last quota slot", MaxModulePayloadRecords - 1, false, "module payload exceeds size limit"},
+		{"restore after save", 0, true, "module restore requires an empty target"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, config, db := compatibilityDatabase(t, Postgres)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			const instanceID = "synthetic-a"
+			compatibilityExec(t, db, `INSERT INTO instances(id,name,created_at) VALUES (?, 'A','now')`, instanceID)
+			compatibilityExec(t, db, `INSERT INTO module_payloads
+				(instance_id,module_id,record_id,format_version,payload_base64,sha256,requires_rebind)
+				SELECT ?, 'future.module', CAST(n AS TEXT), 1, '', ?, 0 FROM generate_series(1,CAST(? AS integer)) AS n`,
+				instanceID, ModulePayloadDigest(nil), tc.existing)
+
+			// Use independent sessions to test the write invariant independently
+			// of FrostAgent's single-connection pool and process lease.
+			var writers [2]*DB
+			var pids [2]int
+			for i := range writers {
+				conn, err := sql.Open("pgx", config.DSN)
+				if err != nil {
+					t.Fatal(err)
+				}
+				conn.SetMaxOpenConns(1)
+				t.Cleanup(func() { conn.Close() })
+				if err := conn.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pids[i]); err != nil {
+					t.Fatal(err)
+				}
+				writers[i] = &DB{SQL: conn, Backend: Postgres}
+			}
+			barrier, err := db.SQL.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer barrier.Rollback()
+			// Allow quota reads and pause writes, so an unlocked implementation
+			// deterministically lets both sessions observe the same initial state.
+			if _, err := barrier.ExecContext(ctx, `LOCK TABLE module_payloads IN SHARE MODE`); err != nil {
+				t.Fatal(err)
+			}
+			waitForBlocked := func(pid int) {
+				t.Helper()
+				for {
+					var blocked bool
+					if err := barrier.QueryRowContext(ctx, `SELECT cardinality(pg_blocking_pids($1)) > 0`, pid).Scan(&blocked); err != nil {
+						t.Fatalf("wait for writer %d: %v", pid, err)
+					}
+					if blocked {
+						return
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatalf("writer %d did not block: %v", pid, ctx.Err())
+					case <-time.After(10 * time.Millisecond):
+					}
+				}
+			}
+			first := ModulePayload{ModuleID: "future.module", RecordID: "first", FormatVersion: 1, SHA256: ModulePayloadDigest(nil)}
+			second := first
+			second.RecordID = "second"
+			firstResult, secondResult := make(chan error, 1), make(chan error, 1)
+			go func() { firstResult <- writers[0].SaveModulePayload(ctx, instanceID, first, nil) }()
+			waitForBlocked(pids[0])
+			go func() {
+				if tc.restore {
+					secondResult <- writers[1].RestoreModulePayloads(ctx, instanceID, []ModulePayload{second})
+					return
+				}
+				secondResult <- writers[1].SaveModulePayload(ctx, instanceID, second, nil)
+			}()
+			waitForBlocked(pids[1])
+			if err := barrier.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-firstResult; err != nil {
+				t.Fatalf("first save: %v", err)
+			}
+			if err := <-secondResult; err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("second write: got %v, want %q", err, tc.wantErr)
+			}
+			var count int
+			if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM module_payloads`).Scan(&count); err != nil || count != tc.existing+1 {
+				t.Fatalf("unexpected module record count: %d, %v", count, err)
+			}
+		})
 	}
 }
 

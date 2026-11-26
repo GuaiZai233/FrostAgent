@@ -142,7 +142,7 @@ func (d *DB) SaveModulePayload(ctx context.Context, instanceID string, p ModuleP
 	if err := ValidateModulePayloads([]ModulePayload{p}); err != nil {
 		return err
 	}
-	tx, err := d.SQL.BeginTx(ctx, nil)
+	tx, err := d.beginModulePayloadWrite(ctx, instanceID)
 	if err != nil {
 		return err
 	}
@@ -208,7 +208,7 @@ func (d *DB) RestoreModulePayloads(ctx context.Context, instanceID string, recor
 	if err := ValidateModulePayloads(records); err != nil {
 		return err
 	}
-	tx, err := d.SQL.BeginTx(ctx, nil)
+	tx, err := d.beginModulePayloadWrite(ctx, instanceID)
 	if err != nil {
 		return err
 	}
@@ -226,4 +226,22 @@ func (d *DB) RestoreModulePayloads(ctx context.Context, instanceID string, recor
 		}
 	}
 	return tx.Commit()
+}
+
+func (d *DB) beginModulePayloadWrite(ctx context.Context, instanceID string) (*sql.Tx, error) {
+	if d.Backend != Postgres {
+		return d.SQL.BeginTx(ctx, nil)
+	}
+	// Serialize saves and restores for this instance. Read committed gives the
+	// subsequent quota check a fresh snapshot after the previous writer commits.
+	tx, err := d.SQL.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return nil, err
+	}
+	var id string
+	if err := tx.QueryRowContext(ctx, d.Bind(`SELECT id FROM instances WHERE id=? FOR NO KEY UPDATE`), instanceID).Scan(&id); err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	return tx, nil
 }
