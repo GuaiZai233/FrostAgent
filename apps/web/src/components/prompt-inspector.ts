@@ -435,14 +435,14 @@ export function buildInspectorDataFromSessionContext(context: {
     }
   }
 
-  if (!privateSession) {
-    const merged = mergeGroupToolHistory(
-      [...summaryGroups.map((group) => group.parsedMessages || []), recentMessages],
-      context.history || [],
-    );
-    summaryGroups.forEach((group, index) => { group.parsedMessages = merged[index]; });
-    recentMessages = merged[merged.length - 1];
-  }
+  // Both group and private timelines receive archived tool notes from
+  // GetSessionContext. Merge them through the same source-ID projection.
+  const merged = mergeGroupToolHistory(
+    [...summaryGroups.map((group) => group.parsedMessages || []), recentMessages],
+    context.history || [],
+  );
+  summaryGroups.forEach((group, index) => { group.parsedMessages = merged[index]; });
+  recentMessages = merged[merged.length - 1];
 
   return {
     sessionKind: privateSession ? 'private' : 'group',
