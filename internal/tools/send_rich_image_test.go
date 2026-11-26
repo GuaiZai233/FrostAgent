@@ -24,6 +24,15 @@ func richImageContext(run llm.RunContext) context.Context {
 	return llm.WithRunContext(context.Background(), run)
 }
 
+func TestSendRichImageDescriptionIncludesUsageGuidance(t *testing.T) {
+	const prefix = "Render content into a PNG image and send it to the active conversation. "
+	const guidance = "Call this tool when the user asks about a specific math problem or coding issue, asks you to discuss a viewpoint in detail, or when the output would exceed 200 characters."
+	description := SendRichImageTool(nil).description
+	if !strings.HasPrefix(description, prefix+guidance) {
+		t.Fatalf("usage guidance must immediately follow the opening sentence: %q", description)
+	}
+}
+
 func TestSendRichImageProducesInlineImageAction(t *testing.T) {
 	tool := SendRichImageTool(nil)
 	args := `{"format":"markdown","content":"Solve $x^2-1=0$:\n\n$$x=\\pm 1$$"}`
