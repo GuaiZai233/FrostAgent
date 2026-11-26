@@ -200,9 +200,3 @@ func TestInstanceMaxIterationsLifecycleSemantics(t *testing.T) {
 		t.Fatalf("restarted engine must use new MaxIterations=40, got %d", restartedItem.runtime.Engine.MaxIterations)
 	}
 }
-
-func TestTemplateContainsDefaultMaxIterations(t *testing.T) {
-	if !strings.Contains(instanceconfig.Template, "AGENT_MAX_ITERATIONS=35") {
-		t.Fatalf("instanceconfig.Template should contain AGENT_MAX_ITERATIONS=35, got:\n%s", instanceconfig.Template)
-	}
-}

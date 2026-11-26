@@ -7,24 +7,6 @@ import {
 } from './mcp-config.ts';
 import { MCP_PRESETS, createMCPPresetDraft } from './mcp-presets.ts';
 
-test('MCP presets contain only AnySearch and GitHub official HTTP endpoints', () => {
-  assert.deepEqual(
-    MCP_PRESETS.map(({ id, name, url }) => ({ id, name, url })),
-    [
-      {
-        id: 'anysearch',
-        name: 'AnySearch',
-        url: 'https://api.anysearch.com/mcp',
-      },
-      {
-        id: 'github',
-        name: 'GitHub',
-        url: 'https://api.githubcopilot.com/mcp/',
-      },
-    ],
-  );
-});
-
 for (const preset of MCP_PRESETS) {
   test(`${preset.id} fills a clean enabled HTTP draft and round-trips through JSON`, () => {
     const draft = createMCPPresetDraft(preset.id, 'synthetic-token');

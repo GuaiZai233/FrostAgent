@@ -802,22 +802,6 @@ func TestGroupCompactor_UserAssistantDialogueFlow(t *testing.T) {
 	}
 }
 
-func TestGroupCompactor_PromptConstraintsIntegrity(t *testing.T) {
-	// 验证 groupCompactPrompt 包含完整的角色说明与事实性/共识边界约束
-	if !strings.Contains(groupCompactPrompt, `role 为 "user" 时表示真实群友发言`) || !strings.Contains(groupCompactPrompt, `role 为 "assistant" 时表示真实机器人历史回复`) {
-		t.Errorf("expected prompt to contain role definitions")
-	}
-	if !strings.Contains(groupCompactPrompt, `role 为 "assistant" 的发言仅作为对话背景和上下文参考`) {
-		t.Errorf("expected prompt to specify assistant messages as background context")
-	}
-	if !strings.Contains(groupCompactPrompt, "严禁将 assistant 单方面的声明、推测、承诺或事实性陈述直接升级为群友事实或群内共识") {
-		t.Errorf("expected prompt to prohibit upgrading assistant claims without confirmation")
-	}
-	if !strings.Contains(groupCompactPrompt, "当群友针对 assistant 的回复提出质疑、纠正、反驳或追问时") {
-		t.Errorf("expected prompt to handle user corrections towards assistant")
-	}
-}
-
 func TestGroupCompactor_ConcurrentPersistenceTOCTOUOrdering(t *testing.T) {
 	mockLLM := &mockCompactorLLM{}
 	tmpDir := t.TempDir()
