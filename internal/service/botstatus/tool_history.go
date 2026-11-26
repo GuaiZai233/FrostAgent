@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
+	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 )
 
 // GetToolHistoryEntry loads parameters and original results only when an
@@ -89,3 +93,81 @@ func resultPage(text string, offset, limit int) (page string, total, end int, ok
 // toolHistoryResultPageChars matches the read_tool_history page size, so a
 // result page is bounded regardless of how large the archived result is.
 const toolHistoryResultPageChars = 8000
+
+
+// sessionTimelineToolNotes projects archived calls for the message IDs that are
+// actually present in the inspector window. It returns metadata-only notes;
+// arguments and results remain behind GetToolHistoryEntry's existing gate.
+func (s *Service) sessionTimelineToolNotes(ctx context.Context, sessionID string, messages []string) ([]*v1.SessionHistoryMessageProto, error) {
+	if s.engine.ToolHistory == nil || len(messages) == 0 {
+		return nil, nil
+	}
+	scope, ok := chatHistoryScope(sessionID)
+	if !ok {
+		return nil, nil
+	}
+	visible := make(map[string]bool, len(messages))
+	for _, id := range messages {
+		if id != "" {
+			visible[id] = true
+		}
+	}
+	sources, err := s.engine.ToolHistory.RecentBySource(ctx, scope, 100, 50)
+	if err != nil {
+		return nil, err
+	}
+	type runNotes struct {
+		runID string
+		source string
+		refs []string
+	}
+	runs := make([]runNotes, 0)
+	byRun := make(map[string]int)
+	for _, source := range sources {
+		if !visible[source.SourceMessageID] {
+			continue
+		}
+		for _, ref := range source.Refs {
+			record, readErr := s.engine.ToolHistory.Read(ctx, scope, ref)
+			if readErr != nil {
+				if errors.Is(readErr, sql.ErrNoRows) {
+					continue
+				}
+				return nil, readErr
+			}
+			key := record.RunID
+			if key == "" {
+				key = record.RefID
+			}
+			index, exists := byRun[key]
+			if !exists {
+				index = len(runs)
+				byRun[key] = index
+				runs = append(runs, runNotes{runID: key, source: record.SourceMessageID})
+			}
+			runs[index].refs = append(runs[index].refs, record.RefID+"\x00"+record.Tool)
+		}
+	}
+	result := make([]*v1.SessionHistoryMessageProto, 0, len(runs))
+	for _, run := range runs {
+		sourceJSON, _ := json.Marshal(run.source)
+		var body strings.Builder
+		body.WriteString("【工具执行记录】\n来源消息: ")
+		body.Write(sourceJSON)
+		for _, item := range run.refs {
+			parts := strings.SplitN(item, "\x00", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			label := "工具调用"
+			if parts[1] == "read_tool_history" {
+				label = "历史回查"
+			}
+			fmt.Fprintf(&body, "\n- %s: %s (ref_id: %s)", label, parts[1], parts[0])
+		}
+		if len(run.refs) > 0 {
+			result = append(result, &v1.SessionHistoryMessageProto{Role: "assistant", Content: body.String(), ToolHistoryRunId: run.runID})
+		}
+	}
+	return result, nil
+}
