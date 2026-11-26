@@ -59,13 +59,39 @@ export const instanceState = {
     }
     if (!id) return;
 
-    const signal = controller.signal;
-    const { instances } = await this.refresh();
-    if (signal.aborted) return;
+    const selectionSignal = controller.signal;
+    const initialHash = window.location.hash;
+    const interaction = new AbortController();
+    const cancel = () => interaction.abort();
+    const options = { capture: true, signal: interaction.signal };
+    for (const type of ['pointerdown', 'click', 'keydown', 'input', 'change']) {
+      document.addEventListener(type, cancel, options);
+    }
+    window.addEventListener(
+      'hashchange',
+      () => {
+        if (window.location.hash !== initialHash) cancel();
+      },
+      options,
+    );
 
-    const instance = instances.find((item) => item.id === id && !item.deleting);
-    if (instance) this.select(instance);
-    else rememberSelection(null);
+    try {
+      const { instances } = await this.refresh();
+      // Selection remounts the page and closes dialogs, so give any interaction priority.
+      if (
+        selectionSignal.aborted ||
+        interaction.signal.aborted ||
+        window.location.hash !== initialHash
+      ) {
+        return;
+      }
+
+      const instance = instances.find((item) => item.id === id && !item.deleting);
+      if (instance) this.select(instance);
+      else rememberSelection(null);
+    } finally {
+      cancel();
+    }
   },
   async refresh() {
     const selectedAtStart = selected?.id;
