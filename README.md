@@ -1,7 +1,7 @@
 <h1 align="center">
   <img src="assets/logo.png" alt="FrostAgent Logo" width="150">
   <br>
-  FrostAgent
+  FrostAgent-Go
 </h1>
 
 <p align="center">

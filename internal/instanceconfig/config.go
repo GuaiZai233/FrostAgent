@@ -461,8 +461,11 @@ const Template = `# Default values for new SQL instances.
 BOT_NAME=助手
 BOT_ALIASES=Assistant,Bot
 ADMIN_QQ_IDS=
+SILENT_IGNORE_USER_IDS=
 SYSTEM_PROMPT=你是一个乐于助人的助手。
 MAX_CONTEXT_MESSAGES=20
+# Per-instance persistent log budget (MiB), oldest entries are removed first.
+LOG_STORAGE_MIB=128
 MEMORY_REFLECTION_TIMEOUT=10m
 ENABLE_AT_IN_GROUP_MSG=true
 GROUP_REPLY_ON_MENTION=true

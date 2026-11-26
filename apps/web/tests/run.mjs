@@ -7,6 +7,7 @@ const esbuildPath = require.resolve('esbuild', {
 });
 const { build } = require(esbuildPath);
 for (const testFile of [
+  'dom-fixture.test.ts',
   'instance-api.test.ts',
   'error-lookup-page.test.ts',
   'logs-copy.test.ts',
@@ -28,8 +29,10 @@ for (const testFile of [
   'model-capability-policy.test.ts',
   'mcp-presets-page.test.ts',
   'prompt-merge.test.ts',
+  'tool-activity.test.ts',
   'group-model-config.test.ts',
   'prompt-page.test.ts',
+  'session-history.test.ts',
   'dialogue-page.test.ts',
   'skills.test.ts',
   'backend-settings-page.test.ts',

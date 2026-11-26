@@ -226,6 +226,9 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
+				if s.engine.SessionManager.HasCheckpoint(record.SessionID) {
+					continue
+				}
 				// Persisted summaries are subject to the same group compact whitelist as live ones.
 				recordSummary := record.Summary
 				if !llm.GroupCompactAllowed(s.engine.Getenv, record.SessionID) {
@@ -391,6 +394,9 @@ func (s *Service) GetSessionContext(
 	if s.engine.SessionManager != nil {
 		if sessCore, ok := s.engine.SessionManager.Get(sessionID); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && !sess.IsMock() {
+				if err := sess.RecoveryError(); err != nil {
+					return nil, connect.NewError(connect.CodeUnavailable, err)
+				}
 				snap := sess.SnapshotGroupContext(limit, 100000, "")
 				var history []llm.ChatMessage
 				if isPrivateSession(sessionID) {
@@ -410,12 +416,18 @@ func (s *Service) GetSessionContext(
 				resp.SystemPrompt = lastSysPrompt
 				resp.Model = lastModel
 				lastUserPrompt = sess.LastUserPrompt()
+				actualRequest, requestAt := sess.LastActualRequest()
+				resp.ActualRequestJson = actualRequest
+				if !requestAt.IsZero() {
+					resp.RequestAt = requestAt.Format(time.RFC3339Nano)
+				}
 
 				for _, h := range history {
-					contentStr := fmt.Sprintf("%v", h.Content)
+					contentStr := llm.InspectionContent(h.Content)
 					historyMsgs = append(historyMsgs, &v1.SessionHistoryMessageProto{
-						Role:    h.Role,
-						Content: contentStr,
+						Role:             h.Role,
+						Content:          contentStr,
+						ToolHistoryRunId: h.ToolHistoryRunID,
 					})
 				}
 			}
@@ -423,7 +435,7 @@ func (s *Service) GetSessionContext(
 	}
 
 	// Fallback to durable summary store if active summary is empty
-	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil {
+	if isGroupSession(sessionID) && !groupCompactDisabled && runningSummary == "" && s.engine.GroupSummaryStore != nil && !s.engine.SessionManager.HasCheckpoint(sessionID) {
 		if rec, ok, err := s.engine.GroupSummaryStore.Get(sessionID); err == nil && ok && rec.Summary != "" {
 			runningSummary = rec.Summary
 		}
@@ -498,12 +510,13 @@ func (s *Service) GetSessionContext(
 
 func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoProto {
 	return &v1.GroupMessageInfoProto{
-		Role:      message.Role,
-		Sender:    message.Sender,
-		SenderId:  message.SenderID,
-		Content:   message.Content,
-		MessageId: message.MessageID,
-		Time:      message.Time,
+		Role:             message.Role,
+		Sender:           message.Sender,
+		SenderId:         message.SenderID,
+		Content:          message.Content,
+		MessageId:        message.MessageID,
+		Time:             message.Time,
+		ToolHistoryRunId: message.ToolHistoryRunID,
 	}
 }
 

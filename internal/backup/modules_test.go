@@ -28,7 +28,7 @@ func TestOpaqueModuleBackupRoundTrip(t *testing.T) {
 	if err := db.SaveModulePayload(ctx, "synthetic-source", p, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version=?,min_compatible_version=18`), storage.SchemaVersion+5); err != nil {
+	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version=?,min_compatible_version=20`), storage.SchemaVersion+5); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := BuildInstanceZIP(db, "synthetic-source", t.TempDir())

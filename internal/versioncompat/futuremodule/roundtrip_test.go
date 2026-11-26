@@ -43,7 +43,7 @@ func TestReleaseProbe(t *testing.T) {
 		if _, err := tx.Exec(`INSERT INTO module_payloads(instance_id,module_id,record_id,format_version,payload_base64,sha256,requires_rebind) VALUES (?,'future.fixture','record',9,?,?,0)`, id, base64.StdEncoding.EncodeToString(want), digest); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec(`UPDATE schema_meta SET version=19,min_compatible_version=18`); err != nil {
+		if _, err := tx.Exec(`UPDATE schema_meta SET version=21,min_compatible_version=20`); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.Commit(); err != nil {

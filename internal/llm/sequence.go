@@ -28,7 +28,7 @@ type executionSequence struct {
 // Only explicit injection triggers cancel earlier work in the same lane.
 func (s *SessionContext) ReserveSequenceTurn(key string, interrupt, proactive bool) *SessionTurn {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if s.epoch == 0 {
 		s.epoch = 1
 	}
@@ -45,6 +45,9 @@ func (s *SessionContext) ReserveSequenceTurn(key string, interrupt, proactive bo
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &SessionTurn{done: make(chan struct{}), epoch: s.epoch, lane: lane, ctx: ctx}
 	t.cancel = func() { t.authorityMu.Lock(); defer t.authorityMu.Unlock(); cancel() }
+	if s.RecoveryError() != nil {
+		t.cancel()
+	}
 	if lane.tail != nil {
 		t.wait = lane.tail.done
 	}
@@ -125,7 +128,7 @@ func (t *SessionTurn) SkillSession() *SessionContext {
 // The request's transient background is never copied to the next attempt.
 func (s *SessionContext) PrepareTurnMessages(t *SessionTurn, durable, prompt string, billing *BillingRunState) ([]ChatMessage, *BillingRunState, uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	if t != nil && t.epoch != s.epoch {
 		return nil, billing, 0
 	}
@@ -138,9 +141,16 @@ func (s *SessionContext) PrepareTurnMessages(t *SessionTurn, durable, prompt str
 		}
 	}
 	history := cloneMessages(s.History)
+	for i := range history {
+		history[i].RecordedAt = time.Time{}
+	}
 	s.nextMsgSeq++
 	id := s.nextMsgSeq
-	s.History = append(s.History, ChatMessage{Role: "user", Content: durable})
+	var recordedAt time.Time
+	if isPrivateConversation(s.ConversationID) {
+		recordedAt = s.UpdatedAt.Round(0)
+	}
+	s.History = append(s.History, ChatMessage{Role: "user", Content: durable, RecordedAt: recordedAt})
 	s.historySeq = append(s.historySeq, id)
 	if t == nil || t.lane == nil {
 		return append(history, ChatMessage{Role: "user", Content: prompt}), billing, id
@@ -271,7 +281,7 @@ func (s *SessionContext) cancelSequencesLocked() {
 // DropMessage removes only the caller's input, never another sender's tail.
 func (s *SessionContext) DropMessage(id uint64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer s.unlockCheckpoint()
 	for i, seq := range s.historySeq {
 		if seq == id {
 			s.History = append(s.History[:i], s.History[i+1:]...)
@@ -281,10 +291,20 @@ func (s *SessionContext) DropMessage(id uint64) {
 	}
 }
 
+func cloneProviderState(state *core.ProviderState) *core.ProviderState {
+	if state == nil {
+		return nil
+	}
+	copy := *state
+	copy.Content = append(copy.Content[:0:0], state.Content...)
+	return &copy
+}
+
 func cloneMessages(messages []ChatMessage) []ChatMessage {
 	result := append([]ChatMessage(nil), messages...)
 	for i := range result {
 		result[i].ToolCalls = append([]ToolCall(nil), result[i].ToolCalls...)
+		result[i].ProviderState = cloneProviderState(result[i].ProviderState)
 		if parts, ok := result[i].Content.([]core.ContentPart); ok {
 			parts = append([]core.ContentPart(nil), parts...)
 			for j := range parts {

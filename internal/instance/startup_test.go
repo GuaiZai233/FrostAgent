@@ -1,10 +1,10 @@
 package instance
 
 import (
+	"context"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"net/http"
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -22,10 +22,19 @@ func TestStartupConstructsEachRuntimeOnce(t *testing.T) {
 	seed.Close()
 
 	calls := map[string][]bool{}
-	manager, err := newManager(seed.root, seed.global, seed.templateDialogue, nil,
-		func(m *Manager, item *managed, config *instanceconfig.Store, dir string, enabled bool) (*Runtime, error) {
+	db, err := storage.Open(context.Background(), seed.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	global, err := instanceconfig.OpenDatabase(db, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := newManager(seed.root, global, db,
+		func(m *Manager, item *managed, config *instanceconfig.Store, enabled bool) (*Runtime, error) {
 			calls[item.id] = append(calls[item.id], enabled)
-			return buildManagedRuntime(m, item, config, dir, enabled)
+			return buildManagedRuntime(m, item, config, enabled)
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +53,7 @@ func TestStartupConstructsEachRuntimeOnce(t *testing.T) {
 			t.Fatalf("instance %s active = %t, want %t", info.Name, active, want[0])
 		}
 	}
-	response := rpc(t, manager, disabled.ID, "SettingsService/UpdateRawEnvFile", `{"content":"BOT_NAME=changed\n"}`, false)
+	response := rpc(t, manager, disabled.ID, "SettingsService/UpdateEnvVar", `{"key":"BOT_NAME","value":"changed"}`, false)
 	if response.Code != http.StatusOK {
 		t.Fatalf("disabled instance settings: %d %s", response.Code, response.Body.String())
 	}
@@ -88,11 +97,9 @@ func TestStartupMalformedEnabledInstanceRemainsRepairable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	setInvalidConnection(t, seed, bad.ID)
 	seed.Close()
-	if err := os.WriteFile(filepath.Join(seed.dir(bad.ID), ".env"), []byte("BOT_NAME=\"unterminated\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	manager, err := New(seed.root, seed.global, seed.templateDialogue)
+	manager, err := NewDatabase(seed.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,20 +111,20 @@ func TestStartupMalformedEnabledInstanceRemainsRepairable(t *testing.T) {
 		}
 	}
 	badItem := manager.instances[bad.ID]
-	if badItem.config == nil || badItem.config.Error() == nil || badItem.runtime == nil || badItem.runtime.Scope.Context().Err() == nil {
+	if badItem.config == nil || badItem.runtime == nil || badItem.runtime.Scope.Context().Err() == nil {
 		t.Fatal("malformed instance did not retain a stopped, repairable management runtime")
 	}
 	if manager.instances[good.ID].runtime.Scope.Context().Err() != nil {
 		t.Fatal("malformed peer blocked healthy startup")
 	}
-	response := rpc(t, manager, bad.ID, "SettingsService/UpdateRawEnvFile", `{"content":"BOT_NAME=repaired\n"}`, false)
+	response := rpc(t, manager, bad.ID, "SettingsService/UpdateEnvVar", `{"key":"ONEBOT_WS_URL","value":"ws://127.0.0.1:1"}`, false)
 	if response.Code != http.StatusOK {
 		t.Fatalf("repair settings: %d %s", response.Code, response.Body.String())
 	}
 	if err := manager.Enable(bad.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := manager.instances[bad.ID].runtime.Scope.Getenv("BOT_NAME"); got != "repaired" {
-		t.Fatalf("repaired runtime BOT_NAME = %q", got)
+	if got := manager.instances[bad.ID].runtime.Scope.Getenv("ONEBOT_WS_URL"); got != "ws://127.0.0.1:1" {
+		t.Fatalf("repaired runtime ONEBOT_WS_URL = %q", got)
 	}
 }

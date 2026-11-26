@@ -151,7 +151,7 @@ func TestMessageGuidancePreservesCustomSystemPrompts(t *testing.T) {
 							t.Fatal(result.Error)
 						}
 						request := provider.lastRequest.Messages
-						if len(request) == 0 || request[0].Role != "system" || request[0].Content != custom {
+						if len(request) == 0 || request[0].Role != "system" || request[0].Content != custom+"\n\n"+frostAgentSystemPrompt {
 							t.Fatalf("enabled=%v limit=%s: custom prompt lost: %+v", enabled, limit, request)
 						}
 						wantCount := 2

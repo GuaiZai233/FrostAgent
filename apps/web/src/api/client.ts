@@ -584,6 +584,11 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   return await next(req);
 };
 
+export interface PersistenceHealth {
+  logs: { enabled: boolean; budget_bytes: number; used_bytes: number; entries: number; error?: string };
+  sessions: { pending: number; local_pending: number; error?: string };
+}
+
 export function createInstanceAPI(options: { globalModelCatalog?: boolean; catalogDraftOwner?: string } = {}) {
   let memoryPlatform = '';
   const instanceID = instanceState.selected?.id;
@@ -670,6 +675,16 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
   return {
     // Bot Overview & Sessions
+    async getPersistenceHealth(): Promise<PersistenceHealth> {
+      selectionSignal.throwIfAborted();
+      if (!instanceID) throw new Error('请先选择实例');
+      const headers = new Headers();
+      const token = getControlToken();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const response = await fetch(`/instances/${encodeURIComponent(instanceID)}/api/persistence`, { headers, signal: selectionSignal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json() as PersistenceHealth;
+    },
     getOverview(): Promise<GetOverviewResponse> {
       return botClient.getOverview({});
     },
@@ -719,6 +734,18 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
 
     deleteGroupSummary(sessionId: string): Promise<DeleteGroupSummaryResponse> {
       return botClient.deleteGroupSummary({ sessionId });
+    },
+
+    getSessionHistory(sessionId: string, after = '', before = '', pageToken = '', signal?: AbortSignal) {
+      return botClient.getSessionHistory({ sessionId, after, before, pageToken, pageSize: 50 }, { signal });
+    },
+
+    getToolHistoryEntry(refId: string, options: { includeResult?: boolean; resultOffset?: number } = {}) {
+      return botClient.getToolHistoryEntry({
+        refId,
+        includeResult: options.includeResult ?? false,
+        resultOffset: options.resultOffset ?? 0,
+      });
     },
 
     // Logs
@@ -1067,71 +1094,6 @@ export function createInstanceAPI(options: { globalModelCatalog?: boolean; catal
     },
     syncMCPServer(id: string): Promise<SyncMCPServerResponse> {
       return mcpClient.syncMCPServer({ id });
-    },
-
-    // ActionsCat
-    getActionsCatStatus(): Promise<ActionsCatStatus> {
-      return actionsCatAPI.getStatus();
-    },
-    listActionsCatActions(): Promise<ActionsCatAction[]> {
-      return actionsCatAPI.listActions();
-    },
-    createActionsCatAction(req: CreateActionRequest): Promise<ActionsCatAction> {
-      return actionsCatAPI.createAction(req);
-    },
-    getActionCatAction(actionID: string): Promise<ActionsCatAction> {
-      return actionsCatAPI.getAction(actionID);
-    },
-    triggerActionsCatRun(
-      actionID: string,
-      req?: TriggerActionRunRequest,
-    ): Promise<ActionsCatRun> {
-      return actionsCatAPI.triggerRun(actionID, req);
-    },
-    listActionsCatRuns(
-      actionID: string,
-      limit = 50,
-      offset = 0,
-    ): Promise<ActionsCatRun[]> {
-      return actionsCatAPI.listRuns(actionID, limit, offset);
-    },
-    getActionsCatRun(actionID: string, runID: string): Promise<ActionsCatRun> {
-      return actionsCatAPI.getRun(actionID, runID);
-    },
-    getActionsCatRunLogs(
-      actionID: string,
-      runID: string,
-    ): Promise<ActionsCatRunLogs> {
-      return actionsCatAPI.getRunLogs(actionID, runID);
-    },
-    dispatchActionsCat(
-      payload: Record<string, unknown>,
-    ): Promise<{ ok: boolean }> {
-      return actionsCatAPI.dispatch(payload);
-    },
-    listActionsCatSchedules(actionID: string): Promise<ActionsCatSchedule[]> {
-      return actionsCatAPI.listSchedules(actionID);
-    },
-    createActionsCatSchedule(
-      actionID: string,
-      req: CreateScheduleRequest,
-    ): Promise<ActionsCatSchedule> {
-      return actionsCatAPI.createSchedule(actionID, req);
-    },
-    deleteActionsCatSchedule(scheduleID: string): Promise<{ ok: boolean }> {
-      return actionsCatAPI.deleteSchedule(scheduleID);
-    },
-    listActionsCatMatchers(actionID: string): Promise<ActionsCatMatcher[]> {
-      return actionsCatAPI.listMatchers(actionID);
-    },
-    createActionsCatMatcher(
-      actionID: string,
-      req: CreateMatcherRequest,
-    ): Promise<ActionsCatMatcher> {
-      return actionsCatAPI.createMatcher(actionID, req);
-    },
-    deleteActionsCatMatcher(matcherID: string): Promise<{ ok: boolean }> {
-      return actionsCatAPI.deleteMatcher(matcherID);
     },
   };
 }

@@ -185,7 +185,11 @@ func TestStickerPairFailuresNeverDeliverAndKeepReferences(t *testing.T) {
 			deliveries := 0
 			run := RunContext{SessionID: "pair-session", ActorPlatform: "test", ActorUserID: "synthetic-actor", SendHook: func(string) error { deliveries++; return nil }}
 			call := func(name string) ToolCall { return ToolCall{Function: ToolCallFunction{Name: name, Arguments: "{}"}} }
-			reply, _ := engine.deliverStickerPair(WithRunContext(engine.Context(), run), &run, call("send_message"), call("send_sticker"))
+			textResult, _, err := engine.deliverStickerPair(WithRunContext(engine.Context(), run), &run, call("send_message"), call("send_sticker"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			reply := contentToText(textResult.Content)
 			entry := assertReferencedError(t, store, reply, tc.summary)
 			if deliveries != 0 || strings.Contains(reply, "endpoint.invalid") || !strings.Contains(entry.Content, tc.diagnostic) {
 				t.Fatalf("unsafe pair failure: delivered=%d reply=%q diagnostic=%+v", deliveries, reply, entry)

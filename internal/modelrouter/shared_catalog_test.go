@@ -380,3 +380,37 @@ func TestSQLReadFailureNeverReturnsEffectiveCachedRoute(t *testing.T) {
 		t.Fatal("initial failure left nil backend")
 	}
 }
+
+func TestSQLRuntimeFallbackUsesLastCoherentSnapshotOnly(t *testing.T) {
+	db := catalogTestDB(t, storage.SQLite)
+	seedCatalog(t, db, "https://shared.invalid/v1")
+	manager := NewSQL(db, "instance-a")
+	bindInstance(t, manager, "model-a")
+	manager.EnableRuntimeFallback()
+	previous := manager.Snapshot()
+	if previous.LoadError() != nil {
+		t.Fatal(previous.LoadError())
+	}
+	if _, err := db.SQL.Exec(`UPDATE provider_endpoints SET base_url='invalid'`); err != nil {
+		t.Fatal(err)
+	}
+	if manager.Snapshot().LoadError() == nil {
+		t.Fatal("reachable invalid configuration used fallback")
+	}
+	if _, err := db.SQL.Exec(`UPDATE provider_endpoints SET base_url='https://shared.invalid/v1'`); err != nil {
+		t.Fatal(err)
+	}
+	_ = manager.Snapshot()
+	db.Close()
+	snapshot := manager.Snapshot()
+	if snapshot.LoadError() != nil {
+		t.Fatal(snapshot.LoadError())
+	}
+	target, err := snapshot.Resolve(WorkloadDialogue, Scope{})
+	if err != nil || target.UpstreamModel != "upstream-a" {
+		t.Fatalf("fallback route: %+v %v", target, err)
+	}
+	if _, err := manager.ActiveChecked(); err == nil {
+		t.Fatal("management API hid database failure")
+	}
+}

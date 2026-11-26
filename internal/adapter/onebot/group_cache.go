@@ -190,7 +190,7 @@ func (c *wsConnection) handleAPIResponse(raw []byte) bool {
 				err = store.UpdateGroupName(name)
 			}
 			if err != nil {
-				c.engine.PauseOnStorageError(err)
+				c.engine.ContinueAfterMemoryStorageError(err)
 			}
 		}
 		c.Log().Info(

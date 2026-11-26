@@ -415,3 +415,32 @@ func TestStealerObservationScoped_CrossGenerationIsolation(t *testing.T) {
 		t.Fatalf("conn-gen-2 sticker should still exist after clearing conn-gen-1, got: %v", err)
 	}
 }
+
+func TestStealer_MarkInappropriateOnlyFlagsCollectedSticker(t *testing.T) {
+	collected := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x02}
+	unknown := []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0x03}
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	stealer := NewStealer(store, nil)
+	if _, err := stealer.Steal(context.Background(), collected); err != nil {
+		t.Fatalf("Steal returned error: %v", err)
+	}
+
+	if _, err := stealer.MarkInappropriate(unknown); err != ErrStickerNotStored {
+		t.Fatalf("unknown sticker error = %v, want ErrStickerNotStored", err)
+	}
+	if store.Exists(HashBytes(unknown)) {
+		t.Fatal("MarkInappropriate must not add unknown stickers")
+	}
+
+	id, err := stealer.MarkInappropriate(collected)
+	if err != nil || id != HashBytes(collected) {
+		t.Fatalf("MarkInappropriate = (%q, %v), want (%q, nil)", id, err, HashBytes(collected))
+	}
+	entry, ok := store.Get(id)
+	if !ok || !entry.ManualBlocked || !entry.SuspectedInappropriate {
+		t.Fatalf("entry = %+v, found=%v; want manually blocked and suspected", entry, ok)
+	}
+}

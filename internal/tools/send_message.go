@@ -54,6 +54,11 @@ func SendMsgTool() Tool {
 		parameter: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
+				"use_frostagent_decoration": map[string]any{
+					"type":        "boolean",
+					"default":     true,
+					"description": "Whether to apply configured automatic sender mentions and reply quotes. Omit or set true to keep existing decoration rules. Set false to send only the explicit messages in their supplied order, without automatic mentions or quotes.",
+				},
 				"messages": map[string]any{
 					"type":        "array",
 					"description": "The ordered sequence of message components.",
@@ -105,9 +110,10 @@ func SendMsgTool() Tool {
 				return textResult(""), fmt.Errorf("主动感知仅允许当前会话的文本和艾特")
 			}
 			var payload struct {
-				Messages            []Msg  `json:"messages"`
-				Session             string `json:"session,omitempty"`
-				SuppressAutoMention bool   `json:"suppress_auto_mention,omitempty"`
+				Messages                []Msg  `json:"messages"`
+				Session                 string `json:"session,omitempty"`
+				SuppressAutoMention     bool   `json:"suppress_auto_mention,omitempty"`
+				UseFrostAgentDecoration *bool  `json:"use_frostagent_decoration,omitempty"`
 			}
 
 			if err := json.Unmarshal([]byte(args), &payload); err != nil {
@@ -174,7 +180,7 @@ func SendMsgTool() Tool {
 				if err := ValidateQQMessages(payload.Messages, false); err != nil {
 					return textResult(""), err
 				}
-				request, _ := json.Marshal(QQRequest{Action: "send", Arguments: QQArguments{Messages: payload.Messages}, SuppressAutoMention: payload.SuppressAutoMention})
+				request, _ := json.Marshal(QQRequest{Action: "send", Arguments: QQArguments{Messages: payload.Messages}, SuppressAutoMention: payload.SuppressAutoMention, UseFrostAgentDecoration: payload.UseFrostAgentDecoration})
 				return core.ToolExecutionResult{Content: string(request), PlatformActionPayload: string(request)}, nil
 			}
 

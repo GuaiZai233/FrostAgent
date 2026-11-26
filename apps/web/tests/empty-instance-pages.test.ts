@@ -76,10 +76,9 @@ try {
       search.value = 'synthetic';
       search.dispatchEvent(new dom.window.Event('input'));
       root.querySelector<HTMLButtonElement>('[data-filter="all-groups"]')!.click();
-      root.querySelector<HTMLButtonElement>('#prompt-toggle-editor-btn')!.click();
-      root.querySelector<HTMLTextAreaElement>('#prompt-raw-input')!.value = '{"messages":[{"role":"user","content":"local-only"}]}';
-      root.querySelector<HTMLButtonElement>('#prompt-apply-input-btn')!.click();
-      assert.match(root.querySelector('#prompt-inspector-mount')!.textContent || '', /local-only/);
+      assert.equal(root.querySelector('#prompt-toggle-editor-btn'), null);
+      assert.equal(root.querySelector('#prompt-raw-input'), null);
+      assert.equal(root.querySelector('#prompt-copy-btn'), null);
     } else {
       for (const control of root.querySelectorAll<HTMLInputElement>('input, button, select, textarea')) assert.equal(control.disabled, true);
     }

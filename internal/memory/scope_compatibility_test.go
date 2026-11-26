@@ -41,7 +41,7 @@ func TestLegacySQLMemoryScopesSurviveV1Cleanup(t *testing.T) {
 		`ALTER TABLE memory_entries ADD COLUMN visibility TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dialogues ADD COLUMN scene TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE dialogues ADD COLUMN relation TEXT NOT NULL DEFAULT ''`,
-		`UPDATE schema_meta SET version=17, min_compatible_version=17`,
+		`UPDATE schema_meta SET version=19, min_compatible_version=19`,
 	} {
 		if _, err := db.SQL.Exec(statement); err != nil {
 			t.Fatal(err)

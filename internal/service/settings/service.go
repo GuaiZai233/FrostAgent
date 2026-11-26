@@ -11,6 +11,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
 	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
+	"github.com/GuaiZai233/FrostAgent/internal/richimage"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"maps"
@@ -55,6 +56,7 @@ var knownEnvVars = map[string]envEntry{
 	"ENABLE_MULTI_SEGMENT_REPLY":           {"是否允许多段回复", false, false, false},
 	"BALANCE_QUERY_CONFIG":                 {"额度查询请求与凭据配置", true, false, false},
 	"DISABLED_TOOLS":                       {"已关闭的原生工具名称（JSON 数组）", false, false, false},
+	richimage.ThemeModeKey:                 {"渲染图片深浅色模式：model（默认，由模型传参决定）；day_night（服务端 20:00 至次日 04:00 深色，其余浅色，忽略模型参数）", false, false, false},
 	timesleep.TimeoutKey:                   {"time_sleep 单次挂起超时秒数，默认 60，达到上限时报 Timeout", false, false, false},
 	"MULTI_SEGMENT_REPLY_MAX_SEGMENTS":     {"多段回复分段上限（0 或留空为不限制；1 视为关闭多段回复；超出时随机保留上限数量的分段，其余丢弃）", false, false, false},
 	"LISTEN_ADDR":                          {"HTTP 监听地址", false, true, false},
@@ -68,6 +70,7 @@ var knownEnvVars = map[string]envEntry{
 	"WS_ALLOWED_ORIGINS":                   {"允许的 WebSocket Origin", false, true, false},
 	"SECURITY_CONTROL_MODE":                {"全局安全控制模式", false, false, false},
 	"SYSTEM_PROMPT":                        {"系统提示词", false, false, true},
+	"LOG_STORAGE_MIB":                      {"持久化日志预算（MiB，包含图片，超限删除最旧记录）", false, false, false},
 	"MAX_CONTEXT_MESSAGES":                 {"最多保留的消息数", false, false, false},
 	"ENABLE_AT_IN_GROUP_MSG":               {"是否开启群聊回复前艾特", false, false, false},
 	"GROUP_REPLY_ON_MENTION":               {"群聊被@或名称/别名提及时触发对话回复（false 则群聊消息不回复）", false, false, false},
@@ -77,6 +80,7 @@ var knownEnvVars = map[string]envEntry{
 	"BOT_NAME":                             {"机器人主名称，用于群聊文本唤醒", false, false, false},
 	"BOT_ALIASES":                          {"机器人文本唤醒别名，多个名称以英文逗号分隔；名称或别名忽略英文字母大小写和空格，纯英文按整词匹配", false, false, false},
 	"ADMIN_QQ_IDS":                         {"允许使用管理员工具的 QQ 号，多个号码以英文逗号分隔", false, false, false},
+	"SILENT_IGNORE_USER_IDS":               {"完全静默屏蔽的 QQ 号（如 QQ 邮箱官方号），其消息、戳一戳与文件上传通知在入口被直接丢弃：不回复、不记录；多个号码以英文逗号分隔，可用 platform:ID 限定平台", false, false, false},
 	"ADMIN_COMMAND_PREFIX":                 {"管理员消息指令前缀（默认 /，如 execute）", false, false, false},
 	"ENABLE_RUNTIME_STATUS_COMMAND":        {"输出 FrostAgent 默认运行信息（#fa，默认开启）", false, false, false},
 	"ENABLE_REPLY_IN_GROUP_MSG":            {"群聊回复时是否引用原消息", false, false, false},
@@ -771,6 +775,11 @@ func validateUpdate(key, value string) error {
 			return errors.New("工具开关必须是工具名称的 JSON 数组")
 		}
 	}
+	if key == richimage.ThemeModeKey {
+		if _, err := richimage.ParseThemeMode(value); err != nil {
+			return err
+		}
+	}
 	if key == timesleep.TimeoutKey {
 		if _, err := timesleep.Timeout(value); err != nil {
 			return err
@@ -807,6 +816,12 @@ func validateUpdate(key, value string) error {
 		seconds, err := strconv.Atoi(value)
 		if err != nil || seconds < 0 || seconds > 86400 || strconv.Itoa(seconds) != value {
 			return errors.New("戳一戳冷却时间必须是 0 到 86400 的整数秒")
+		}
+	}
+	if key == "LOG_STORAGE_MIB" && strings.TrimSpace(value) != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > 65536 {
+			return fmt.Errorf("LOG_STORAGE_MIB 必须是 1 到 65536 之间的整数")
 		}
 	}
 	if key == "MAX_CONTEXT_MESSAGES" {

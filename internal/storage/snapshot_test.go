@@ -28,6 +28,9 @@ func TestReadSnapshotKeepsCoreAndPayloadConsistent(t *testing.T) {
 			}
 			defer writer.Close()
 			err = db.ReadSnapshot(context.Background(), func(view *DB) error {
+				if err := view.SQL.PingContext(context.Background()); err != nil {
+					return err
+				}
 				var name string
 				if err := view.SQL.QueryRow(`SELECT name FROM instances WHERE id='synthetic-a'`).Scan(&name); err != nil {
 					return err

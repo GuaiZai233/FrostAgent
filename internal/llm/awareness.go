@@ -150,8 +150,7 @@ func (s *AwarenessService) dueTargets() []AwarenessTarget {
 func (s *AwarenessService) Run(ctx context.Context) {
 	if s.Engine.GroupManager != nil {
 		groups, err := s.Engine.GroupManager.ListGroups()
-		if err != nil {
-			s.Engine.PauseOnStorageError(err)
+		if err != nil && !s.Engine.ContinueAfterMemoryStorageError(err) {
 			return
 		}
 		for _, group := range groups {
@@ -310,6 +309,7 @@ func (s *AwarenessService) Trigger(parent context.Context, target AwarenessTarge
 	if deliveries.Text() != "" {
 		return
 	}
+	deliveries.SetFinalMessage(result.FinalMessage)
 	parts := replyformat.SplitLimited(result.Content, replyformat.Enabled(e.Getenv), replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)))
 	for _, part := range parts {
 		if err := sendMessages([]proactive.AwarenessMessage{{Type: "plain", Text: part}}); err != nil {

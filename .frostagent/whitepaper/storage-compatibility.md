@@ -4,7 +4,7 @@
 
 ## 版本与迁移
 
-`schema_meta.version=18` 是清理后的 v1 关系结构基线，`min_compatible_version=18` 阻止旧二进制误写。v7–v17 历史定义不改写；v18 清理、固定载荷表、模块迁移登记及版本推进在同一事务提交。新库直接构造最终结构。按 Maintainer 决定，4 张退休模型表及对话 scene/relation、记忆 visibility 直接删除，不归档；现用 provider 数据、凭据和记忆作用域保留。
+`schema_meta.version=20` 是清理后的 v1 关系结构基线，`min_compatible_version=20` 阻止旧二进制误写。v7–v19 历史定义不改写；v20 清理、固定载荷表、模块迁移登记及版本推进在同一事务提交。新库直接构造最终结构。按 Maintainer 决定，4 张退休模型表及对话 scene/relation、记忆 visibility 直接删除，不归档；现用 provider 数据、凭据和记忆作用域保留。
 
 `module_migrations` 继续使用稳定 ID 记录独立附加迁移，已有 endpoint / Computer Use 记录保持，增加 `opaque-instance-payloads/v1`。历史核心序列继续作为升级桥，不通过伪造历史 checksum 或改写旧版本来迁移。后续模块只变更载荷格式不必增加核心版本；核心结构不兼容时追加迁移并提高下限。
 

@@ -15,6 +15,8 @@ var compatiblePrimaryKeys = map[string]string{
 	"computer_use_projects":   "instance_id,id",
 	"computer_use_tasks":      "instance_id,id",
 	"module_payloads":         "instance_id,module_id,record_id",
+	"session_states":          "instance_id,session_id",
+	"tool_history":            "instance_id,ref_id",
 	"chat_history":            "instance_id,id",
 	"access_records":          "principal_key",
 	"counters":                "key",
@@ -48,7 +50,7 @@ var compatiblePrimaryKeys = map[string]string{
 func compatibleForeignKeys(table string) []schemaForeignKey {
 	var key schemaForeignKey
 	switch table {
-	case "computer_use_config", "computer_use_projects", "computer_use_tasks", "module_payloads", "chat_history", "dialogues", "group_profiles", "group_summaries", "mcp_servers", "memory_catalogs",
+	case "session_states", "tool_history", "computer_use_config", "computer_use_projects", "computer_use_tasks", "module_payloads", "chat_history", "dialogues", "group_profiles", "group_summaries", "mcp_servers", "memory_catalogs",
 		"memory_entries", "memory_merge_archives", "model_bindings", "model_revisions",
 		"pending_deletions", "skills", "sticker_entries", "memory_embedding_scopes":
 		key = schemaForeignKey{"instance_id", "instances", "id", "CASCADE", "NO ACTION"}

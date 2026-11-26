@@ -8,17 +8,13 @@ import { openDialog } from '../components/dialog';
 import { openGroupModelConfig } from '../components/group-model-config';
 import { confirmDialog } from '../components/confirm';
 import { attachPaginationEvents, renderPagination } from '../components/pagination';
-import { copyToClipboard } from '../utils/clipboard';
+import { openSessionHistoryDialog, supportsSessionHistory } from '../components/session-history';
 import {
   DEFAULT_BOT_NAME,
   renderPromptInspector,
   buildInspectorDataFromSessionContext,
-  parsePrompt,
   type ParsedPrompt,
 } from '../components/prompt-inspector';
-
-// NOTE: parsePrompt / renderPromptInspector are also used by the logs page via
-// openPromptInspectorDialog — do NOT remove those exports from prompt-inspector.ts.
 
 export function mountPromptPage(container: HTMLElement, api = createInstanceAPI()): () => void {
   const instanceID = instanceState.selected?.id;
@@ -32,16 +28,15 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
   let searchSessionsRequestSeq = 0;
   let selectedSessionId = '';
   let selectedSession: SessionInfo | null = null;
-  let currentPromptText = '';
   let activePlatformFilter = 'all'; // 'all-groups' | 'all-private' | 'aiohttp' | 'onebot' | 'all'
   let searchQuery = '';
   let inspectorCleanup: (() => void) | null = null;
-  let isEditorExpanded = false;
   let sessionContextRequestSeq = 0;
   const tokenStack = new PageTokenStack();
   let pageSize = 20;
   let summaryDialogClose: (() => void) | null = null;
   let modelDialogClose: (() => void) | null = null;
+  let historyDialogClose: (() => void) | null = null;
   const pageAbortController = new AbortController();
   let botName = DEFAULT_BOT_NAME;
   let botNameLoaded = false;
@@ -65,36 +60,12 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
           <h1 class="page-title">会话与 Prompt 检查</h1>
+<p id="session-persistence-health" class="text-xs text-muted" role="status">会话快照跨重启恢复；历史原文不会自动补入上下文。</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           ${instanceID ? `<a class="btn btn-outline btn-sm" href="/api/instances/${escapeHtml(instanceID)}/backup/summaries" download="group_summaries.json">下载群摘要备份</a>` : ''}
-          <button class="btn btn-outline btn-sm" id="prompt-toggle-editor-btn">
-            ${icon('code', 'w-3.5 h-3.5')}
-            <span id="prompt-toggle-editor-label">自定义输入</span>
-          </button>
-          <button class="btn btn-ghost btn-sm" id="prompt-copy-btn" title="复制 Prompt">
-            ${icon('copy', 'w-3.5 h-3.5')}
-            <span>复制</span>
-          </button>
         </div>
       </header>
-
-      <!-- Input / Editor Panel (Collapsible) -->
-      <section class="card p-3.5" id="prompt-editor-card" style="display: none;">
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <label class="form-label mb-0" for="prompt-raw-input">自定义 Prompt 输入 (支持 JSON / XML 标签)</label>
-          <div class="flex items-center gap-2">
-            <button class="btn btn-ghost btn-sm text-xs h-6 px-2" id="prompt-clear-input-btn">清空</button>
-            <button class="btn btn-primary btn-sm text-xs h-6 px-2.5" id="prompt-apply-input-btn">应用解析</button>
-          </div>
-        </div>
-        <textarea
-          id="prompt-raw-input"
-          class="input font-mono text-xs w-full select-text leading-relaxed"
-          style="min-height: 10rem; resize: vertical;"
-          placeholder="粘贴发送给 LLM 的 JSON 请求体或带有 <recent_group_messages>、<group_running_summary> 等 XML 标签的 Prompt 文本..."
-        ></textarea>
-      </section>
 
       <!-- Main Master-Detail Layout -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
@@ -150,19 +121,23 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     </div>
   `;
 
+  void api.getPersistenceHealth().then(health => {
+    const status = container.querySelector<HTMLElement>('#session-persistence-health');
+    if (!status) return;
+    status.textContent = health.sessions.error || (health.sessions.pending > 0
+      ? `会话已保存本地快照，${health.sessions.pending} 个会话等待提交数据库。`
+      : '会话快照跨重启恢复；历史原文不会自动补入上下文。');
+  }).catch(() => {
+    const status = container.querySelector<HTMLElement>('#session-persistence-health');
+    if (status) status.textContent = '会话持久化状态暂时无法读取';
+  });
+
   const mountEl = container.querySelector<HTMLElement>('#prompt-inspector-mount')!;
   const sessionListEl = container.querySelector<HTMLElement>('#prompt-session-list')!;
   const sessionPaginationEl = container.querySelector<HTMLElement>('#prompt-sessions-pagination')!;
   const searchInput = container.querySelector<HTMLInputElement>('#prompt-session-search-input')!;
   const filterTabsEl = container.querySelector<HTMLElement>('#prompt-platform-filter-tabs')!;
   const sessionsRefreshBtn = container.querySelector<HTMLButtonElement>('#prompt-sessions-refresh-btn')!;
-  const editorCard = container.querySelector<HTMLElement>('#prompt-editor-card')!;
-  const rawInput = container.querySelector<HTMLTextAreaElement>('#prompt-raw-input')!;
-  const toggleEditorBtn = container.querySelector<HTMLButtonElement>('#prompt-toggle-editor-btn')!;
-  const toggleEditorLabel = container.querySelector<HTMLElement>('#prompt-toggle-editor-label')!;
-  const copyBtn = container.querySelector<HTMLButtonElement>('#prompt-copy-btn')!;
-  const clearInputBtn = container.querySelector<HTMLButtonElement>('#prompt-clear-input-btn')!;
-  const applyInputBtn = container.querySelector<HTMLButtonElement>('#prompt-apply-input-btn')!;
 
   // 1. Fetch Session List
   async function loadSessions(): Promise<boolean> {
@@ -363,6 +338,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       card.addEventListener('click', () => {
         const sessionId = card.getAttribute('data-session-id');
         if (sessionId) {
+          historyDialogClose?.();
           selectedSessionId = sessionId;
           selectedSession = (isSearchMode() ? searchSessions : sessions)
             ?.find((session) => session.sessionId === sessionId) || null;
@@ -393,7 +369,6 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       const resp = await api.getSessionContext(sessionId, 60);
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
 
-      currentPromptText = resp.promptText || '';
       if (selectedSession?.sessionId === sessionId && typeof resp.runningSummary === 'string') {
         selectedSession.groupSummary = resp.runningSummary;
       }
@@ -412,15 +387,19 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       inspectorCleanup();
       inspectorCleanup = null;
     }
-    const rawVal = typeof dataOrRaw === 'string' ? dataOrRaw : dataOrRaw.raw;
-    rawInput.value = rawVal;
     const groupId = session && isGroupSession(session)
       ? groupIdFromSessionId(session.sessionId)
       : '';
     inspectorCleanup = renderPromptInspector(mountEl, dataOrRaw, {
       showRawToggle: true,
+      showCopy: false,
       title,
       botName,
+      onViewHistory: session && supportsSessionHistory(session.sessionId) ? () => {
+        historyDialogClose?.();
+        historyDialogClose = openSessionHistoryDialog(api, session.sessionId, botName);
+      } : undefined,
+      loadToolArguments: typeof api.getToolHistoryEntry === 'function' ? (refId, options) => api.getToolHistoryEntry(refId, options) : undefined,
       modelConfigHref: session && !groupId ? '#/model-router' : undefined,
       onConfigureModel: session && groupId
         ? () => {
@@ -529,48 +508,6 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     });
   });
 
-  toggleEditorBtn.addEventListener('click', () => {
-    isEditorExpanded = !isEditorExpanded;
-    editorCard.style.display = isEditorExpanded ? 'block' : 'none';
-    toggleEditorLabel.textContent = isEditorExpanded ? '收起输入' : '自定义输入';
-  });
-
-  const applyParsedInput = (value: string) => {
-    if (isUnmounted) return;
-    sessionContextRequestSeq += 1;
-    currentPromptText = value;
-    renderInspector(parsePrompt(value, botName), '自定义输入 Prompt');
-    toast.success('已更新 Prompt 检查视图');
-  };
-
-  applyInputBtn.addEventListener('click', () => {
-    const val = rawInput.value.trim();
-    if (!val) {
-      toast.info('输入为空');
-      return;
-    }
-    if (botNameLoaded) {
-      applyParsedInput(val);
-      return;
-    }
-    void botNameReady.then(() => applyParsedInput(val));
-  });
-
-  clearInputBtn.addEventListener('click', () => {
-    rawInput.value = '';
-    rawInput.focus();
-  });
-
-  copyBtn.addEventListener('click', async () => {
-    if (!currentPromptText) {
-      toast.info('当前无 Prompt 内容可复制');
-      return;
-    }
-    const success = await copyToClipboard(currentPromptText);
-    if (success) toast.success('已复制 Prompt');
-    else toast.error('复制失败，请手动复制');
-  });
-
   // Initial Load
   sessionsRefreshBtn.disabled = !instanceID;
   void loadSessions();
@@ -581,6 +518,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     pageAbortController.abort();
     summaryDialogClose?.();
     modelDialogClose?.();
+    historyDialogClose?.();
     if (inspectorCleanup) {
       inspectorCleanup();
       inspectorCleanup = null;

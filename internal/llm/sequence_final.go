@@ -7,10 +7,10 @@ type sequenceTranscriptTurn struct {
 	inputID      uint64
 	inputIndex   int
 	finalIndex   int
-	pendingFinal string
+	pendingFinal *ChatMessage
 }
 
-func (lane *executionSequence) recordFinalProgress(turn *SessionTurn, historyID uint64, text string) {
+func (lane *executionSequence) recordFinalProgress(turn *SessionTurn, historyID uint64, message ChatMessage) {
 	if lane.proactive || !lane.messageIDs[turn.messageSeq] {
 		return // This task no longer inherits the originating private trajectory.
 	}
@@ -22,7 +22,7 @@ func (lane *executionSequence) recordFinalProgress(turn *SessionTurn, historyID 
 		// Claim even a late first delivery immediately. Otherwise it would be
 		// prepended from shared history before its retained originating input.
 		lane.messageIDs[historyID] = true
-		checkpoint.pendingFinal = text
+		checkpoint.pendingFinal = &message
 		if lane.active == turn {
 			lane.applyFinalProgress(i)
 		}
@@ -38,10 +38,10 @@ func (lane *executionSequence) applyPendingFinalProgress() {
 
 func (lane *executionSequence) applyFinalProgress(index int) {
 	checkpoint := &lane.transcriptTurns[index]
-	if checkpoint.pendingFinal == "" {
+	if checkpoint.pendingFinal == nil {
 		return
 	}
-	message := ChatMessage{Role: "assistant", Content: checkpoint.pendingFinal}
+	message := *checkpoint.pendingFinal
 	if checkpoint.finalIndex >= 0 {
 		lane.transcript[checkpoint.finalIndex] = message
 	} else {
@@ -62,5 +62,5 @@ func (lane *executionSequence) applyFinalProgress(index int) {
 			}
 		}
 	}
-	checkpoint.pendingFinal = ""
+	checkpoint.pendingFinal = nil
 }

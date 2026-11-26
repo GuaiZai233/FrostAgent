@@ -158,6 +158,7 @@ type resolvedReplyContext struct {
 	SessionID   string
 	Segments    []content.MessageSegment
 	ParentID    int64
+	SenderID    int64
 	Ancestors   []resolvedReplyContext
 }
 
@@ -352,6 +353,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 		SessionID:   historyKey(event),
 		Segments:    segments,
 		ParentID:    replyMessageIDFromRaw(data.Message),
+		SenderID:    replySenderID(data),
 	}
 }
 
@@ -376,6 +378,18 @@ func (c *wsConnection) replyMessageMatchesEvent(event model.OneBotEvent, message
 	default:
 		return false
 	}
+}
+
+// replySenderID returns the sender of a get_msg response. OneBot v11 carries it
+// in sender.user_id; a top-level user_id is accepted as a fallback.
+func replySenderID(data oneBotMessageData) int64 {
+	if data.UserID != 0 {
+		return data.UserID
+	}
+	if data.Sender != nil {
+		return data.Sender.UserID
+	}
+	return 0
 }
 
 func privateMessagePeer(selfID int64, data oneBotMessageData) (int64, bool) {
@@ -541,6 +555,9 @@ func (c *wsConnection) loadObservedImage(
 	}
 	if imageIndex < 0 {
 		return nil, fmt.Errorf("image_index %d 不能小于 0", imageIndex)
+	}
+	if strings.HasPrefix(messageID, qqForwardImagePrefix) {
+		return c.loadQQForwardImage(ctx, event, messageID, imageIndex)
 	}
 
 	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)

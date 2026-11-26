@@ -6,6 +6,10 @@ import "context"
 // MemoryWritten describes a completed durable write. MessagePayload is a
 // requested delivery, whose success still depends on the adapter acknowledgement.
 type ToolExecutionResult struct {
+	HistoryRestricted bool
+	// RawResult preserves the logical MCP response before display formatting.
+	RawResult      string
+	HistoryRefID   string
 	Content        string
 	MemoryWritten  bool
 	MessagePayload string

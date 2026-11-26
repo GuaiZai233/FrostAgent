@@ -9,6 +9,7 @@ import (
 // SQLConnection allows the same readers to run against a single consistent
 // transaction during a complete backup. Normal operation uses *sql.DB.
 type SQLConnection interface {
+	PingContext(context.Context) error
 	Query(string, ...any) (*sql.Rows, error)
 	QueryRow(string, ...any) *sql.Row
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -23,6 +24,11 @@ type SQLConnection interface {
 var errSnapshotWrite = errors.New("writes are not allowed in a backup snapshot")
 
 type snapshotConnection struct{ *sql.Tx }
+
+func (s snapshotConnection) PingContext(ctx context.Context) error {
+	var value int
+	return s.QueryRowContext(ctx, `SELECT 1`).Scan(&value)
+}
 
 func (snapshotConnection) Exec(string, ...any) (sql.Result, error) { return nil, errSnapshotWrite }
 func (snapshotConnection) ExecContext(context.Context, string, ...any) (sql.Result, error) {

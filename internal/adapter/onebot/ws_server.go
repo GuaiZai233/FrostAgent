@@ -117,6 +117,9 @@ type wsConnection struct {
 	pendingGroupByEcho  map[string]pendingGroupInfo
 	pendingGroupByID    map[int64]string
 	nextGroupEcho       uint64
+	inboundFileMu       sync.Mutex
+	inboundFiles        []*inboundFile
+	fileHTTPClient      *http.Client
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
@@ -763,8 +766,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		requestPrompt += fmt.Sprintf("\n\n<response_context>\n%s\n</response_context>", responseContext)
 	}
 	requestPrompt += fmt.Sprintf("\n\n<system_context>\n%s\n</system_context>", string(contextBytes))
+	var fileQuotes []*resolvedReplyContext
 	if replyContext.Prompt != "" {
 		vettedReply := replyContext.promptWithAncestors()
+		originalReply := vettedReply
 		if engine != nil && engine.Security != nil {
 			principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
 			if pErr == nil {
@@ -784,6 +789,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 		if vettedReply != "" {
+			if vettedReply == originalReply {
+				fileQuotes = quoteNodes
+			}
 			requestPrompt += fmt.Sprintf("\n\n<reply_context>\n%s\n</reply_context>", vettedReply)
 			if directVision {
 				for _, quote := range quoteNodes {
@@ -792,19 +800,22 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
+	requestPrompt += conn.prepareInboundFiles(turn.Context(), event, session, fileQuotes)
 
 	if wakeSignals.Proactive {
 		if engine != nil {
 			engine.Log().InfoWithConsoleSummary(logs.SYSTEM, "【触发主动回复逻辑】", "【触发主动回复逻辑】")
 		}
-		requestPrompt = fmt.Sprintf("%s\n\n%s", proactive.PromptPrefix, requestPrompt)
-		groupContextStart += len(proactive.PromptPrefix) + 2
-		groupContextEnd += len(proactive.PromptPrefix) + 2
+		guidance := llm.WrapRuntimeGuidance(proactive.PromptPrefix)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", guidance, requestPrompt)
+		groupContextStart += len(guidance) + 2
+		groupContextEnd += len(guidance) + 2
 	}
 	if botLoopSoft {
-		requestPrompt = fmt.Sprintf("%s\n\n%s", botloop.PromptPrefix, requestPrompt)
-		groupContextStart += len(botloop.PromptPrefix) + 2
-		groupContextEnd += len(botloop.PromptPrefix) + 2
+		guidance := llm.WrapRuntimeGuidance(botloop.PromptPrefix)
+		requestPrompt = fmt.Sprintf("%s\n\n%s", guidance, requestPrompt)
+		groupContextStart += len(guidance) + 2
+		groupContextEnd += len(guidance) + 2
 	}
 
 	// 4. Call the agent engine with history
@@ -876,8 +887,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		sendHook := func(toolResultJSON string) error {
 			var toolOutput struct {
-				Messages            []tools.Msg `json:"messages"`
-				SuppressAutoMention bool        `json:"suppress_auto_mention"`
+				Messages                []tools.Msg `json:"messages"`
+				SuppressAutoMention     bool        `json:"suppress_auto_mention"`
+				UseFrostAgentDecoration *bool       `json:"use_frostagent_decoration"`
 			}
 			if err := json.Unmarshal([]byte(toolResultJSON), &toolOutput); err != nil {
 				engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("SendHook: 解析 send_message 结果失败: %v", err))
@@ -894,7 +906,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if len(oneBotSegments) == 0 {
 				return fmt.Errorf("消息内容为空")
 			}
-			if event.MessageType == "group" {
+			if event.MessageType == "group" && (toolOutput.UseFrostAgentDecoration == nil || *toolOutput.UseFrostAgentDecoration) {
 				decorationEvent := event
 				if toolOutput.SuppressAutoMention {
 					decorationEvent.UserID = 0
@@ -1095,6 +1107,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			ProactiveStickerOnly: wakeSignals.StickerOnly,
 		})
 		stopThinking()
+		deliveries.SetFinalMessage(runResult.FinalMessage)
 		replyText = runResult.Content
 		multiSegment := replyformat.Enabled(engine.Getenv)
 		if !multiSegment {

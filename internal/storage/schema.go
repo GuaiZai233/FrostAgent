@@ -199,7 +199,9 @@ var migrations = []migration{
 	{version: 15, preservesCompatibility: true},
 	{version: 16},
 	{version: 17, statements: chatHistorySchema},
-	{version: 18, statements: v1CleanupSchema},
+	{version: 18, statements: toolHistorySchema},
+	{version: 19, statements: sessionStateSchema},
+	{version: 20, statements: v1CleanupSchema},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {
@@ -273,7 +275,7 @@ func (d *DB) createSchema(ctx context.Context) error {
 			minimumCompatible = max(minimumCompatible, step.version)
 		}
 		for _, statement := range step.statements {
-			if step.version == 18 {
+			if step.version == 20 {
 				continue // Fresh databases never contain retired structures.
 			}
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
@@ -316,7 +318,7 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 	if err := validateCompatibility(version, minimumCompatible); err != nil {
 		return err
 	}
-	if step.version == 18 {
+	if step.version == 20 {
 		if err := d.validateV1Cleanup(ctx, tx); err != nil {
 			return err
 		}
@@ -341,7 +343,7 @@ func (d *DB) applyMigration(ctx context.Context, step migration) error {
 			return err
 		}
 	}
-	if step.version == 18 {
+	if step.version == 20 {
 		if err := createModulePayloads(ctx, tx); err != nil {
 			return err
 		}

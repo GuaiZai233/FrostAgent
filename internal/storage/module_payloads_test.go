@@ -41,7 +41,7 @@ func TestModulePayloadRoundTripAndWriteProtection(t *testing.T) {
 			if err := db.SaveModulePayload(ctx, "synthetic-restored", p, &future); err != nil {
 				t.Fatal(err)
 			}
-			compatibilityExec(t, db, `UPDATE schema_meta SET version=?,min_compatible_version=18`, SchemaVersion+1)
+			compatibilityExec(t, db, `UPDATE schema_meta SET version=?,min_compatible_version=20`, SchemaVersion+1)
 			compatibilityClose(t, db)
 			db, err := OpenWithConfig(ctx, root, config)
 			if err != nil {

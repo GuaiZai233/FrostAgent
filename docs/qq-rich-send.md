@@ -3,6 +3,8 @@
 FrostAgent 原生提供 QQ 消息组件和互动操作，通过当前对话绑定的 OneBot
 连接发送，支持 NapCat、SnowLuma 的兼容动作。无需安装 Aurabot。
 
+接收用户文件并在沙箱读取，参见[QQ 接收文件与读取](qq-inbound-files.md)。
+
 ## 工具入口
 
 `send_message` 仅接收基础消息组件：文字、图片、语音、视频、文件、@用户、引用与
@@ -118,6 +120,9 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 | `reaction` | `message_id`, `emoji_id`, `set` | 当前群，`set=false` 取消回应，默认 true |
 | `recall` | `message_id` | 仅当前连接、当前对话已获发送回执的机器人消息 |
 | `read_forward` | `message_id`, `forward_index`, `offset/limit`, `path` | 查看当前对话中观察过的合并转发聊天记录 |
+| `group_user_count` | 无 | 仅当前群：返回群成员人数（只读） |
+| `group_user_list` | 无 | 仅当前群：群成员 ≤ 35 人时返回成员列表（QQ 号、昵称、群名片、角色）；超过时返回错误“当前群人数过多，请使用group_user_search搜索特定群友的昵称。” |
+| `group_user_search` | `query`（必填，≤ 64 字符）, `limit`（1..20，默认 10；0 同样使用默认值） | 仅当前群：按昵称/群名片模糊搜索（不区分大小写，精确 > 前缀 > 子串 > 顺序子序列），返回真实 QQ 号 `user_id`，可用于 `poke` / `mention_user` |
 | `forward_message` | `message_id` | 当前对话观察过的消息 |
 | `forward_bundle` | `nodes`, `source/summary/prompt/news` | 合并转发，最多 50 个节点 |
 
@@ -163,6 +168,18 @@ ID 均用字符串表示；从上下文选取实际 ID，不使用昵称猜测�
 按 `next_offset` 继续翻页；默认每页 20 条，最多 50 条，单页不超过 32 KiB，
 因此实际条数可能更少。单条文字最多 2048 个字符，被截断时标记 `text_truncated`。
 图片、语音、视频、文件等返回类型占位，不下载媒体，也不返回原始媒体地址或内联数据。
+含图片或商城表情的节点另有 `image_count` 和 `image_ref`。需要查看时，将该节点返回的
+`image_ref` 原样作为 `inspect_message_image` 的 `message_id`，再用从 0 开始的
+`image_index` 选择节点内的图片（默认第一张）：
+
+```json
+{"message_id":"qq-forward-image:101:0:2","image_index":0}
+```
+
+上例仅演示引用形态，实际调用必须使用 `read_forward` 返回的引用，不自行拼接。
+图片按需读取，沿用现有图片识别的模型路由、次数上限、大小限制和安全审查。
+嵌套记录和翻页后的节点同样提供引用；引用只用于识图，不可用于引用回复、转发、回应或撤回。
+每次读取重新校验最外层消息所属连接和会话，内部节点的消息 ID 不会获得操作权限。
 
 查看嵌套记录时，保持最外层 `message_id` 和 `forward_index`，在 `path` 中增加
 父记录的绝对索引及其中的卡片序号。例如打开第 3 条记录中的第一张嵌套卡片：

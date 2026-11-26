@@ -38,6 +38,16 @@ func (m *Manager) InstanceZIP(id string) ([]byte, error) {
 	if err := safeTree(m.dir(i.id)); err != nil {
 		return nil, err
 	}
+	i.mu.RLock()
+	runtime := i.runtime
+	i.mu.RUnlock()
+	if runtime != nil && runtime.Engine.SessionManager.Checkpoints != nil {
+		records, err := runtime.Engine.SessionManager.Checkpoints.Records()
+		if err != nil {
+			return nil, err
+		}
+		return backup.BuildInstanceZIP(m.db, i.id, filepath.Join(m.dir(i.id), "sticker"), records)
+	}
 	return backup.BuildInstanceZIP(m.db, i.id, filepath.Join(m.dir(i.id), "sticker"))
 }
 
@@ -129,7 +139,7 @@ func (m *Manager) importSettingsWithComputerUse(id string, data backup.Settings,
 	} else {
 		importErr = backup.ImportSettingsWithComputerUse(m.db, i.id, data, *metadata)
 	}
-	r, c, buildErr := m.buildFresh(i.id, i, enabled, m.dir(i.id))
+	r, c, buildErr := m.buildFresh(i.id, i, enabled)
 	if buildErr == nil && enabled && i.mcp != nil {
 		buildErr = i.mcp.SetRuntimeActive(true)
 	}
@@ -317,6 +327,16 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 			return Info{}, err
 		}
 	}
+	if decoded.Sessions != nil {
+		if err := backup.ImportSessionStates(m.db, info.ID, *decoded.Sessions); err != nil {
+			return Info{}, err
+		}
+	}
+	if decoded.ToolHistory != nil {
+		if err := backup.ImportToolHistory(m.db, info.ID, *decoded.ToolHistory); err != nil {
+			return Info{}, err
+		}
+	}
 	if err := backup.ImportStickers(m.db, info.ID, filepath.Join(m.dir(info.ID), "sticker"),
 		decoded.Stickers, decoded.Images); err != nil {
 		return Info{}, err
@@ -331,7 +351,7 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	if oldMCP != nil {
 		_ = oldMCP.Close()
 	}
-	runtime, config, err := m.buildFresh(info.ID, i, false, m.dir(info.ID))
+	runtime, config, err := m.buildFresh(info.ID, i, false)
 	if err != nil {
 		if runtime != nil {
 			runtime.Stop()
@@ -424,7 +444,7 @@ func (m *Manager) CancelDeletion(id string) error {
 		}
 	}
 	m.mu.Unlock()
-	r, c, err := m.buildFresh(i.id, i, false, m.dir(i.id))
+	r, c, err := m.buildFresh(i.id, i, false)
 	i.mu.Lock()
 	i.runtime, i.config = r, c
 	r.StartBackground()
@@ -472,6 +492,10 @@ func (m *Manager) ConfirmDeletion(id string) (resultErr error) {
 		if err := i.mcp.Close(); err != nil {
 			return err
 		}
+	}
+	i.logger.StopPersistence()
+	if i.runtime != nil && i.runtime.Engine.SessionManager.Checkpoints != nil {
+		i.runtime.Engine.SessionManager.Checkpoints.Close()
 	}
 	stage, err := m.createDeletionStage(i.id)
 	if err != nil {
@@ -527,6 +551,10 @@ func (m *Manager) copySQLInstanceSettings(target, source string) error {
 	if m.shutdown.Err() != nil {
 		src.op.RUnlock()
 		return ErrClosing
+	}
+	if err := m.rejectDeleting(src.id); err != nil {
+		src.op.RUnlock()
+		return err
 	}
 	settings, err := backup.ExportSettings(m.db, src.id)
 	if err != nil {

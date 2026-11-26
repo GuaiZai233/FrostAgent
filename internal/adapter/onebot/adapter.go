@@ -9,6 +9,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/directchat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/heartbeat"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
+	"github.com/GuaiZai233/FrostAgent/internal/adapter/silentignore"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsauth"
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
@@ -34,6 +35,7 @@ import (
 
 // Adapter 实现 core.MessageAdapter 接口，管理 OneBot WebSocket 连接与消息收发。
 type Adapter struct {
+	fileHTTPClient     *http.Client
 	engine             *llm.Engine
 	stealer            *sticker.Stealer
 	mu                 sync.RWMutex
@@ -314,6 +316,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		wsConn = newWSConnection(conn)
 	}
 	wsConn.stealer = a.stealer
+	wsConn.fileHTTPClient = a.fileHTTPClient
 	wsConn.llmErrorReplies = &a.llmErrorReplies
 	wsConn.mock = mock
 	stopCancellation := context.AfterFunc(ctx, func() { _ = wsConn.Close() })
@@ -385,6 +388,10 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if event.MetaEventType == "heartbeat" {
 			continue
 		}
+		if a.silentlyIgnored(wsConn, event) {
+			continue
+		}
+		wsConn.rememberInboundFileNotice(event)
 		previousError := wsConn.takePreviousError(event)
 		wsConn.recordIncomingHistory(event)
 
@@ -394,7 +401,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			if groupIDStr != "" && userIDStr != "" {
 				gStore, err := a.engine.GroupManager.GetGroupStore(groupIDStr)
 				if err != nil {
-					a.engine.PauseOnStorageError(err)
+					a.engine.ContinueAfterMemoryStorageError(err)
 					continue
 				}
 				if gStore != nil {
@@ -407,7 +414,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 						}
 					}
 					if err != nil {
-						a.engine.PauseOnStorageError(err)
+						a.engine.ContinueAfterMemoryStorageError(err)
 						continue
 					}
 				}
@@ -473,7 +480,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 			event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 		if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
-			(isWoken(event, a.engine, routing) || canDispatch) {
+			(isWoken(event, a.engine, routing) || canDispatch || hasInboundFiles(event)) {
 			secPlatform := "onebot"
 			if wsConn.mock {
 				secPlatform = "mock"
@@ -491,6 +498,10 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			}
 			if security.Blocks(decision.Action) {
 				directReply := shouldSendSecurityDirectReply(event, a.engine, routing)
+				if directReply && isBannedRejection(a.engine.Security, principal, decision) {
+					directReply = allowBannedRejectReply(event, routing.WakeSignals, &a.engine.BannedRejectGate, a.engine.Getenv,
+						principal.Key()+":"+wsConn.historyKey(event), time.Now())
+				}
 				if directReply {
 					if botLoopObservation.Finish(true, botLoopConfig.Limit()) && botLoopConfig.Hard() {
 						continue
@@ -540,6 +551,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				warningNotice = decision.WarningNotice
 			}
 		}
+
+		wsConn.rememberInboundFiles(event)
 
 		var routeSnapshot *modelrouter.Snapshot
 		if a.engine != nil && a.engine.ModelRouter != nil && event.PostType == "message" &&
@@ -639,8 +652,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 							gStore.RememberRoute(groupIDStr, core.RouteContext{Platform: "onebot", GroupID: groupIDStr})
 						}
 					}
-					if err != nil {
-						a.engine.PauseOnStorageError(err)
+					if err != nil && !a.engine.ContinueAfterMemoryStorageError(err) {
 						if turn != nil {
 							turn.Done()
 						}
@@ -832,4 +844,35 @@ func validateOutboundMediaURL(rawURL string) error {
 	default:
 		return fmt.Errorf("unsupported media url scheme %q: only http, https, and base64 are allowed", scheme)
 	}
+}
+
+// silentlyIgnored drops messages, pokes and file-upload notices from users in SILENT_IGNORE_USER_IDS
+// before any reply, history, memory or security processing. Direct Chat
+// (mock) connections are never filtered.
+func (a *Adapter) silentlyIgnored(conn *wsConnection, event model.OneBotEvent) bool {
+	if a.engine == nil || conn.mock || event.UserID == 0 {
+		return false
+	}
+	if !silentIgnoreEvent(event) {
+		return false
+	}
+	return silentignore.Parse(a.engine.Getenv).Ignored("onebot", strconv.FormatInt(event.UserID, 10))
+}
+
+// silentIgnoreEvent reports whether the event is user-originated content that
+// the ignore list covers: messages, pokes and file-upload notices (the latter
+// would otherwise populate the per-connection inbound file cache).
+func silentIgnoreEvent(event model.OneBotEvent) bool {
+	switch event.PostType {
+	case "message":
+		return true
+	case "notice":
+		switch event.NoticeType {
+		case "group_upload", "offline_file":
+			return true
+		case "notify":
+			return event.SubType == "poke"
+		}
+	}
+	return false
 }

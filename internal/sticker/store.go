@@ -168,6 +168,12 @@ func (s *Store) saveSQL(index map[string]*Entry, ordered []string) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Delete keywords explicitly instead of relying on ON DELETE CASCADE: if a
+	// SQLite connection ever runs without foreign_keys enabled, stale keyword rows
+	// would survive and collide with the re-inserted positions below.
+	if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM sticker_keywords WHERE instance_id = ?`), s.instanceID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, s.db.Bind(`DELETE FROM sticker_entries WHERE instance_id = ?`), s.instanceID); err != nil {
 		return err
 	}

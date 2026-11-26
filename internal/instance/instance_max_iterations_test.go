@@ -75,7 +75,7 @@ func TestInstancesHaveSeparatedMaxIterations(t *testing.T) {
 	}
 }
 
-func TestInstanceRestartRequiredOnMaxIterationsChange(t *testing.T) {
+func TestInstanceAutomaticallyAppliesMaxIterationsChange(t *testing.T) {
 	if !instanceconfig.InstanceRestartKeys["AGENT_MAX_ITERATIONS"] {
 		t.Fatal("AGENT_MAX_ITERATIONS must be registered in InstanceRestartKeys")
 	}
@@ -112,8 +112,8 @@ func TestInstanceRestartRequiredOnMaxIterationsChange(t *testing.T) {
 	if updated == nil {
 		t.Fatal("instance not found")
 	}
-	if !updated.RestartRequired {
-		t.Fatal("expected RestartRequired to be true after AGENT_MAX_ITERATIONS changed")
+	if updated.RestartRequired || m.instances[info.ID].runtime.Engine.EffectiveMaxIterations() != 60 {
+		t.Fatal("SQL settings did not apply AGENT_MAX_ITERATIONS automatically")
 	}
 }
 
@@ -157,7 +157,7 @@ func TestInstanceMaxIterationsLifecycleSemantics(t *testing.T) {
 		t.Fatalf("UpdateEnvVar failed with code %d: %s", w.Code, w.Body.String())
 	}
 
-	// 3. RestartRequired must now be true
+	// 3. SQL settings are applied before the update response.
 	instances, _ = m.List()
 	restartRequiredFound := false
 	for _, inst := range instances {
@@ -166,16 +166,13 @@ func TestInstanceMaxIterationsLifecycleSemantics(t *testing.T) {
 			break
 		}
 	}
-	if !restartRequiredFound {
-		t.Fatal("expected RestartRequired to be true after AGENT_MAX_ITERATIONS update")
+	if restartRequiredFound {
+		t.Fatal("automatic SQL runtime apply left a restart warning")
 	}
 
-	// 4. Verify running engine still uses old value (15), NOT the new value (40)
-	if item.runtime.Engine.EffectiveMaxIterations() != 15 {
-		t.Fatalf("running engine must continue using old EffectiveMaxIterations=15 before restart, got %d", item.runtime.Engine.EffectiveMaxIterations())
-	}
-	if item.runtime.Engine.MaxIterations != 15 {
-		t.Fatalf("running engine must continue using old MaxIterations=15 before restart, got %d", item.runtime.Engine.MaxIterations)
+	// 4. The rebuilt engine already uses the new value.
+	if item.runtime.Engine.EffectiveMaxIterations() != 40 || item.runtime.Engine.MaxIterations != 40 {
+		t.Fatal("running engine did not apply the updated limit")
 	}
 
 	// 5. Restart/re-enable instance

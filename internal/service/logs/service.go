@@ -39,7 +39,7 @@ func (s *Service) ListLogs(
 		}
 		entry, found := store.FindError(id)
 		if !found {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到错误日志，可能已清理、覆盖或重启；请确认实例和日志来源"))
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到错误日志，可能已清理、超出预算或属于临时日志来源；请确认实例和日志来源"))
 		}
 		return connect.NewResponse(&v1.ListLogsResponse{
 			Entries:    []*v1.LogEntry{convertEntry(entry)},

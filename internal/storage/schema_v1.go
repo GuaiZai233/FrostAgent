@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// v18 is the v1 relational baseline. Removal of these inactive legacy values
+// v20 is the v1 relational baseline. Removal of these inactive legacy values
 // was explicitly approved without archival. Active provider data was migrated
 // by v11; never copy the stale provider archives back over the active catalog.
 var v1CleanupSchema = []string{

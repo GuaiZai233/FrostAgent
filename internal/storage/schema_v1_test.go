@@ -35,7 +35,7 @@ func TestV1CleanupMigration(t *testing.T) {
 			}
 			defer db.Close()
 			assertMigratedProviders(t, db)
-			assertCompatibilityVersions(t, db, 18, 18)
+			assertCompatibilityVersions(t, db, 20, 20)
 			for _, table := range []string{"dialogues", "memory_entries"} {
 				columns, err := db.tableColumns(context.Background(), db.SQL, table)
 				if err != nil || !reflect.DeepEqual(columns, fresh[table]) {
@@ -62,13 +62,43 @@ func TestV1CleanupMigration(t *testing.T) {
 	}
 }
 
+func TestV1CleanupFromSessionStateSchema(t *testing.T) {
+	for _, backend := range []Backend{SQLite, Postgres} {
+		t.Run(string(backend), func(t *testing.T) {
+			root, config, db := compatibilityDatabase(t, backend)
+			prepareOldSchema(t, db, 19)
+			populateMigrationFixture(t, db)
+			compatibilityExec(t, db, `INSERT INTO tool_history VALUES ('synthetic-instance','synthetic-reference','qq','private','synthetic-user','synthetic-message',1,'{"preserved":true}')`)
+			compatibilityExec(t, db, `INSERT INTO session_states VALUES ('synthetic-instance','private:synthetic',4,'{"Version":1,"ConversationID":"private:synthetic"}')`)
+			compatibilityClose(t, db)
+
+			db = compatibilityReopen(t, root, config)
+			defer db.Close()
+			assertCompatibilityVersions(t, db, 20, 20)
+			assertMigrationFixture(t, db)
+			for query, want := range map[string]string{
+				`SELECT record_json FROM tool_history WHERE ref_id='synthetic-reference'`:                `{"preserved":true}`,
+				`SELECT payload FROM session_states WHERE session_id='private:synthetic' AND revision=4`: `{"Version":1,"ConversationID":"private:synthetic"}`,
+			} {
+				var got string
+				if err := db.SQL.QueryRow(query).Scan(&got); err != nil || got != want {
+					t.Fatalf("v19 data changed during cleanup: %q %v", got, err)
+				}
+			}
+			if err := db.RequireNativeSchema(context.Background(), "export upgraded v19 instance"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestV1CleanupRollsBack(t *testing.T) {
 	for _, backend := range []Backend{SQLite, Postgres} {
 		t.Run(string(backend), func(t *testing.T) {
 			_, _, db := compatibilityDatabase(t, backend)
-			prepareOldSchema(t, db, 17)
+			prepareOldSchema(t, db, 19)
 			populateMigrationFixture(t, db)
-			// Recreate populated archives as retained by an upgraded v17 database.
+			// Recreate populated archives as retained by an upgraded v19 database.
 			for _, statement := range schemaStatements {
 				for _, table := range []string{"endpoint_ids", "model_endpoints", "model_secrets", "models"} {
 					if strings.HasPrefix(statement, "CREATE TABLE "+table+" (") {
@@ -102,7 +132,7 @@ func TestV1CleanupRollsBack(t *testing.T) {
 			if after := compatibilitySnapshot(t, db.SQL, backend); !reflect.DeepEqual(before, after) {
 				t.Fatal("failed cleanup changed tables, columns, data, module registration or version")
 			}
-			assertCompatibilityVersions(t, db, 17, 17)
+			assertCompatibilityVersions(t, db, 19, 19)
 			assertMigrationFixture(t, db)
 			if backend == Postgres {
 				compatibilityExec(t, db, `DROP TRIGGER fail_v1 ON schema_meta`)
@@ -113,7 +143,7 @@ func TestV1CleanupRollsBack(t *testing.T) {
 			if err := db.applyMigration(context.Background(), migrations[len(migrations)-1]); err != nil {
 				t.Fatal(err)
 			}
-			assertCompatibilityVersions(t, db, 18, 18)
+			assertCompatibilityVersions(t, db, 20, 20)
 			assertMigrationFixture(t, db)
 			if err := db.RequireNativeSchema(context.Background(), "export after cleanup retry"); err != nil {
 				t.Fatal(err)
@@ -127,7 +157,7 @@ func TestV1CleanupProtectsUnknownDependentTable(t *testing.T) {
 		t.Run(string(backend), func(t *testing.T) {
 			_, _, db := compatibilityDatabase(t, backend)
 			defer db.Close()
-			prepareOldSchema(t, db, 17)
+			prepareOldSchema(t, db, 19)
 			compatibilityExec(t, db, `INSERT INTO instances(id,name,created_at) VALUES ('synthetic-a','A','now')`)
 			compatibilityExec(t, db, `CREATE TABLE endpoint_ids(id TEXT PRIMARY KEY,instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE)`)
 			compatibilityExec(t, db, `INSERT INTO endpoint_ids VALUES ('synthetic-endpoint','synthetic-a')`)

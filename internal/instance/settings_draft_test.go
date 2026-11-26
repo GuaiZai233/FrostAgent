@@ -228,11 +228,11 @@ func TestSQLSettingsDraftRuntimeFailureRestoresGlobalScope(t *testing.T) {
 	}
 	before := m.instances[info.ID].config.Get("AGENT_MAX_ITERATIONS")
 	builder := m.buildRuntime
-	m.buildRuntime = func(manager *Manager, item *managed, config *instanceconfig.Store, dir string, enabled bool) (*Runtime, error) {
+	m.buildRuntime = func(manager *Manager, item *managed, config *instanceconfig.Store, enabled bool) (*Runtime, error) {
 		if config.Get("AGENT_MAX_ITERATIONS") == "42" {
 			return nil, errors.New("synthetic runtime failure")
 		}
-		return builder(manager, item, config, dir, enabled)
+		return builder(manager, item, config, enabled)
 	}
 	response := applySettingsDraft(m, info.ID, `{"updates":[{"key":"AGENT_MAX_ITERATIONS","value":"42"},{"key":"MCP_CONTROL_TOKEN","value":"synthetic-token"}]}`)
 	if response.Code == http.StatusOK || m.instances[info.ID].config.Get("AGENT_MAX_ITERATIONS") != before || m.global.Get("MCP_CONTROL_TOKEN") != "" {

@@ -278,3 +278,16 @@ func TestParseCandidate(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCandidate_BanSticker(t *testing.T) {
+	cmd, isCand, err := ParseCandidate("/bansticker", "/")
+	if !isCand || err != nil || cmd.Type != CmdBanSticker || len(cmd.Args) != 0 {
+		t.Fatalf("ParseCandidate(/bansticker) = (%+v, %v, %v), want bansticker with no error", cmd, isCand, err)
+	}
+	if _, _, err := ParseCandidate("/bansticker 123", "/"); err == nil {
+		t.Fatal("bansticker with an argument must be rejected")
+	}
+	if !strings.Contains(FormatUsage("/"), "/bansticker") {
+		t.Fatal("FormatUsage must list bansticker")
+	}
+}
