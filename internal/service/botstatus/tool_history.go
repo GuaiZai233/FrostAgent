@@ -13,7 +13,6 @@ import (
 	"connectrpc.com/connect"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
-	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 )
 
 // GetToolHistoryEntry loads parameters and original results only when an
