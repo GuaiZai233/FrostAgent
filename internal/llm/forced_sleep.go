@@ -22,19 +22,18 @@ const ForcedMentionSleepSeconds = 10
 // backend-issued call cannot carry. Messages that arrived during the wait reach
 // the model through the adapter's RefreshPrompt, as for a model-issued sleep.
 //
-// ran reports whether the wait completed (including a Timeout result). When
-// time_sleep is not registered the wait is skipped and ran is false. A non-nil
-// abort must be returned as the run result.
-func (e *Engine) runForcedMentionSleep(ctx context.Context) (ran bool, abort *AgentRunResult) {
+// The returned guidance describes the outcome using backend-owned text. An
+// empty result means the wait was skipped or the turn must return abort.
+func (e *Engine) runForcedMentionSleep(ctx context.Context) (guidance string, abort *AgentRunResult) {
 	// Re-check interruption immediately before anything is persisted: an
 	// interrupted turn must not leave a tool record for a wait that never started.
 	if runCanceled(ctx) {
-		return false, &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
+		return "", &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 	}
 	tool, ok := e.findToolExecutor(timesleep.ToolName)
 	if !ok {
 		e.Log().WarnWithConsoleSummary(logs.TOOL, "后端强制挂起已跳过：time_sleep 工具未启用", "强制挂起已跳过")
-		return false, nil
+		return "", nil
 	}
 	call := ToolCall{
 		ID:   "forced_time_sleep_" + uuid.NewString(),
@@ -48,21 +47,24 @@ func (e *Engine) runForcedMentionSleep(ctx context.Context) (ran bool, abort *Ag
 
 	execution, err := e.executeRecordedTool(ctx, tool, call)
 	if errors.Is(err, errToolHistoryStorage) {
-		return false, &AgentRunResult{Error: err}
+		return "", &AgentRunResult{Error: err}
 	}
 	if runCanceled(ctx) {
-		return false, &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
+		return "", &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 	}
 	content := execution.Content
+	status := fmt.Sprintf("后端已完成 %d 秒的 time_sleep 等待。", ForcedMentionSleepSeconds)
 	if err != nil {
 		content = "Timeout"
+		status = "后端 time_sleep 等待结果为 Timeout。"
 		if !errors.Is(err, timesleep.ErrTimeout) {
 			content = fmt.Sprintf("后端强制挂起失败: %v", err)
+			status = "后端 time_sleep 等待失败。"
 			e.Log().WarnWithConsoleSummary(logs.TOOL, content, "强制挂起失败")
 		}
 	}
 	if _, archiveErr := e.finishToolHistory(ctx, execution, content, false); archiveErr != nil {
-		return false, &AgentRunResult{Error: archiveErr}
+		return "", &AgentRunResult{Error: archiveErr}
 	}
-	return true, nil
+	return WrapRuntimeGuidance(status), nil
 }
