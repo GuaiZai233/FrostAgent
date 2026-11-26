@@ -465,6 +465,25 @@ func (s *Service) GetSessionContext(
 		resp.RecentStructuredMessages = append(resp.RecentStructuredMessages, groupMessageToProto(message))
 	}
 
+	// Project archived tool calls into the same timeline data source as legacy
+	// notes. Only visible source IDs are queried; hidden/compacted messages are
+	// never used as anchors.
+	visibleSourceIDs := make([]string, 0, len(recentStructuredMessages)+len(summaryGroups)*10)
+	for _, message := range recentStructuredMessages {
+		visibleSourceIDs = append(visibleSourceIDs, message.MessageID)
+	}
+	for _, group := range summaryGroups {
+		for _, message := range group.StructuredMsgs {
+			visibleSourceIDs = append(visibleSourceIDs, message.MessageID)
+		}
+	}
+	toolNotes, toolNotesErr := s.sessionTimelineToolNotes(ctx, sessionID, visibleSourceIDs)
+	if toolNotesErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("会话工具时间线读取失败，请稍后重试"))
+	}
+	historyMsgs = append(historyMsgs, toolNotes...)
+	resp.History = historyMsgs
+
 	if isPrivateSession(sessionID) {
 		// Private compaction is injected into ordinary history, not group XML.
 		// This is a context preview, not a reconstruction of the last LLM request.
