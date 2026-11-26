@@ -107,6 +107,21 @@ func (s *Store) SaveTx(ctx context.Context, q interface {
 	return nil
 }
 
+// DiscardUnstarted removes a reservation whose caller has prevented execution.
+func (s *Store) DiscardUnstarted(ctx context.Context, scope chathistory.Scope, ref string) error {
+	scope = scope.Canonical()
+	if err := scope.Validate(); err != nil {
+		return err
+	}
+	if !ValidRef(ref) {
+		return fmt.Errorf("invalid tool history reference")
+	}
+	_, err := s.db.SQL.ExecContext(ctx, s.db.Bind(`DELETE FROM tool_history
+		WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND ref_id=?`),
+		s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, ref)
+	return err
+}
+
 func (s *Store) Read(ctx context.Context, scope chathistory.Scope, ref string) (Record, error) {
 	var r Record
 	scope = scope.Canonical()

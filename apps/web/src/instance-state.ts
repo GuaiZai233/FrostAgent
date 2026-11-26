@@ -8,9 +8,21 @@ export interface InstanceInfo {
   deleting?: boolean;
   error?: string;
 }
+
+const SELECTED_INSTANCE_KEY = 'frostagent_selected_instance';
 let selected: InstanceInfo | null = null;
 let controller = new AbortController();
 let logSource: 'instance' | 'control-plane' = 'instance';
+
+function rememberSelection(id: string | null): void {
+  try {
+    if (id) window.sessionStorage.setItem(SELECTED_INSTANCE_KEY, id);
+    else window.sessionStorage.removeItem(SELECTED_INSTANCE_KEY);
+  } catch {
+    // Selection still works in memory if browser storage is unavailable.
+  }
+}
+
 export const instanceState = {
   get selected() {
     return selected;
@@ -28,12 +40,58 @@ export const instanceState = {
     controller.abort();
     controller = new AbortController();
     selected = value;
+    rememberSelection(value?.id ?? null);
     document
       .querySelectorAll<HTMLDialogElement>('dialog')
       .forEach((dialog) =>
         dialog.dispatchEvent(new Event('cancel', { cancelable: true })),
       );
     window.dispatchEvent(new Event('instance-selected'));
+  },
+  async restoreSelection() {
+    if (selected) return;
+
+    let id: string | null;
+    try {
+      id = window.sessionStorage.getItem(SELECTED_INSTANCE_KEY);
+    } catch {
+      return;
+    }
+    if (!id) return;
+
+    const selectionSignal = controller.signal;
+    const initialHash = window.location.hash;
+    const interaction = new AbortController();
+    const cancel = () => interaction.abort();
+    const options = { capture: true, signal: interaction.signal };
+    for (const type of ['pointerdown', 'click', 'keydown', 'input', 'change']) {
+      document.addEventListener(type, cancel, options);
+    }
+    window.addEventListener(
+      'hashchange',
+      () => {
+        if (window.location.hash !== initialHash) cancel();
+      },
+      options,
+    );
+
+    try {
+      const { instances } = await this.refresh();
+      // Selection remounts the page and closes dialogs, so give any interaction priority.
+      if (
+        selectionSignal.aborted ||
+        interaction.signal.aborted ||
+        window.location.hash !== initialHash
+      ) {
+        return;
+      }
+
+      const instance = instances.find((item) => item.id === id && !item.deleting);
+      if (instance) this.select(instance);
+      else rememberSelection(null);
+    } finally {
+      cancel();
+    }
   },
   async refresh() {
     const selectedAtStart = selected?.id;

@@ -25,7 +25,6 @@ import { mountLogsPage } from './pages/logs';
 import { mountSettingsPage } from './pages/settings';
 import { mountStorageSettingsPage } from './pages/storage-settings';
 import { mountBackupRestorePage } from './pages/backup-restore';
-import { mountFrontendSettingsPage } from './pages/frontend-settings';
 import { mountAccessCredentialsPage } from './pages/access-credentials';
 import { mountCommandSettingsPage } from './pages/command-settings';
 import { mountSecurityPage } from './pages/security';
@@ -38,6 +37,11 @@ const mountBackendSettingsPage = lazyMount(() =>
 const mountModelRouterPage = lazyMount(() =>
   import('./pages/model-router').then(
     ({ mountModelRouterPage }) => mountModelRouterPage,
+  ),
+);
+const mountFrontendSettingsPage = lazyMount(() =>
+  import('./pages/frontend-settings').then(
+    ({ mountFrontendSettingsPage }) => mountFrontendSettingsPage,
   ),
 );
 const mountMemoryPage = lazyMount(() =>
@@ -359,4 +363,7 @@ function initAppShell(): void {
 document.addEventListener('DOMContentLoaded', () => {
   mountAuthenticatedResources();
   initAppShell();
+  void instanceState.restoreSelection().catch((error) => {
+    console.warn('Failed to restore the selected instance:', error);
+  });
 });

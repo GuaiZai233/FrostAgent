@@ -23,6 +23,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 	"github.com/google/uuid"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -376,9 +377,6 @@ func (e *Engine) RunMessagesWithContext(
 	if runContext.Proactive && runContext.ProactiveStickerOnly {
 		return e.staySilentForInboundSticker(ctx, messages, runContext)
 	}
-	// Tool records reach the model as request-local context, never as history.
-	messages = e.withToolActivity(ctx, messages, runContext)
-
 	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
 
@@ -948,33 +946,60 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 	var specificReplyEchoes proactive.ReplyEchoGuard
 	specificReplyDelivered := false
 	refreshPromptPending := false
-	for i := 0; i < maxIterations; i++ {
+	var forcedSleepGuidance, toolActivity string
+	validateIteration := func() *AgentRunResult {
 		if runCanceled(ctx) {
-			return AgentRunResult{Silent: true, Error: context.Canceled}
+			return &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 		}
 		if err := e.securityAccess(runCtx); err != nil {
-			return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err, Usage: totalUsage}
+			return &AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err, Usage: totalUsage}
 		}
 		if runCanceled(ctx) {
-			return AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
+			return &AgentRunResult{Silent: true, SilenceReason: "canceled", Error: context.Canceled}
 		}
 		if hasRunCtx && runCtx.SessionID != "" && runCtx.Epoch > 0 && e.SessionManager != nil {
 			if sessCore, ok := e.SessionManager.Get(runCtx.SessionID); ok {
-				if sess, isSess := sessCore.(*SessionContext); isSess {
-					if sess.Epoch() != runCtx.Epoch {
-						return AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated")}
-					}
+				if sess, isSess := sessCore.(*SessionContext); isSess && sess.Epoch() != runCtx.Epoch {
+					return &AgentRunResult{Silent: true, SilenceReason: "epoch_changed", Error: errors.New("session epoch invalidated")}
 				}
 			}
 		}
-		if refreshPromptPending && runCtx.RefreshPrompt != nil {
+		return nil
+	}
+	for i := 0; i < maxIterations; i++ {
+		if abort := validateIteration(); abort != nil {
+			return *abort
+		}
+		// Backend-owned wait for "reply to bot + only @bot". It runs on the first pass only,
+		// after every validity guard above, so an interrupted or stale turn never waits or records it.
+		if i == 0 && hasRunCtx && runCtx.ReplyToBotMentionOnly {
+			var abort *AgentRunResult
+			forcedSleepGuidance, abort = e.runForcedMentionSleep(ctx)
+			if abort != nil {
+				abort.Usage = totalUsage
+				abort.MemoryWritten = memoryWritten
+				return *abort
+			}
+			// Like a model-issued time_sleep: messages that arrived during the wait are refreshed.
+			refreshPromptPending = forcedSleepGuidance != ""
+		}
+		promptRefreshed := refreshPromptPending && runCtx.RefreshPrompt != nil
+		if promptRefreshed {
 			refreshed, err := runCtx.RefreshPrompt(ctx)
 			if err != nil {
 				return AgentRunResult{Content: e.Log().ReportError(logs.SYSTEM, "挂起后上下文刷新失败", err, runCtx.SessionID), Error: err, Usage: totalUsage}
 			}
 			messages = replaceCurrentPrompt(messages, refreshed.Content)
 			mergeSecurityNotice(&runCtx, refreshed.SecurityNotice)
-			refreshPromptPending = false
+		}
+		refreshPromptPending = false
+		if i == 0 || promptRefreshed {
+			toolActivity = e.toolActivityBlock(ctx, runCtx)
+		}
+		if i == 0 && forcedSleepGuidance != "" {
+			if abort := validateIteration(); abort != nil {
+				return *abort
+			}
 		}
 		e.TotalMessagesProcessed.Add(1)
 		iterationSummary := fmt.Sprintf("【第%d轮思考开始】", i+1)
@@ -990,9 +1015,15 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			messages = skillMessages
 		}
 		messages = e.messageGuidanceMessages(messages)
+		compactArchivedToolMessages(messages)
+		// Attach trusted metadata only to the provider request and its trace.
+		requestMessages := withToolActivity(messages, toolActivity)
+		if forcedSleepGuidance != "" {
+			requestMessages = slices.Insert(requestMessages, 1, ChatMessage{Role: "system", Content: forcedSleepGuidance})
+		}
 		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && runCtx.Mock) {
 			var system []string
-			for _, message := range messages {
+			for _, message := range requestMessages {
 				if message.Role == "system" {
 					if content, ok := message.Content.(string); ok {
 						system = append(system, content)
@@ -1001,7 +1032,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			sess.SetLastPromptTrace(strings.Join(system, "\n\n"), modelName)
 			var lastUser string
-			for _, message := range messages {
+			for _, message := range requestMessages {
 				if message.Role == "user" {
 					// Overwrite on every user turn so an unrecognised content type
 					// cannot leave the previous request's text behind.
@@ -1036,8 +1067,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 
 		// Build transient constraints from current availability so a disabled
 		// tool cannot leave an impossible instruction in later model requests.
-		compactArchivedToolMessages(messages)
-		coreMsgs := convertToCoreMessages(messages)
+		coreMsgs := convertToCoreMessages(requestMessages)
 		if enforceStickerActivity() {
 			if notice := e.stickerActivityPrompt(); notice != "" {
 				for j := len(coreMsgs) - 1; j >= 0; j-- {

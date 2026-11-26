@@ -9,6 +9,7 @@ const { build } = require(esbuildPath);
 for (const testFile of [
   'dom-fixture.test.ts',
   'instance-api.test.ts',
+  'instance-selection.test.ts',
   'error-lookup-page.test.ts',
   'logs-copy.test.ts',
   'chat-navigation.test.ts',
@@ -53,7 +54,7 @@ for (const testFile of [
     platform: 'node',
     format: 'esm',
     write: false,
-    loader: { '.css': 'empty' },
+    loader: { '.css': 'empty', '.png': 'empty' },
     alias: {
       '@frostagent/proto': resolve('../../libs/frostagent-proto/src/index.ts'),
     },
