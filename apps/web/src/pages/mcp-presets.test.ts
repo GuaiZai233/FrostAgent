@@ -7,22 +7,20 @@ import {
 } from './mcp-config.ts';
 import { MCP_PRESETS, createMCPPresetDraft } from './mcp-presets.ts';
 
-test('MCP presets contain only AnySearch and GitHub official HTTP endpoints', () => {
+test('MCP presets attach bearer tokens only to their approved endpoints', () => {
+  const approvedEndpoints = {
+    anysearch: 'https://api.anysearch.com/mcp',
+    github: 'https://api.githubcopilot.com/mcp/',
+  };
   assert.deepEqual(
-    MCP_PRESETS.map(({ id, name, url }) => ({ id, name, url })),
-    [
-      {
-        id: 'anysearch',
-        name: 'AnySearch',
-        url: 'https://api.anysearch.com/mcp',
-      },
-      {
-        id: 'github',
-        name: 'GitHub',
-        url: 'https://api.githubcopilot.com/mcp/',
-      },
-    ],
+    MCP_PRESETS.map(({ id }) => id).sort(),
+    Object.keys(approvedEndpoints).sort(),
   );
+  for (const { id } of MCP_PRESETS) {
+    const draft = createMCPPresetDraft(id, 'synthetic-token');
+    assert.equal(draft.url, approvedEndpoints[id], `${id} credential destination`);
+    assert.equal(draft.headers.Authorization, 'Bearer synthetic-token');
+  }
 });
 
 for (const preset of MCP_PRESETS) {

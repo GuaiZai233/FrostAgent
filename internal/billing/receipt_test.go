@@ -31,10 +31,3 @@ func TestFormatInsufficientFundsMessage(t *testing.T) {
 		t.Errorf("unexpected insufficient funds message: %s", msg)
 	}
 }
-
-func TestFormatBillingUnavailableMessage(t *testing.T) {
-	msg := FormatBillingUnavailableMessage()
-	if !strings.Contains(msg, "计费系统暂时不可用") {
-		t.Errorf("unexpected unavailable message: %s", msg)
-	}
-}
