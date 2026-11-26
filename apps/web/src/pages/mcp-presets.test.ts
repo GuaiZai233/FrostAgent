@@ -7,6 +7,22 @@ import {
 } from './mcp-config.ts';
 import { MCP_PRESETS, createMCPPresetDraft } from './mcp-presets.ts';
 
+test('MCP presets attach bearer tokens only to their approved endpoints', () => {
+  const approvedEndpoints = {
+    anysearch: 'https://api.anysearch.com/mcp',
+    github: 'https://api.githubcopilot.com/mcp/',
+  };
+  assert.deepEqual(
+    MCP_PRESETS.map(({ id }) => id).sort(),
+    Object.keys(approvedEndpoints).sort(),
+  );
+  for (const { id } of MCP_PRESETS) {
+    const draft = createMCPPresetDraft(id, 'synthetic-token');
+    assert.equal(draft.url, approvedEndpoints[id], `${id} credential destination`);
+    assert.equal(draft.headers.Authorization, 'Bearer synthetic-token');
+  }
+});
+
 for (const preset of MCP_PRESETS) {
   test(`${preset.id} fills a clean enabled HTTP draft and round-trips through JSON`, () => {
     const draft = createMCPPresetDraft(preset.id, 'synthetic-token');
