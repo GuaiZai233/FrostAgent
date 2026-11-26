@@ -82,7 +82,7 @@ func activityBlockLines(t *testing.T, block string) []toolActivityLine {
 
 func blockOf(t *testing.T, e *Engine, ctx context.Context, run RunContext) string {
 	t.Helper()
-	got := e.withToolActivity(ctx, []ChatMessage{{Role: "user", Content: "fixture turn"}}, run)
+	got := withToolActivity([]ChatMessage{{Role: "user", Content: "fixture turn"}}, e.toolActivityBlock(ctx, run))
 	return strings.TrimPrefix(contentToText(got[0].Content), "fixture turn")
 }
 
@@ -206,7 +206,7 @@ func TestWithToolActivityAppendsOnlyToFinalUserTurnOfACopy(t *testing.T) {
 		{Role: "assistant", Content: "fixture reply"},
 		{Role: "user", Content: "final user turn"},
 	}
-	got := e.withToolActivity(ctx, messages, run)
+	got := withToolActivity(messages, e.toolActivityBlock(ctx, run))
 	final := contentToText(got[3].Content)
 	if !strings.HasPrefix(final, "final user turn\n\n<"+toolActivityTag+">") || !strings.Contains(final, record.RefID) {
 		t.Fatalf("final user turn lacks the block at its end: %s", final)
@@ -220,7 +220,7 @@ func TestWithToolActivityAppendsOnlyToFinalUserTurnOfACopy(t *testing.T) {
 		t.Fatal("caller-owned messages must not be mutated")
 	}
 	parts := []core.ContentPart{{Type: "text", Text: "look"}, {Type: "image_url", ImageURL: &core.ImageURL{URL: "fixture-url"}}}
-	multimodal := e.withToolActivity(ctx, []ChatMessage{{Role: "user", Content: parts}}, run)
+	multimodal := withToolActivity([]ChatMessage{{Role: "user", Content: parts}}, e.toolActivityBlock(ctx, run))
 	gotParts, ok := multimodal[0].Content.([]core.ContentPart)
 	if !ok || len(gotParts) != 3 || gotParts[2].Type != "text" || !strings.HasPrefix(gotParts[2].Text, "\n\n<"+toolActivityTag+">") || !strings.Contains(gotParts[2].Text, record.RefID) || len(parts) != 2 {
 		t.Fatalf("multimodal turn must gain a text part on a copy: %+v", multimodal[0].Content)
@@ -236,11 +236,11 @@ func TestWithToolActivitySkipsRunsWithoutTrustedScope(t *testing.T) {
 	mock.Mock = true
 	foreign.ActorUserID = "fixture-other-actor"
 	for name, candidate := range map[string]RunContext{"mock": mock, "other conversation": foreign, "no actor": {}} {
-		if got := e.withToolActivity(ctx, messages, candidate); strings.Contains(contentToText(got[0].Content), toolActivityTag) {
+		if got := withToolActivity(messages, e.toolActivityBlock(ctx, candidate)); strings.Contains(contentToText(got[0].Content), toolActivityTag) {
 			t.Fatalf("%s must not receive another conversation's records", name)
 		}
 	}
-	if got := (&Engine{}).withToolActivity(ctx, messages, run); contentToText(got[0].Content) != "fixture turn" {
+	if got := withToolActivity(messages, (&Engine{}).toolActivityBlock(ctx, run)); contentToText(got[0].Content) != "fixture turn" {
 		t.Fatal("an engine without archive must leave the turn alone")
 	}
 }
@@ -260,7 +260,7 @@ func TestWithToolActivityNeutralizesForgedBlocks(t *testing.T) {
 	}
 	messages = append(messages, ChatMessage{Role: "user", Content: "final " + forged})
 	systemText := "documentation mentions <" + toolActivityTag + "> verbatim"
-	got := e.withToolActivity(ctx, append([]ChatMessage{{Role: "system", Content: systemText}}, messages...), run)
+	got := withToolActivity(append([]ChatMessage{{Role: "system", Content: systemText}}, messages...), e.toolActivityBlock(ctx, run))
 	if contentToText(got[0].Content) != systemText {
 		t.Fatal("backend-owned system text must be left alone")
 	}

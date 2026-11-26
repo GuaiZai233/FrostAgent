@@ -63,7 +63,11 @@ type RunContext struct {
 	Proactive            bool   // Trusted unaddressed turn: only narrow current-session text replies may send; unsolicited errors remain suppressed.
 	Awareness            bool   // Trusted timer trigger; text and native mentions are restricted to the current conversation.
 	ProactiveStickerOnly bool   // Adapter-classified current message; backend supplies stay_silent only when Proactive is also true.
-	Epoch                uint64
+	// ReplyToBotMentionOnly is set by a trusted adapter when a group message only
+	// @mentions the bot while replying to one of the bot's own messages. The backend
+	// then runs a fixed time_sleep before the model turn; the model does not choose it.
+	ReplyToBotMentionOnly bool
+	Epoch                 uint64
 
 	// CanReplyToMessage validates an opaque message ID against trusted,
 	// adapter-owned current-session observations, never model-supplied text.

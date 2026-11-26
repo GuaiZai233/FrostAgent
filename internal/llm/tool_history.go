@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
@@ -76,7 +77,11 @@ func (e *Engine) executeRecordedTool(ctx context.Context, tool ToolExecutor, cal
 	if err := e.saveToolHistory(ctx, record); err != nil {
 		return core.ToolExecutionResult{}, err
 	}
+	var claimed atomic.Bool
 	wrapped := recordedTool{ToolExecutor: tool, execute: func(execCtx context.Context) (core.ToolExecutionResult, error) {
+		if runCanceled(execCtx) || !claimed.CompareAndSwap(false, true) {
+			return core.ToolExecutionResult{}, context.Canceled
+		}
 		output, execErr := executeToolResult(execCtx, tool, call)
 		var envelope struct {
 			IsError bool `json:"isError"`
@@ -94,6 +99,18 @@ func (e *Engine) executeRecordedTool(ctx context.Context, tool ToolExecutor, cal
 		return output, execErr
 	}}
 	output, err := executeInterruptibleTool(ctx, wrapped, call)
+	// Cancellation can win while the initial write is in flight or before the
+	// worker starts. Claim the pending record before discarding it so a late
+	// worker cannot execute without its archive. Started tools own their record.
+	if claimed.CompareAndSwap(false, true) {
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		if discardErr := e.ToolHistory.DiscardUnstarted(writeCtx, scope, record.RefID); discardErr != nil {
+			e.PauseOnStorageError(fmt.Errorf("未启动的工具历史清理失败: %w", discardErr))
+			return output, errToolHistoryStorage
+		}
+		return output, err
+	}
 	output.HistoryRefID = record.RefID
 	return output, err
 }

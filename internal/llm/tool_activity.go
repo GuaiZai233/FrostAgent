@@ -116,27 +116,13 @@ func formatToolActivityRuns(runs []toolActivityRun) string {
 		"</" + toolActivityTag + ">"
 }
 
-// withToolActivity returns a request-local copy of messages. Any tag lookalike
-// already present is neutralized first, then the genuine block is appended to
-// the final user turn. Session history and the durable transcript never see it.
-func (e *Engine) withToolActivity(ctx context.Context, messages []ChatMessage, run RunContext) []ChatMessage {
-	result := neutralizeToolActivityTags(messages)
+func (e *Engine) toolActivityBlock(ctx context.Context, run RunContext) string {
 	if e.ToolHistory == nil {
-		return result
+		return ""
 	}
 	scope, allowed := ToolHistoryScope(run)
 	if !allowed {
-		return result
-	}
-	last := -1
-	for i := len(result) - 1; i >= 0; i-- {
-		if result[i].Role == "user" {
-			last = i
-			break
-		}
-	}
-	if last < 0 {
-		return result
+		return ""
 	}
 	// Advisory context must never fail the run; the archive stays authoritative.
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
@@ -144,13 +130,24 @@ func (e *Engine) withToolActivity(ctx context.Context, messages []ChatMessage, r
 	runs, err := e.selectToolActivityRuns(readCtx, scope)
 	if err != nil {
 		e.Log().Warn(logs.SYSTEM, fmt.Sprintf("近期工具记录读取失败，本轮不附带: session=%s err=%v", run.SessionID, err))
-		return result
+		return ""
 	}
-	block := formatToolActivityRuns(runs)
+	return formatToolActivityRuns(runs)
+}
+
+// withToolActivity returns a request-local copy. It neutralizes tag lookalikes
+// before appending the archive metadata to the final user turn.
+func withToolActivity(messages []ChatMessage, block string) []ChatMessage {
+	result := neutralizeToolActivityTags(messages)
 	if block == "" {
 		return result
 	}
-	result[last].Content = appendToContent(result[last].Content, block)
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i].Role == "user" {
+			result[i].Content = appendToContent(result[i].Content, block)
+			break
+		}
+	}
 	return result
 }
 

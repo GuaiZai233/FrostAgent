@@ -71,6 +71,7 @@ func (e *Engine) GroupContextPrompt(ctx context.Context, run RunContext, snapsho
 }
 
 func replaceCurrentPrompt(messages []ChatMessage, content any) []ChatMessage {
+	messages = append([]ChatMessage(nil), messages...)
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			messages[i].Content = content
