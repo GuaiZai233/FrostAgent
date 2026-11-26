@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,7 +12,10 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
+	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
+	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 )
 
@@ -161,27 +165,6 @@ func requestHasSleepExchange(messages []core.ChatMessage) bool {
 
 var _ llm.ToolExecutor = (*replyBotSleepStub)(nil)
 
-// blockingSleepStub signals when the backend wait starts and holds it until released.
-type blockingSleepStub struct {
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
-	mu      sync.Mutex
-	calls   int
-}
-
-func (s *blockingSleepStub) Name() string               { return timesleep.ToolName }
-func (s *blockingSleepStub) Description() string        { return "synthetic blocking sleep" }
-func (s *blockingSleepStub) Parameters() map[string]any { return nil }
-func (s *blockingSleepStub) Execute(string) (string, error) {
-	s.mu.Lock()
-	s.calls++
-	s.mu.Unlock()
-	s.once.Do(func() { close(s.started) })
-	<-s.release
-	return "已挂起 10 秒", nil
-}
-
 func TestReplyToBotMentionWaitInterruptedBySameSender(t *testing.T) {
 	t.Setenv("ENABLE_QUOTE_TRACE", "true")
 	t.Setenv("QUOTE_TRACE_DEPTH", "1")
@@ -190,9 +173,23 @@ func TestReplyToBotMentionWaitInterruptedBySameSender(t *testing.T) {
 		Message: core.ChatMessage{Role: core.RoleAssistant, Content: "收到新消息"},
 	}}}
 	engine := newTestEngine(dialogue)
-	stub := &blockingSleepStub{started: make(chan struct{}), release: make(chan struct{})}
-	defer close(stub.release)
-	engine.ToolRegistry[timesleep.ToolName] = stub
+	ctx := t.Context()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	const instanceID = "fixture-instance"
+	if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: instanceID, Name: "Fixture", CreatedAt: time.Now()}, 2); err != nil {
+		t.Fatal(err)
+	}
+	engine.ToolHistory = toolhistory.NewStore(db, instanceID)
+	started := make(chan struct{})
+	var signalStarted sync.Once
+	engine.ToolRegistry[timesleep.ToolName] = tools.TimeSleepTool(func(string) string {
+		signalStarted.Do(func() { close(started) })
+		return ""
+	})
 
 	srv, wsURL := startReplyWSTestServer(t, engine)
 	defer srv.Close()
@@ -241,9 +238,17 @@ func TestReplyToBotMentionWaitInterruptedBySameSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-stub.started:
+	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("backend wait did not start")
+	}
+	records, err := engine.ToolHistory.Export(ctx)
+	if err != nil || len(records) != 1 || records[0].State != "running" {
+		t.Fatalf("expected one running wait in the archive, got %+v, %v", records, err)
+	}
+	beforeInterrupt := records[0]
+	if beforeInterrupt.SourceMessageID != fmt.Sprint(first.MessageID) || beforeInterrupt.Tool != timesleep.ToolName {
+		t.Fatalf("running wait attributed to the wrong message or tool: %+v", beforeInterrupt)
 	}
 
 	// The same sender interrupts the wait with a new @bot message.
@@ -284,5 +289,37 @@ func TestReplyToBotMentionWaitInterruptedBySameSender(t *testing.T) {
 	}
 	if !strings.Contains(lastUser, "新消息") {
 		t.Fatalf("model answered a stale turn: %s", lastUser)
+	}
+	if !strings.Contains(lastUser, beforeInterrupt.RefID) {
+		t.Fatalf("later turn did not receive the interrupted wait's activity metadata: %s", lastUser)
+	}
+
+	// The turn can exit before the tool worker finishes saving its cancellation.
+	archiveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for {
+		record, err := engine.ToolHistory.Read(archiveCtx, beforeInterrupt.Scope, beforeInterrupt.RefID)
+		if err != nil {
+			t.Fatalf("interrupted wait disappeared from the archive: %v", err)
+		}
+		if record.State == "executed" {
+			if !record.Restricted || record.Error != context.Canceled.Error() || record.CompletedAt.IsZero() ||
+				record.ResultRaw != "" || record.ModelResultRaw != "" {
+				t.Fatalf("interrupted wait should retain a restricted cancellation with no result: %+v", record)
+			}
+			visible := record.ForModel()
+			if visible.ArgumentsRaw != "" || visible.Error != "" {
+				t.Fatalf("interrupted wait exposed restricted fields: %+v", visible)
+			}
+			break
+		}
+		if record.State != "running" {
+			t.Fatalf("interrupted wait settled in an unexpected state: %+v", record)
+		}
+		select {
+		case <-archiveCtx.Done():
+			t.Fatalf("interrupted wait did not settle: %+v", record)
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
