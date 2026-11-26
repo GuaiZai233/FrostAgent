@@ -9,6 +9,7 @@ import (
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
+	"github.com/GuaiZai233/FrostAgent/internal/replyformat"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 )
@@ -23,6 +24,8 @@ func TestSendMessageDecorationPreferenceThroughAdapter(t *testing.T) {
 	quoteSegment := tools.OneBotSegment{Type: "reply", Data: map[string]any{"id": "14"}}
 	mentionSegment := tools.OneBotSegment{Type: "at", Data: map[string]any{"qq": "15"}}
 	imageSegment := tools.OneBotSegment{Type: "image", Data: map[string]any{"file": image.URL}}
+	markedText := tools.Msg{Type: "plain", Text: "first。" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`"}
+	cleanTextSegment := tools.OneBotSegment{Type: "text", Data: map[string]any{"text": "first。second\n\n`" + replyformat.SegmentMark + "`"}}
 	for _, chain := range []struct {
 		name     string
 		messages []tools.Msg
@@ -30,6 +33,7 @@ func TestSendMessageDecorationPreferenceThroughAdapter(t *testing.T) {
 	}{
 		{"plain", []tools.Msg{text}, []tools.OneBotSegment{textSegment}},
 		{"explicit quote and mention", []tools.Msg{quote, mention, text}, []tools.OneBotSegment{quoteSegment, mentionSegment, textSegment}},
+		{"explicit quote and mention with segment marker", []tools.Msg{quote, mention, markedText}, []tools.OneBotSegment{quoteSegment, mentionSegment, cleanTextSegment}},
 		{"media", []tools.Msg{text, image}, []tools.OneBotSegment{textSegment, imageSegment}},
 		{"media with explicit quote and mention", []tools.Msg{quote, mention, text, image}, []tools.OneBotSegment{quoteSegment, mentionSegment, textSegment, imageSegment}},
 	} {
@@ -60,6 +64,7 @@ func TestSendMessageDecorationPreferenceThroughAdapter(t *testing.T) {
 				engine.Scope = newTestScopeWithEnv(t, map[string]string{
 					"ENABLE_AT_IN_GROUP_MSG": "true", "ENABLE_REPLY_IN_GROUP_MSG": "true",
 					"GROUP_REPLY_ON_MENTION": "true", "ENABLE_PROACTIVE_REPLY": "false",
+					replyformat.EnvKey: "true",
 				})
 				defer engine.Scope.Cancel()
 				engine.ToolRegistry["send_message"] = tools.SendMsgTool()

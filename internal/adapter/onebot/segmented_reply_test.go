@@ -56,13 +56,19 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 		name, output         string
 		enabled, group, fail bool
 		want                 []string
-		limit                string
+		limit, wantHistory   string
 	}{
-		{"private", "first" + replyformat.SegmentMark + "second\n\nthird", true, false, false, []string{"first", "second", "third"}, "0"},
-		{"group", "first" + replyformat.SegmentMark + "second", true, true, false, []string{"first", "second"}, "0"},
-		{"disabled", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", false, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "0"},
-		{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", true, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "1"},
-		{"partial failure", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, false, true, []string{"first", "second"}, "0"},
+		{"private", "first" + replyformat.SegmentMark + "second\n\nthird", true, false, false, []string{"first", "second", "third"}, "0", ""},
+		{"group", "first" + replyformat.SegmentMark + "second", true, true, false, []string{"first", "second"}, "0", ""},
+		{
+			name: "structured group", enabled: true, group: true,
+			output:      `{"messages":[{"type":"plain","text":"first` + replyformat.SegmentMark + `second\n\nthird"}]}`,
+			want:        []string{"firstsecond\n\nthird"},
+			wantHistory: `{"messages":[{"type":"plain","text":"firstsecond\n\nthird"}]}`,
+		},
+		{"disabled", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", false, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "0", ""},
+		{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", true, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "1", ""},
+		{"partial failure", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, false, true, []string{"first", "second"}, "0", "first"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			engine := segmentTestEngine(t, tc.output, tc.enabled)
@@ -150,9 +156,9 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 			if tc.group {
 				key = "group:43"
 			}
-			history := strings.Join(tc.want, "\n\n")
-			if tc.fail {
-				history = "first"
+			history := tc.wantHistory
+			if history == "" {
+				history = strings.Join(tc.want, "\n\n")
 			}
 			waitSegmentHistory(t, engine, key, []string{history})
 			conn.SetReadDeadline(time.Now().Add(80 * time.Millisecond))

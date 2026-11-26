@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-func TestSendMessageFiltersDisabledSegmentMarks(t *testing.T) {
+func TestSendMessageFiltersSegmentMarks(t *testing.T) {
 	for _, tc := range []struct{ name, enabled, limit string }{
+		{"switch on", "true", "0"},
 		{"switch off", "false", "0"},
 		{"single segment limit", "true", "1"},
 	} {
