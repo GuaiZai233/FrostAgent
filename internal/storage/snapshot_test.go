@@ -3,9 +3,56 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 )
+
+func TestReadSnapshotFailureReleasesTransaction(t *testing.T) {
+	for _, backend := range []Backend{SQLite, Postgres} {
+		t.Run(string(backend), func(t *testing.T) {
+			_, _, db := compatibilityDatabase(t, backend)
+			defer db.Close()
+			ctx := context.Background()
+			failure := errors.New("synthetic export failure")
+			var connection SQLConnection
+			err := db.ReadSnapshot(ctx, func(view *DB) error {
+				connection = view.SQL
+				if _, err := view.SQL.ExecContext(ctx, `DELETE FROM instances`); !errors.Is(err, errSnapshotWrite) {
+					t.Fatalf("snapshot write: %v", err)
+				}
+				if _, err := view.SQL.Begin(); !errors.Is(err, errSnapshotWrite) {
+					t.Fatalf("snapshot Begin: %v", err)
+				}
+				if _, err := view.SQL.BeginTx(ctx, nil); !errors.Is(err, errSnapshotWrite) {
+					t.Fatalf("snapshot BeginTx: %v", err)
+				}
+				if err := view.SQL.Close(); !errors.Is(err, errSnapshotWrite) {
+					t.Fatalf("snapshot Close: %v", err)
+				}
+				return view.ReadSnapshot(ctx, func(nested *DB) error {
+					if nested != view {
+						t.Fatal("nested export opened a separate snapshot")
+					}
+					if err := nested.SQL.PingContext(ctx); err != nil {
+						t.Fatal(err)
+					}
+					return failure
+				})
+			})
+			if !errors.Is(err, failure) {
+				t.Fatalf("export error lost: %v", err)
+			}
+			if err := connection.PingContext(ctx); !errors.Is(err, sql.ErrTxDone) {
+				t.Fatalf("failed export left a live transaction: %v", err)
+			}
+			compatibilityExec(t, db, `INSERT INTO instances(id,name,created_at) VALUES ('after-failure','Writable','now')`)
+			if err := db.ReadSnapshot(ctx, func(view *DB) error { return view.SQL.PingContext(ctx) }); err != nil {
+				t.Fatalf("export retry: %v", err)
+			}
+		})
+	}
+}
 
 func TestReadSnapshotKeepsCoreAndPayloadConsistent(t *testing.T) {
 	for _, backend := range []Backend{SQLite, Postgres} {
