@@ -1108,11 +1108,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		})
 		stopThinking()
 		deliveries.SetFinalMessage(runResult.FinalMessage)
-		replyText = runResult.Content
+		replyText = filterStructuredSegmentMarks(runResult.Content)
 		multiSegment := replyformat.Enabled(engine.Getenv)
-		if !multiSegment {
-			replyText = filterStructuredSegmentMarks(replyText)
-		}
 		if wakeSignals.Proactive {
 			replyText = filterProactiveStickerCQ(replyText)
 		}

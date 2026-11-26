@@ -137,10 +137,8 @@ func SendMsgTool() Tool {
 				}
 				switch msg.Type {
 				case "plain":
-					if !replyformat.Enabled(runtimescope.FromContext(ctx).Getenv) {
-						msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
-						payload.Messages[i].Text = msg.Text
-					}
+					msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
+					payload.Messages[i].Text = msg.Text
 					if strings.TrimSpace(msg.Text) == "" {
 						return textResult(""), fmt.Errorf("messages[%d].text 不能为空", i)
 					}

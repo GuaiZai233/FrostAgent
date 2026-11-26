@@ -20,8 +20,9 @@ delimiter-only line with up to three leading spaces and at least as many
 backticks as its opener; an unclosed fence extends to the end of the response.
 Empty segments are skipped. When disabled, bare
 markers are removed but paragraph breaks and backtick-protected markers remain.
-The existing structured tool message chain is not segmented; disabled-mode
-filtering also covers its plain text components.
+In structured `send_message` chains and legacy structured final replies, plain
+text components drop bare markers in either mode and preserve markers inside
+backtick code.
 
 The optional **分段消息上限** (`MULTI_SEGMENT_REPLY_MAX_SEGMENTS`, 0–20, default
 0 = unlimited, applies only while segmentation is enabled) caps delivered
