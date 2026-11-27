@@ -271,3 +271,53 @@ func TestNativeToolArgumentNumbersSurviveReplay(t *testing.T) {
 		})
 	}
 }
+
+func TestGeminiRequestStripsNonStandardSchemaKeywords(t *testing.T) {
+	params := map[string]any{
+		"type":         "object",
+		"returnDirect": false,
+		"properties": map[string]any{
+			"returnDirect": map[string]any{"type": "string", "enum": []any{"returnDirect"}, "x-extra": true},
+			"count":        map[string]any{"type": "integer", "minimum": float64(1), "format": "int64"},
+		},
+		"required":          []any{"count"},
+		"dependentRequired": map[string]any{"count": []any{"returnDirect"}},
+	}
+	req := core.ChatRequest{Model: "fixture-model", Messages: []core.ChatMessage{{Role: core.RoleUser, Content: "hi"}}, Tools: []core.Tool{{Name: "lookup", Parameters: params}}}
+	payload, err := geminiRequest(req, stateOrigin{URL: "https://relay.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Tools []struct {
+			Declarations []struct {
+				Schema map[string]any `json:"parametersJsonSchema"`
+			} `json:"functionDeclarations"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	schema := decoded.Tools[0].Declarations[0].Schema
+	if _, ok := schema["returnDirect"]; ok {
+		t.Fatalf("top-level returnDirect sent: %s", raw)
+	}
+	props := schema["properties"].(map[string]any)
+	field, ok := props["returnDirect"].(map[string]any)
+	if !ok || field["enum"].([]any)[0] != "returnDirect" {
+		t.Fatalf("property name or literal value lost: %s", raw)
+	}
+	if _, ok := field["x-extra"]; ok {
+		t.Fatalf("nested extension sent: %s", raw)
+	}
+	if props["count"].(map[string]any)["minimum"] != float64(1) || schema["dependentRequired"] == nil {
+		t.Fatalf("legal constraints lost: %s", raw)
+	}
+	if _, ok := params["returnDirect"]; !ok {
+		t.Fatal("caller schema was mutated")
+	}
+}

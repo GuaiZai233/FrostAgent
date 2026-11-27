@@ -1107,3 +1107,28 @@ func TestManager_SetServerEnabled_PropagatesStartupErrorAndContext(t *testing.T)
 		t.Fatalf("expected error on canceled context, got nil")
 	}
 }
+
+func TestCatalogUpdateRemoteStripsNonStandardSchemaKeywords(t *testing.T) {
+	cat := NewToolCatalog()
+	cat.UpdateRemote([]*officialmcp.Tool{{
+		Name: "cancelOrder",
+		InputSchema: map[string]any{
+			"type":         "object",
+			"returnDirect": false,
+			"properties":   map[string]any{"orderId": map[string]any{"type": "string", "minLength": float64(1)}},
+			"required":     []any{"orderId"},
+		},
+	}}, nil)
+	items := cat.EffectiveItems()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	params := items[0].Parameters
+	if _, ok := params["returnDirect"]; ok {
+		t.Fatalf("returnDirect kept in catalog: %v", params)
+	}
+	orderID := params["properties"].(map[string]any)["orderId"].(map[string]any)
+	if orderID["minLength"] != float64(1) || params["required"] == nil {
+		t.Fatalf("legal constraints lost: %v", params)
+	}
+}
