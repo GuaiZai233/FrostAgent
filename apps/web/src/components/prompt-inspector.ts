@@ -1,6 +1,6 @@
 import { instanceURL } from '../instance-state';
 import { icon } from './icons';
-import { escapeHtml, isPrivateSession } from '../utils/formatters';
+import { escapeHtml, formatMessageTime, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
@@ -15,6 +15,7 @@ export interface GroupMessageItem {
   content: string;
   rawText: string;
   toolHistoryRunId?: string;
+  imageHashes?: string[];
   toolActivity?: ToolActivity;
   isSummarized?: boolean;
   promptContexts?: Array<{ name: string; content: string }>;
@@ -40,6 +41,7 @@ export interface StructuredGroupMessage {
   messageId: string;
   time: string;
   toolHistoryRunId?: string;
+  imageHashes?: string[];
 }
 
 export interface PromptImage {
@@ -149,7 +151,7 @@ export function parseMessageLine(line: string, botName?: string): GroupMessageIt
       }
       text = text.slice(tagMatch[0].length);
       matchedTag = true;
-    } else if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
+    } else if (/^(?:\d{4}-\d{2}-\d{2}\s+)?\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
       if (!time) {
         time = tagContent;
       }
@@ -254,6 +256,7 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
     content: record.content,
     rawText: JSON.stringify(record),
     toolHistoryRunId: record.toolHistoryRunId,
+    imageHashes: record.imageHashes?.length ? record.imageHashes : undefined,
   };
 }
 
@@ -1185,7 +1188,7 @@ export function renderSingleMessageRow(
             ? `<span class="badge badge-purple msg-role-badge text-[10px] py-0 px-1 font-medium" title="当前上下文模型，历史回复当时使用的模型可能不同">Bot (${escapeHtml(model || '未知模型')})</span>`
             : `<span class="badge badge-outline msg-role-badge text-[10px] py-0 px-1 font-medium text-muted">User</span>`
         }
-        ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}
+        ${msg.time ? `<span class="msg-time">${escapeHtml(formatMessageTime(msg.time))}</span>` : ''}
         <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(displaySender)}</span>
         ${
           msg.senderId
@@ -1194,7 +1197,7 @@ export function renderSingleMessageRow(
         }
         ${msg.id ? `<span class="msg-id">#${escapeHtml(msg.id)}</span>` : ''}
       </div>
-      <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${escapeHtml(msg.content)}</div>
+      <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${renderMessageContent(msg.content, msg.imageHashes)}</div>
       ${msg.promptContexts?.length ? `
         <details class="mt-2 text-xs">
           <summary class="cursor-pointer text-muted select-none">附加上下文</summary>
@@ -1206,6 +1209,33 @@ export function renderSingleMessageRow(
       ` : ''}
     </div>
   `;
+}
+
+const messageImagePlaceholder = /\[图片\]|\[image(?: [^\]]*)?\]/g;
+const imageHashPattern = /^[a-f0-9]{64}$/;
+
+/**
+ * Escapes message text and turns each image placeholder ([图片] from users,
+ * [image ...] from the bot) into a hover-previewable reference when the backend
+ * supplied one key per placeholder. A count mismatch means the mapping is
+ * unreliable, so every placeholder stays plain text.
+ */
+export function renderMessageContent(content: string, imageHashes?: string[]): string {
+  const matches = [...content.matchAll(messageImagePlaceholder)];
+  if (!imageHashes?.length || matches.length !== imageHashes.length) return escapeHtml(content);
+
+  let rendered = '';
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    const start = match.index ?? 0;
+    rendered += escapeHtml(content.slice(cursor, start));
+    const hash = imageHashes[index];
+    rendered += imageHashPattern.test(hash)
+      ? `<span class="msg-image-ref" tabindex="0" data-image-url="${escapeHtml(instanceURL(`/api/log-images/${hash}`))}">${escapeHtml(match[0])}</span>`
+      : escapeHtml(match[0]);
+    cursor = start + match[0].length;
+  });
+  return rendered + escapeHtml(content.slice(cursor));
 }
 
 const loggedImagePlaceholder = /^\[image omitted: type=([^,\]]+), size=(\d+) bytes, sha256=([a-f0-9]{64})\]$/;

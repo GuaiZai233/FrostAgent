@@ -32,7 +32,7 @@ func TestPrivateMessageTimeAdmissionAndConfirmedReply(t *testing.T) {
 	}
 	view, _ := s.SnapshotPrivateContext(50)
 	for i, message := range view.RecentStructuredMessages {
-		if message.Time != history[i].RecordedAt.Format("15:04:05") {
+		if message.Time != FormatMessageTime(history[i].RecordedAt) {
 			t.Fatalf("inspection dropped message time: %+v", message)
 		}
 	}
@@ -71,8 +71,8 @@ func TestPrivateMessageTimeCompactAndRestart(t *testing.T) {
 		t.Fatal("restart changed the recorded instant")
 	}
 	if len(after.SummaryGroups) != 1 || len(after.RecentStructuredMessages) != 1 ||
-		after.SummaryGroups[0].StructuredMsgs[0].Time != "20:34:34" ||
-		after.SummaryGroups[0].StructuredMsgs[1].Time != "20:34:40" ||
+		after.SummaryGroups[0].StructuredMsgs[0].Time != FormatMessageTime(stamp) ||
+		after.SummaryGroups[0].StructuredMsgs[1].Time != FormatMessageTime(stamp.Add(6*time.Second)) ||
 		after.RecentStructuredMessages[0].Time == "" ||
 		after.RecentStructuredMessages[0].Time != before.RecentStructuredMessages[0].Time {
 		t.Fatalf("timestamps lost across compact/restart: %+v", after)

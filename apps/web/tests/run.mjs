@@ -30,6 +30,7 @@ for (const testFile of [
   'model-capability-policy.test.ts',
   'mcp-presets-page.test.ts',
   'prompt-merge.test.ts',
+  'message-time.test.ts',
   'tool-activity.test.ts',
   'group-model-config.test.ts',
   'prompt-page.test.ts',

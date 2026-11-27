@@ -517,6 +517,7 @@ func groupMessageToProto(message llm.GroupCompactMessage) *v1.GroupMessageInfoPr
 		MessageId:        message.MessageID,
 		Time:             message.Time,
 		ToolHistoryRunId: message.ToolHistoryRunID,
+		ImageHashes:      message.ImageKeys,
 	}
 }
 

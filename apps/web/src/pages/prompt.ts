@@ -59,7 +59,7 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
     <div class="page-container fade-in">
       <header class="flex items-center justify-between gap-4 flex-wrap pb-1">
         <div>
-          <h1 class="page-title">会话与 Prompt 检查</h1>
+          <h1 class="page-title">会话</h1>
 <p id="session-persistence-health" class="text-xs text-muted" role="status">会话快照跨重启恢复；历史原文不会自动补入上下文。</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">

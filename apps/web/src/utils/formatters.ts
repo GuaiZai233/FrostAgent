@@ -47,6 +47,22 @@ export function formatDateTime(value: string | undefined | null): string {
   }).format(date);
 }
 
+/**
+ * Formats a conversation message time. Backend values are server-local
+ * "YYYY-MM-DD HH:mm:ss"; legacy records carry only the clock part and are
+ * returned unchanged. Messages from the viewer's current day read "今天 HH:mm:ss".
+ */
+export function formatMessageTime(value: string, now: Date = new Date()): string {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}:\d{2}(?::\d{2})?)$/);
+  if (!match) return value;
+  const [, year, month, day, clock] = match;
+  const sameDay =
+    Number(year) === now.getFullYear() &&
+    Number(month) === now.getMonth() + 1 &&
+    Number(day) === now.getDate();
+  return sameDay ? `今天 ${clock}` : `${year}-${month}-${day} ${clock}`;
+}
+
 export function formatStatus(status: BotStatus): string {
   switch (status) {
     case BotStatus.STOPPED:

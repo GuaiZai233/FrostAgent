@@ -213,6 +213,8 @@ message GroupMessageInfoProto {
   string time = 6;
   // Internal tool timeline annotation, distinct from a delivered assistant reply.
   string tool_history_run_id = 7;
+  // Per image placeholder in content, a log-image key for hover previews (empty when unavailable).
+  repeated string image_hashes = 8;
 }
 
 message SessionHistoryMessageProto {
