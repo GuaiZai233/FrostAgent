@@ -47,7 +47,7 @@ globalThis.fetch = async (input, init) => {
     return Response.json({
       current: { display: '123abcd', version: '', commit: '123abcd' + 'a'.repeat(33) },
       stable: { status: 'no-release', error: '暂无正式 Release' },
-      latest: { status: 'different', value: 'b'.repeat(40), url: 'javascript:alert(1)' },
+      latest: { status: 'behind', value: 'b'.repeat(40), behind_by: 8, url: 'javascript:alert(1)' },
       checked_at: '2026-01-01T00:00:00Z',
     });
   }
@@ -115,9 +115,10 @@ try {
   assert.equal(calls.filter((path) => path === '/api/update-check').length, 1, 'duplicate clicks must coalesce');
   releaseCheck!();
   await flush();
-  assert.match(document.querySelector('dialog #update-results')!.textContent || '', /Stable.*暂无正式 Release.*Latest.*与目标不同/s);
+  assert.match(document.querySelector('dialog #update-results')!.textContent || '', /Stable.*暂无正式 Release.*Latest.*落后 8 个提交/s);
   assert.equal(document.querySelector<HTMLAnchorElement>('dialog #update-results a')!.hostname, 'github.com');
   assert.ok(document.querySelector<HTMLAnchorElement>('dialog #update-results a')!.href.endsWith('b'.repeat(40)));
+  assert.ok(document.querySelector<HTMLAnchorElement>('dialog #update-results a')!.href.includes('/compare/123abcd' + 'a'.repeat(33) + '...'));
   document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')!.click();
   assert.equal(document.querySelector('dialog'), null);
 
