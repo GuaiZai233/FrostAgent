@@ -140,8 +140,9 @@ func TestOneBotOutboundPreservesText(t *testing.T) {
 						want = append(want, tools.OneBotSegment{Type: "at", Data: map[string]any{"qq": "12"}})
 					}
 					wantText := text
-					if route.mention && text == "正文" {
-						wantText = " 正文"
+					if route.mention {
+						// A mention is always followed by exactly one space.
+						wantText = map[string]string{"正文": " 正文", " \t正文\n  ": " 正文\n  "}[text]
 					}
 					want = append(want, tools.OneBotSegment{Type: "text", Data: map[string]any{"text": wantText}})
 					data, err := json.Marshal(message)
