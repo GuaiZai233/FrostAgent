@@ -877,7 +877,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						if engine.GroupCompactor != nil {
 							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 						}
-						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
+						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: llm.FormatMessageTime(time.Now())}, maxBufferSize)
 						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
 							turn.StagedGuard().AddSequence(seq)
 						} else {
@@ -989,7 +989,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 								Role:    "assistant",
 								Sender:  botName,
 								Content: strings.TrimSpace(botReply),
-								Time:    time.Now().Format("15:04:05"),
+								Time:    llm.FormatMessageTime(time.Now()),
 							},
 							maxBufferSize,
 						)
@@ -1617,7 +1617,7 @@ func captureGroupCompactText(event model.OneBotEvent, text string, engine *llm.E
 			SenderID:  strconv.FormatInt(event.UserID, 10),
 			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
-			Time:      time.Now().Format("15:04:05"),
+			Time:      llm.FormatMessageTime(time.Now()),
 		},
 		maxBufferSize,
 	)
@@ -1663,7 +1663,7 @@ func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Eng
 			SenderID:  strconv.FormatInt(event.UserID, 10),
 			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
-			Time:      time.Now().Format("15:04:05"),
+			Time:      llm.FormatMessageTime(time.Now()),
 		},
 		maxBufferSize,
 		strconv.FormatInt(event.UserID, 10),

@@ -1,6 +1,6 @@
 import { instanceURL } from '../instance-state';
 import { icon } from './icons';
-import { escapeHtml, isPrivateSession } from '../utils/formatters';
+import { escapeHtml, formatMessageTime, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
@@ -149,7 +149,7 @@ export function parseMessageLine(line: string, botName?: string): GroupMessageIt
       }
       text = text.slice(tagMatch[0].length);
       matchedTag = true;
-    } else if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
+    } else if (/^(?:\d{4}-\d{2}-\d{2}\s+)?\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
       if (!time) {
         time = tagContent;
       }
@@ -1185,7 +1185,7 @@ export function renderSingleMessageRow(
             ? `<span class="badge badge-purple msg-role-badge text-[10px] py-0 px-1 font-medium" title="当前上下文模型，历史回复当时使用的模型可能不同">Bot (${escapeHtml(model || '未知模型')})</span>`
             : `<span class="badge badge-outline msg-role-badge text-[10px] py-0 px-1 font-medium text-muted">User</span>`
         }
-        ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}
+        ${msg.time ? `<span class="msg-time">${escapeHtml(formatMessageTime(msg.time))}</span>` : ''}
         <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(displaySender)}</span>
         ${
           msg.senderId

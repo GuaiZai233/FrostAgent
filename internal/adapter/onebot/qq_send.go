@@ -255,7 +255,7 @@ func recordQQTargetDelivery(engine *llm.Engine, session *llm.SessionContext, epo
 		if engine.GroupCompactor != nil {
 			maxBuffer = engine.GroupCompactor.MaxBufferSize()
 		}
-		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: time.Now().Format("15:04:05")}, maxBuffer)
+		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: llm.FormatMessageTime(time.Now())}, maxBuffer)
 	})
 	engine.TrimSession(session)
 }

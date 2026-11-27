@@ -67,7 +67,7 @@ const navItems = [
   { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人格设定', iconName: 'chat' },
-  { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
+  { path: '/prompt', label: '会话', iconName: 'message_square' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
   { path: '/skills', label: 'Skills', iconName: 'sparkles' },
@@ -285,10 +285,10 @@ function initAppShell(): void {
   // Register Routes
   router.register('/overview', '概览', mountOverviewPage);
   router.register('/connections', '连接', mountConnectionsPage);
-  router.register('/sessions', '会话与 Prompt', mountPromptPage);
+  router.register('/sessions', '会话', mountPromptPage);
   router.register('/memory', '记忆管理', mountMemoryPage);
   router.register('/dialogue', '人格设定', mountDialoguePage);
-  router.register('/prompt', '会话与 Prompt', mountPromptPage);
+  router.register('/prompt', '会话', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
   router.register('/chat', '直接对话', mountChatPage);
   router.register('/skills', 'Skills', mountSkillsPage);

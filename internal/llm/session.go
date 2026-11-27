@@ -32,7 +32,7 @@ type GroupCompactMessage struct {
 	Content          string `json:"content"`                       // Message body (opaque payload)
 	ImageDescription string `json:"image_description,omitempty"`   // Vision output kept separate from user text.
 	MessageID        string `json:"message_id,omitempty"`          // Message ID for deduplication
-	Time             string `json:"time,omitempty"`                // Timestamp string e.g. "15:04:05"
+	Time             string `json:"time,omitempty"`                // Local "2006-01-02 15:04:05"; legacy records may hold only "15:04:05"
 	raw              string `json:"-"`                             // Preserved raw string if ingested from text
 }
 
@@ -1336,7 +1336,7 @@ func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot
 func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
 	item := GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID}
 	if !msg.RecordedAt.IsZero() {
-		item.Time = msg.RecordedAt.Format("15:04:05")
+		item.Time = FormatMessageTime(msg.RecordedAt)
 	}
 	return item
 }
@@ -2989,4 +2989,14 @@ func (sm *SessionManager) ListSessions(offset, limit int) []*SessionContext {
 		result = append(result, entry.context)
 	}
 	return result
+}
+
+// MessageTimeLayout is the date-qualified layout for message timestamps shown
+// to the model and the web console. Older persisted records may still carry
+// only the clock part ("15:04:05").
+const MessageTimeLayout = "2006-01-02 15:04:05"
+
+// FormatMessageTime renders a message timestamp in the server's local zone.
+func FormatMessageTime(t time.Time) string {
+	return t.Format(MessageTimeLayout)
 }
