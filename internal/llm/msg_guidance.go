@@ -9,7 +9,19 @@ import (
 
 const messageGuidancePrefix = "<frostagent_msg_guidance>\n"
 
+// messageGuidance is the guidance for runs whose send_message accepts
+// forcefully_avoid_separation.
 func messageGuidance(limit int) string {
+	return messageGuidanceFor(limit, true)
+}
+
+// messageGuidanceFor omits the forcefully_avoid_separation instruction when the
+// run's send_message schema does not accept it (proactive and awareness runs).
+func messageGuidanceFor(limit int, avoidSeparation bool) string {
+	avoidGuidance := ""
+	if avoidSeparation {
+		avoidGuidance = "如因特殊需求，你想完整输出 mark 的整个原文（而不希望后端自动执行分段），请显式携带参数forcefully_avoid_separation为true，这样后端会认为它是普通字段然后不解析。\n"
+	}
 	limitGuidance := ""
 	if limit > 1 {
 		limitGuidance = fmt.Sprintf("你不是无限分段的，你被允许插入<FROSTAGENT_SEGMENT_MARK>的数量是 **%d**。", limit-1)
@@ -17,7 +29,7 @@ func messageGuidance(limit int) string {
 	return messageGuidancePrefix +
 		"为保证拟真的对话效果，你被允许多段回复用户消息。" + limitGuidance +
 		"在正常回复中插入<FROSTAGENT_SEGMENT_MARK>，FrostAgent 后端会自动解析并分段将你的消息发出。请根据语境决定是否这样输出。\n" +
-		"如因特殊需求，你想完整输出 mark 的整个原文，请用反引号``包裹它，这样后端不会解析。\n" +
+		avoidGuidance +
 		"</frostagent_msg_guidance>"
 }
 
@@ -28,7 +40,7 @@ func isGeneratedMessageGuidance(content string) bool {
 	// Match the complete generated body for every supported limit so refreshing
 	// settings removes old guidance without discarding custom system prompts.
 	for limit := 0; limit <= replyformat.MaxSegmentLimit; limit++ {
-		if content == messageGuidance(limit) {
+		if content == messageGuidanceFor(limit, true) || content == messageGuidanceFor(limit, false) {
 			return true
 		}
 	}
@@ -38,6 +50,12 @@ func isGeneratedMessageGuidance(content string) bool {
 // messageGuidanceMessages rebuilds transient instructions on every iteration,
 // including callers supplying a system message and already-running sessions.
 func (e *Engine) messageGuidanceMessages(messages []ChatMessage) []ChatMessage {
+	return e.messageGuidanceMessagesFor(messages, true)
+}
+
+// messageGuidanceMessagesFor additionally tells whether this run's send_message
+// accepts forcefully_avoid_separation.
+func (e *Engine) messageGuidanceMessagesFor(messages []ChatMessage, avoidSeparation bool) []ChatMessage {
 	result := make([]ChatMessage, 0, len(messages)+1)
 	for _, msg := range messages {
 		content, _ := msg.Content.(string)
@@ -57,6 +75,6 @@ func (e *Engine) messageGuidanceMessages(messages []ChatMessage) []ChatMessage {
 	}
 	result = append(result, ChatMessage{})
 	copy(result[position+1:], result[position:])
-	result[position] = ChatMessage{Role: "system", Content: messageGuidance(replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)))}
+	result[position] = ChatMessage{Role: "system", Content: messageGuidanceFor(replyformat.ParseLimit(e.Getenv(replyformat.LimitEnvKey)), avoidSeparation)}
 	return result
 }

@@ -16,7 +16,7 @@ import (
 func TestMessageGuidanceRefreshAndTrace(t *testing.T) {
 	wantGuidance := "<frostagent_msg_guidance>\n" +
 		"为保证拟真的对话效果，你被允许多段回复用户消息。在正常回复中插入<FROSTAGENT_SEGMENT_MARK>，FrostAgent 后端会自动解析并分段将你的消息发出。请根据语境决定是否这样输出。\n" +
-		"如因特殊需求，你想完整输出 mark 的整个原文，请用反引号``包裹它，这样后端不会解析。\n" +
+		"如因特殊需求，你想完整输出 mark 的整个原文（而不希望后端自动执行分段），请显式携带参数forcefully_avoid_separation为true，这样后端会认为它是普通字段然后不解析。\n" +
 		"</frostagent_msg_guidance>"
 	if got := messageGuidance(0); got != wantGuidance {
 		t.Fatalf("unexpected guidance: %s", got)
@@ -205,5 +205,51 @@ func TestMessageGuidanceReplacesAllGeneratedLimits(t *testing.T) {
 				t.Fatalf("old limit=%d: missing current guidance: %+v", oldLimit, got)
 			}
 		}
+	}
+}
+
+func TestMessageGuidanceOmitsAvoidSeparationWhereUnsupported(t *testing.T) {
+	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{replyformat.EnvKey: "true", replyformat.LimitEnvKey: "3"} {
+		if err := config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &mockTraceProvider{}
+	engine := &Engine{Scope: runtimescope.New(config, nil, nil), Provider: provider, MaxIterations: 1}
+	defer func() { engine.Scope.Cancel(); engine.Scope.Wait() }()
+	for _, tc := range []struct {
+		name      string
+		run       RunContext
+		supported bool
+	}{
+		{"ordinary", RunContext{}, true},
+		{"proactive", RunContext{Proactive: true}, false},
+		{"awareness", RunContext{Proactive: true, Awareness: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, tc.run)
+			if result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			var guidance string
+			for _, msg := range provider.lastRequest.Messages {
+				if content, _ := msg.Content.(string); strings.HasPrefix(content, messageGuidancePrefix) {
+					guidance = content
+				}
+			}
+			if guidance != messageGuidanceFor(3, tc.supported) {
+				t.Fatalf("unexpected guidance: %q", guidance)
+			}
+			if got := strings.Contains(guidance, "forcefully_avoid_separation"); got != tc.supported {
+				t.Fatalf("mentions parameter=%v, supported=%v", got, tc.supported)
+			}
+			if !isGeneratedMessageGuidance(guidance) {
+				t.Fatal("variant must be recognized for refresh")
+			}
+		})
 	}
 }

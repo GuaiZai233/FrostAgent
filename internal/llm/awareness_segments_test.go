@@ -14,6 +14,7 @@ import (
 )
 
 func TestAwarenessFinalReplySegments(t *testing.T) {
+	stripped := "``"
 	protected := "`" + replyformat.SegmentMark + "`"
 	for _, kind := range []string{"private", "group"} {
 		for _, tc := range []struct {
@@ -23,9 +24,9 @@ func TestAwarenessFinalReplySegments(t *testing.T) {
 			want         []string
 		}{
 			{"markers after blank lines", "first\n\n" + replyformat.SegmentMark + "second\n\n" + replyformat.SegmentMark + "third", true, "3", []string{"first", "second", "third"}},
-			{"disabled", "first" + replyformat.SegmentMark + "second\n\n" + protected, false, "1", []string{"firstsecond\n\n" + protected}},
-			{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n" + protected, true, "1", []string{"firstsecond\n\n" + protected}},
-			{"protected code", "first" + replyformat.SegmentMark + protected + "\n\n```text\n" + replyformat.SegmentMark + "\n```", true, "0", []string{"first", protected, "```text\n" + replyformat.SegmentMark + "\n```"}},
+			{"disabled", "first" + replyformat.SegmentMark + "second\n\n" + protected, false, "1", []string{"firstsecond\n\n" + stripped}},
+			{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n" + protected, true, "1", []string{"firstsecond\n\n" + stripped}},
+			{"backticks do not protect markers", "first" + replyformat.SegmentMark + protected, true, "0", []string{"first", "`", "`"}},
 			{"marker only", replyformat.SegmentMark, true, "0", nil},
 			{"disabled marker only", replyformat.SegmentMark, false, "0", nil},
 			{"limited", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, "2", nil},
