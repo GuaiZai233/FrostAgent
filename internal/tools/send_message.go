@@ -218,12 +218,16 @@ func validateBasicMessageFields(raw string) error {
 func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 	var oneBotChain []OneBotSegment
 
-	for _, Msg := range toolMessages {
+	for i, Msg := range toolMessages {
 		switch Msg.Type {
 		case "plain":
+			text := Msg.Text
+			if i > 0 && (toolMessages[i-1].Type == "mention_user" || toolMessages[i-1].Type == "mention_all") {
+				text = SeparateMentionText(text)
+			}
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: "text",
-				Data: map[string]interface{}{"text": Msg.Text},
+				Data: map[string]interface{}{"text": text},
 			})
 
 		case "mention_user":

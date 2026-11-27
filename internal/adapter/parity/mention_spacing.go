@@ -1,18 +1,8 @@
 package parity
 
-import (
-	"unicode"
-	"unicode/utf8"
-)
+import "github.com/GuaiZai233/FrostAgent/internal/tools"
 
-// SeparateMentionText adds a separator after an automatic mention while preserving existing whitespace.
+// SeparateMentionText normalizes the separator after an @ segment to exactly one space.
 func SeparateMentionText(text string) string {
-	if text == "" {
-		return text
-	}
-	first, _ := utf8.DecodeRuneInString(text)
-	if unicode.IsSpace(first) {
-		return text
-	}
-	return " " + text
+	return tools.SeparateMentionText(text)
 }
