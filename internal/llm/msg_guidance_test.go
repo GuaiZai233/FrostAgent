@@ -207,3 +207,49 @@ func TestMessageGuidanceReplacesAllGeneratedLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestMessageGuidanceOmitsAvoidSeparationWhereUnsupported(t *testing.T) {
+	config, err := instanceconfig.Open(filepath.Join(t.TempDir(), "instance.env"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{replyformat.EnvKey: "true", replyformat.LimitEnvKey: "3"} {
+		if err := config.Update(key, value, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider := &mockTraceProvider{}
+	engine := &Engine{Scope: runtimescope.New(config, nil, nil), Provider: provider, MaxIterations: 1}
+	defer func() { engine.Scope.Cancel(); engine.Scope.Wait() }()
+	for _, tc := range []struct {
+		name      string
+		run       RunContext
+		supported bool
+	}{
+		{"ordinary", RunContext{}, true},
+		{"proactive", RunContext{Proactive: true}, false},
+		{"awareness", RunContext{Proactive: true, Awareness: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := engine.RunMessagesWithContext([]ChatMessage{{Role: "user", Content: "hello"}}, tc.run)
+			if result.Error != nil {
+				t.Fatal(result.Error)
+			}
+			var guidance string
+			for _, msg := range provider.lastRequest.Messages {
+				if content, _ := msg.Content.(string); strings.HasPrefix(content, messageGuidancePrefix) {
+					guidance = content
+				}
+			}
+			if guidance != messageGuidanceFor(3, tc.supported) {
+				t.Fatalf("unexpected guidance: %q", guidance)
+			}
+			if got := strings.Contains(guidance, "forcefully_avoid_separation"); got != tc.supported {
+				t.Fatalf("mentions parameter=%v, supported=%v", got, tc.supported)
+			}
+			if !isGeneratedMessageGuidance(guidance) {
+				t.Fatal("variant must be recognized for refresh")
+			}
+		})
+	}
+}

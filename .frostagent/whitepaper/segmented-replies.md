@@ -21,8 +21,10 @@ When disabled, bare markers are removed but paragraph breaks remain.
 In structured `send_message` chains and legacy structured final replies, plain
 text components drop markers in either mode. The optional top-level
 `send_message.forcefully_avoid_separation` (default false) keeps markers in plain
-components as ordinary literal text when true; it is not part of the restricted
-proactive specific-reply or awareness send schemas, which always drop markers.
+components as ordinary literal text when true. It is not part of the restricted
+proactive specific-reply or awareness send schemas: their guidance omits the
+instruction, and `send_message` rejects the flag at execution time for those
+runs, so they always drop markers.
 
 The optional **分段消息上限** (`MULTI_SEGMENT_REPLY_MAX_SEGMENTS`, 0–20, default
 0 = unlimited, applies only while segmentation is enabled) caps delivered

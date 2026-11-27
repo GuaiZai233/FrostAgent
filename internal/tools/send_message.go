@@ -131,6 +131,9 @@ func SendMsgTool() Tool {
 			if payload.Session != "" {
 				return textResult(""), fmt.Errorf("send_message 仅发送到当前会话；发送到白名单群请使用 qq_extend_messages 的 target_group_id")
 			}
+			if payload.ForcefullyAvoidSeparation && (run.Proactive || run.Awareness) {
+				return textResult(""), fmt.Errorf("主动回复和主动感知不支持 forcefully_avoid_separation")
+			}
 			if err := validateBasicMessageFields(args); err != nil {
 				return textResult(""), err
 			}
