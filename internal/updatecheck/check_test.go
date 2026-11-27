@@ -53,20 +53,91 @@ func TestHandlerChecksStableReleaseAndLatestCommit(t *testing.T) {
 }
 
 func TestMissingReleaseDoesNotHideLatestCommit(t *testing.T) {
+	current := strings.Repeat("a", 40)
+	latest := strings.Repeat("b", 40)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
 			http.NotFound(w, r)
-			return
+		case strings.HasSuffix(r.URL.Path, "/commits"):
+			_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: latest}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(compareResponse{Status: "ahead", AheadBy: 8})
+		default:
+			http.NotFound(w, r)
 		}
-		_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: strings.Repeat("b", 40)}})
 	}))
 	defer server.Close()
 
-	result := Source{Client: server.Client(), APIBaseURL: server.URL, Current: Build{Commit: strings.Repeat("a", 40)}}.Check(context.Background())
+	result := Source{Client: server.Client(), APIBaseURL: server.URL, Current: Build{Commit: current}}.Check(context.Background())
 	if result.Stable.Status != "no-release" || result.Stable.Error != "暂无正式 Release" {
 		t.Fatalf("stable = %+v", result.Stable)
 	}
-	if result.Latest.Status != "different" {
+	if result.Latest.Status != "behind" || result.Latest.BehindBy != 8 || result.Latest.Value != latest {
+		t.Fatalf("latest = %+v", result.Latest)
+	}
+}
+
+func TestLatestCommitReportsCommitDistance(t *testing.T) {
+	current := strings.Repeat("a", 40)
+	latest := strings.Repeat("b", 40)
+	for _, tc := range []struct {
+		name       string
+		comparison compareResponse
+		status     string
+		behindBy   int
+		aheadBy    int
+	}{
+		{name: "remote ahead", comparison: compareResponse{Status: "ahead", AheadBy: 8}, status: "behind", behindBy: 8},
+		{name: "local ahead", comparison: compareResponse{Status: "behind", BehindBy: 3}, status: "ahead", aheadBy: 3},
+		{name: "diverged", comparison: compareResponse{Status: "diverged", AheadBy: 8, BehindBy: 3}, status: "diverged", behindBy: 8, aheadBy: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/releases/latest"):
+					http.NotFound(w, r)
+				case strings.HasSuffix(r.URL.Path, "/commits"):
+					_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: latest}})
+				case strings.HasSuffix(r.URL.Path, "/compare/"+current+"..."+latest):
+					_ = json.NewEncoder(w).Encode(tc.comparison)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			result := Source{
+				Client: server.Client(), APIBaseURL: server.URL,
+				Current: Build{Commit: current},
+			}.Check(context.Background())
+			if result.Latest.Status != tc.status || result.Latest.BehindBy != tc.behindBy || result.Latest.AheadBy != tc.aheadBy {
+				t.Fatalf("latest = %+v, want status=%s behind=%d ahead=%d", result.Latest, tc.status, tc.behindBy, tc.aheadBy)
+			}
+		})
+	}
+}
+
+func TestCompareFailureKeepsLatestCommitVisible(t *testing.T) {
+	current := strings.Repeat("a", 40)
+	latest := strings.Repeat("b", 40)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
+			http.NotFound(w, r)
+		case strings.HasSuffix(r.URL.Path, "/commits"):
+			_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: latest}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result := Source{
+		Client: server.Client(), APIBaseURL: server.URL,
+		Current: Build{Commit: current},
+	}.Check(context.Background())
+	if result.Latest.Status != "unavailable" || result.Latest.Value != latest || result.Latest.URL == "" || result.Latest.Error == "" {
 		t.Fatalf("latest = %+v", result.Latest)
 	}
 }
@@ -74,10 +145,15 @@ func TestMissingReleaseDoesNotHideLatestCommit(t *testing.T) {
 func TestComparisonsRequireFullBuildIdentity(t *testing.T) {
 	sha := strings.Repeat("a", 40)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
 			_ = json.NewEncoder(w).Encode(releaseResponse{TagName: "v1.2.3"})
-		} else {
+		case strings.HasSuffix(r.URL.Path, "/commits"):
 			_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: sha}})
+		case strings.Contains(r.URL.Path, "/compare/"):
+			_ = json.NewEncoder(w).Encode(compareResponse{Status: "ahead", AheadBy: 2})
+		default:
+			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
@@ -85,7 +161,7 @@ func TestComparisonsRequireFullBuildIdentity(t *testing.T) {
 		name, version, commit, stable, latest string
 	}{
 		{"release", "v1.2.3", sha, "up-to-date", "up-to-date"},
-		{"prefix collision", "1.2.3", sha[:7] + strings.Repeat("b", 33), "up-to-date", "different"},
+		{"prefix collision", "1.2.3", sha[:7] + strings.Repeat("b", 33), "up-to-date", "behind"},
 		{"short hash", "", sha[:7], "unknown", "unknown"},
 		{"unknown", "", "", "unknown", "unknown"},
 		{"uppercase", "", strings.ToUpper(sha), "unknown", "up-to-date"},
