@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -121,7 +120,7 @@ func TestSendMessageDecorationPreferenceThroughAdapter(t *testing.T) {
 				for i := 1; i < len(want); i++ {
 					if want[i-1].Type == "at" && want[i].Type == "text" {
 						raw, _ := want[i].Data["text"].(string)
-						want[i] = tools.OneBotSegment{Type: "text", Data: map[string]any{"text": " " + strings.TrimLeft(raw, " \t")}}
+						want[i] = tools.OneBotSegment{Type: "text", Data: map[string]any{"text": tools.SeparateMentionText(raw)}}
 					}
 				}
 				if !reflect.DeepEqual(got, want) {

@@ -107,3 +107,17 @@ func TestExplicitMentionSpacing(t *testing.T) {
 		t.Fatalf("plain text without a preceding mention must be untouched: %+v %v", got, err)
 	}
 }
+
+func TestSeparateMentionTextEdgeCases(t *testing.T) {
+	for text, want := range map[string]string{
+		"":       "",
+		"   ":    "   ",
+		"  \n正文": "\n正文",
+		" 正文":    " 正文",
+		" 正文":    " 正文",
+	} {
+		if got := tools.SeparateMentionText(text); got != want {
+			t.Errorf("SeparateMentionText(%q) = %q, want %q", text, got, want)
+		}
+	}
+}

@@ -1,20 +1,23 @@
 package tools
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
-// SeparateMentionText makes text that follows an @ segment start with exactly one
-// space. Leading spaces and tabs are normalized; text that starts with a line
-// break (or is blank) is left untouched.
+// SeparateMentionText makes text that follows an @ segment start with exactly
+// one space. Leading horizontal whitespace is normalized. Text that starts with
+// a line break keeps it (without leading spaces before it); blank text is left
+// untouched.
 func SeparateMentionText(text string) string {
 	trimmed := strings.TrimLeftFunc(text, func(r rune) bool {
-		return r != '\n' && r != '\r' && isSpaceRune(r)
+		return r != '\n' && r != '\r' && unicode.IsSpace(r)
 	})
-	if trimmed == "" || trimmed[0] == '\n' || trimmed[0] == '\r' {
+	if trimmed == "" {
 		return text
 	}
+	if trimmed[0] == '\n' || trimmed[0] == '\r' {
+		return trimmed
+	}
 	return " " + trimmed
-}
-
-func isSpaceRune(r rune) bool {
-	return r == ' ' || r == '\t' || r == '　' || r == ' ' || r == '\v' || r == '\f'
 }
