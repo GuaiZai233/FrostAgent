@@ -1,6 +1,8 @@
 package instance
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -33,7 +35,14 @@ func (m *Manager) globalSettingsHandler(next http.Handler) http.Handler {
 		for key, values := range response.Header() {
 			w.Header()[key] = values
 		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(response.Code)
-		_, _ = w.Write(response.Body.Bytes())
+		body := response.Body.Bytes()
+		if strings.Contains(strings.ToLower(response.Header().Get("Content-Type")), "json") {
+			var escaped bytes.Buffer
+			json.HTMLEscape(&escaped, body)
+			body = escaped.Bytes()
+		}
+		_, _ = w.Write(body)
 	})
 }
