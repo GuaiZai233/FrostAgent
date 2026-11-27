@@ -2,6 +2,7 @@ package instance
 
 import (
 	"bytes"
+	"connectrpc.com/connect"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -210,7 +211,7 @@ func newManager(root string, global *instanceconfig.Store, db *storage.DB, build
 	m.general = mux
 	sandboxCfg := sandbox.LoadConfig(global.Get)
 	m.sandbox = sandbox.NewConfigManager(sandboxCfg)
-	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingssvc.NewScoped(nil, global, m.sandbox))
+	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingssvc.NewScoped(nil, global, m.sandbox), connect.WithInterceptors(m.globalSettingsInterceptor()))
 	mux.Handle(settingsPath, m.globalSettingsHandler(settingsHandler))
 	mux.HandleFunc("/api/diagnostics", m.serveDiagnostics)
 	mux.HandleFunc("/api/storage/status", m.serveDiagnostics)
@@ -815,6 +816,13 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 		response = buffered
 	}
 	rt.Handler.ServeHTTP(response, req)
+	unknownWrite := buffered != nil && buffered.Header().Get(settingssvc.WriteStateHeader) == "unknown"
+	writeSettingsError := func(err error) {
+		if unknownWrite {
+			err = errors.Join(instanceconfig.ErrOutcomeUnknown, err)
+		}
+		writeError(w, err)
+	}
 	if !ws && !stream {
 		after := i.config.Snapshot()
 		globalAfter := m.global.Snapshot()
@@ -828,7 +836,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 						opUnlock = nil
 						err = errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, true))
 					}
-					writeError(w, err)
+					writeSettingsError(err)
 				}
 				return
 			}
@@ -839,14 +847,14 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 				opUnlock = nil
 				if err := m.applyGlobalSettings(); err != nil {
 					if settingsDraft {
-						writeError(w, errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
+						writeSettingsError(errors.Join(err, m.rollbackSettingsDraft(i, before, after, globalBefore, globalAfter, wasRunning, instanceReload)))
 						return
 					}
 					rollbackErr := m.restoreGlobalSnapshot(globalBefore)
 					if rollbackErr == nil {
 						rollbackErr = m.applyGlobalSettings()
 					}
-					writeError(w, errors.Join(err, rollbackErr))
+					writeSettingsError(errors.Join(err, rollbackErr))
 					return
 				}
 			}
@@ -1015,9 +1023,14 @@ func writeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		code = 404
 	}
+	body := map[string]string{"error": err.Error(), "code": "aborted", "message": err.Error()}
+	if errors.Is(err, instanceconfig.ErrOutcomeUnknown) || errors.Is(err, modelrouter.ErrOutcomeUnknown) {
+		code = http.StatusInternalServerError
+		body["state"] = "unknown"
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "code": "aborted", "message": err.Error()})
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 const blobDownloadHeader = "X-FrostAgent-Download"

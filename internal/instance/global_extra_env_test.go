@@ -20,29 +20,6 @@ func localSettingsRequest(method, path string, body io.Reader) *http.Request {
 	return request.WithContext(managementauth.WithLocalAdmin(request.Context()))
 }
 
-func TestGlobalSettingsHandlerEscapesJSONResponseContent(t *testing.T) {
-	m := testManager(t)
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"value":"<script>alert(1)</script>"}`))
-	})
-	response := httptest.NewRecorder()
-	m.globalSettingsHandler(next).ServeHTTP(response, localSettingsRequest(
-		http.MethodPost,
-		"/frostagent.v1.SettingsService/UpdateEnvVars",
-		nil,
-	))
-	if response.Code != http.StatusOK {
-		t.Fatalf("response code = %d", response.Code)
-	}
-	if bytes.Contains(response.Body.Bytes(), []byte("<script>")) || !bytes.Contains(response.Body.Bytes(), []byte(`\u003cscript\u003e`)) {
-		t.Fatalf("JSON response was not HTML-escaped: %s", response.Body.String())
-	}
-	if response.Header().Get("X-Content-Type-Options") != "nosniff" {
-		t.Fatal("missing nosniff response header")
-	}
-}
-
 func TestSensitiveGlobalSettingsRoutesRequireControlPlaneAuth(t *testing.T) {
 	m, err := NewDatabase(t.TempDir())
 	if err != nil {

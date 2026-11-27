@@ -27,7 +27,6 @@ import { mountStorageSettingsPage } from './pages/storage-settings';
 import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountAccessCredentialsPage } from './pages/access-credentials';
 import { mountCommandSettingsPage } from './pages/command-settings';
-import { mountSecurityPage } from './pages/security';
 
 const mountBackendSettingsPage = lazyMount(() =>
   import('./pages/backend-settings').then(
@@ -56,6 +55,9 @@ const mountActionsCatPage = lazyMount(() =>
 
 const mountSkillsPage = lazyMount(() =>
   import('./pages/skills').then(({ mountSkillsPage }) => mountSkillsPage),
+);
+const mountSecurityPage = lazyMount(() =>
+  import('./pages/security').then(({ mountSecurityPage }) => mountSecurityPage),
 );
 
 // Initialize Theme

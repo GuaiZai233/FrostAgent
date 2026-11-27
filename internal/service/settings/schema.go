@@ -19,6 +19,9 @@ func configScopeAllows(scope, key string) bool {
 	return scope == "instance" && !instanceconfig.GlobalKeys[key]
 }
 func (s *Service) GetConfigSchema(ctx context.Context, req *connect.Request[v1.GetConfigSchemaRequest]) (*connect.Response[v1.GetConfigSchemaResponse], error) {
+	if err := s.databaseStateError(); err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
 	fields := []*v1.ConfigField{}
 	for key, meta := range knownEnvVars {
 		if !configScopeAllows(req.Msg.Scope, key) || key == "DIALOGUE_PATH" || key == "BRAIN_PATH" || key == "ONEBOT_WS_PATH" {

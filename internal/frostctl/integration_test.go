@@ -16,11 +16,76 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	pbconnect "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1/frostagentv1connect"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	settings "github.com/GuaiZai233/FrostAgent/internal/service/settings"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"github.com/GuaiZai233/FrostAgent/internal/testutil/sqlfault"
 )
+
+func TestConfigCommitAcknowledgementLoss(t *testing.T) {
+	for _, unavailable := range []bool{false, true} {
+		name := "readback"
+		if unavailable {
+			name = "unavailable"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			db, err := storage.Open(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			global, err := instanceconfig.OpenDatabase(db, "", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := settings.NewScoped(nil, global, nil)
+			_, handler := pbconnect.NewSettingsServiceHandler(service)
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			c := &client{base: server.URL, http: server.Client()}
+			fault := sqlfault.Install(t, db, filepath.Join(root, "frostagent.db"))
+			fault.FailReadback = unavailable
+			inv, _ := Parse([]string{"config", "set", "HTTP_ALLOWED_ORIGINS", "--value", "https://synthetic.invalid", "--scope", "global"})
+			_, err = execute(context.Background(), c, inv, nil, io.Discard)
+			var failure *commandError
+			if !errors.As(err, &failure) || failure.Status != "unknown" || fault.Commits.Load() != 1 {
+				t.Fatalf("CLI result = %v, commits = %d", err, fault.Commits.Load())
+			}
+			get, _ := Parse([]string{"config", "get", "HTTP_ALLOWED_ORIGINS", "--scope", "global"})
+			data, err := execute(context.Background(), c, get, nil, io.Discard)
+			if !unavailable {
+				if err != nil || field(data, "value") != "https://synthetic.invalid" {
+					t.Fatalf("verification did not read committed value: %v %v", data, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("verification reported stale configuration")
+			}
+			file := filepath.Join(t.TempDir(), "config.json")
+			export, _ := Parse([]string{"config", "export", "--scope", "global", "--file", file})
+			if _, err := execute(context.Background(), c, export, nil, io.Discard); err == nil {
+				t.Fatal("export reported stale configuration")
+			}
+			if _, err := os.Stat(file); !os.IsNotExist(err) {
+				t.Fatal("failed export left a misleading file")
+			}
+			if _, err := service.UpdateEnvVar(context.Background(), connect.NewRequest(&v1.UpdateEnvVarRequest{Key: "HTTP_ALLOWED_ORIGINS", Value: ""})); connect.CodeOf(err) != connect.CodeUnavailable {
+				t.Fatalf("legacy write did not reject unavailable state: %v", err)
+			}
+			if _, err := service.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{Key: "HTTP_ALLOWED_ORIGINS"})); connect.CodeOf(err) != connect.CodeUnavailable {
+				t.Fatalf("legacy delete did not reject unavailable state: %v", err)
+			}
+			if _, err := execute(context.Background(), c, inv, nil, io.Discard); !errors.As(err, &failure) || failure.Status != "failed" || fault.Commits.Load() != 1 {
+				t.Fatalf("unconfirmed state allowed another write: %v", err)
+			}
+		})
+	}
+}
 
 func TestConfigExportRoundTripAgainstSQLService(t *testing.T) {
 	ctx := context.Background()

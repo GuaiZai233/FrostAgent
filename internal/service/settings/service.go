@@ -38,6 +38,10 @@ type envEntry struct {
 	AllowMultiline  bool
 }
 
+// WriteStateHeader carries uncertainty through the instance HTTP gateway even
+// when Connect has already compressed or framed the response body.
+const WriteStateHeader = "X-FrostAgent-Write-State"
+
 // knownEnvVars is the registry of all env keys the settings page manages.
 var knownEnvVars = map[string]envEntry{
 	chathistory.PrivateEnabledKey:              {"是否保存私聊原文（默认开启；关闭后保留已有档案）", false, false, false},
@@ -290,6 +294,11 @@ func (s *Service) ListEnvVars(
 	ctx context.Context,
 	req *connect.Request[v1.ListEnvVarsRequest],
 ) (*connect.Response[v1.ListEnvVarsResponse], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.databaseStateError(); err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
 	var vars []*v1.EnvVar
 	for key, meta := range knownEnvVars {
 		if !configScopeAllows(req.Msg.Scope, key) || key == balancequery.ConfigKey && !req.Msg.RedactSecrets && req.Msg.Scope == "" {
@@ -335,6 +344,9 @@ func (s *Service) UpdateEnvVar(
 	ctx context.Context,
 	req *connect.Request[v1.UpdateEnvVarRequest],
 ) (*connect.Response[v1.UpdateEnvVarResponse], error) {
+	if err := s.databaseStateError(); err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
 	key := strings.TrimSpace(req.Msg.GetKey())
 	value := req.Msg.GetValue()
 
@@ -393,6 +405,9 @@ func (s *Service) DeleteEnvVar(
 	ctx context.Context,
 	req *connect.Request[v1.DeleteEnvVarRequest],
 ) (*connect.Response[v1.DeleteEnvVarResponse], error) {
+	if err := s.databaseStateError(); err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
 	key := strings.TrimSpace(req.Msg.GetKey())
 	if key == "" {
 		return connect.NewResponse(&v1.DeleteEnvVarResponse{
@@ -650,13 +665,22 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 	changes := make([]change, 0, len(req.Msg.Updates)+len(req.Msg.ClearKeys))
 	seen := make(map[string]bool)
 	failure := func(err error) (*connect.Response[v1.UpdateEnvVarsResponse], error) {
-		return connect.NewResponse(&v1.UpdateEnvVarsResponse{Error: err.Error()}), nil
+		state := "failed"
+		if errors.Is(err, instanceconfig.ErrOutcomeUnknown) {
+			state = "unknown"
+		}
+		response := connect.NewResponse(&v1.UpdateEnvVarsResponse{Error: err.Error(), State: state})
+		response.Header().Set(WriteStateHeader, state)
+		return response, nil
 	}
 	if len(req.Msg.Updates)+len(req.Msg.ClearKeys) > len(knownEnvVars) {
 		return failure(errors.New("too many setting changes"))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.databaseStateError(); err != nil {
+		return failure(err)
+	}
 	add := func(key, value string, clear bool) error {
 		key = strings.TrimSpace(key)
 		meta, ok := knownEnvVars[key]
@@ -775,6 +799,17 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 		s.sandboxManager.RefreshEnabled(func() bool { return sandbox.ParseBool(s.store("SANDBOX_ENABLED").Get("SANDBOX_ENABLED"), false) })
 	}
 	return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true, State: "applied", Changes: diff}), nil
+}
+
+func (s *Service) databaseStateError() error {
+	for _, store := range []*instanceconfig.Store{s.config, s.global} {
+		if store.IsDatabase() {
+			if err := store.Error(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func validateUpdate(key, value string) error {
