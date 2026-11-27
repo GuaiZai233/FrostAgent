@@ -31,7 +31,7 @@ func SendRichImageTool(getenv func(string) string) Tool {
 	return Tool{
 		name: SendRichImageToolName,
 		description: "Render content into a PNG image and send it to the active conversation. Call this tool when the user asks about a specific math problem or coding issue, asks you to discuss a viewpoint in detail, or when the output would exceed 200 characters. Use it when plain text cannot express the answer well: math derivations and formulas, tables, structured notes, code listings, or diagrams of abstract concepts. 推荐一旦遇到代码或数学公式等，优先调用此工具，避免直接输出被后端分隔逻辑错误解析造成歧义。 " +
-			"Math supports a subset of LaTeX, using $...$ for inline math and $$...$$ for display math. Common formulas, matrices, cases, and aligned equations are supported. Unsupported commands are displayed as literal source text. " +
+			"format=markdown: CommonMark with tables, strikethrough, lists, quotes and fenced code. Math supports a subset of LaTeX, using $...$ for inline math and $$...$$ for display math. Common formulas, matrices, cases, and aligned equations are supported. Unsupported commands are displayed as literal source text. " +
 			"format=svg: a complete <svg> with a viewBox, for diagrams, flowcharts, graphs and layouts. Use inline presentation attributes (fill, stroke, font-size, text-anchor) on shapes and <text>; CSS <style>, classes, scripts, external images and <foreignObject> are not supported. HTML is not supported. " +
 			"The image is sent as one message; keep text in the normal reply short and do not repeat the image content. Content that renders too tall must be split across several calls.",
 		parameter: map[string]any{
