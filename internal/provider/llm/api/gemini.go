@@ -144,7 +144,7 @@ func geminiRequest(req core.ChatRequest, origin stateOrigin) (any, error) {
 	}
 	declarations := make([]any, 0, len(req.Tools))
 	for _, tool := range req.Tools {
-		declarations = append(declarations, map[string]any{"name": tool.Name, "description": tool.Description, "parametersJsonSchema": tool.Parameters})
+		declarations = append(declarations, map[string]any{"name": tool.Name, "description": tool.Description, "parametersJsonSchema": sanitizeGeminiSchema(tool.Parameters)})
 	}
 	if len(declarations) > 0 {
 		payload["tools"] = []any{map[string]any{"functionDeclarations": declarations}}
