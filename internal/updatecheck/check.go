@@ -132,7 +132,7 @@ func (s Source) latest(ctx context.Context) Channel {
 	}
 
 	var comparison compareResponse
-	path := "/repos/" + Repository + "/compare/" + strings.ToLower(s.Current.Commit) + "..." + sha
+	path := "/repos/" + Repository + "/compare/" + strings.ToLower(s.Current.Commit) + "..." + sha + "?per_page=1&page=2"
 	if err := s.get(ctx, path, &comparison); err != nil {
 		return comparisonUnavailable(channel, err)
 	}
