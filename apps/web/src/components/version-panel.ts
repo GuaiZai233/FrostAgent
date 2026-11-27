@@ -52,7 +52,7 @@ export function mountVersionControl(container: HTMLElement): () => void {
           versionRequest++;
           showVersion(result.current);
           dialog.querySelector<HTMLElement>('#update-current-version')!.textContent = `当前：${result.current.display || 'unknown'}${result.current.commit ? ` · ${result.current.commit}` : ''}`;
-          results.innerHTML = renderChannel('Stable', result.stable) + renderChannel('Latest', result.latest);
+          results.innerHTML = renderChannel('Stable', result.stable) + renderChannel('Latest', result.latest, result.current.commit);
           dialog.querySelector<HTMLElement>('#update-checked-at')!.textContent = `检查时间：${new Date(result.checked_at).toLocaleString()}`;
         }).catch((error) => {
           if (!request.signal.aborted) results.textContent = String(error);
@@ -70,19 +70,28 @@ export function mountVersionControl(container: HTMLElement): () => void {
   };
 }
 
-function renderChannel(name: 'Stable' | 'Latest', channel: UpdateChannel): string {
+function renderChannel(name: 'Stable' | 'Latest', channel: UpdateChannel, currentCommit = ''): string {
   const labels: Record<UpdateChannel['status'], string> = {
     'up-to-date': '与目标一致',
     different: '与目标不同，请查看 GitHub 变更后决定是否更新',
+    behind: channel.behind_by === undefined ? '无法获取提交差距' : `当前版本落后 ${channel.behind_by} 个提交`,
+    ahead: channel.ahead_by === undefined ? '无法获取提交差距' : `当前版本领先 ${channel.ahead_by} 个提交`,
+    diverged: channel.behind_by === undefined || channel.ahead_by === undefined
+      ? '无法获取提交差距'
+      : `已分叉：远程领先 ${channel.behind_by} 个提交，当前版本领先 ${channel.ahead_by} 个提交`,
     unknown: '当前构建缺少此渠道的版本信息，无法自动比较',
     unavailable: '检查失败',
     'no-release': '暂无正式 Release',
   };
   // Construct links locally: never render a URL supplied by an upstream response.
   const value = channel.value || '';
+  const hasComparableCommit = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(currentCommit);
+  const compareCommits = name === 'Latest' && hasComparableCommit && currentCommit.toLowerCase() !== value.toLowerCase();
   const url = name === 'Stable'
     ? `https://github.com/GuaiZai233/FrostAgent/releases/tag/${encodeURIComponent(value)}`
-    : `https://github.com/GuaiZai233/FrostAgent/commit/${encodeURIComponent(value)}`;
+    : compareCommits
+      ? `https://github.com/GuaiZai233/FrostAgent/compare/${encodeURIComponent(currentCommit)}...${encodeURIComponent(value)}`
+      : `https://github.com/GuaiZai233/FrostAgent/commit/${encodeURIComponent(value)}`;
   return `<article class="rounded-md border p-3 min-w-0">
     <h3 class="text-sm font-semibold">${name}</h3>
     ${value ? `<a class="text-xs font-mono break-all" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(value)}</a>` : ''}
