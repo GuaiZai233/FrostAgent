@@ -108,7 +108,7 @@ func (c *wsConnection) resolveLocalImageSegments(segments []content.MessageSegme
 			resolved = append([]content.MessageSegment(nil), segments...)
 			copied = true
 		}
-		resolved[index].Data = make(map[string]any, len(segment.Data)+1)
+		resolved[index].Data = make(map[string]any)
 		for key, value := range segment.Data {
 			resolved[index].Data[key] = value
 		}
