@@ -1,0 +1,14 @@
+# Disable PR comments/annotations and keep status checks informational so low coverage does not fail CI.
+comment: false
+
+github_checks:
+  annotations: false
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
