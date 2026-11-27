@@ -2,15 +2,12 @@ package onebot
 
 import (
 	"context"
-	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 )
-
-const sessionImageFetchTimeout = 20 * time.Second
 
 // retainEventImages returns one cache key per image placeholder in the event
 // (in message order, "" when the image has no trusted source) and fetches the
@@ -32,16 +29,10 @@ func retainEventImages(event model.OneBotEvent, engine *llm.Engine) []string {
 			continue
 		}
 		found = true
-		if store.HasSessionImage(key) {
-			continue
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), sessionImageFetchTimeout)
-			defer cancel()
-			if data, err := content.FetchSegmentImage(ctx, seg); err == nil {
-				store.PutSessionImage(key, data)
-			}
-		}()
+		// Bounded and de-duplicated: a full queue simply skips the preview.
+		store.FetchSessionImage(key, func(ctx context.Context) ([]byte, error) {
+			return content.FetchSegmentImage(ctx, seg)
+		})
 	}
 	if !found {
 		return nil

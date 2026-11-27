@@ -49,20 +49,21 @@ type subscriber struct {
 }
 
 type Store struct {
-	disk          *diskStore
-	buffer        *ring.Ring
-	mu            sync.RWMutex
-	size          int
-	maxBytes      int
-	totalBytes    int
-	subscribers   map[int]*subscriber
-	nextSubID     int
-	subMu         sync.Mutex
-	nextEntryID   uint64
-	imageCache    map[string]*cachedImage
-	sessionImages sessionImageCache
-	name          string
-	id            string
+	disk           *diskStore
+	buffer         *ring.Ring
+	mu             sync.RWMutex
+	size           int
+	maxBytes       int
+	totalBytes     int
+	subscribers    map[int]*subscriber
+	nextSubID      int
+	subMu          sync.Mutex
+	nextEntryID    uint64
+	imageCache     map[string]*cachedImage
+	sessionImages  sessionImageCache
+	sessionFetches sessionImageFetcher
+	name           string
+	id             string
 }
 
 const (
