@@ -109,12 +109,19 @@ func TestSendMessageDecorationPreferenceThroughAdapter(t *testing.T) {
 				want := append([]tools.OneBotSegment(nil), chain.want...)
 				if preference != "false" {
 					// Configured decoration adds the triggering user's mention;
-					// existing leading whitespace and explicit quotes are retained.
+					// explicit quotes are retained.
 					body := want
 					if want[0].Type == "reply" {
 						body = want[1:]
 					}
 					want = append([]tools.OneBotSegment{quoteSegment, {Type: "at", Data: map[string]any{"qq": "12"}}}, body...)
+				}
+				// Text directly after any mention is normalized to one leading space.
+				for i := 1; i < len(want); i++ {
+					if want[i-1].Type == "at" && want[i].Type == "text" {
+						raw, _ := want[i].Data["text"].(string)
+						want[i] = tools.OneBotSegment{Type: "text", Data: map[string]any{"text": tools.SeparateMentionText(raw)}}
+					}
 				}
 				if !reflect.DeepEqual(got, want) {
 					t.Fatalf("wire chain=%s, want=%+v", wire, want)
