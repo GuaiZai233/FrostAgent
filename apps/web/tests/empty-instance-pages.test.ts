@@ -25,6 +25,7 @@ const calls: string[] = [];
 let releaseCheck: (() => void) | undefined;
 let pendingCheck = false;
 let failCheck = false;
+let comparisonUnavailable = false;
 let checkSignal: AbortSignal | undefined;
 let releaseVersion: (() => void) | undefined;
 let pendingVersion = false;
@@ -47,7 +48,9 @@ globalThis.fetch = async (input, init) => {
     return Response.json({
       current: { display: '123abcd', version: '', commit: '123abcd' + 'a'.repeat(33) },
       stable: { status: 'no-release', error: '暂无正式 Release' },
-      latest: { status: 'behind', value: 'b'.repeat(40), behind_by: 8, url: 'javascript:alert(1)' },
+      latest: comparisonUnavailable
+        ? { status: 'unavailable', value: 'b'.repeat(40), error: '无法计算提交差距', url: 'javascript:alert(1)' }
+        : { status: 'behind', value: 'b'.repeat(40), behind_by: 8, url: 'javascript:alert(1)' },
       checked_at: '2026-01-01T00:00:00Z',
     });
   }
@@ -121,6 +124,21 @@ try {
   assert.ok(document.querySelector<HTMLAnchorElement>('dialog #update-results a')!.href.includes('/compare/123abcd' + 'a'.repeat(33) + '...'));
   document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')!.click();
   assert.equal(document.querySelector('dialog'), null);
+
+  pendingCheck = false;
+  comparisonUnavailable = true;
+  root.querySelector<HTMLButtonElement>('#check-updates')!.click();
+  await flush();
+  const fallbackResults = document.querySelector('dialog #update-results')!;
+  assert.match(fallbackResults.textContent || '', /无法计算提交差距/);
+  const fallbackLink = document.querySelector<HTMLAnchorElement>('dialog #update-results a')!;
+  assert.equal(fallbackLink.hostname, 'github.com');
+  assert.ok(fallbackLink.href.endsWith('/commit/' + 'b'.repeat(40)));
+  assert.ok(!fallbackLink.href.includes('/compare/'), 'failed comparison must retain a direct latest-commit link');
+  document.querySelector<HTMLButtonElement>('dialog .dialog-close-btn')!.click();
+  assert.equal(document.querySelector('dialog'), null);
+  comparisonUnavailable = false;
+  pendingCheck = true;
 
   root.querySelector<HTMLButtonElement>('#check-updates')!.click();
   await flush();
