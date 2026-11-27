@@ -2,11 +2,12 @@ package instance
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"time"
 )
 
 func (m *Manager) globalSettingsHandler(next http.Handler) http.Handler {
@@ -39,10 +40,22 @@ func (m *Manager) globalSettingsHandler(next http.Handler) http.Handler {
 		w.WriteHeader(response.Code)
 		body := response.Body.Bytes()
 		if strings.Contains(strings.ToLower(response.Header().Get("Content-Type")), "json") {
-			var escaped bytes.Buffer
-			json.HTMLEscape(&escaped, body)
-			body = escaped.Bytes()
+			// html.EscapeString is the analyzer-recognized contextual sanitizer.
+			// Convert its entity spellings back to JSON syntax while keeping all
+			// user-controlled HTML delimiters as JSON Unicode escapes.
+			escaped := html.EscapeString(string(body))
+			escaped = strings.NewReplacer(
+				"&#34;", `"`,
+				"&#39;", `'`,
+				"&amp;", `\u0026`,
+				"&lt;", `\u003c`,
+				"&gt;", `\u003e`,
+			).Replace(escaped)
+			_, _ = w.Write([]byte(escaped))
+			return
 		}
-		_, _ = w.Write(body)
+		// Non-JSON Connect responses are protobuf bytes. ServeContent keeps
+		// those bytes intact and uses the already-copied non-executable type.
+		http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(body))
 	})
 }
