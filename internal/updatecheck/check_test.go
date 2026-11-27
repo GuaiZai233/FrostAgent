@@ -118,6 +118,39 @@ func TestLatestCommitReportsCommitDistance(t *testing.T) {
 	}
 }
 
+func TestInvalidCompareResponsesAreUnavailable(t *testing.T) {
+	current := strings.Repeat("a", 40)
+	latest := strings.Repeat("b", 40)
+	for _, tc := range []struct {
+		name string
+		body compareResponse
+	}{
+		{name: "unknown status", body: compareResponse{Status: "unknown"}},
+		{name: "missing count", body: compareResponse{Status: "ahead"}},
+		{name: "inconsistent counts", body: compareResponse{Status: "ahead", AheadBy: 2, BehindBy: 1}},
+		{name: "negative count", body: compareResponse{Status: "ahead", AheadBy: -1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/releases/latest"):
+					http.NotFound(w, r)
+				case strings.HasSuffix(r.URL.Path, "/commits"):
+					_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: latest}})
+				default:
+					_ = json.NewEncoder(w).Encode(tc.body)
+				}
+			}))
+			defer server.Close()
+
+			result := Source{Client: server.Client(), APIBaseURL: server.URL, Current: Build{Commit: current}}.Check(context.Background())
+			if result.Latest.Status != "unavailable" || result.Latest.Value != latest {
+				t.Fatalf("latest = %+v", result.Latest)
+			}
+		})
+	}
+}
+
 func TestCompareFailureKeepsLatestCommitVisible(t *testing.T) {
 	current := strings.Repeat("a", 40)
 	latest := strings.Repeat("b", 40)
