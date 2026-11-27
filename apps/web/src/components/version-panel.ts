@@ -85,8 +85,13 @@ function renderChannel(name: 'Stable' | 'Latest', channel: UpdateChannel, curren
   };
   // Construct links locally: never render a URL supplied by an upstream response.
   const value = channel.value || '';
-  const hasComparableCommit = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(currentCommit);
-  const compareCommits = name === 'Latest' && hasComparableCommit && currentCommit.toLowerCase() !== value.toLowerCase();
+  const isFullCommitSHA = (sha: string) => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(sha);
+  const comparisonSucceeded = ['up-to-date', 'behind', 'ahead', 'diverged'].includes(channel.status);
+  const compareCommits = name === 'Latest'
+    && comparisonSucceeded
+    && isFullCommitSHA(currentCommit)
+    && isFullCommitSHA(value)
+    && currentCommit.toLowerCase() !== value.toLowerCase();
   const url = name === 'Stable'
     ? `https://github.com/GuaiZai233/FrostAgent/releases/tag/${encodeURIComponent(value)}`
     : compareCommits
