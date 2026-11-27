@@ -29,7 +29,7 @@ func TestDockerStartupRejectsUnsafeConfiguration(t *testing.T) {
 		name, token, management, adapter, wantError string
 	}{
 		{
-			name: "missing credential", management: "127.0.0.1:0", adapter: "127.0.0.1:1",
+			name: "invalid credential", token: "short", management: "127.0.0.1:0", adapter: "127.0.0.1:1",
 			wantError: dockerBootstrapTokenKey,
 		},
 		{
@@ -60,7 +60,7 @@ func TestDockerControlTokenBootstrap(t *testing.T) {
 		container, loopback, wantError   bool
 	}{
 		{name: "first startup", container: true, bootstrap: token},
-		{name: "missing credential", container: true, wantError: true},
+		{name: "missing credential allows IPC setup", container: true},
 		{name: "short credential", container: true, bootstrap: "short", wantError: true},
 		{name: "multiline credential", container: true, bootstrap: token + "\ninvalid", wantError: true},
 		{name: "NUL credential", container: true, bootstrap: token + "\x00invalid", wantError: true},
@@ -71,7 +71,7 @@ func TestDockerControlTokenBootstrap(t *testing.T) {
 		{name: "existing token wins", container: true, existing: "synthetic-existing-token", bootstrap: token},
 		{name: "existing admin wins", container: true, admin: "synthetic-admin-token", bootstrap: token},
 		{name: "existing token needs no bootstrap", container: true, existing: "synthetic-existing-token"},
-		{name: "native startup"},
+		{name: "native startup", bootstrap: token},
 		{name: "host namespace startup", container: true, loopback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestDockerControlTokenBootstrap(t *testing.T) {
 				t.Fatal("bootstrap error disclosed credential")
 			}
 			want := tc.existing
-			if !tc.wantError && tc.container && !tc.loopback && tc.existing == "" && tc.admin == "" {
+			if !tc.wantError && tc.existing == "" && tc.admin == "" {
 				want = tc.bootstrap
 			}
 			if global.Get("MCP_CONTROL_TOKEN") != want {

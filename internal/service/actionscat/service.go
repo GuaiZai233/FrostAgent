@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	client "github.com/GuaiZai233/FrostAgent/internal/actionscat"
-	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 )
 
 // Service exposes an HTTP API for the FrostAgent frontend and internal caller to manage ActionsCat.
@@ -70,7 +70,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s != nil {
 		getenv = s.getenv
 	}
-	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, getenv); err != nil {
+	if err := managementauth.Authorize(r.Context(), r.Header, getenv); err != nil {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized: "+err.Error())
 		return
 	}

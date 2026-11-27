@@ -155,7 +155,9 @@ func (m *Manager) importSettingsWithComputerUse(id string, data backup.Settings,
 	}
 	i.mu.Lock()
 	i.runtime, i.config = r, c
-	r.StartBackground()
+	if r != nil {
+		r.StartBackground()
+	}
 	i.mu.Unlock()
 	if buildErr != nil {
 		_ = m.update(i.id, func(info *Info) { info.Enabled = false; info.Error = buildErr.Error() })
@@ -237,6 +239,9 @@ func (m *Manager) RestoreInstanceZIP(name string, archive []byte) (result Info, 
 	}
 	decoded, err := backup.DecodeInstanceZIP(archive)
 	if err != nil {
+		return Info{}, err
+	}
+	if _, err := backup.PreviewRestore(context.Background(), m.db, decoded); err != nil {
 		return Info{}, err
 	}
 	autoName := name == ""
@@ -367,6 +372,15 @@ func (m *Manager) handleInstanceRestore(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
+	if r.URL.Query().Get("dry_run") == "true" {
+		plan, err := m.VerifyBackup(r.Context(), archive, r.URL.Query().Get("name"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, plan)
+		return
+	}
 	info, err := m.RestoreInstanceZIP(r.URL.Query().Get("name"), archive)
 	if err != nil {
 		writeError(w, err)
@@ -444,7 +458,9 @@ func (m *Manager) CancelDeletion(id string) error {
 	r, c, err := m.buildFresh(i.id, i, false)
 	i.mu.Lock()
 	i.runtime, i.config = r, c
-	r.StartBackground()
+	if r != nil {
+		r.StartBackground()
+	}
 	i.mu.Unlock()
 	if err != nil {
 		_ = m.update(i.id, func(info *Info) { info.Error = err.Error() })
@@ -554,6 +570,9 @@ func (m *Manager) copySQLInstanceSettings(target, source string) error {
 		return err
 	}
 	settings, err := backup.ExportSettings(m.db, src.id)
+	if err == nil {
+		settings = backup.ForConfigurationCopy(settings)
+	}
 	if err != nil {
 		src.op.RUnlock()
 		return err

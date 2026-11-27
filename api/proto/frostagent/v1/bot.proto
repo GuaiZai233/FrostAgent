@@ -16,6 +16,7 @@ service BotStatusService {
   rpc GetSessions(GetSessionsRequest) returns (GetSessionsResponse);
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc GetSessionHistory(GetSessionHistoryRequest) returns (GetSessionHistoryResponse);
+  rpc ListSessionTools(ListSessionToolsRequest) returns (ListSessionToolsResponse);
   rpc GetToolHistoryEntry(GetToolHistoryEntryRequest) returns (GetToolHistoryEntryResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
@@ -117,6 +118,7 @@ message GetOverviewResponse {
 
 message GetSessionsRequest {
   Pagination pagination = 1;
+  string platform = 2;
 }
 
 message GetSessionsResponse {
@@ -136,6 +138,7 @@ message DeleteGroupSummaryResponse {
 message GetSessionContextRequest {
   string session_id = 1;
   int32 recent_limit = 2;
+  optional bool include_prompt = 3;
 }
 
 // Browses committed chat originals; independent of compact/context retention.
@@ -163,10 +166,12 @@ message SessionChatRecord {
 message GetSessionHistoryResponse {
   repeated SessionChatRecord records = 1;
   string next_page_token = 2;
+  ArchiveCoverage coverage = 3;
 }
 
 message GetToolHistoryEntryRequest {
   string ref_id = 1;
+  string session_id = 4;
   // Only result inspection requests the original result; arguments-only
   // expansion never transfers it.
   bool include_result = 2;
@@ -276,4 +281,25 @@ message FetchQuotaConfigResponse {
   string quota_display_type = 5;
   string custom_currency_symbol = 6;
   double custom_currency_exchange_rate = 7;
+}
+
+message ArchiveCoverage {
+ string since = 1;
+ string until = 2;
+ int64 count = 3;
+ string status = 4;
+}
+message ListSessionToolsRequest { string session_id = 1; int32 limit = 2; }
+message SessionToolRecord {
+ string ref_id = 1;
+ string run_id = 2;
+ string tool = 3;
+ string state = 4;
+ string result_summary = 5;
+ string occurred_at = 6;
+ bool restricted = 7;
+}
+message ListSessionToolsResponse {
+ repeated SessionToolRecord calls = 1;
+ ArchiveCoverage coverage = 2;
 }

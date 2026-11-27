@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/GuaiZai233/FrostAgent/internal/backup"
 	"github.com/GuaiZai233/FrostAgent/internal/envinject"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,7 @@ import (
 func localSettingsRequest(method, path string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, path, body)
 	request.RemoteAddr = "127.0.0.1:12345"
-	return request
+	return request.WithContext(managementauth.WithLocalAdmin(request.Context()))
 }
 
 func TestSensitiveGlobalSettingsRoutesRequireControlPlaneAuth(t *testing.T) {
@@ -93,7 +94,7 @@ func TestSensitiveGlobalSettingsRoutesRequireControlPlaneAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	m.ServeHTTP(response, localSettingsRequest(http.MethodGet, "/api/instances/global/extra-env", nil))
+	m.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/instances/global/extra-env", nil))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("local token enforcement was bypassed: %d", response.Code)
 	}

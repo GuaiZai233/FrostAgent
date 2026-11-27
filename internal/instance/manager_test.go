@@ -276,7 +276,7 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 
 func TestMCPIsIsolatedPerInstanceAndHasNoRootEndpoint(t *testing.T) {
 	m := testManager(t)
-	req := httptest.NewRequest(
+	req := localSettingsRequest(
 		http.MethodPost,
 		"/frostagent.v1.MCPService/ListMCPServers",
 		strings.NewReader("{}"),
@@ -301,7 +301,7 @@ func TestMCPIsIsolatedPerInstanceAndHasNoRootEndpoint(t *testing.T) {
 		}
 	}
 
-	req = httptest.NewRequest(
+	req = localSettingsRequest(
 		http.MethodPost,
 		"/instances/"+a.ID+"/frostagent.v1.MCPService/AddMCPServer",
 		strings.NewReader(`{"id":"only-a","name":"Only A","enabled":false,"transportType":"stdio","command":"synthetic"}`),

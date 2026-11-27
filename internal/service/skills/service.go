@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	skillstore "github.com/GuaiZai233/FrostAgent/internal/skills"
 )
 
@@ -23,7 +23,7 @@ func New(store *skillstore.Store, getenv func(string) string) *Service {
 
 func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if err := mcpsvc.CheckControlPlaneAuthScoped(r.RemoteAddr, r.Header, s.getenv); err != nil {
+	if err := managementauth.Authorize(r.Context(), r.Header, s.getenv); err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}

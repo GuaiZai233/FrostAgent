@@ -103,10 +103,6 @@ def wait_ready(read):
 
 def exercise_image_run():
     """Verify the image's defaults without Compose or a shared namespace relay."""
-    missing = subprocess.run(('docker', 'run', '--rm', '--network', 'none', IMAGE),
-                             capture_output=True, text=True, encoding='utf-8', timeout=30)
-    assert missing.returncode == 1, 'a fresh bridge deployment started without a token'
-    assert 'FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN' in missing.stderr
     project = 'frostagent-run-smoke-' + uuid.uuid4().hex[:12]
     volume = project + '-data'
     app = None
@@ -117,7 +113,16 @@ def exercise_image_run():
                            '--publish', '127.0.0.1::8080', '--volume', volume + ':/app/data',
                            '--env', 'FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN=' + token, IMAGE)
 
-        app = start(BOOTSTRAP_TOKEN)
+        app = start('')
+        for _ in range(30):
+            result = subprocess.run(('docker', 'exec', '--user', '0', app, 'frostctl', 'instance', 'list', '--output', 'json'), capture_output=True, text=True)
+            if result.returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError('local IPC did not become ready without an HTTP token')
+        initialized = subprocess.run(('docker', 'exec', '--user', '0', '-i', app, 'frostctl', 'config', 'secret', 'set', 'MCP_CONTROL_TOKEN', '--scope', 'global', '--stdin'), input=BOOTSTRAP_TOKEN, text=True, capture_output=True)
+        assert initialized.returncode == 0, initialized.stderr
 
         def read(path='/', payload=None, headers=None):
             port = int(command('docker', 'port', app, '8080/tcp').rsplit(':', 1)[1])
@@ -206,8 +211,10 @@ def exercise(root, temporary, host_mode=False):
         def read(path, payload=None, headers=None):
             return client(origin, '127.0.0.1', 8080, path, payload, headers)
 
+        management_token = BOOTSTRAP_TOKEN
+
         def api(path, payload=None, headers=None):
-            result = read(path, payload, headers)
+            result = read(path, payload, {'Authorization': 'Bearer ' + management_token, **(headers or {})})
             assert result['status'] == 200, (path, result)
             return json.loads(result['body'])
 
@@ -231,9 +238,9 @@ def exercise(root, temporary, host_mode=False):
         settings['settings'].update({'HTTP_ALLOWED_ORIGINS': PUBLIC_ORIGIN,
                                      'WS_ALLOWED_ORIGINS': PUBLIC_ORIGIN})
         assert api('/api/instances/global/import/settings', settings).get('success')
-        # A real public Host/Origin and forwarded headers work without another login.
+        # Allowed Host/Origin and forwarding do not replace management authentication.
         assert api('/api/instances', headers=FORWARDED)['instances'] == []
-        assert read('/api/storage', headers=FORWARDED)['status'] == 200
+        assert read('/api/storage', headers=FORWARDED)['status'] == 401
         assert read('/', headers={**FORWARDED, 'Host': 'attacker.example'})['status'] == 403
         assert read('/', headers={**FORWARDED, 'Origin': 'https://attacker.example'})['status'] == 403
         assert command(*compose, 'exec', '-T', 'frostagent', 'id', '-u') == '10001'
@@ -242,7 +249,8 @@ def exercise(root, temporary, host_mode=False):
         instance_id = instance['id']
         assert api(f'/instances/{instance_id}/frostagent.v1.SettingsService/UpdateEnvVar',
                    {'key': 'MCP_CONTROL_TOKEN', 'value': 'synthetic-control-token'}, FORWARDED).get('success')
-        assert read('/api/instances', headers=FORWARDED)['status'] == 200
+        management_token = 'synthetic-control-token'
+        assert read('/api/instances', headers=FORWARDED)['status'] == 401
         if not host_mode:
             for endpoint in ('/api/instances/global/backup/settings', '/api/storage',
                              f'/instances/{instance_id}/frostagent.v1.SettingsService/ListEnvVars',
@@ -258,7 +266,7 @@ def exercise(root, temporary, host_mode=False):
             overview = api(f'/instances/{instance_id}/frostagent.v1.BotStatusService/GetOverview', {}, FORWARDED)
             assert overview.get('version') == expected_version, overview
         rpc = f'/instances/{instance_id}/frostagent.v1.SettingsService/ListEnvVars'
-        assert read(rpc, {}, FORWARDED)['status'] == 200
+        assert read(rpc, {}, {**FORWARDED, 'Authorization': 'Bearer ' + management_token})['status'] == 200
 
         management = [('/', 'GET', None), ('/api/instances', 'GET', None),
                       ('/api/instances', 'POST', {'name': 'unauthorized'}),
@@ -280,7 +288,7 @@ def exercise(root, temporary, host_mode=False):
         for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             check_management_websocket(read, ws)
-            check_management_websocket(lambda path, headers: read(path, headers={**FORWARDED, **headers}), ws)
+            check_management_websocket(lambda path, headers: read(path, headers={**FORWARDED, **headers}), ws, token=management_token)
             if not host_mode:
                 check_management_websocket(published_read, ws, token='synthetic-control-token')
             check_adapter_websocket(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws)
@@ -356,7 +364,7 @@ def exercise(root, temporary, host_mode=False):
             published = int(command(*compose, 'port', 'frostagent', '1235').rsplit(':', 1)[1])
             check_adapter_websocket(lambda path, headers: published_websocket(published, path, headers), ws)
 
-        # Preserve explicit local-token enforcement; Access adds no mandatory local token.
+        # The legacy local-token flag no longer disables HTTP authentication.
         settings['settings']['MCP_ENFORCE_LOCAL_TOKEN'] = 'true'
         assert api('/api/instances/global/import/settings', settings).get('success')
         assert read('/api/instances', headers=FORWARDED)['status'] == 401

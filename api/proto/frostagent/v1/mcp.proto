@@ -37,9 +37,11 @@ message MCPServerInfo {
   int32 tools_count = 13;
   int32 enabled_tools_count = 14;
   repeated MCPToolInfo tools = 15;
+ bool transport_details_configured = 16;
+ bool last_error_present = 17;
 }
 
-message ListMCPServersRequest {}
+message ListMCPServersRequest { bool redact_credentials = 1; }
 
 message ListMCPServersResponse {
   repeated MCPServerInfo servers = 1;
@@ -47,6 +49,7 @@ message ListMCPServersResponse {
 
 message GetMCPServerRequest {
   string id = 1;
+ bool redact_credentials = 2;
 }
 
 message GetMCPServerResponse {

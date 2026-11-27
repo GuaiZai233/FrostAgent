@@ -15,13 +15,13 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	"github.com/GuaiZai233/FrostAgent/internal/mcp"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox/codeinterpreter"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	logsvc "github.com/GuaiZai233/FrostAgent/internal/service/logs"
-	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	routersvc "github.com/GuaiZai233/FrostAgent/internal/service/modelrouter"
 	settingssvc "github.com/GuaiZai233/FrostAgent/internal/service/settings"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
@@ -210,6 +210,10 @@ func newManager(root string, global *instanceconfig.Store, db *storage.DB, build
 	m.general = mux
 	sandboxCfg := sandbox.LoadConfig(global.Get)
 	m.sandbox = sandbox.NewConfigManager(sandboxCfg)
+	settingsPath, settingsHandler := pbconnect.NewSettingsServiceHandler(settingssvc.NewScoped(nil, global, m.sandbox))
+	mux.Handle(settingsPath, m.globalSettingsHandler(settingsHandler))
+	mux.HandleFunc("/api/diagnostics", m.serveDiagnostics)
+	mux.HandleFunc("/api/storage/status", m.serveDiagnostics)
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
 			logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后重新启用）", err))
@@ -535,7 +539,9 @@ func (m *Manager) stop(id string, i *managed) error {
 	}
 	return err
 }
-func (m *Manager) Enable(id string, enabled bool) error {
+func (m *Manager) Enable(id string, enabled bool) error { return m.enable(id, enabled, false) }
+func (m *Manager) Restart(id string) error              { return m.enable(id, true, true) }
+func (m *Manager) enable(id string, enabled, restart bool) error {
 	i, err := m.lookup(id)
 	if err != nil {
 		return err
@@ -558,7 +564,7 @@ func (m *Manager) Enable(id string, enabled bool) error {
 	list, _ := m.List()
 	for _, info := range list {
 		if info.ID == id {
-			if info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
+			if !restart && info.Enabled == enabled && i.runtime != nil && (i.runtime.Scope.Context().Err() == nil) == enabled {
 				return nil
 			}
 		}
@@ -716,7 +722,7 @@ func (m *Manager) serveInstance(w http.ResponseWriter, r *http.Request, id, path
 	isSendMessage := path == "/api/v1/messages/send" || strings.HasSuffix(path, "/api/v1/messages/send")
 	isActionsCat := strings.HasPrefix(path, "/api/actionscat") || strings.HasPrefix(path, "/api/v1/actionscat")
 	if isActionsCat {
-		if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+		if err := managementauth.Authorize(r.Context(), r.Header, m.mcpGetenv); err != nil {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -915,7 +921,7 @@ func (m *Manager) handleDefaultActionsCat(w http.ResponseWriter, r *http.Request
 		http.Error(w, ErrClosing.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+	if err := managementauth.Authorize(r.Context(), r.Header, m.mcpGetenv); err != nil {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -1029,7 +1035,7 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 	if path == "global/extra-env" || strings.HasPrefix(path, "global/extra-env/") ||
 		path == "global/backup/settings" || path == "global/import/settings" {
 		w.Header().Set("Cache-Control", "no-store")
-		if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(remoteAddr(r), r.Header, m.mcpGetenv); err != nil {
+		if err := managementauth.Authorize(r.Context(), r.Header, m.mcpGetenv); err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -1153,11 +1159,23 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]bool{"success": true})
 		return
 	}
+	if path == "verify" && r.Method == http.MethodPost {
+		m.handleBackupVerify(w, r)
+		return
+	}
+	if path == "global/billing/status" && r.Method == http.MethodGet {
+		m.serveBillingStatus(w, r)
+		return
+	}
 	if path == "restore" && r.Method == http.MethodPost {
 		m.handleInstanceRestore(w, r)
 		return
 	}
 	parts := strings.Split(path, "/")
+	if len(parts) == 2 && r.Method == http.MethodGet && (parts[1] == "trace" || parts[1] == "routes") {
+		m.serveInspection(w, r, parts[0], parts[1])
+		return
+	}
 	if len(parts) == 3 && parts[1] == "import" && parts[2] == "settings" && r.Method == http.MethodPost {
 		m.handleSettingsImport(w, r, parts[0])
 		return
@@ -1252,6 +1270,8 @@ func (m *Manager) api(w http.ResponseWriter, r *http.Request) {
 		err = m.Rename(parts[0], req.Name)
 	case "enable":
 		err = m.Enable(parts[0], req.Enabled)
+	case "restart":
+		err = m.Restart(parts[0])
 	case "delete":
 		err = m.Delete(parts[0], req.All)
 	case "copy":

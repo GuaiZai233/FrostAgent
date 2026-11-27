@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -184,20 +185,24 @@ func CaptureInitialEnv() {
 
 // Service implements frostagent.v1.SettingsServiceHandler.
 type Service struct {
-	storageBackend    string
-	validateEmbedding func(context.Context) error
-	envPath           string
-	config, global    *instanceconfig.Store
-	sandboxManager    SandboxManager
-	externalOverrides map[string]string
-	mu                sync.Mutex
+	storageBackend            string
+	validateEmbedding         func(context.Context) error
+	validateEmbeddingReadOnly func(context.Context) error
+	envPath                   string
+	config, global            *instanceconfig.Store
+	sandboxManager            SandboxManager
+	externalOverrides         map[string]string
+	mu                        sync.Mutex
 }
 
 func NewScoped(c, g *instanceconfig.Store, sandboxManager SandboxManager) *Service {
 	return &Service{config: c, global: g, sandboxManager: sandboxManager}
 }
 
-func (s *Service) SetEmbeddingStorage(backend string, validate func(context.Context) error) {
+func (s *Service) SetEmbeddingStorage(backend string, validate func(context.Context) error, readOnly ...func(context.Context) error) {
+	if len(readOnly) > 0 {
+		s.validateEmbeddingReadOnly = readOnly[0]
+	}
 	s.storageBackend = backend
 	s.validateEmbedding = validate
 }
@@ -287,7 +292,7 @@ func (s *Service) ListEnvVars(
 ) (*connect.Response[v1.ListEnvVarsResponse], error) {
 	var vars []*v1.EnvVar
 	for key, meta := range knownEnvVars {
-		if key == balancequery.ConfigKey {
+		if !configScopeAllows(req.Msg.Scope, key) || key == balancequery.ConfigKey && !req.Msg.RedactSecrets && req.Msg.Scope == "" {
 			continue
 		}
 		val := os.Getenv(key)
@@ -307,7 +312,13 @@ func (s *Service) ListEnvVars(
 		} else if s.global != nil {
 			val = s.global.Get(key)
 		}
+		configured := meta.IsSecret && val != ""
+		source := s.configSource(key, val, inherited)
+		if (req.Msg.RedactSecrets || req.Msg.Scope != "") && meta.IsSecret {
+			val = ""
+		}
 		vars = append(vars, &v1.EnvVar{
+			SecretConfigured: configured, Source: source,
 			Key:         key,
 			Value:       val,
 			IsSecret:    meta.IsSecret,
@@ -315,6 +326,7 @@ func (s *Service) ListEnvVars(
 			IsInherited: inherited,
 		})
 	}
+	sort.Slice(vars, func(i, j int) bool { return vars[i].Key < vars[j].Key })
 	return connect.NewResponse(&v1.ListEnvVarsResponse{EnvVars: vars, StorageBackend: s.storageBackend}), nil
 }
 
@@ -647,8 +659,18 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 	defer s.mu.Unlock()
 	add := func(key, value string, clear bool) error {
 		key = strings.TrimSpace(key)
-		if _, ok := knownEnvVars[key]; !ok {
+		meta, ok := knownEnvVars[key]
+		if !ok {
 			return fmt.Errorf("key %q is not in the allowed environment variables list", key)
+		}
+		if !configScopeAllows(req.Msg.Scope, key) {
+			return fmt.Errorf("setting %q is outside selected scope", key)
+		}
+		if req.Msg.Scope != "" && meta.IsSecret && !req.Msg.SecretInput {
+			return fmt.Errorf("setting %q requires config secret", key)
+		}
+		if req.Msg.Scope != "" && !meta.IsSecret && req.Msg.SecretInput {
+			return fmt.Errorf("setting %q is not secret", key)
 		}
 		if seen[key] {
 			return fmt.Errorf("duplicate setting %q", key)
@@ -657,8 +679,10 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 			if err := validateUpdate(key, value); err != nil {
 				return err
 			}
-			if err := s.validateEmbeddingUpdate(ctx, key, value); err != nil {
-				return err
+			if key == "ENABLE_EMBEDDING" && value == "true" && s.validateEmbeddingReadOnly != nil {
+				if err := s.validateEmbeddingReadOnly(ctx); err != nil {
+					return err
+				}
 			}
 		}
 		store := s.store(key)
@@ -670,15 +694,19 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 		seen[key] = true
 		return nil
 	}
+	validationErrors := []*v1.ConfigValidationError{}
 	for _, update := range req.Msg.Updates {
 		if err := add(update.GetKey(), update.GetValue(), false); err != nil {
-			return failure(err)
+			validationErrors = append(validationErrors, &v1.ConfigValidationError{Key: update.GetKey(), Message: err.Error()})
 		}
 	}
 	for _, key := range req.Msg.ClearKeys {
 		if err := add(key, "", true); err != nil {
-			return failure(err)
+			validationErrors = append(validationErrors, &v1.ConfigValidationError{Key: key, Message: err.Error()})
 		}
+	}
+	if len(validationErrors) > 0 {
+		return connect.NewResponse(&v1.UpdateEnvVarsResponse{Error: "configuration validation failed", Errors: validationErrors}), nil
 	}
 	connectionChanges := make(map[string]*string, len(changes))
 	for _, change := range changes {
@@ -691,6 +719,33 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 	}
 	if err := s.validateConnectionChanges(connectionChanges); err != nil {
 		return failure(err)
+	}
+	if req.Msg.Scope != "" {
+		if err := s.validateScopedCandidate(connectionChanges); err != nil {
+			return failure(err)
+		}
+	}
+	diff := []*v1.ConfigChange{}
+	for _, change := range changes {
+		if change.clear && !change.existed || !change.clear && change.existed && change.previous == change.value {
+			continue
+		}
+		item := &v1.ConfigChange{Key: change.key, Before: change.previous, After: change.value, Removed: change.clear, Secret: knownEnvVars[change.key].IsSecret, ConfiguredBefore: change.previous != "", ConfiguredAfter: !change.clear && change.value != ""}
+		if item.Secret {
+			item.Before = ""
+			item.After = ""
+		}
+		diff = append(diff, item)
+	}
+	if req.Msg.DryRun {
+		return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true, State: "validated", Changes: diff}), nil
+	}
+	for _, change := range changes {
+		if !change.clear {
+			if err := s.validateEmbeddingUpdate(ctx, change.key, change.value); err != nil {
+				return failure(err)
+			}
+		}
 	}
 	databaseChanges := make([]instanceconfig.DatabaseChange, 0, len(changes))
 	hasDatabase := false
@@ -719,7 +774,7 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 	if seen["SANDBOX_ENABLED"] && s.sandboxManager != nil {
 		s.sandboxManager.RefreshEnabled(func() bool { return sandbox.ParseBool(s.store("SANDBOX_ENABLED").Get("SANDBOX_ENABLED"), false) })
 	}
-	return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true}), nil
+	return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true, State: "applied", Changes: diff}), nil
 }
 
 func validateUpdate(key, value string) error {

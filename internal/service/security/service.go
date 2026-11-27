@@ -3,9 +3,10 @@ package security
 import (
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	securityctl "github.com/GuaiZai233/FrostAgent/internal/security"
-	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -39,7 +40,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s != nil {
 		getenv = s.getenv
 	}
-	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, getenv); err != nil {
+	if err := managementauth.Authorize(r.Context(), r.Header, getenv); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -77,6 +78,39 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"unlocked": principal})
 	case path == "/api/security/mode" && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{"mode": s.controller.Mode()})
+	case path == "/api/security/audit" && r.Method == http.MethodGet:
+		limit := 100
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 1000 {
+				limit = n
+			}
+		}
+		events, err := s.controller.Audit.List(0)
+		if err != nil {
+			http.Error(w, "security audit unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		instanceID := strings.TrimSpace(r.URL.Query().Get("instance"))
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		filtered := make([]securityctl.AuditEvent, 0, len(events))
+		for n := len(events) - 1; n >= 0; n-- {
+			event := events[n]
+			if instanceID != "" && event.Instance != instanceID {
+				continue
+			}
+			if id != "" && event.ID != id {
+				continue
+			}
+			filtered = append(filtered, event)
+			if len(filtered) >= limit {
+				break
+			}
+		}
+		if id != "" && len(filtered) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": filtered})
 	case path == "/api/security/mode" && r.Method == http.MethodPost:
 		var body struct {
 			Mode string `json:"mode"`

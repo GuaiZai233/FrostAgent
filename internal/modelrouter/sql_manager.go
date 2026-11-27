@@ -250,7 +250,10 @@ func (m *Manager) writeSQL(cfg Configuration) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: database commit could not be confirmed", ErrOutcomeUnknown)
+	}
+	return nil
 }
 
 // Disabling a shared provider is allowed without rewriting instance policy.

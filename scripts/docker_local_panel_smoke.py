@@ -169,7 +169,7 @@ def peer_request(container, host, port, path='/api/instances', headers=None):
     return json.loads(result.stdout)['status']
 
 
-def probe_peer_management(container, host, port, *, token_required=False):
+def probe_peer_management(container, host, port, *, token_required=False, token=TOKEN):
     """Observe trusted peer reachability; enforce an explicitly enabled token."""
     route = f'{container[:12]} -> {host}:{port}'
     status = peer_request(container, host, port, headers=None)
@@ -180,7 +180,7 @@ def probe_peer_management(container, host, port, *, token_required=False):
     assert status == expected, \
         f'{route}: unexpected management HTTP status {status} without a token (expected {expected})'
     if token_required:
-        status = peer_request(container, host, port, headers=BEARER)
+        status = peer_request(container, host, port, headers={'Authorization': 'Bearer ' + token})
         assert status == 200, f'{route}: correct token returned HTTP {status}, expected 200'
         status = peer_request(container, host, port, headers={
             'Authorization': 'Bearer incorrect-synthetic-token'})
@@ -265,10 +265,11 @@ def enable_local_token(api, instance_id):
     # Credentials use SettingsService; global backup/import deliberately excludes them.
     assert api(f'/instances/{instance_id}/frostagent.v1.SettingsService/UpdateEnvVar',
                {'key': 'MCP_CONTROL_TOKEN', 'value': TOKEN}).get('success')
-    settings = api('/api/instances/global/backup/settings')
+    bearer = {'Authorization': 'Bearer ' + TOKEN}
+    settings = api('/api/instances/global/backup/settings', headers=bearer)
     assert not settings['settings'].get('MCP_CONTROL_TOKEN'), 'backup exposed the control token'
     settings['settings']['MCP_ENFORCE_LOCAL_TOKEN'] = 'true'
-    assert api('/api/instances/global/import/settings', settings).get('success')
+    assert api('/api/instances/global/import/settings', settings, headers=bearer).get('success')
 
 
 def exercise(root):
@@ -308,8 +309,10 @@ def exercise(root):
             def read(endpoint='/', payload=None, headers=None):
                 return http_request('127.0.0.1', panel_port, endpoint, payload, headers)
 
+            management_token = 'synthetic-local-panel-bootstrap-token'
+
             def api(endpoint, payload=None, headers=None):
-                result = read(endpoint, payload, headers)
+                result = read(endpoint, payload, {'Authorization': 'Bearer ' + management_token, **(headers or {})})
                 assert result['status'] == 200, (endpoint, result)
                 return json.loads(result['body'])
 
@@ -317,12 +320,12 @@ def exercise(root):
             asset = re.search(r'<script[^>]+src="([^"]+)"', html)
             assert asset and read(asset.group(1))['status'] == 200
             assert api('/api/instances')['instances'] == []
-            assert read('/api/storage')['status'] == 200
+            assert read('/api/storage')['status'] == 401
             # Exercise the legacy saved-loopback layout. The default wildcard
             # listener and direct published-token path have their own smoke.
             saved = api('/api/instances/global/backup/settings')
             saved['settings']['LISTEN_ADDR'] = '127.0.0.1:8080'
-            result = read('/api/instances/global/import/settings', saved)
+            result = read('/api/instances/global/import/settings', saved, {'Authorization': 'Bearer ' + management_token})
             assert result['status'] in (0, 200), result
             wait_ready(read)
             for endpoint in ('/', '/api/instances', '/api/storage'):
@@ -338,7 +341,7 @@ def exercise(root):
             desktop_gateway = command('docker', 'exec', peer, 'python', '-c',
                                       "import socket; print(socket.gethostbyname('host.docker.internal'))")
 
-            def check_topology_and_peer_access(target_port=8080, *, token_required=False):
+            def check_topology_and_peer_access(target_port=8080, *, token_required=True):
                 app = container('frostagent')
                 actual = inspect(app)
                 assert actual['HostConfig']['PortBindings']['8080/tcp'][0]['HostIp'] == '127.0.0.1'
@@ -363,23 +366,24 @@ def exercise(root):
                 for helper_id, host, port in ((peer, ingress_ip, 8080), (peer, gateway, panel_port),
                                               (peer, desktop_gateway, panel_port),
                                               (panel_peer, ingress_ip, 8080)):
-                    probe_peer_management(helper_id, host, port, token_required=token_required)
+                    probe_peer_management(helper_id, host, port, token_required=token_required, token=management_token)
 
             check_topology_and_peer_access()
             created = api('/api/instances', {'name': 'Synthetic local panel smoke'})
             instance_id = created['id']
             assert api(f'/api/instances/{instance_id}/enable', {'enabled': True}).get('success')
             rpc = f'/instances/{instance_id}/frostagent.v1.SettingsService/ListEnvVars'
-            assert read(rpc, {})['status'] == 200
+            assert read(rpc, {}, {'Authorization': 'Bearer ' + management_token})['status'] == 200
             for adapter in ('onebot',):
                 endpoint = f'/instances/{instance_id}/ws/{adapter}'
-                check_management_websocket(read, endpoint)
+                check_management_websocket(read, endpoint, token=management_token)
                 check_adapter_websocket(lambda path, headers: http_request('127.0.0.1', ws_port, path, headers=headers), endpoint)
                 check_adapter_websocket(lambda path, headers: {'status': peer_request(peer, 'frostagent', adapter_port, path, headers)}, endpoint)
             assert peer_request(peer, 'frostagent', adapter_port, '/api/storage') == 404
             print('PASS: host HTML/assets/API/RPC/WebSocket, adapter connectivity and relay topology')
 
             enable_local_token(api, instance_id)
+            management_token = TOKEN
             assert read('/api/instances')['status'] == 401
             assert read(rpc, {})['status'] == 401
             assert read('/api/instances', headers={'Authorization': 'Bearer incorrect-synthetic-token'})['status'] == 401

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"io"
@@ -179,6 +180,15 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 	}
 	if len(decoded.Images) != len(decoded.Stickers.Entries) {
 		return decoded, fmt.Errorf("ZIP contains unreferenced sticker images")
+	}
+	if err := ValidateSummaries(decoded.Summaries); err != nil {
+		return decoded, err
+	}
+	if err := ValidateStickers(decoded.Stickers, decoded.Images); err != nil {
+		return decoded, err
+	}
+	if err := memory.ValidateSnapshot(memorySnapshot(decoded.Memories)); err != nil {
+		return decoded, err
 	}
 	return decoded, nil
 }

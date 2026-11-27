@@ -161,20 +161,38 @@ func (m *Manager) TestModelForOwner(modelID, owner string) (string, time.Duratio
 	if err != nil {
 		return "", 0, err
 	}
+	return m.testEndpoint(context.Background(), endpoint, model, apiKey)
+}
+
+func (m *Manager) TestActiveModel(ctx context.Context, modelID, endpointID string) (string, time.Duration, error) {
+	if endpointID == "" {
+		return "", 0, fmt.Errorf("endpoint is required")
+	}
+	endpoint, model, key, err := m.previewEndpointForOwner(endpointID, modelID, ActiveConfigurationOwner)
+	if err != nil {
+		return "", 0, err
+	}
+	return m.testEndpoint(ctx, endpoint, model, key)
+}
+
+func (m *Manager) testEndpoint(ctx context.Context, endpoint Endpoint, model Model, apiKey string) (string, time.Duration, error) {
 	client := api.NewClient(endpoint.BaseURL, apiKey, api.Format(endpoint.APIFormat), 0)
 	client.EndpointID = endpoint.ID
 	client.Logger = m.Log()
 	started := time.Now()
 	for _, capability := range model.Capabilities {
 		if capability == "embedding" {
-			result, err := client.Embed(context.Background(), core.EmbeddingRequest{Model: model.UpstreamModel, Input: []string{"Embedding connectivity test"}})
+			result, err := client.Embed(ctx, core.EmbeddingRequest{Model: model.UpstreamModel, Input: []string{"Embedding connectivity test"}})
 			if err != nil {
 				return "", time.Since(started), err
+			}
+			if len(result.Vectors) == 0 {
+				return "", time.Since(started), fmt.Errorf("upstream returned no embedding")
 			}
 			return fmt.Sprintf("Embedding 已返回 %d 维向量", len(result.Vectors[0])), time.Since(started), nil
 		}
 	}
-	response, err := client.Chat(context.Background(), core.ChatRequest{
+	response, err := client.Chat(ctx, core.ChatRequest{
 		Model: model.UpstreamModel,
 		Messages: []core.ChatMessage{{
 			Role:    core.RoleUser,
@@ -192,6 +210,8 @@ func (m *Manager) TestModelForOwner(modelID, owner string) (string, time.Duratio
 	return string(body), duration, nil
 }
 
+const ActiveConfigurationOwner = "\x00active"
+
 func (m *Manager) previewEndpointForOwner(endpointID, modelID, owner string) (Endpoint, Model, string, error) {
 	if m.db != nil {
 		m.db.ModelRouterMu.RLock()
@@ -207,23 +227,37 @@ func (m *Manager) previewEndpointForOwner(endpointID, modelID, owner string) (En
 			m.draft.Endpoints, m.draft.Models = m.active.Endpoints, m.active.Models
 		}
 	}
-	if err := m.checkDraftOwner(owner); err != nil {
+	cfg := m.draft
+	if owner == ActiveConfigurationOwner {
+		cfg = m.active
+	} else if err := m.checkDraftOwner(owner); err != nil {
 		return Endpoint{}, Model{}, "", err
 	}
 	var model Model
 	var err error
 	if modelID != "" {
-		model, err = modelByID(m.draft, modelID)
+		model, err = modelByID(cfg, modelID)
 		if err != nil {
 			return Endpoint{}, Model{}, "", err
 		}
+		if endpointID != "" && endpointID != model.EndpointID {
+			return Endpoint{}, Model{}, "", fmt.Errorf("model does not belong to endpoint")
+		}
 		endpointID = model.EndpointID
 	}
-	endpoint, err := endpointByID(m.draft, endpointID)
+	endpoint, err := endpointByID(cfg, endpointID)
 	if err != nil {
 		return Endpoint{}, Model{}, "", err
 	}
-	apiKey, err := m.secrets.ResolveDraft(endpoint)
+	if owner == ActiveConfigurationOwner && (!endpoint.Enabled || modelID != "" && !model.Enabled) {
+		return Endpoint{}, Model{}, "", fmt.Errorf("model or endpoint is disabled")
+	}
+	var apiKey string
+	if owner == ActiveConfigurationOwner {
+		apiKey, err = m.secrets.Resolve(endpoint)
+	} else {
+		apiKey, err = m.secrets.ResolveDraft(endpoint)
+	}
 	if err != nil {
 		return Endpoint{}, Model{}, "", fmt.Errorf("读取 Endpoint %q 的 API Key 失败: %w", endpoint.DisplayName, err)
 	}

@@ -91,14 +91,14 @@ func TestManager_ActionsCatControlPlaneAuth(t *testing.T) {
 				}
 			}
 
-			// 4. Loopback default without token -> 200
+			// 4. Loopback default without token -> 401
 			{
 				req := newReq(http.MethodGet)
 				req.RemoteAddr = "127.0.0.1:43210"
 				rec := httptest.NewRecorder()
 				m.ServeHTTP(rec, req)
-				if rec.Code != http.StatusOK {
-					t.Fatalf("[%s] expected 200 for loopback default without token, got %d (body: %s)", ep.name, rec.Code, rec.Body.String())
+				if rec.Code != http.StatusUnauthorized {
+					t.Fatalf("[%s] expected 401 for loopback without token without token, got %d (body: %s)", ep.name, rec.Code, rec.Body.String())
 				}
 			}
 

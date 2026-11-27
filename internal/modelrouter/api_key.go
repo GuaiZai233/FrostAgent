@@ -262,6 +262,13 @@ func (b *SecretBackend) apply(previous, next Configuration, persist bool) (func(
 	manualBefore := cloneSecretMap(b.manual)
 	windowsBefore := make(map[string]credentialState)
 	manualChanged := false
+	fail := func(cause error) (func() error, error) {
+		b.manual = cloneSecretMap(manualBefore)
+		if err := restoreWindowsCredentials(windowsBefore); err != nil {
+			return nil, fmt.Errorf("%w: credential compensation failed", ErrOutcomeUnknown)
+		}
+		return nil, cause
+	}
 
 	for _, endpoint := range previous.Endpoints {
 		if !persistentSecretSource(endpoint.APIKeySource) || secretReferenceUsed(next, endpoint.APIKeySource, endpoint.APIKeyRef) {
@@ -273,13 +280,10 @@ func (b *SecretBackend) apply(previous, next Configuration, persist bool) (func(
 			manualChanged = true
 		case APIKeyStorageWindowsCredentialManager:
 			if err := rememberWindowsCredential(windowsBefore, endpoint.APIKeyRef); err != nil {
-				b.manual = manualBefore
-				return nil, err
+				return fail(err)
 			}
 			if err := writeWindowsCredential(endpoint.APIKeyRef, ""); err != nil {
-				b.manual = manualBefore
-				_ = restoreWindowsCredentials(windowsBefore)
-				return nil, fmt.Errorf("清除 Windows 凭据 %q 失败: %w", endpoint.APIKeyRef, err)
+				return fail(fmt.Errorf("credential removal failed: %w", err))
 			}
 		}
 	}
@@ -306,23 +310,17 @@ func (b *SecretBackend) apply(previous, next Configuration, persist bool) (func(
 			manualChanged = true
 		case APIKeyStorageWindowsCredentialManager:
 			if err := rememberWindowsCredential(windowsBefore, mutation.Ref); err != nil {
-				b.manual = manualBefore
-				_ = restoreWindowsCredentials(windowsBefore)
-				return nil, err
+				return fail(err)
 			}
 			if err := writeWindowsCredential(mutation.Ref, value); err != nil {
-				b.manual = manualBefore
-				_ = restoreWindowsCredentials(windowsBefore)
-				return nil, fmt.Errorf("写入 Windows 凭据 %q 失败: %w", mutation.Ref, err)
+				return fail(fmt.Errorf("credential write failed: %w", err))
 			}
 		}
 	}
 
 	if manualChanged && persist {
 		if err := b.writeManualLocked(); err != nil {
-			b.manual = manualBefore
-			_ = restoreWindowsCredentials(windowsBefore)
-			return nil, err
+			return fail(err)
 		}
 	}
 

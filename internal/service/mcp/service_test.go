@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -52,7 +53,7 @@ func TestMCPServiceRPCs(t *testing.T) {
 	mgr := mcpcore.NewManagerWithFactory(store, []string{"memory"}, factory)
 
 	svc := New(mgr)
-	ctx := context.Background()
+	ctx := managementauth.WithLocalAdmin(context.Background())
 
 	// 1. AddMCPServer with sensitive env & header
 	addResp, err := svc.AddMCPServer(ctx, connect.NewRequest(&v1.AddMCPServerRequest{
@@ -212,81 +213,25 @@ func TestMCPServiceRPCs(t *testing.T) {
 }
 
 func TestControlPlaneSecurityBoundary(t *testing.T) {
-	// 1. When no token is set: control plane access is restricted to loopback
-	os.Unsetenv("MCP_CONTROL_TOKEN")
-	os.Unsetenv("ADMIN_TOKEN")
-	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
-	os.Unsetenv("MCP_ENFORCE_LOCAL_TOKEN")
 
-	// Remote address without token -> permission denied
-	hRemote := make(http.Header)
-	err := CheckControlPlaneAuth("192.168.1.100:45678", hRemote)
-	if err == nil {
-		t.Fatalf("expected permission denied for remote control plane access without token")
-	}
-	connectErr, ok := err.(*connect.Error)
-	if !ok || connectErr.Code() != connect.CodePermissionDenied {
-		t.Fatalf("expected CodePermissionDenied, got %v", err)
-	}
-
-	// Loopback addresses -> allowed
-	loopbackAddrs := []string{
-		"127.0.0.1:12345",
-		"[::1]:12345",
-		"localhost:8080",
-		"",
-	}
-	for _, addr := range loopbackAddrs {
-		if err := CheckControlPlaneAuth(addr, make(http.Header)); err != nil {
-			t.Fatalf("expected loopback addr %q to be allowed, got: %v", addr, err)
+	t.Setenv("MCP_CONTROL_TOKEN", "")
+	t.Setenv("ADMIN_TOKEN", "")
+	t.Setenv("ALLOW_REMOTE_MCP_MANAGEMENT", "true")
+	for _, peer := range []string{"127.0.0.1:12345", "[::1]:12345", "198.51.100.4:12345", ""} {
+		if err := CheckControlPlaneAuth(peer, http.Header{}); err == nil {
+			t.Fatal("HTTP management allowed without configured token")
 		}
 	}
-
-	// With ALLOW_REMOTE_MCP_MANAGEMENT=true -> remote allowed
-	os.Setenv("ALLOW_REMOTE_MCP_MANAGEMENT", "true")
-	if err := CheckControlPlaneAuth("192.168.1.100:45678", make(http.Header)); err != nil {
-		t.Fatalf("expected allowed with ALLOW_REMOTE_MCP_MANAGEMENT=true, got: %v", err)
+	t.Setenv("MCP_CONTROL_TOKEN", "super-secret-token")
+	for _, peer := range []string{"127.0.0.1:12345", "[::1]:12345", "198.51.100.4:12345", ""} {
+		for _, token := range []string{"", "Bearer wrong", "Bearer super-secret-token"} {
+			header := http.Header{"Authorization": []string{token}}
+			err := CheckControlPlaneAuth(peer, header)
+			if (err == nil) != (token == "Bearer super-secret-token") {
+				t.Fatalf("unexpected HTTP authentication for %q: %v", peer, err)
+			}
+		}
 	}
-	os.Unsetenv("ALLOW_REMOTE_MCP_MANAGEMENT")
-
-	// 2. When MCP_CONTROL_TOKEN is set
-	os.Setenv("MCP_CONTROL_TOKEN", "super-secret-token")
-	defer os.Unsetenv("MCP_CONTROL_TOKEN")
-
-	// Remote without token -> unauthenticated
-	if err := CheckControlPlaneAuth("192.168.1.100:45678", make(http.Header)); err == nil {
-		t.Fatalf("expected unauthenticated when remote client lacks token")
-	}
-
-	// Remote with wrong token -> unauthenticated
-	hWrongToken := make(http.Header)
-	hWrongToken.Set("Authorization", "Bearer wrong")
-	if err := CheckControlPlaneAuth("192.168.1.100:45678", hWrongToken); err == nil {
-		t.Fatalf("expected unauthenticated with wrong token")
-	}
-
-	// Remote with valid token -> allowed
-	hValidToken := make(http.Header)
-	hValidToken.Set("Authorization", "Bearer super-secret-token")
-	if err := CheckControlPlaneAuth("192.168.1.100:45678", hValidToken); err != nil {
-		t.Fatalf("expected allowed with valid bearer token, got: %v", err)
-	}
-
-	// Local client without token -> allowed by default (preventing Web UI lockout on localhost)
-	if err := CheckControlPlaneAuth("127.0.0.1:12345", make(http.Header)); err != nil {
-		t.Fatalf("expected local same-origin without token to be allowed by default, got: %v", err)
-	}
-
-	// Local client with MCP_ENFORCE_LOCAL_TOKEN=true -> requires token
-	os.Setenv("MCP_ENFORCE_LOCAL_TOKEN", "true")
-	if err := CheckControlPlaneAuth("127.0.0.1:12345", make(http.Header)); err == nil {
-		t.Fatalf("expected local client without token to be rejected when MCP_ENFORCE_LOCAL_TOKEN=true")
-	}
-	if err := CheckControlPlaneAuth("127.0.0.1:12345", hValidToken); err != nil {
-		t.Fatalf("expected local client with valid token to be allowed when MCP_ENFORCE_LOCAL_TOKEN=true, got: %v", err)
-	}
-	os.Unsetenv("MCP_ENFORCE_LOCAL_TOKEN")
-
 	// End-to-end via service RPC with token enforcement
 	os.Setenv("MCP_ENFORCE_LOCAL_TOKEN", "true")
 	tmpDir, err := os.MkdirTemp("", "mcpsvc_sec_test_*")
@@ -351,4 +296,3 @@ func TestControlPlaneSecurityBoundary(t *testing.T) {
 		t.Fatalf("expected Cookie header to be masked, got %q", cookieHeaders["Cookie"])
 	}
 }
-

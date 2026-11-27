@@ -60,7 +60,7 @@ var resetHints = map[string]string{
 	"SANDBOX_SESSION_NAMESPACE":            "frostagent",
 	"MCP_CONTROL_TOKEN":                    "复用兼容管理令牌",
 	"ADMIN_TOKEN":                          "未配置兼容令牌",
-	"MCP_ENFORCE_LOCAL_TOKEN":              "关闭本机强制令牌；远程管理仍需令牌",
+	"MCP_ENFORCE_LOCAL_TOKEN":              "所有 HTTP 管理请求始终要求令牌；此兼容字段不再关闭鉴权",
 	"AGENT_MAX_ITERATIONS":                 "35",
 	"ACTIONSCAT_ENABLED":                   "开启",
 	"ACTIONSCAT_ENDPOINT":                  "未配置服务地址",

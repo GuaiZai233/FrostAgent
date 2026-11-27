@@ -78,6 +78,10 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			const controlToken = "synthetic-listener-control-token"
+			if err := manager.GlobalConfig().Update("MCP_CONTROL_TOKEN", controlToken, false); err != nil {
+				t.Fatal(err)
+			}
 			management := httptest.NewServer(managementMux(gateway))
 			defer management.Close()
 			settings := frostagentv1connect.NewSettingsServiceClient(management.Client(), management.URL+"/instances/"+info.ID)
@@ -89,15 +93,13 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 					&v1.EnvVar{Key: prefix + "_WS_URL", Value: "ws" + strings.TrimPrefix(upstream.URL, "http")},
 				)
 			}
-			response, err := settings.UpdateEnvVars(context.Background(), connect.NewRequest(&v1.UpdateEnvVarsRequest{Updates: updates}))
+			request := connect.NewRequest(&v1.UpdateEnvVarsRequest{Updates: updates})
+			request.Header().Set("Authorization", "Bearer "+controlToken)
+			response, err := settings.UpdateEnvVars(context.Background(), request)
 			if err != nil || !response.Msg.Success {
 				t.Fatalf("configure adapters: %v %v", response, err)
 			}
 			if err := manager.Enable(info.ID, true); err != nil {
-				t.Fatal(err)
-			}
-			const controlToken = "synthetic-listener-control-token"
-			if err := manager.GlobalConfig().Update("MCP_CONTROL_TOKEN", controlToken, false); err != nil {
 				t.Fatal(err)
 			}
 			remoteManagement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +144,9 @@ func TestAdapterListenerMockIsolationPreservesDirectChat(t *testing.T) {
 					// Non-browser peers can omit Origin; the listener must still reject them.
 					assertHandshake(adapterListener.URL, path+attempt.query, headers, http.StatusForbidden)
 					headers.Set("Origin", management.URL)
+					headers.Set("Authorization", "Bearer "+controlToken)
 					assertHandshake(management.URL, path+attempt.query, headers, http.StatusSwitchingProtocols)
+					headers.Del("Authorization")
 					headers.Del("Origin")
 					assertHandshake(remoteManagement.URL, path+attempt.query, headers, http.StatusUnauthorized)
 					headers.Set("Origin", remoteManagement.URL)

@@ -58,6 +58,10 @@ func TestSessionHistoryInspection(t *testing.T) {
 	if err != nil || len(response.Msg.Records) != 0 {
 		t.Fatal("history crossed instance scope", response, err)
 	}
+	coldList, err := New(&llm.Engine{ChatHistory: chathistory.NewRecorder(store, nil, nil)}, "test", "").GetSessions(ctx, connect.NewRequest(&v1.GetSessionsRequest{}))
+	if err != nil || len(coldList.Msg.Sessions) != 1 || coldList.Msg.Sessions[0].SessionId != memory.CanonicalSessionKey("qq:private:"+record.TargetID) {
+		t.Fatalf("session list lost persisted archive without a live session manager: %v %v", coldList, err)
+	}
 	for _, invalid := range []*v1.GetSessionHistoryRequest{
 		{}, {SessionId: "mock:fixture:private:fixture-user"}, {SessionId: "invalid"}, {SessionId: "private:"},
 		{SessionId: "discord_group_synthetic-group"}, {SessionId: "onebot_private_synthetic-user"},

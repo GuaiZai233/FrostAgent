@@ -264,10 +264,10 @@ class LocalPanelGuardTests(unittest.TestCase):
         self.assertEqual(api.call_args_list, [
             call('/instances/a1b2c3d4/frostagent.v1.SettingsService/UpdateEnvVar',
                  {'key': 'MCP_CONTROL_TOKEN', 'value': TOKEN}),
-            call('/api/instances/global/backup/settings'),
+            call('/api/instances/global/backup/settings', headers=BEARER),
             call('/api/instances/global/import/settings', {
                 'format_version': 1, 'settings': {
-                    'MCP_CONTROL_TOKEN': '', 'MCP_ENFORCE_LOCAL_TOKEN': 'true'}}),
+                    'MCP_CONTROL_TOKEN': '', 'MCP_ENFORCE_LOCAL_TOKEN': 'true'}}, headers=BEARER),
         ])
 
     def test_published_ports_are_rediscovered_after_restart(self):

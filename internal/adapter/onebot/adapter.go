@@ -876,3 +876,16 @@ func silentIgnoreEvent(event model.OneBotEvent) bool {
 	}
 	return false
 }
+
+// RealConnectionCount excludes browser Direct Chat from platform diagnostics.
+func (a *Adapter) RealConnectionCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	count := 0
+	for conn := range a.conns {
+		if !conn.mock && !conn.closed.Load() {
+			count++
+		}
+	}
+	return count
+}

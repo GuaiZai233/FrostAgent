@@ -158,7 +158,7 @@ func (s *Service) GetSessions(
 	ctx context.Context,
 	req *connect.Request[v1.GetSessionsRequest],
 ) (*connect.Response[v1.GetSessionsResponse], error) {
-	if s.engine.SessionManager == nil {
+	if s.engine == nil {
 		return connect.NewResponse(&v1.GetSessionsResponse{}), nil
 	}
 
@@ -183,40 +183,42 @@ func (s *Service) GetSessions(
 		updatedAt time.Time
 	}
 	viewsByID := make(map[string]sessionView)
-	sessions := s.engine.SessionManager.ListSessions(0, 0)
-	for _, sess := range sessions {
-		if sess.IsMock() {
-			continue
-		}
-		platform := derivePlatform(sess.ConversationID)
+	if s.engine.SessionManager != nil {
+		sessions := s.engine.SessionManager.ListSessions(0, 0)
+		for _, sess := range sessions {
+			if sess.IsMock() {
+				continue
+			}
+			platform := derivePlatform(sess.ConversationID)
 
-		sess.Lock()
-		msgCount := len(sess.History)
-		createdAt := sess.CreatedAt
-		updatedAt := sess.UpdatedAt
-		sess.Unlock()
-		groupName := sess.GroupName()
-		summary := sess.GroupRunningSummary()
-		if isPrivateSession(sess.ConversationID) {
-			summary = sess.PrivateRunningSummary()
-		} else if !llm.GroupCompactAllowed(s.engine.Getenv, sess.ConversationID) {
-			summary = ""
-		}
-		if groupName == "" && s.engine.SessionManager != nil {
-			groupName = s.engine.SessionManager.GetGroupName(sess.ConversationID)
-		}
-		viewsByID[sess.ConversationID] = sessionView{
-			info: &v1.SessionInfo{
-				SessionId:    sess.ConversationID,
-				Platform:     platform,
-				MessageCount: int32(msgCount),
-				CreatedAt:    createdAt.Format(time.RFC3339),
-				LastActive:   updatedAt.Format(time.RFC3339),
-				GroupSummary: summary,
-				GroupName:    groupName,
-			},
-			createdAt: createdAt,
-			updatedAt: updatedAt,
+			sess.Lock()
+			msgCount := len(sess.History)
+			createdAt := sess.CreatedAt
+			updatedAt := sess.UpdatedAt
+			sess.Unlock()
+			groupName := sess.GroupName()
+			summary := sess.GroupRunningSummary()
+			if isPrivateSession(sess.ConversationID) {
+				summary = sess.PrivateRunningSummary()
+			} else if !llm.GroupCompactAllowed(s.engine.Getenv, sess.ConversationID) {
+				summary = ""
+			}
+			if groupName == "" {
+				groupName = s.engine.SessionManager.GetGroupName(sess.ConversationID)
+			}
+			viewsByID[sess.ConversationID] = sessionView{
+				info: &v1.SessionInfo{
+					SessionId:    sess.ConversationID,
+					Platform:     platform,
+					MessageCount: int32(msgCount),
+					CreatedAt:    createdAt.Format(time.RFC3339),
+					LastActive:   updatedAt.Format(time.RFC3339),
+					GroupSummary: summary,
+					GroupName:    groupName,
+				},
+				createdAt: createdAt,
+				updatedAt: updatedAt,
+			}
 		}
 	}
 
@@ -226,7 +228,7 @@ func (s *Service) GetSessions(
 			s.engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("读取持久化群聊总结失败: %v", err))
 		} else {
 			for _, record := range records {
-				if s.engine.SessionManager.HasCheckpoint(record.SessionID) {
+				if s.engine.SessionManager != nil && s.engine.SessionManager.HasCheckpoint(record.SessionID) {
 					continue
 				}
 				// Persisted summaries are subject to the same group compact whitelist as live ones.
@@ -316,8 +318,34 @@ func (s *Service) GetSessions(
 			}
 		}
 	}
+	if s.engine.ChatHistory != nil && s.engine.ChatHistory.Store != nil {
+		scopes, err := s.engine.ChatHistory.Store.Scopes(ctx)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, errors.New("session archive unavailable"))
+		}
+		for _, scope := range scopes {
+			id := scope.Platform + ":" + scope.MessageType + ":" + scope.TargetID
+			id = memory.CanonicalSessionKey(id)
+			exists := false
+			for _, alias := range memory.SessionKeyAliases(id) {
+				if _, ok := viewsByID[alias]; ok {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				viewsByID[id] = sessionView{info: &v1.SessionInfo{SessionId: id, Platform: derivePlatform(id)}}
+			}
+		}
+	}
 	views := make([]sessionView, 0, len(viewsByID))
 	for _, view := range viewsByID {
+		if scope, ok := chatHistoryScope(view.info.SessionId); ok && s.mockArchiveScope(scope) {
+			continue
+		}
+		if req.Msg.Platform != "" && !(strings.EqualFold(req.Msg.Platform, view.info.Platform) || memory.IsQQPlatform(req.Msg.Platform) && memory.IsQQPlatform(view.info.Platform)) {
+			continue
+		}
 		views = append(views, view)
 	}
 	sort.SliceStable(views, func(i, j int) bool {
@@ -483,6 +511,11 @@ func (s *Service) GetSessionContext(
 			Messages []*v1.SessionHistoryMessageProto `json:"messages"`
 		}{Model: resp.Model, Messages: messages}, "", "  ")
 		resp.PromptText = string(preview)
+		if req.Msg.IncludePrompt != nil && !req.Msg.GetIncludePrompt() {
+			resp.PromptText = ""
+			resp.SystemPrompt = ""
+			resp.ActualRequestJson = ""
+		}
 		return connect.NewResponse(resp), nil
 	}
 
@@ -505,6 +538,11 @@ func (s *Service) GetSessionContext(
 	promptBuilder.WriteString(fmt.Sprintf("<response_context>\n当前会话: %s\n平台: %s\n</response_context>", sessionID, platform))
 	resp.PromptText = promptBuilder.String()
 
+	if req.Msg.IncludePrompt != nil && !req.Msg.GetIncludePrompt() {
+		resp.PromptText = ""
+		resp.SystemPrompt = ""
+		resp.ActualRequestJson = ""
+	}
 	return connect.NewResponse(resp), nil
 }
 

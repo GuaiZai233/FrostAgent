@@ -10,8 +10,9 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
+	"github.com/GuaiZai233/FrostAgent/internal/managementipc"
 	"github.com/GuaiZai233/FrostAgent/internal/modelcatalog"
-	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	"github.com/GuaiZai233/FrostAgent/internal/updatecheck"
 	"maps"
 	"net/http"
@@ -24,6 +25,10 @@ import (
 )
 
 func run() error {
+	if err := logs.General.EnablePersistence(filepath.Join("data", "control-plane-logs"), logs.DefaultPersistentBytes); err != nil {
+		logs.General.Warn(logs.SYSTEM, "control-plane log persistence is degraded")
+	}
+	defer logs.General.StopPersistence()
 	catalogCtx, stopCatalog := context.WithCancel(context.Background())
 	defer stopCatalog()
 	modelcatalog.Start(catalogCtx, modelcatalog.New(
@@ -44,7 +49,27 @@ func run() error {
 	if err := gateway.prepare(manager); err != nil {
 		return err
 	}
+	if instanceconfig.ContainerManagement == "true" || instanceconfig.ManagementLoopbackOnly == "true" {
+		listen, wsListen := global.Get("LISTEN_ADDR"), global.Get("WS_LISTEN_ADDR")
+		if listen == "" {
+			listen = instanceconfig.DefaultListenAddr
+		}
+		if wsListen == "" {
+			wsListen = instanceconfig.DefaultWSListenAddr
+		}
+		if err := instanceconfig.ValidateContainerListeners(listen, wsListen); err != nil {
+			return err
+		}
+	}
 	mux := managementMux(gateway)
+	local, err := managementipc.Listen(managementipc.Endpoint())
+	if err != nil {
+		return fmt.Errorf("local management: %w", err)
+	}
+	localServer := managementipc.Server(mux)
+	defer localServer.Close()
+	localErrors := make(chan error, 1)
+	go func() { localErrors <- localServer.Serve(local) }()
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(gateway))
 	listeners := newListenerSet()
@@ -85,6 +110,7 @@ func run() error {
 	defer ticker.Stop()
 	select {
 	case <-ctx.Done():
+	case err = <-localErrors:
 	case err = <-listeners.errors:
 	case <-ticker.C:
 	}
@@ -126,12 +152,14 @@ func run() error {
 		}
 		select {
 		case <-ctx.Done():
+		case err = <-localErrors:
 		case err = <-listeners.errors:
 		case <-ticker.C:
 		}
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = localServer.Shutdown(shutdown)
 	listeners.Close(shutdown)
 	if err == http.ErrServerClosed {
 		return nil
@@ -167,6 +195,9 @@ func managementMux(manager http.Handler) http.Handler {
 func managementMuxWithUpdateSource(manager http.Handler, source updatecheck.Source) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/storage", manager)
+	mux.Handle("/api/storage/status", manager)
+	mux.Handle("/api/diagnostics", manager)
+	mux.Handle("/frostagent.v1.SettingsService/", manager)
 	mux.Handle("/api/instances", manager)
 	mux.Handle("/api/update-check", managementReadHandler(manager, updatecheck.Handler(source)))
 	mux.Handle("/api/version", managementReadHandler(manager, updatecheck.VersionHandler(source)))
@@ -205,18 +236,10 @@ func managementAuthMiddleware(next http.Handler, getenv func(string) string) htt
 		mock := isAdapterWebSocketPath(path) && directchat.IsRequest(r)
 		management := strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/instances/") ||
 			strings.HasPrefix(path, "/frostagent.v1.")
-		if !management || path == "/api/v1/messages/send" || strings.HasPrefix(path, "/frostagent.v1.MCPService/") ||
+		if !management || path == "/api/v1/messages/send" ||
 			(isAdapterOrMessagePath(path) && !mock) {
 			next.ServeHTTP(w, r)
 			return
-		}
-		peer := r.RemoteAddr
-		// Only an actual loopback connector retains the deployment's Access policy.
-		// Docker bridge and host-published requests always require a control token.
-		container := instanceconfig.ContainerManagement == "true" || instanceconfig.ManagementLoopbackOnly == "true"
-		trustedLocalConnector := container && isLoopbackHost(peer)
-		if !trustedLocalConnector && (!isLoopbackHost(r.Host) || hasProxyHeaders(r)) {
-			peer = "remote-management"
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		header := r.Header
@@ -228,11 +251,12 @@ func managementAuthMiddleware(next http.Handler, getenv func(string) string) htt
 				return
 			}
 		}
-		if err := mcpsvc.CheckSensitiveControlPlaneAuthScoped(peer, header, getenv); err != nil {
+		ctx, err := managementauth.Authenticate(r.Context(), header, getenv)
+		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

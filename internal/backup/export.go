@@ -140,3 +140,12 @@ func ValidateFormat(version int) error {
 	}
 	return nil
 }
+
+// ForConfigurationCopy removes URL-embedded authentication from copied
+// endpoint definitions. Instance ZIP exports keep their historical URL format.
+func ForConfigurationCopy(data Settings) Settings {
+	for n := range data.ModelRouter.Endpoints {
+		data.ModelRouter.Endpoints[n].BaseURL = publicURL(data.ModelRouter.Endpoints[n].BaseURL)
+	}
+	return data
+}

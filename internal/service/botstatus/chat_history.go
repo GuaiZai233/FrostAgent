@@ -64,7 +64,11 @@ func (s *Service) GetSessionHistory(ctx context.Context, req *connect.Request[v1
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("聊天历史读取失败，请稍后重试"))
 	}
-	response := &v1.GetSessionHistoryResponse{NextPageToken: page.NextCursor}
+	coverage, err := s.engine.ChatHistory.Store.Coverage(readCtx, scope)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("archive coverage unavailable"))
+	}
+	response := &v1.GetSessionHistoryResponse{NextPageToken: page.NextCursor, Coverage: archiveCoverage(coverage)}
 	for _, record := range page.Records {
 		response.Records = append(response.Records, &v1.SessionChatRecord{
 			Id: record.ID, MessageId: record.MessageID, SenderId: record.SenderID,

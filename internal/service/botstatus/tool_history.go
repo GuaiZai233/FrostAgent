@@ -32,6 +32,12 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("工具参数读取失败"))
 	}
+	if req.Msg.SessionId != "" {
+		scope, ok := chatHistoryScope(req.Msg.SessionId)
+		if !ok || record.Scope.Canonical() != scope || s.mockArchiveScope(scope) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("tool call is outside the selected session"))
+		}
+	}
 	visible := record.ForModel()
 	available := !record.Restricted && record.State == "complete"
 	response := &v1.GetToolHistoryEntryResponse{RefId: record.RefID, Tool: record.Tool,

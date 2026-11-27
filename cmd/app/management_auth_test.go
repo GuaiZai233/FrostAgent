@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/instance"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,7 @@ import (
 func localManagementRequest(method, path string, body io.Reader) *http.Request {
 	request := httptest.NewRequest(method, path, body)
 	request.RemoteAddr, request.Host = "127.0.0.1:12345", "localhost:8080"
-	return request
+	return request.WithContext(managementauth.WithLocalAdmin(request.Context()))
 }
 
 func TestContainerConnectorKeepsLoopbackAuthenticationBoundary(t *testing.T) {
@@ -32,7 +33,7 @@ func TestContainerConnectorKeepsLoopbackAuthenticationBoundary(t *testing.T) {
 		enforceLocal        bool
 		status              int
 	}{
-		{"connector loopback hop", "127.0.0.1:12345", "", false, http.StatusNoContent},
+		{"connector loopback hop", "127.0.0.1:12345", "", false, http.StatusUnauthorized},
 		{"remote cannot claim connector", "198.51.100.10:12345", "", false, http.StatusUnauthorized},
 		{"local token enforcement remains", "127.0.0.1:12345", "", true, http.StatusUnauthorized},
 		{"explicit local bearer token", "127.0.0.1:12345", "Bearer synthetic-control-token", true, http.StatusNoContent},
@@ -218,7 +219,7 @@ func TestManagementAuthLocalProxyAndAdapterBoundaries(t *testing.T) {
 		name, path, host, remote, token string
 		status                          int
 	}{
-		{"local", "/api/instances", "localhost:8080", "127.0.0.1:12345", "", 204},
+		{"local", "/api/instances", "localhost:8080", "127.0.0.1:12345", "", 401},
 		{"remote host via local proxy", "/api/instances", "panel.example", "127.0.0.1:12345", "", 401},
 		{"proxy authorized", "/api/instances", "panel.example", "127.0.0.1:12345", "Bearer synthetic-control-token", 204},
 		{"remote with local host", "/api/instances", "localhost:8080", "198.51.100.10:12345", "", 401},
@@ -272,4 +273,12 @@ func TestManagementAuthLocalProxyAndAdapterBoundaries(t *testing.T) {
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("local enforcement bypassed: %d", response.Code)
 	}
+}
+
+// localAdminTestHandler simulates the identity already checked by an IPC listener.
+// HTTP authentication assertions use managementMux directly.
+func localAdminTestHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(managementauth.WithLocalAdmin(r.Context())))
+	})
 }

@@ -49,6 +49,35 @@ func ReferencedConfiguration(cfg Configuration) Configuration {
 // providers or credentials. Conflicting IDs are remapped with their bindings.
 // The caller holds DB.ModelRouterMu across the enclosing transaction.
 func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg Configuration) error {
+
+	plan, err := planImportedConfigurationTx(ctx, tx, cfg)
+	if err != nil {
+		return err
+	}
+	cfg, catalog, changed := plan.configuration, plan.catalog, plan.changed
+	if changed {
+		catalog.Revision++
+		if err := writeCatalogTx(ctx, db, tx, catalog); err != nil {
+			return err
+		}
+	}
+	var revision int64
+	err = tx.QueryRowContext(ctx, db.Bind(`SELECT revision FROM model_revisions WHERE instance_id = ?`), instanceID).Scan(&revision)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	cfg.Revision = revision + 1
+	return writeConfigurationTx(ctx, db, tx, instanceID, cfg)
+}
+
+type importedConfiguration struct {
+	configuration         Configuration
+	catalog               Configuration
+	changed               bool
+	endpointMap, modelMap map[string]string
+}
+
+func planImportedConfigurationTx(ctx context.Context, tx *sql.Tx, cfg Configuration) (importedConfiguration, error) {
 	cfg = cloneConfiguration(cfg)
 	for i := range cfg.Endpoints {
 		cfg.Endpoints[i].APIKeySource = ""
@@ -57,11 +86,11 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 	}
 	normalizeConfiguration(&cfg)
 	if err := validateStoredConfiguration(cfg); err != nil {
-		return err
+		return importedConfiguration{}, err
 	}
 	catalog, err := readCatalogTx(ctx, tx)
 	if err != nil {
-		return err
+		return importedConfiguration{}, err
 	}
 	endpointIDs, modelIDs, endpointNames, modelNames := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, e := range catalog.Endpoints {
@@ -76,13 +105,13 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 	// imported provider must not adopt that credential merely by matching its ID.
 	rows, err := tx.QueryContext(ctx, `SELECT ref FROM provider_secrets`)
 	if err != nil {
-		return err
+		return importedConfiguration{}, err
 	}
 	for rows.Next() {
 		var ref string
 		if err := rows.Scan(&ref); err != nil {
 			rows.Close()
-			return err
+			return importedConfiguration{}, err
 		}
 		if strings.HasPrefix(ref, "endpoint/") {
 			endpointIDs[strings.TrimPrefix(ref, "endpoint/")] = true
@@ -91,7 +120,7 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return err
+		return importedConfiguration{}, err
 	}
 	endpointMap, modelMap := map[string]string{}, map[string]string{}
 	changed := false
@@ -110,7 +139,7 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 		if endpointIDs[incoming.ID] {
 			incoming.ID, err = importedID(endpointIDs)
 			if err != nil {
-				return err
+				return importedConfiguration{}, err
 			}
 		}
 		incoming.DisplayName = importedName(incoming.DisplayName, endpointNames)
@@ -136,7 +165,7 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 		if modelIDs[incoming.ID] {
 			incoming.ID, err = importedID(modelIDs)
 			if err != nil {
-				return err
+				return importedConfiguration{}, err
 			}
 		}
 		incoming.DisplayName = importedName(incoming.DisplayName, modelNames)
@@ -159,21 +188,82 @@ func WriteImportedConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.T
 	}
 	cfg.Endpoints, cfg.Models = catalog.Endpoints, catalog.Models
 	if err := validateStoredConfiguration(cfg); err != nil {
-		return err
+		return importedConfiguration{}, err
 	}
-	if changed {
-		catalog.Revision++
-		if err := writeCatalogTx(ctx, db, tx, catalog); err != nil {
-			return err
+	return importedConfiguration{cfg, catalog, changed, endpointMap, modelMap}, nil
+}
+
+// ImportImpact is computed without modifying the catalog. New IDs are allocated
+// again during restore, under the catalog mutation lock.
+type ImportImpact struct {
+	EndpointsAdded               int      `json:"endpoints_added"`
+	ModelsAdded                  int      `json:"models_added"`
+	RemappedEndpoints            []string `json:"remapped_endpoints"`
+	RemappedModels               []string `json:"remapped_models"`
+	MissingCredentials           []string `json:"missing_credentials"`
+	CredentialStateUnavailable   []string `json:"credential_state_unavailable"`
+	ExistingCredentialsPreserved bool     `json:"existing_credentials_preserved"`
+}
+
+func PreviewImportedConfiguration(ctx context.Context, db *storage.DB, cfg Configuration) (ImportImpact, error) {
+	db.ModelRouterMu.RLock()
+	defer db.ModelRouterMu.RUnlock()
+	tx, err := db.SQL.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ImportImpact{}, err
+	}
+	defer tx.Rollback()
+	before, err := readCatalogTx(ctx, tx)
+	if err != nil {
+		return ImportImpact{}, err
+	}
+	plan, err := planImportedConfigurationTx(ctx, tx, cfg)
+	if err != nil {
+		return ImportImpact{}, err
+	}
+	impact := ImportImpact{EndpointsAdded: len(plan.catalog.Endpoints) - len(before.Endpoints), ModelsAdded: len(plan.catalog.Models) - len(before.Models), ExistingCredentialsPreserved: true, RemappedEndpoints: []string{}, RemappedModels: []string{}, MissingCredentials: []string{}}
+	for _, e := range cfg.Endpoints {
+		target := plan.endpointMap[e.ID]
+		if target != e.ID {
+			impact.RemappedEndpoints = append(impact.RemappedEndpoints, e.ID)
+		}
+		var reused *Endpoint
+		for _, old := range before.Endpoints {
+			if old.ID == target {
+				v := old
+				reused = &v
+				break
+			}
+		}
+		if reused == nil {
+			impact.MissingCredentials = append(impact.MissingCredentials, e.ID)
+			continue
+		}
+		configured := false
+		if reused.APIKeySource == APIKeyStorageManual || reused.APIKeySource == "" {
+			var count int
+			if err := tx.QueryRowContext(ctx, db.Bind(`SELECT COUNT(*) FROM provider_secrets WHERE ref=? AND secret<>''`), reused.APIKeyRef).Scan(&count); err != nil {
+				return ImportImpact{}, err
+			}
+			configured = count > 0
+		} else {
+			value, err := (&SecretBackend{}).Resolve(*reused)
+			if err != nil {
+				impact.CredentialStateUnavailable = append(impact.CredentialStateUnavailable, e.ID)
+				continue
+			}
+			configured = value != ""
+		}
+		if !configured {
+			impact.MissingCredentials = append(impact.MissingCredentials, e.ID)
 		}
 	}
-	var revision int64
-	err = tx.QueryRowContext(ctx, db.Bind(`SELECT revision FROM model_revisions WHERE instance_id = ?`), instanceID).Scan(&revision)
-	if err != nil && err != sql.ErrNoRows {
-		return err
+	for _, model := range cfg.Models {
+		if plan.modelMap[model.ID] != model.ID {
+			impact.RemappedModels = append(impact.RemappedModels, model.ID)
+		}
 	}
-	cfg.Revision = revision + 1
-	return writeConfigurationTx(ctx, db, tx, instanceID, cfg)
+	return impact, nil
 }
 
 func readCatalogTx(ctx context.Context, tx *sql.Tx) (Configuration, error) {
