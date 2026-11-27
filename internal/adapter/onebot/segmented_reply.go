@@ -7,7 +7,7 @@ import (
 
 // Final progress already owns public history and the live transcript. Preserve
 // its group-context projection on failure without automatic memory extraction.
-func recordPartialReply(session *llm.SessionContext, engine *llm.Engine, epoch uint64, group bool, text string) {
+func recordPartialReply(session *llm.SessionContext, engine *llm.Engine, epoch uint64, group bool, text string, imageKeys ...string) {
 	if session == nil || engine == nil {
 		return
 	}
@@ -23,7 +23,7 @@ func recordPartialReply(session *llm.SessionContext, engine *llm.Engine, epoch u
 		if engine.GroupCompactor != nil {
 			maxBuffer = engine.GroupCompactor.MaxBufferSize()
 		}
-		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: llm.FormatMessageTime(time.Now())}, maxBuffer)
+		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: llm.FormatMessageTime(time.Now()), ImageKeys: imageKeys}, maxBuffer)
 	})
 	engine.TrimSession(session)
 }

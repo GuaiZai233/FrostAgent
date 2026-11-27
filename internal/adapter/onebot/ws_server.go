@@ -877,7 +877,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						if engine.GroupCompactor != nil {
 							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 						}
-						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: llm.FormatMessageTime(time.Now())}, maxBufferSize)
+						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: llm.FormatMessageTime(time.Now()), ImageKeys: qqDeliveredImageKeys(messages)}, maxBufferSize)
 						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
 							turn.StagedGuard().AddSequence(seq)
 						} else {
@@ -1371,7 +1371,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return
 			}
 			if len(acknowledged) > 0 {
-				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged))
+				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged), qqDeliveredImageKeys(acknowledged)...)
 			}
 			if session != nil {
 				reason := result.Content
@@ -1618,6 +1618,7 @@ func captureGroupCompactText(event model.OneBotEvent, text string, engine *llm.E
 			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
 			Time:      llm.FormatMessageTime(time.Now()),
+			ImageKeys: retainEventImages(event, engine),
 		},
 		maxBufferSize,
 	)
@@ -1664,6 +1665,7 @@ func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Eng
 			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
 			Time:      llm.FormatMessageTime(time.Now()),
+			ImageKeys: retainEventImages(event, engine),
 		},
 		maxBufferSize,
 		strconv.FormatInt(event.UserID, 10),

@@ -1,3 +1,4 @@
+import { formatMessageTime } from '../src/utils/formatters';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
@@ -633,11 +634,11 @@ renderPromptInspector(
 );
 assert.equal(
   container.querySelector('.group-msg-row.is-user .msg-time')!.textContent,
-  '20:34:34',
+  formatMessageTime('2026-11-17 20:34:34'),
 );
 assert.equal(
   container.querySelector('.group-msg-row.is-assistant .msg-time')!.textContent,
-  '20:34:40',
+  formatMessageTime('2026-11-17 20:34:40'),
 );
 assert.equal(
   container.querySelector('.group-msg-row.is-user .msg-content')!.textContent,

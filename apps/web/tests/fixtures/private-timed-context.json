@@ -20,12 +20,12 @@
     {
       "role": "user",
       "content": "User Message: fixture input\n\n<system_context>\n{\"message_id\":\"fixture-message\",\"user_id\":\"fixture-user\"}\n</system_context>",
-      "time": "20:34:34"
+      "time": "2026-11-17 20:34:34"
     },
     {
       "role": "assistant",
       "content": "fixture reply",
-      "time": "20:34:40"
+      "time": "2026-11-17 20:34:40"
     }
   ]
 }

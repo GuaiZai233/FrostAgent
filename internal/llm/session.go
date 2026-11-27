@@ -33,7 +33,10 @@ type GroupCompactMessage struct {
 	ImageDescription string `json:"image_description,omitempty"`   // Vision output kept separate from user text.
 	MessageID        string `json:"message_id,omitempty"`          // Message ID for deduplication
 	Time             string `json:"time,omitempty"`                // Local "2006-01-02 15:04:05"; legacy records may hold only "15:04:05"
-	raw              string `json:"-"`                             // Preserved raw string if ingested from text
+	// ImageKeys lists, per image placeholder in Content, the log-image key used for
+	// console hover previews ("" when unavailable). Never sent to the model.
+	ImageKeys []string `json:"-"`
+	raw       string   `json:"-"` // Preserved raw string if ingested from text
 }
 
 // FormatDisplay renders the message as a single-line display string.

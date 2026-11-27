@@ -362,6 +362,7 @@ function initAppShell(): void {
 // Start application
 document.addEventListener('DOMContentLoaded', () => {
   mountAuthenticatedResources();
+  void import('./components/image-hover-preview').then(({ mountImageHoverPreview }) => mountImageHoverPreview());
   initAppShell();
   void instanceState.restoreSelection().catch((error) => {
     console.warn('Failed to restore the selected instance:', error);

@@ -16,8 +16,10 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/onebot/content"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/qqextend"
+	"github.com/GuaiZai233/FrostAgent/internal/runtimescope"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
@@ -91,6 +93,8 @@ type qqSender struct {
 	confirmed   func(oneBotAPIResponse, []tools.Msg)
 	decorate    func([]tools.OneBotSegment) []tools.OneBotSegment
 	sandboxFile func(string, int64) ([]byte, error)
+	// retainImage keeps delivered image bytes for console hover previews.
+	retainImage func(key string, data []byte)
 }
 
 func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine) func(context.Context, string) (core.PlatformActionResult, error) {
@@ -165,6 +169,11 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 			}
 		}
 		sender := qqSender{event: destination,
+			retainImage: func(key string, data []byte) {
+				if engine != nil {
+					runtimescope.First([]*runtimescope.Scope{engine.Scope}).Log().PutSessionImage(key, data)
+				}
+			},
 			sandboxFile: func(name string, limit int64) ([]byte, error) {
 				if turn.Interrupted() {
 					return nil, context.Canceled
@@ -255,7 +264,7 @@ func recordQQTargetDelivery(engine *llm.Engine, session *llm.SessionContext, epo
 		if engine.GroupCompactor != nil {
 			maxBuffer = engine.GroupCompactor.MaxBufferSize()
 		}
-		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: llm.FormatMessageTime(time.Now())}, maxBuffer)
+		session.AppendGroupCompactMessage(llm.GroupCompactMessage{Role: "assistant", Sender: name, Content: text, Time: llm.FormatMessageTime(time.Now()), ImageKeys: qqDeliveredImageKeys(messages)}, maxBuffer)
 	})
 	engine.TrimSession(session)
 }
@@ -624,6 +633,13 @@ func (s qqSender) prepare(messages []tools.Msg) ([]qqSendPart, error) {
 				inlineBudget -= qqInlineSize(source)
 				m.Thumb = source
 			}
+			if m.Type == "image" && s.retainImage != nil {
+				if data := qqInlineImageBytes(m.URL); len(data) > 0 {
+					key := logs.SessionImageKey(string(data))
+					s.retainImage(key, data)
+					part.messages[i].ImageKey = key
+				}
+			}
 			wireMessages[i] = m
 		}
 		segments, err := tools.BuildOneBotMessage(wireMessages)
@@ -932,4 +948,46 @@ func qqInlineFileLimit(path string, limit int64) (string, error) {
 		return "", fmt.Errorf("inline media exceeds 30 MiB or is empty")
 	}
 	return "base64://" + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// qqInlineImageBytes decodes an inline base64 image source ("base64://" or a
+// base64 data URI); other sources yield nil.
+func qqInlineImageBytes(source string) []byte {
+	encoded := ""
+	switch {
+	case strings.HasPrefix(source, "base64://"):
+		encoded = strings.TrimPrefix(source, "base64://")
+	case strings.HasPrefix(source, "data:"):
+		comma := strings.IndexByte(source, ',')
+		if comma < 0 || !strings.Contains(strings.ToLower(source[:comma]), ";base64") {
+			return nil
+		}
+		encoded = source[comma+1:]
+	default:
+		return nil
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// qqDeliveredImageKeys lists, in order, the preview key of each delivered image
+// component (one per "[image ...]" placeholder in qqDeliveredText), or nil when
+// no image has a key.
+func qqDeliveredImageKeys(messages []tools.Msg) []string {
+	var keys []string
+	found := false
+	for _, m := range messages {
+		if m.Type != "image" {
+			continue
+		}
+		keys = append(keys, m.ImageKey)
+		found = found || m.ImageKey != ""
+	}
+	if !found {
+		return nil
+	}
+	return keys
 }

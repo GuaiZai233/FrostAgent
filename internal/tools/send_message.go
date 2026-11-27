@@ -31,6 +31,9 @@ type Msg struct {
 	Transfer      string         `json:"transfer,omitempty"`
 	Data          *QQMessageData `json:"data,omitempty"`
 	StickerIndex  int            `json:"sticker_index,omitempty"`
+	// ImageKey is the console preview key for an image the adapter delivered.
+	// Set by the adapter only; never part of the tool schema.
+	ImageKey string `json:"-"`
 }
 
 // OneBotSegment 定义 OneBot v11 协议的标准消息段结构
