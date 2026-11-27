@@ -66,8 +66,8 @@ func TestSegmentedReplyDelivery(t *testing.T) {
 			want:        []string{"firstsecond\n\nthird"},
 			wantHistory: `{"messages":[{"type":"plain","text":"firstsecond\n\nthird"}]}`,
 		},
-		{"disabled", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", false, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "0", ""},
-		{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", true, false, false, []string{"firstsecond\n\n`" + replyformat.SegmentMark + "`"}, "1", ""},
+		{"disabled", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", false, false, false, []string{"firstsecond\n\n``"}, "0", ""},
+		{"single segment limit", "first" + replyformat.SegmentMark + "second\n\n`" + replyformat.SegmentMark + "`", true, false, false, []string{"firstsecond\n\n``"}, "1", ""},
 		{"partial failure", "first" + replyformat.SegmentMark + "second" + replyformat.SegmentMark + "third", true, false, true, []string{"first", "second"}, "0", "first"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

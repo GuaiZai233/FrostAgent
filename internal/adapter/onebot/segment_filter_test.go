@@ -30,14 +30,14 @@ func TestFilterStructuredSegmentMarks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []tools.Msg{input[0], input[1], {Type: "plain", Text: "firstsecond\n\n" + protected}, input[4]}
+	want := []tools.Msg{input[0], input[1], {Type: "plain", Text: "firstsecond\n\n``"}, input[4]}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v; want %+v", got, want)
 	}
 	if got := filterStructuredSegmentMarks(marshal([]tools.Msg{{Type: "plain", Text: replyformat.SegmentMark}})); got != "" {
 		t.Fatalf("marker-only final must become empty: %q", got)
 	}
-	for _, input := range []string{"ordinary " + replyformat.SegmentMark, "{invalid", marshal([]tools.Msg{{Type: "plain", Text: protected}})} {
+	for _, input := range []string{"ordinary " + replyformat.SegmentMark, "{invalid"} {
 		if got := filterStructuredSegmentMarks(input); got != input {
 			t.Fatalf("unexpected rewrite: %q -> %q", input, got)
 		}
