@@ -322,7 +322,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 
 	c.rememberMessageSession(messageID, historyKey(event))
 
-	segments := ParseMessageSegments(data.Message)
+	segments := c.resolveLocalImageSegments(ParseMessageSegments(data.Message))
 	visibleText := extractUserText(segments, data.Message, c.Scope)
 	context := map[string]interface{}{
 		"message_id": messageID,

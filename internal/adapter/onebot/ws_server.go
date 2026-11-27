@@ -404,6 +404,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if segments == nil {
 		segments = []content.MessageSegment{}
 	}
+	segments = conn.resolveLocalImageSegments(segments)
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
 	memoryText := userText

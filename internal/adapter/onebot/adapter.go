@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,14 +72,49 @@ func (c *wsConnection) observeStickers(event model.OneBotEvent) {
 		return
 	}
 	messageID := strconv.FormatInt(int64(event.MessageID), 10)
+	segments := c.resolveLocalImageSegments(ParseMessageSegments(event.Message))
 	observeStickerSources(
 		c.stealer,
 		c.generation,
 		historyKey(event),
 		messageID,
-		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
+		stickerSourcesFromSegments(segments),
 		event.MessageType == "group",
 	)
+}
+
+func (c *wsConnection) resolveLocalImageSegments(segments []content.MessageSegment) []content.MessageSegment {
+	if c == nil || c.stealer == nil {
+		return segments
+	}
+	resolved := segments
+	copied := false
+	for index, segment := range segments {
+		if segment.Type != "image" && segment.Type != "mface" {
+			continue
+		}
+		if content.SegmentImageSource(segment) != "" {
+			continue
+		}
+		fileName, ok := segment.Data["file"].(string)
+		if !ok {
+			continue
+		}
+		data, found := c.stealer.ResolveLocalImage(fileName)
+		if !found {
+			continue
+		}
+		if !copied {
+			resolved = append([]content.MessageSegment(nil), segments...)
+			copied = true
+		}
+		resolved[index].Data = make(map[string]any, len(segment.Data)+1)
+		for key, value := range segment.Data {
+			resolved[index].Data[key] = value
+		}
+		resolved[index].Data["base64"] = base64.StdEncoding.EncodeToString(data)
+	}
+	return resolved
 }
 
 func (a *Adapter) observeStickers(event model.OneBotEvent) {

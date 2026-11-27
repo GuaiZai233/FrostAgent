@@ -2,12 +2,15 @@ package sticker
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -464,6 +467,67 @@ func (s *Store) FilePath(id string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(s.dir, e.FileName), true
+}
+
+// ResolveFileName loads a locally stored sticker referenced by a platform file
+// name. OneBot implementations commonly return an MD5-based name even though
+// the collection stores files under their content SHA-256 IDs.
+func (s *Store) ResolveFileName(fileName string) ([]byte, bool) {
+	if s == nil {
+		return nil, false
+	}
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" || fileName != filepath.Base(fileName) || strings.ContainsAny(fileName, `/\\`) {
+		return nil, false
+	}
+	baseName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+
+	s.mu.RLock()
+	entries := make([]Entry, 0, len(s.index))
+	for _, entry := range s.index {
+		if entry != nil {
+			entries = append(entries, *entry)
+		}
+	}
+	dir := s.dir
+	s.mu.RUnlock()
+
+	for _, entry := range entries {
+		if fileName != entry.FileName && fileName != entry.ID {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.FileName))
+		if err != nil {
+			continue
+		}
+		return data, true
+	}
+	if len(baseName) != md5.Size*2 || !isHexDigest(baseName) {
+		return nil, false
+	}
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, entry.FileName))
+		if err != nil {
+			continue
+		}
+		digest := md5.Sum(data)
+		if strings.EqualFold(baseName, hex.EncodeToString(digest[:])) {
+			return data, true
+		}
+	}
+	return nil, false
+}
+
+func isHexDigest(value string) bool {
+	for _, char := range value {
+		if (char >= '0' && char <= '9') ||
+			(char >= 'a' && char <= 'f') ||
+			(char >= 'A' && char <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Store) Unsummarized() []Entry {
