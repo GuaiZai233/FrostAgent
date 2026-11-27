@@ -100,7 +100,15 @@ func TestLatestCommitReportsCommitDistance(t *testing.T) {
 				case strings.HasSuffix(r.URL.Path, "/commits"):
 					_ = json.NewEncoder(w).Encode([]commitResponse{{SHA: latest}})
 				case strings.HasSuffix(r.URL.Path, "/compare/"+current+"..."+latest):
-					_ = json.NewEncoder(w).Encode(tc.comparison)
+					if r.URL.RawQuery != "per_page=1&page=2" {
+						t.Errorf("unexpected compare query: %s", r.URL.RawQuery)
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"status": tc.comparison.Status,
+						"ahead_by": tc.comparison.AheadBy,
+						"behind_by": tc.comparison.BehindBy,
+						"commits": []commitResponse{{SHA: latest}},
+					})
 				default:
 					http.NotFound(w, r)
 				}
