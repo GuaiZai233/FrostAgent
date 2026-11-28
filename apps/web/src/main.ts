@@ -4,6 +4,7 @@ import { renderInstanceLabel } from './components/instance-label';
 import { mountInstanceRequired } from './components/instance-required';
 import logoURL from '../../../assets/logo.png';
 import { mountAuthenticatedResources } from './components/authenticated-resources';
+import { mountManagementAuthNotice } from './components/management-auth-notice';
 import './styles/app.css';
 import './styles/variables.css';
 import './styles/base.css';
@@ -192,12 +193,14 @@ function initAppShell(): void {
 
       <!-- Main Content Container -->
       <main class="main-content" id="main-content">
+        <div id="management-auth-notice"></div>
         <div id="page-content"></div>
       </main>
     </div>
   `;
 
   const pageContainer = document.getElementById('page-content');
+  mountManagementAuthNotice(document.getElementById('management-auth-notice')!);
   const drawer = document.getElementById('mobile-drawer');
   const backdrop = document.getElementById('drawer-backdrop');
   const menuBtn = document.getElementById('mobile-menu-btn');

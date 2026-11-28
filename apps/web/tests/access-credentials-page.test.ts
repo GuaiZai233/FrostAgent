@@ -40,7 +40,9 @@ try {
   assert.ok(root.querySelector('a[href="#/settings"]'), 'new page must link back to Settings');
   assert.equal(input().value, existing, 'existing browser credentials need no migration');
   assert.equal(input().type, 'password');
-  assert.match(root.querySelector('#control-token-status')!.textContent!, /已配置/);
+  assert.match(root.querySelector('#control-token-status')!.textContent!, /已保存.*尚未验证/);
+  assert.match(root.textContent!, /所有管理访问（包括本机浏览器）/);
+  assert.match(root.textContent!, /FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN/);
   assert.equal(root.querySelector('[data-mode]'), null, 'credentials must not include appearance controls');
   assert.ok(!root.innerHTML.includes(existing), 'credential must not be interpolated into HTML');
   button('toggle-token-visibility').click();

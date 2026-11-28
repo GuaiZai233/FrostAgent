@@ -34,6 +34,7 @@ func newClient(ctx context.Context, inv Invocation) (*client, error) {
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	c := &client{base: "http://frostagent.local"}
 	if name := inv.Value("remote"); name != "" {
+		transport.Proxy = http.ProxyFromEnvironment
 		_, err := withRemotes(ctx, func(store *remoteStore) (any, error) {
 			r, ok := store.Entries[name]
 			if !ok {

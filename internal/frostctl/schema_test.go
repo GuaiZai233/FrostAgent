@@ -54,3 +54,19 @@ func TestMachineOutputAndDiscovery(t *testing.T) {
 		t.Fatal("machine output was mixed with diagnostics")
 	}
 }
+
+func TestRunRejectsInvalidTimeoutBeforeSideEffects(t *testing.T) {
+	for _, value := range []string{"invalid", "0", "0s", "-1s", "999999999999999999999h", ""} {
+		var out, diagnostics bytes.Buffer
+		code := Run(context.Background(), []string{"remote", "add", "synthetic", "--url", "https://example.test", "--timeout=" + value, "--output=json"}, strings.NewReader(""), &out, &diagnostics)
+		var result Result
+		if json.Unmarshal(out.Bytes(), &result) != nil || code != 2 || result.Error == nil || result.Error.Code != "invalid_argument" || !strings.Contains(result.Error.Message, "--timeout") {
+			t.Fatalf("timeout %q: code=%d result=%s", value, code, out.String())
+		}
+	}
+	for _, limit := range []string{"0", "1001", "invalid"} {
+		if _, err := Parse([]string{"security", "audit", "list", "--instance", "synthetic", "--limit", limit}); err == nil {
+			t.Fatalf("audit limit %q accepted", limit)
+		}
+	}
+}

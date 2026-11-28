@@ -47,15 +47,15 @@ Go 模块路径为 `github.com/GuaiZai233/FrostAgent`，源码与测试的内部
 
 ### Docker 部署
 
-管理认证遵循 PR #165 的 Maintainer 决定，由前置 Cloudflare Access 承担。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号或新的部署认证层。应用系统 CA 信任包仅用于出站 TLS。
+管理域名由前置 Cloudflare Access 保护，应用层同时要求管理 Token。PR #192 添加的 Caddy、Basic Auth 管理员配置和自签名 CA/证书卷已从部署中删除，不增加应用账号。应用系统 CA 信任包仅用于出站 TLS。
 
-默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。端口映射及普通网桥来源必须携带正确的管理控制令牌，私有 IP、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。缺少合法凭据时在绑定端口前退出，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；切库缺少凭据会拒绝切换并恢复原库，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot WebSocket。
+默认桥接 Compose 只启动 FrostAgent：管理默认监听容器内 `0.0.0.0:8080`，直接发布宿主 `127.0.0.1:8080`，不依赖 socat。所有 HTTP 管理请求均必须携带正确的管理控制令牌，私有 IP、回环地址、本地 Host 和转发头不能跳过认证。首次部署以 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 初始化 SQL 中的管理令牌，只接受 32–4096 个无空格的可打印 ASCII 字符；已有 `MCP_CONTROL_TOKEN` / `ADMIN_TOKEN` 优先且不覆盖。没有令牌时后端仍启动，管理 HTTP 返回 401；提供非法 bootstrap 输入时拒绝启动，错误不回显令牌。该变量仅用于启动或切换到无令牌的目标库时首次初始化，不是普通应用设置的环境覆盖源；目标库无令牌时 HTTP 保持锁定，已有目标库令牌保持独立。适配器监听 `0.0.0.0:11023`，宿主机发布到 `127.0.0.1:11023`；该端口仍只处理 OneBot WebSocket。
 
-Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；只有这个真实回环连接沿用原 Access 信任策略，普通网桥来源仍需令牌。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，构建时将管理与适配器默认都绑定宿主回环，并保留管理回环限制；host 模式无端口映射。标准桥接镜像不应直接用于 host 网络。
+Tunnel 的运行位置由部署用户决定。容器 connector 通过可选 `compose.cloudflare.yaml` 与 FrostAgent 共享网络命名空间，回源到 `http://127.0.0.1:8080`；该回环连接同样要求浏览器提供管理 Token。宿主机 cloudflared 可在原生 Linux 上选择单独的 `compose.host.yaml`，构建时将管理与适配器默认都绑定宿主回环，并保留管理回环限制；host 模式无端口映射。标准桥接镜像不应直接用于 host 网络。
 
-`compose.local.yaml` 保留为旧 SQL 回环部署的显式兼容入口：两个固定摘要的 socat 容器通过 Unix socket 将宿主 `127.0.0.1:8088` 转为真实回环连接。它仍使用此前同机所有容器可信的边界，不能宣称自动获得直连入口的网桥令牌保护。切换到要求网桥认证的默认入口后，必须显式停止并删除两个旧 relay，再省略覆盖文件；不能只省略文件而留下运行中的免认证路径。旧模式与恢复说明见 [legacy socat 入口](../../docs/docker-local-panel.md)。
+`compose.local.yaml` 保留为旧 SQL 回环部署的显式兼容入口：两个固定摘要的 socat 容器通过 Unix socket 将宿主 `127.0.0.1:8088` 转为真实回环连接，仍须通过管理 Token 认证。切换到默认直连入口后，显式停止并删除两个不再需要的 relay，再省略覆盖文件。旧模式与恢复说明见 [legacy socat 入口](../../docs/docker-local-panel.md)。
 
-生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。仅信任实际回环连接，不能凭 Cloudflare/转发头认定认证成功；已有显式本地强制令牌设置继续有效。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
+生产路径为浏览器 → Cloudflare Access → Tunnel → cloudflared → 回环管理监听。整个管理域名全部路径均须由 Access 保护，并配置 SQL `HTTP_ALLOWED_ORIGINS` 接受公共 Host/Origin；Tunnel 本身不提供用户认证。浏览器还须发送管理 Token，回环地址、Cloudflare/转发头和旧兼容开关均不能跳过应用层认证。connector 在 FrostAgent 重建时需同步重建，防止滞留旧命名空间。
 
 SQL 保持优先；标准镜像允许管理通配或回环监听，但在启动、热更新和换库前都强制管理与适配器端口分离；host 镜像还强制管理数值回环。旧 `127.0.0.1:8081` 等设置原样保留，直接端口映射需要用户通过原入口显式改成 `0.0.0.0:8080`。无 SQL 令牌的旧部署也需提供一次初始化输入。UID/GID `10001:10001` 与 `/app/data` 持久卷保留，不改 schema 或自动删除旧资源。完整首次配置、更新及退役步骤见 [Docker 部署与更新](../../docs/docker.md)。
 
@@ -431,9 +431,9 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **正式生产安全基线 (Linux/POSIX)**：FrostAgent 正式安全基线以 Linux/POSIX 部署（交付容器 Docker / Linux 主机环境）为准。在此类系统上，严格保证所有者独占 `0600` 权限、目录原子重命名替换、及启动时 fail-closed 权限防御（若历史 `.env` 无法收紧至 `0600` 则拒绝启用设置管理服务）；重命名失败时直接报错中断，**绝不回退至截断复制（copyFile）**，彻底避免破坏目标文件的原子性与完整性；
   - **开发环境兼容性 (Windows Dev Best-effort)**：Windows 裸机作为本地开发与测试环境提供 best-effort compatibility；不再提供 Windows Smoke CI，也不额外安排 Windows 冒烟验证。由于 Windows 平台文件 ACL 继承体系及文件重命名锁定语义与 POSIX 存在本质差异，Windows 裸机环境不承诺与 POSIX 等价的 `0600` 及原子替换安全语义，其文件锁定引发的重命名回退仅在 `runtime.GOOS == "windows"` 条件下作为开发调试兜底，与正式生产基线严格隔离。
 - **单管理员控制台模型与认证现状说明 (Single-Administrator Console & Auth Status)**：
-  - **当前真实边界**：当前版本核心安全边界为「默认仅回环绑定 + Host 头校验/DNS Rebinding 防护 + 严格同源/CORS 浏览器隔离」；应用层访问控制（如基于 Token 或密码的管理员登录认证）已规划于后续发布里程碑，当前版本尚未集成；
+  - **当前真实边界**：所有 HTTP 管理请求均要求管理 Token，并保留默认回环绑定、Host 校验/DNS Rebinding 防护及同源/CORS 浏览器隔离。本机 `frostctl` 通过操作系统校验的 IPC 身份访问；IPC 初始化失败时警告并继续启动，管理 HTTP 仍保持认证；
   - **控制台透明性**：在单管理员自托管架构下，已授权会话拥有实例的完全管理权限，因此设置接口（`ListEnvVars` 与 `GetRawEnvFile`）向管理员提供真实的配置与密钥显隐视图，不进行破坏性的阻断式脱敏，同时保持原始 `.env` 编辑器（`UpdateRawEnvFile`）的可用性；
-  - **网络暴露风险警示**：在应用层认证正式落地前，若显式将 `LISTEN_ADDR` 绑定至局域网或公网 IP，属于显式信任网络/自担风险的 opt-in 行为；远程管理使用前置 Cloudflare Access，并按部署说明隔离回源监听，不把 Host/Origin 检查作为用户认证。
+  - **远程管理**：跨不可信网络使用 HTTPS/WSS 和管理 Token；前置 Cloudflare Access 的部署仍按部署说明隔离回源监听，Host/Origin 检查不能替代身份认证。
 - **环境变量白名单、语句级 Dotenv 解析与防换行/NUL 注入 (Settings API Allowlist, Statement-Aware Parsing & Injection Defense)**：
   - 通过 `knownEnvVars` 注册表对 `UpdateEnvVar` 与 `DeleteEnvVar` 进行严格键名白名单校验，拒绝任意未注册的环境变量写入；
   - **语句级语法解析与多行/重复键安全变异 (Statement-Aware Dotenv Mutation)**：
@@ -520,7 +520,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **Unix POSIX 原子重命名**：在 Linux/macOS 环境下采用标准 `os.Rename` 结合父目录 `fsync` 实现原子落盘与掉电保护。
 - **控制平面安全门禁、跨源防御与敏感凭据脱敏 (Control Plane Auth, CSRF Defense & Secret Masking)**：
   - **统一网关跨源防护与 DNS 重绑定防御 (CORS, CSRF & DNS Rebinding Defense)**：针对恶意网页利用浏览器向 `localhost` 发起跨域请求或利用 DNS 重绑定（攻击者域名解析至 `127.0.0.1`，制造 `Origin == Host == attacker.example`）绕过回环认证的安全隐患，系统在 HTTP 全局入口层（`corsMiddleware`）实施严格的 Host 与 Origin 校验。网关强制验证请求 Host 头仅限本地回环（`localhost`, `127.0.0.1`, `[::1]`）或显式配置的 `HTTP_ALLOWED_ORIGINS`，且同源自动信任仅在请求 Host 本身为回环地址时成立。非受信跨源请求直接由网关层拒绝并返回 `403 Forbidden`，从传输层杜绝网页端逃逸执行本地 stdio 进程（RCE）的风险；MCP 服务层则专注管控本地回环与远程 Bearer Token 鉴权边界；
-  - **网络边界认证与本地控制台防锁死机制 (Local Same-Origin vs. Remote Bearer Token)**：远程访问（非回环 IP）强制要求配置 `MCP_CONTROL_TOKEN` 或 `ADMIN_TOKEN` 并在请求中提供合法 Bearer 认证；本地同源访问（本地回环 + 受信同源）默认放行以保证内置控制台开箱即用（支持配置 `MCP_ENFORCE_LOCAL_TOKEN=true` 开启本地严格鉴权）。同时前端 ConnectRPC 客户端内置 `authInterceptor` 拦截器，支持在 Web 端外观设置中配置与持久化访问 Token，确保远程部署和受保护环境下控制台顺畅交互；
+  - **统一管理认证与初始化**：HTTP 管理访问（包括回环）要求 `MCP_CONTROL_TOKEN` 或兼容 `ADMIN_TOKEN`，`MCP_ENFORCE_LOCAL_TOKEN` 和 `ALLOW_REMOTE_MCP_MANAGEMENT` 不再控制认证。静态面板在无 Token 或认证失败时展示「设置 → 访问凭据」引导；IPC 不可用的普通用户部署通过 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 一次性初始化，初始化后移除环境副本。迁移和权限要求见 [frostctl 管理指南](../../docs/frostctl.md)；
   - **敏感凭据全面脱敏防护**：在环境变量及请求头中，对包含 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `COOKIE` 以及 `Authorization` 的敏感信息在读取接口（`ListMCPServers`, `GetMCPServer`）中统一脱敏展示为 `"******"`；
   - **更新保全机制**：前端在提交配置修改时若传回脱敏占位符（`"******"`），后端自动从现有配置中保全并还原原始密钥，杜绝密钥因回传占位符而被意外覆盖破坏；
   - **上下文透传与启动错误真实反馈**：`SetServerEnabled` 完整透传 RPC 请求上下文并设置启动超时保护，当外部子进程或网络传输握手失败时，将真实错误向上传播给控制台 RPC 响应，杜绝将启动失败伪报为“成功”的操作误导。
@@ -580,7 +580,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
   - **切页与会话生命周期**：同一浏览器页面、同一选中实例内，控制台切页只卸下对话视图，保留配置、输入草稿、屏幕记录与原 WebSocket；离页期间继续接收回复与 OneBot ACK，因此真实模型上下文可连续。清屏只清除屏幕记录；手动断开结束连接上下文；重新连接保留屏幕记录但开始新的模型上下文；重置会话同时清屏并重新连接。切换实例（包括在其他页面操作）销毁旧视图与连接，不保留供切回恢复的会话。刷新、关闭浏览器页面或服务重启后不恢复模型上下文，未新增浏览器存储或服务端持久化；后端仍按原有连接级清理规则取消在途任务并释放临时资源；
   - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
-  - **Mock 管理鉴权**：独立适配器监听拒绝所有 mock 请求；管理监听上的 mock 请求遵循现有敏感管理接口鉴权，Origin 仅作浏览器来源校验，不能替代身份认证。远程访问使用 `MCP_CONTROL_TOKEN`（缺省时回退 `ADMIN_TOKEN`），`ALLOW_REMOTE_MCP_MANAGEMENT` 不免除此校验；可信本地回环、容器 connector 和显式 `MCP_ENFORCE_LOCAL_TOKEN` 保持原有策略。浏览器从「前端设置」的访问凭据读取令牌，在同源 WebSocket 握手中提供 `frostagent.direct-chat` 与 `frostagent.control-token.<令牌 UTF-8 字节的无填充 base64url>` 子协议，服务端仅协商前者，令牌不写入 URL 或响应。反向代理若记录握手头，必须将该凭据协议按 Authorization 同等脱敏；跨不可信网络仍须使用 HTTPS/WSS。
+  - **Mock 管理鉴权**：独立适配器监听拒绝所有 mock 请求；管理监听上的 mock 请求遵循统一管理 Token 鉴权，Origin 仅作浏览器来源校验，不能替代身份认证。所有 HTTP 管理访问使用 `MCP_CONTROL_TOKEN`（缺省时回退 `ADMIN_TOKEN`），回环、容器 connector 和旧兼容开关均不免除此校验。浏览器从「设置 → 访问凭据」读取令牌，在同源 WebSocket 握手中提供 `frostagent.direct-chat` 与 `frostagent.control-token.<令牌 UTF-8 字节的无填充 base64url>` 子协议，服务端仅协商前者，令牌不写入 URL 或响应。反向代理若记录握手头，必须将该凭据协议按 Authorization 同等脱敏；跨不可信网络仍须使用 HTTPS/WSS。
   - **极简对话视图**：展示清晰的双向对话气泡、时间戳、发送者标识及中间思考状态，直观反映大模型推理输出。
 
 ### 沙箱隔离与命令执行系统 (Sandbox Backend & Isolated Execution System)

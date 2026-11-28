@@ -15,6 +15,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/modelcatalog"
 	"github.com/GuaiZai233/FrostAgent/internal/updatecheck"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,18 +26,28 @@ import (
 )
 
 func run() error {
-	if err := logs.General.EnablePersistence(filepath.Join("data", "control-plane-logs"), logs.DefaultPersistentBytes); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runWithContext(ctx, "data", managementipc.Listen)
+}
+
+func runWithContext(ctx context.Context, dataDir string, listenLocal func(string) (net.Listener, error)) error {
+	dataDir, err := filepath.Abs(dataDir)
+	if err != nil {
+		return fmt.Errorf("resolve data directory: %w", err)
+	}
+	if err := logs.General.EnablePersistence(filepath.Join(dataDir, "control-plane-logs"), logs.DefaultPersistentBytes); err != nil {
 		logs.General.Warn(logs.SYSTEM, "control-plane log persistence is degraded")
 	}
 	defer logs.General.StopPersistence()
-	catalogCtx, stopCatalog := context.WithCancel(context.Background())
+	catalogCtx, stopCatalog := context.WithCancel(ctx)
 	defer stopCatalog()
 	modelcatalog.Start(catalogCtx, modelcatalog.New(
 		modelcatalog.DefaultURL,
-		filepath.Join("data", "models_dev_cache.json"),
+		filepath.Join(dataDir, "models_dev_cache.json"),
 		modelcatalog.RefreshInterval,
 	))
-	gateway, err := newStorageGateway(context.Background(), "data")
+	gateway, err := newStorageGateway(ctx, dataDir)
 	if err != nil {
 		return err
 	}
@@ -62,14 +73,20 @@ func run() error {
 		}
 	}
 	mux := managementMux(gateway)
-	local, err := managementipc.Listen(managementipc.Endpoint())
-	if err != nil {
-		return fmt.Errorf("local management: %w", err)
+	local, localErr := listenLocal(managementipc.Endpoint())
+	var localServer *http.Server
+	var localErrors chan error
+	if localErr != nil {
+		logs.General.Warn(logs.SYSTEM, fmt.Sprintf("local management unavailable: %v; backend continues with token-authenticated HTTP management", localErr))
+	} else {
+		localServer = managementipc.Server(mux)
+		defer localServer.Close()
+		localErrors = make(chan error, 1)
+		go func() { localErrors <- localServer.Serve(local) }()
 	}
-	localServer := managementipc.Server(mux)
-	defer localServer.Close()
-	localErrors := make(chan error, 1)
-	go func() { localErrors <- localServer.Serve(local) }()
+	if strings.TrimSpace(global.Get("MCP_CONTROL_TOKEN")) == "" && strings.TrimSpace(global.Get("ADMIN_TOKEN")) == "" {
+		logs.General.Warn(logs.SYSTEM, "HTTP management is locked until a management token is configured; use local frostctl when IPC is available, or restart with FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN to initialize the selected database")
+	}
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/instances/", instanceWebSocketHandler(gateway))
 	listeners := newListenerSet()
@@ -104,8 +121,6 @@ func run() error {
 		return err
 	}
 	lastApplied := global.Snapshot()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	select {
@@ -159,7 +174,9 @@ func run() error {
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = localServer.Shutdown(shutdown)
+	if localServer != nil {
+		_ = localServer.Shutdown(shutdown)
+	}
 	listeners.Close(shutdown)
 	if err == http.ErrServerClosed {
 		return nil

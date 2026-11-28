@@ -1,12 +1,15 @@
 package frostctl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRemoteOriginsAndTokenInvalidation(t *testing.T) {
@@ -51,6 +54,9 @@ func TestRemoteOriginsAndTokenInvalidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	visible := invoke("remote", "show", "lab")
+	if visible.(Remote).Store != "file" {
+		t.Fatal("credential storage method is hidden")
+	}
 	bytes, _ := json.Marshal(visible)
 	if strings.Contains(string(bytes), "synthetic-secret") || strings.Contains(string(bytes), "credential") {
 		t.Fatal("credential leaked")
@@ -72,5 +78,44 @@ func TestRemoteOriginsAndTokenInvalidation(t *testing.T) {
 	}
 	if invoke("remote", "show", "lab").(Remote).TokenConfigured {
 		t.Fatal("token remained bound after origin change")
+	}
+}
+
+func TestCredentialFallbackIsVisibleAndCancellationDoesNotWrite(t *testing.T) {
+	store := &remoteStore{dir: t.TempDir()}
+	data := []byte(`{"origin":"https://example.test:443","token":"synthetic-secret"}`)
+	systemWrite := func(ctx context.Context, id string, got []byte) error {
+		t.Helper()
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 3*time.Second {
+			t.Fatal("system store has no bounded deadline")
+		}
+		return errors.New("synthetic unavailable")
+	}
+	kind, err := store.saveCredential(context.Background(), "synthetic", data, systemWrite)
+	if err != nil || kind != "file" {
+		t.Fatalf("fallback: %s %v", kind, err)
+	}
+	saved, err := os.ReadFile(filepath.Join(store.dir, "synthetic.secret"))
+	if err != nil || !bytes.Equal(saved, data) {
+		t.Fatal("fallback credential was not saved")
+	}
+	visible := visibleRemote(Remote{Name: "lab", URL: "https://example.test", TokenConfigured: true, Credential: "synthetic", Store: kind})
+	for _, format := range []string{"json", "table"} {
+		var out, diagnostics bytes.Buffer
+		if err := render(&out, &diagnostics, format, Result{Status: "success", Data: visible}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "store") || !strings.Contains(out.String(), "file") || strings.Contains(out.String(), "synthetic") {
+			t.Fatalf("unsafe or incomplete output: %s", out.String())
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := store.saveCredential(ctx, "cancelled", data, systemWrite); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.dir, "cancelled.secret")); !os.IsNotExist(err) {
+		t.Fatal("cancelled operation wrote a fallback secret")
 	}
 }

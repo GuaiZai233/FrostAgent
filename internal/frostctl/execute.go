@@ -175,7 +175,12 @@ func executeAdvanced(ctx context.Context, c *client, inv Invocation, in io.Reade
 	case strings.HasPrefix(name, "mcp "):
 		return executeMCP(ctx, c, inv)
 	case strings.HasPrefix(name, "security audit"):
-		query := url.Values{"limit": {inv.Value("limit")}}
+		query := url.Values{}
+		for _, key := range []string{"limit", "offset"} {
+			if value := inv.Value(key); value != "" {
+				query.Set(key, value)
+			}
+		}
 		if inv.Value("instance") != "" {
 			query.Set("instance", inv.Value("instance"))
 		}

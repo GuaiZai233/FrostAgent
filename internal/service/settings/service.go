@@ -122,7 +122,7 @@ var knownEnvVars = map[string]envEntry{
 	"SANDBOX_SESSION_NAMESPACE":            {"Sandbox 会话基础命名空间", false, true, false},
 	"MCP_CONTROL_TOKEN":                    {"MCP 管理面认证 Token", true, true, false},
 	"ADMIN_TOKEN":                          {"MCP 管理面兼容认证 Token", true, true, false},
-	"MCP_ENFORCE_LOCAL_TOKEN":              {"本机 MCP 管理是否也强制 Token", false, true, false},
+	"MCP_ENFORCE_LOCAL_TOKEN":              {"兼容字段，已停用；所有 HTTP 管理请求始终要求 Token", false, true, false},
 	"BILLING_MAX_OUTPUT_TOKENS":            {"计费预扣款最大预留输出 Token", false, true, false},
 	"BILLING_SAFETY_MULTIPLIER":            {"计费预扣款输入 Token 安全倍率", false, true, false},
 	"BILLING_PROMPT_PRICE_PER_MILLION":     {"每百万输入 Token 的计费价格", false, false, false},

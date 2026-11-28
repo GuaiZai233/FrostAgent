@@ -190,6 +190,11 @@ const knownSettings = settingsService.match(/var knownEnvVars = map\[string\]env
 assert.doesNotMatch(knownSettings, /^\s*"(?:CODER_API_KEY|UPSTREAM_API_KEY|MAX_CONTEXT_CHARS|ALLOW_REMOTE_MCP_MANAGEMENT|ENABLE_ONEBOT_ADAPTER|ENABLE_ASTRBOT_ADAPTER|BRAIN_PATH|DIALOGUE_PATH|ONEBOT_WS_PATH|ASTRBOT_WS_PATH)":/m);
 const dedicatedSettings = settingFields.match(/export const dedicatedSettingKeys = new Set\(\[([\s\S]*?)\]\);/)?.[1] ?? '';
 for (const [, key] of knownSettings.matchAll(/^\s*"([A-Z_]+)":/gm)) {
+  // Retained for config compatibility, but cannot disable HTTP authentication.
+  if (key === 'MCP_ENFORCE_LOCAL_TOKEN') {
+    assert.doesNotMatch(settingFields, /MCP_ENFORCE_LOCAL_TOKEN: \{/);
+    continue;
+  }
   if (['DIALOGUE_PATH', 'BRAIN_PATH', 'ONEBOT_WS_PATH', 'ASTRBOT_WS_PATH'].includes(key)) continue;
   assert.ok(
     new RegExp(`\\b${key}: \\{`).test(settingFields) || dedicatedSettings.includes(`'${key}'`),

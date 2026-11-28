@@ -19,7 +19,8 @@ export function mountAccessCredentialsPage(container: HTMLElement): () => void {
         <section class="card p-4 flex flex-col gap-4" style="max-width: 42rem;">
           <div>
             <h2 class="text-sm font-semibold text-foreground">API / 控制平面访问凭据</h2>
-            <p class="text-xs text-muted mt-0.5">Docker 端口映射和远程管理需要控制令牌。Docker 首次部署请填写初始化时设置的令牌；已有部署填写服务端的管理控制令牌。</p>
+            <p class="text-xs text-muted mt-0.5">所有管理访问（包括本机浏览器）均需要管理 Token。请填写服务端已有的管理控制令牌。</p>
+            <p class="text-xs text-muted mt-1">首次部署若未配置 Token，请由部署者通过本机 frostctl 初始化；本机管理不可用时，设置 FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN 后重启服务，再在此填写同一 Token。</p>
             <p class="text-xs text-muted mt-1">凭据仅保存在当前浏览器，用于访问此站点的管理 API 和直接对话；此处不会修改服务端令牌。</p>
           </div>
 
@@ -34,7 +35,7 @@ export function mountAccessCredentialsPage(container: HTMLElement): () => void {
             </div>
             <div class="flex items-center justify-between gap-2 flex-wrap pt-1">
               <span id="control-token-status" class="text-xs text-muted" role="status">
-                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已配置 Token</span>' : '未设置 Token；Docker 端口映射访问仍需填写凭据'}
+                ${currentToken ? '<span class="text-emerald-500 font-medium">✓ 已保存 Token（尚未验证）</span>' : '未设置 Token；请先填写管理凭据'}
               </span>
               <div class="flex gap-2">
                 ${currentToken ? '<button id="clear-token-btn" type="button" class="btn btn-ghost btn-sm text-destructive text-xs">清除</button>' : ''}

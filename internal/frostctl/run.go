@@ -39,7 +39,11 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 	}
 	timeout := 30 * time.Second
 	if value := inv.Value("timeout"); value != "" {
-		timeout, _ = time.ParseDuration(value)
+		timeout, err = time.ParseDuration(value)
+		if err != nil || timeout <= 0 {
+			render(out, diagnostics, inv.Value("output"), Result{Status: "failed", Error: &Error{Code: "invalid_argument", Message: "--timeout must be a positive duration"}})
+			return 2
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -84,6 +88,9 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 		}
 	}
 	result := Result{Status: "success", Data: data}
+	if remote, ok := data.(Remote); ok && err == nil && inv.Command.Name == "remote token set" && remote.Store == "file" {
+		fmt.Fprintln(diagnostics, "warning: system credential storage unavailable; token saved in an unencrypted file restricted to the current user (store=file)")
+	}
 	exit := 0
 	if err != nil {
 		result.Status = "failed"

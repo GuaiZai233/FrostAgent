@@ -134,7 +134,23 @@ func validRemoteName(name string) bool {
 	}
 	return true
 }
-func visibleRemote(r Remote) Remote { r.Credential = ""; r.Store = ""; return r }
+func visibleRemote(r Remote) Remote { r.Credential = ""; return r }
+
+func (s *remoteStore) saveCredential(ctx context.Context, id string, data []byte, systemWrite func(context.Context, string, []byte) error) (string, error) {
+	credentialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	err := systemWrite(credentialCtx, id, data)
+	cancel()
+	if err == nil {
+		return "system", nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := privateWrite(filepath.Join(s.dir, id+".secret"), data); err != nil {
+		return "", errors.New("cannot save remote credential")
+	}
+	return "file", nil
+}
 func (s *remoteStore) removeCredential(ctx context.Context, r Remote) error {
 	if r.Credential == "" {
 		return nil
@@ -270,14 +286,7 @@ func remoteCommand(ctx context.Context, inv Invocation, in io.Reader) (any, erro
 			}
 			old := r
 			r.Credential = hex.EncodeToString(id)
-			r.Store = "system"
-			credentialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			err = writeSystemCredential(credentialCtx, r.Credential, data)
-			cancel()
-			if err != nil {
-				r.Store = "file"
-				err = privateWrite(filepath.Join(s.dir, r.Credential+".secret"), data)
-			}
+			r.Store, err = s.saveCredential(ctx, r.Credential, data, writeSystemCredential)
 			if err != nil {
 				return nil, errors.New("cannot save remote credential")
 			}

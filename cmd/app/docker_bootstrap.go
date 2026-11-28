@@ -9,7 +9,7 @@ import (
 
 const dockerBootstrapTokenKey = "FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN"
 
-// initializeDockerControlToken seeds a bridge deployment's selected SQL credential.
+// initializeDockerControlToken seeds any deployment's selected SQL credential.
 // It is a one-time bootstrap input, never an override of an existing credential.
 func initializeDockerControlToken(global *instanceconfig.Store, getenv func(string) string) error {
 	if strings.TrimSpace(global.Get("MCP_CONTROL_TOKEN")) != "" || strings.TrimSpace(global.Get("ADMIN_TOKEN")) != "" {
@@ -18,7 +18,7 @@ func initializeDockerControlToken(global *instanceconfig.Store, getenv func(stri
 	token := strings.TrimSpace(getenv(dockerBootstrapTokenKey))
 	if token == "" {
 		return nil
-	} // Local IPC remains available before HTTP credentials are initialized.
+	} // HTTP stays locked until bootstrap or an available local IPC initializes it.
 	valid := len(token) >= 32 && len(token) <= 4096
 	for _, char := range token {
 		valid = valid && char >= '!' && char <= '~'

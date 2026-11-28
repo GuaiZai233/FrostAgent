@@ -48,11 +48,19 @@ Switching databases does not automatically migrate data. If migration is require
 
 ### 3. Start the Service
 
+Before first startup, supply a random 32–4096 character printable ASCII management
+token through the process environment `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN`.
+It initializes an empty SQL credential once; existing tokens take precedence.
+
 ```bash
 go run ./cmd/app
 ```
 
-Open [http://localhost:8080](http://localhost:8080) in your browser. No instance is created automatically on the first startup, so you must create one manually.
+Open [Access credentials](http://localhost:8080/#/settings/credentials) and save the
+same token before creating an instance. All HTTP management requests, including
+localhost, require it. Remove the bootstrap input after initialization.
+If local IPC cannot start under your account, the backend continues with a warning;
+use Web/HTTPS management. See [frostctl and upgrade guidance](docs/frostctl.md).
 
 ## Docker Deployment
 

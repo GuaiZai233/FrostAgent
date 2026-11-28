@@ -12,6 +12,9 @@ Linux 只接受同一用户命名空间内 UID 0 的客户端。默认 Socket �
 /run/frostagent（0700）；父目录必须由 root 或该服务账号控制且不能由其他账号写入。
 例如 systemd 服务使用 RuntimeDirectory=frostagent 和 RuntimeDirectoryMode=0700。
 Socket 路径可用 FROSTAGENT_IPC_PATH 覆盖，后端与 CLI 必须一致。
+普通用户无法创建该目录时，后端记录 `local management unavailable` 警告并继续运行；
+本机 frostctl 此时不可用，HTTP 管理仍要求 Token。可由服务管理器准备上述目录，
+或使用下述 bootstrap 初始化后通过 Web/HTTPS 管理。
 
 ```sh
 sudo frostctl instance list --output json
@@ -23,8 +26,8 @@ docker compose exec --user 0 frostagent frostctl doctor --instance INSTANCE_ID
 容器外的 root 或转发 Header 不构成本机身份。不要把 Socket 暴露给其他容器。
 
 Windows 使用本机命名管道 \\.\pipe\FrostAgent.Management。
-从“以管理员身份运行”的 PowerShell 启动后端或 CLI；未提权的管理员进程会被拒绝。
-CLI 验证管道的服务端进程；后端必须为提升权限的管理员/System，
+本机管道要求从“以管理员身份运行”的 PowerShell 启动 CLI；未提权的管理员进程会被拒绝。
+未提权后端仍可启动，但本机管道不可用。CLI 验证管道的服务端进程；管道服务端必须为提升权限的管理员/System，
 或 SCM 中名称为 FrostAgent 的服务所对应的进程。以 LocalService/NetworkService
 运行时必须通过该服务注册及 PID 校验。此 CLI 不安装 Windows 服务；
 已有服务包装器须把实际管道进程作为 SCM 服务进程。普通用户不能抢占管理管道。
@@ -32,10 +35,12 @@ CLI 验证管道的服务端进程；后端必须为提升权限的管理员/Sys
 所有 HTTP 管理请求现在都需要当前管理 Token，包括 IPv4/IPv6 回环、
 REST、ConnectRPC、下载、日志流和管理 WebSocket。
 静态面板和真实 OneBot 入站保留各自的入口与鉴权。
-MCP_ENFORCE_LOCAL_TOKEN 保留为兼容设置，但不再关闭 HTTP 鉴权。
+MCP_ENFORCE_LOCAL_TOKEN 和 ALLOW_REMOTE_MCP_MANAGEMENT 保留已保存的值，
+但不再控制 HTTP 认证；任何取值都不能恢复回环免 Token 访问。
 
 升级前先在旧部署设置管理 Token，并让面板和自动化发送 Authorization: Bearer。
-新部署无 Token 时可以启动并通过 IPC 初始化。部署环境
+新部署无 Token 时可以启动，管理 HTTP 返回 401；静态面板保留访问凭据入口和初始化引导。
+IPC 可用时可通过它初始化；IPC 不可用时，原生部署和容器均可使用部署环境
 FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN 可一次性写入 SQL（32–4096 个不含空格的
 可打印 ASCII 字符），已有 MCP_CONTROL_TOKEN 或 ADMIN_TOKEN 时不覆盖。
 环境变量不用于后续轮换；通过本机 IPC 从标准输入设置：
@@ -48,6 +53,12 @@ frostctl config secret set MCP_CONTROL_TOKEN --scope global --stdin
 HTTP 只认可当前 SQL 配置；Token 轮换和切换数据库后旧 Token 失效。
 IPC 身份在轮换后仍有效。
 
+升级已有普通用户部署时，优先在升级前保存管理 Token；若已升级且无 Token，
+停止服务，在部署环境中注入上述 bootstrap 变量后从原数据目录重启，
+在「设置 → 访问凭据」保存同一 Token。初始化成功后移除部署环境中的副本。
+更换数据库前也要准备目标库自己的 Token；缺失时 HTTP 会被锁定，
+可用 IPC 初始化，或保留 bootstrap 输入来初始化目标库。
+
 ## 远程与结果
 
 ```sh
@@ -58,7 +69,12 @@ frostctl instance list --output json
 ```
 
 最后一条仍然访问本机。远程只支持系统信任链验证的 HTTPS，拒绝重定向；
-URL 源变化会清除旧 Token。优先系统凭据存储，不可用时使用当前用户私有文件。
+URL 源变化会清除旧 Token。远程 HTTPS 遵循 HTTPS_PROXY / NO_PROXY，
+代理隧道仍执行目标服务端的系统证书与主机名校验；本机 IPC 不使用代理。
+优先系统凭据存储，不可用时使用当前用户私有文件。
+remote token set 的结果和 remote show/list 均显示 store（system 或 file）；
+回退文件时 stderr 另行提示。file 是未加密的凭据文件，Linux 权限为 0600，
+Windows 使用当前用户 DACL；不要将其目录纳入可共享的配置备份。
 remote token 只保存客户端凭据，不会初始化或修改服务端 Token。
 
 help 和 schema 从与参数解析相同的定义生成。命令默认 table，可选 json；
@@ -92,6 +108,13 @@ frostctl logs export --instance INSTANCE_ID --file logs.jsonl
 无按天过期。实例日志使用自己的 LOG_STORAGE_MIB。查询返回 coverage，
 包含保留时间范围、容量与持久化错误。实时流为尽力而为，断线可能丢失事件；
 导出失败留下 .partial 文件，并返回 complete=false。
+控制面日志、模型目录缓存和本地数据库统一使用启动时解析的绝对数据根目录。
+原生入口沿用当前工作目录下的 data；服务管理器应固定 WorkingDirectory，
+从其他目录启动会选择另一套数据。此版本没有独立的日志目录配置。
+
+security audit list 支持 --limit 1–1000（默认 100）和 --offset 0–10000，
+在服务端按实例过滤后分页，按新到旧返回。审计存储仍保留最多 1000 条事件；
+并发追加或保留策略淘汰可能使 offset 分页移动。
 
 ## 配置
 

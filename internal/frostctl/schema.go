@@ -188,7 +188,7 @@ func Commands() []Command {
 		definition("mcp tool list", "List MCP tools", "instance", "none", nil, flag("server", "string", "server ID filter")),
 		definition("mcp tool enable", "Enable one MCP tool", "instance", "write", []string{"server-id", "tool"}),
 		definition("mcp tool disable", "Disable one MCP tool", "instance", "write", []string{"server-id", "tool"}),
-		definition("security audit list", "List security audit records", "instance", "none", nil, flag("limit", "int", "page size")),
+		definition("security audit list", "List security audit records", "instance", "none", nil, flag("limit", "int", "page size, 1-1000"), flag("offset", "int", "skip matching records, 0-10000")),
 		definition("security audit show", "Show one security audit record", "instance", "none", []string{"id"}),
 		definition("billing status", "Show billing configuration status", "deployment", "none", nil),
 	)
@@ -293,6 +293,9 @@ func Parse(args []string) (Invocation, error) {
 		}
 		if f.Type == "int" {
 			n, err := strconv.Atoi(vs[0])
+			if selected.Name == "security audit list" && key == "limit" && (err != nil || n < 1 || n > 1000) {
+				return inv, errors.New("--limit must be between 1 and 1000")
+			}
 			if err != nil || n < 0 || (key != "offset" && n < 1) || n > 10000 {
 				return inv, fmt.Errorf("--%s must be between 1 and 10000", key)
 			}
