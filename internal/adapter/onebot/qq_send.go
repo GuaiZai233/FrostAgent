@@ -255,7 +255,8 @@ func recordQQTargetDelivery(engine *llm.Engine, session *llm.SessionContext, epo
 		return
 	}
 	session.WithEpochCommit(epoch, func() {
-		session.AddMessageAtEpoch(core.ChatMessage{Role: core.RoleAssistant, Content: text}, epoch)
+		id := session.AddMessageAtEpoch(core.ChatMessage{Role: core.RoleAssistant, Content: text}, epoch)
+		session.SetHistoryImageKeys(id, qqDeliveredImageKeys(messages))
 		name := engine.Getenv("BOT_NAME")
 		if name == "" {
 			name = defaultBotName

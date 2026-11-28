@@ -62,6 +62,7 @@ type Store struct {
 	imageCache     map[string]*cachedImage
 	sessionImages  sessionImageCache
 	sessionFetches sessionImageFetcher
+	sessionBackend SessionImageBackend
 	name           string
 	id             string
 }

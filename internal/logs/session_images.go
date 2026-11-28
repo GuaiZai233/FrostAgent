@@ -131,10 +131,52 @@ func (s *Store) FetchSessionImage(key string, fetch func(context.Context) ([]byt
 	return true
 }
 
-// HasSessionImage reports whether a conversation image is already cached.
+// SessionImageBackend durably keeps conversation images so previews survive
+// restarts and cache eviction. Implementations enforce their own quota.
+type SessionImageBackend interface {
+	PutSessionImage(key, contentType string, data []byte) error
+	GetSessionImage(key string) (contentType string, data []byte, ok bool)
+	HasSessionImage(key string) bool
+}
+
+// SetSessionImageBackend attaches durable storage behind the in-memory cache.
+func (s *Store) SetSessionImageBackend(backend SessionImageBackend) {
+	s.mu.Lock()
+	s.sessionBackend = backend
+	s.mu.Unlock()
+}
+
+func (s *Store) sessionImageBackend() SessionImageBackend {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sessionBackend
+}
+
+// loadSessionImage returns a conversation image from memory, falling back to
+// durable storage and warming the cache.
+func (s *Store) loadSessionImage(key string) (sessionImage, bool) {
+	if image, ok := s.sessionImages.get(key); ok {
+		return image, true
+	}
+	backend := s.sessionImageBackend()
+	if backend == nil {
+		return sessionImage{}, false
+	}
+	contentType, data, ok := backend.GetSessionImage(key)
+	if !ok {
+		return sessionImage{}, false
+	}
+	s.sessionImages.put(key, contentType, data)
+	return sessionImage{key: key, contentType: contentType, data: data}, true
+}
+
+// HasSessionImage reports whether a conversation image is already stored.
 func (s *Store) HasSessionImage(key string) bool {
-	_, ok := s.sessionImages.get(key)
-	return ok
+	if _, ok := s.sessionImages.get(key); ok {
+		return true
+	}
+	backend := s.sessionImageBackend()
+	return backend != nil && backend.HasSessionImage(key)
 }
 
 // PutSessionImage retains a conversation image for hover previews. Data that is
@@ -147,5 +189,9 @@ func (s *Store) PutSessionImage(key string, data []byte) {
 	if !strings.HasPrefix(contentType, "image/") {
 		return
 	}
-	s.sessionImages.put(key, contentType, append([]byte(nil), data...))
+	stored := append([]byte(nil), data...)
+	s.sessionImages.put(key, contentType, stored)
+	if backend := s.sessionImageBackend(); backend != nil {
+		_ = backend.PutSessionImage(key, contentType, stored)
+	}
 }

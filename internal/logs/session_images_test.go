@@ -133,3 +133,43 @@ func TestFetchSessionImageBoundsConcurrencyAndQueueAndReleasesSlots(t *testing.T
 	})
 	waitFor(t, "retry cached", func() bool { return store.HasSessionImage(SessionImageKey("https://example.invalid/retry.png")) })
 }
+
+type memorySessionBackend struct{ images map[string]sessionImage }
+
+func (b *memorySessionBackend) PutSessionImage(key, contentType string, data []byte) error {
+	b.images[key] = sessionImage{key: key, contentType: contentType, data: data}
+	return nil
+}
+
+func (b *memorySessionBackend) GetSessionImage(key string) (string, []byte, bool) {
+	image, ok := b.images[key]
+	return image.contentType, image.data, ok
+}
+
+func (b *memorySessionBackend) HasSessionImage(key string) bool { _, ok := b.images[key]; return ok }
+
+func TestSessionImageSurvivesCacheLossThroughBackend(t *testing.T) {
+	backend := &memorySessionBackend{images: map[string]sessionImage{}}
+	store := New("", "test", 10)
+	store.SetSessionImageBackend(backend)
+	key := SessionImageKey("https://example.invalid/synthetic.png")
+	store.PutSessionImage(key, testPNG)
+	if len(backend.images) != 1 {
+		t.Fatal("image not written to durable storage")
+	}
+
+	// A fresh store models a restart: memory is empty, the backend is not.
+	restarted := New("", "test", 10)
+	restarted.SetSessionImageBackend(backend)
+	if !restarted.HasSessionImage(key) {
+		t.Fatal("durable image not reported after restart")
+	}
+	rec := httptest.NewRecorder()
+	restarted.ImageHandler(rec, httptest.NewRequest(http.MethodGet, LogImagePathPrefix+key, nil))
+	if rec.Code != http.StatusOK || rec.Body.Len() != len(testPNG) {
+		t.Fatalf("durable image not served after restart: %d", rec.Code)
+	}
+	if _, warmed := restarted.sessionImages.get(key); !warmed {
+		t.Fatal("serving a durable image should warm the memory cache")
+	}
+}

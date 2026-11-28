@@ -854,6 +854,10 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
+		if event.MessageType != "group" {
+			// Group messages carry their keys in the group buffer instead.
+			session.SetHistoryImageKeys(inputID, retainEventImages(event, engine))
+		}
 		if len(messages) > 0 {
 			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
 		}
@@ -868,7 +872,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		recordDelivery := func(messages []tools.Msg) {
 			deliveries.NoteConfirmed()
 			if deliveredReply := qqDeliveredText(messages); strings.TrimSpace(deliveredReply) != "" {
-				deliveries.Record(deliveredReply, func(live bool) {
+				deliveries.RecordWithImages(deliveredReply, qqDeliveredImageKeys(messages), func(live bool) {
 					if event.MessageType == "group" {
 						botName := engine.Getenv("BOT_NAME")
 						if botName == "" {
