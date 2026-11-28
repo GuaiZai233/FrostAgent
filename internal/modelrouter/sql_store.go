@@ -154,10 +154,6 @@ func writeConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, insta
 	}
 	for _, override := range cfg.GroupOverrides {
 		for workload, binding := range override.Bindings {
-			if workload == WorkloadMedia {
-				// Older binaries reject the unknown workload; see Configuration.MarshalJSON.
-				continue
-			}
 			if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_bindings
 				(instance_id, platform, group_id, workload, mode, model_id)
 				VALUES (?, ?, ?, ?, ?, ?)`), instanceID, override.Platform, override.GroupID,
