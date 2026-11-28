@@ -19,6 +19,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storageusage"
 	"github.com/GuaiZai233/FrostAgent/internal/timesleep"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
@@ -127,7 +128,9 @@ type Engine struct {
 	ToolHistory *toolhistory.Store
 	ChatHistory *chathistory.Recorder
 	TokenUsage  *tokenusage.Store
-	PokeGate    poke.Gate
+	// StorageUsage estimates this instance's persistent storage footprint.
+	StorageUsage *storageusage.Collector
+	PokeGate     poke.Gate
 	// BannedRejectGate rate-limits security rejection replies sent to banned users.
 	BannedRejectGate poke.Gate
 	*runtimescope.Scope

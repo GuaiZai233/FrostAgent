@@ -52,6 +52,10 @@ jobs:
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
         run: go test ./internal/modelrouter -run '^(TestSharedCatalogAndIsolatedRoutes|TestCatalogDraftOwnerKeepsEndpointAndSecretTogether|TestRoutePublicationGuardKeepsScopesIsolated|TestEndpointAPIKeyUsesPublishedCredential|TestEndpointFormatsSQLRoundTrip)$' -count=1 -v
+      - name: Test PostgreSQL storage usage collector
+        env:
+          FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
+        run: go test ./internal/storageusage -run '^(TestSlowScanIsCutOff|TestMeasureOnRealSchema)' -count=1 -v
       - name: Test PostgreSQL token usage accounting
         env:
           FROSTAGENT_TEST_POSTGRES_DSN: postgres://frostagent:synthetic-test-password@localhost:5432/frostagent_test?sslmode=disable
