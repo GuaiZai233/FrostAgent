@@ -13,9 +13,12 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
+	"github.com/GuaiZai233/FrostAgent/internal/service/botstatus"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
+	"connectrpc.com/connect"
+	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 )
 
 func toolHistoryFixture(t *testing.T) (*llm.Engine, llm.RunContext) {
@@ -274,5 +277,50 @@ func TestToolHistoryOversizedStickerPairReadStaysQuarantined(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestToolHistoryPanelInspectionDoesNotRelaxModelQuarantine(t *testing.T) {
+	engine, run := toolHistoryFixture(t)
+	ctx := llm.WithRunContext(context.Background(), run)
+	scope, _ := llm.ToolHistoryScope(run)
+	record := toolhistory.Record{
+		Scope:           scope,
+		RefID:           toolhistory.NewRef(),
+		RunID:           "fixture-run",
+		ActorID:         run.ActorUserID,
+		Tool:            "mcp__anysearch__extract",
+		SourceMessageID: run.MemorySource.MessageID,
+		ArgumentsRaw:    `{"url":"https://example.invalid/restricted"}`,
+		ResultRaw:       "[FrostAgent 错误] MCP 工具执行失败 (Ref_ID: fixture-err)",
+		MCPResultRaw:    `{"content":[{"type":"text","text":"extract_failed\nUnable to extract content from the URL."}],"isError":true}`,
+		ModelResultRaw:  "[FrostAgent 错误] MCP 工具执行失败 (Ref_ID: fixture-err)",
+		Error:           "fixture-private-error",
+		State:           "complete",
+		Restricted:      true,
+		OccurredAt:      time.Now().UTC(),
+	}
+	if err := engine.ToolHistory.Save(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	statusService := botstatus.New(engine, "test", "")
+	argsResp, err := statusService.GetToolHistoryEntry(context.Background(), connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID}))
+	if err != nil || !argsResp.Msg.ArgumentsAvailable || argsResp.Msg.ArgumentsRaw != record.ArgumentsRaw || !argsResp.Msg.Restricted {
+		t.Fatalf("panel could not inspect restricted arguments: %+v %v", argsResp, err)
+	}
+	resResp, err := statusService.GetToolHistoryEntry(context.Background(), connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true}))
+	if err != nil || !resResp.Msg.ResultAvailable || resResp.Msg.ResultRaw != record.ResultRaw || resResp.Msg.McpResultRaw != record.MCPResultRaw || resResp.Msg.ErrorRaw != record.Error {
+		t.Fatalf("panel could not inspect restricted diagnostics: %+v %v", resResp, err)
+	}
+	modelBody, err := NewToolHistoryTool(engine).ExecuteContext(ctx, fmt.Sprintf(`{"read_target_ref_id":%q}`, record.RefID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var read toolhistory.Record
+	if err := json.Unmarshal([]byte(modelBody), &read); err != nil {
+		t.Fatal(err)
+	}
+	if !read.Restricted || read.ArgumentsRaw != "" || read.ResultRaw != "" || read.MCPResultRaw != "" || read.Error != "" || read.ModelResultRaw != record.ModelResultRaw {
+		t.Fatalf("model read_tool_history bypassed quarantine: %+v", read)
 	}
 }
