@@ -69,7 +69,9 @@ func (e *Engine) skillSession(ctx context.Context) *SessionContext {
 	if run.SkillState != nil {
 		return run.SkillState
 	}
-	if !ok {
+	// A temporary conversation reserves no turn, so falling back to the shared
+	// session would leak its skill activations into the normal queue.
+	if !ok || run.TempChat != nil {
 		return nil
 	}
 	return e.promptTraceSession(ctx)
@@ -95,6 +97,11 @@ func (e *Engine) activateRequestedSkill(ctx context.Context, messages []ChatMess
 		return nil
 	}
 	run, _ := RunContextFromContext(ctx)
+	if run.TempChat != nil {
+		// Slash-activated skills persist in session state; a temporary
+		// conversation must not write there.
+		return nil
+	}
 	prompt := run.MemorySource.Content
 	if prompt == "" && run.ActorUserID == "" {
 		prompt = extractLastUserMessage(messages)

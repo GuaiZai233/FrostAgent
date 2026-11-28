@@ -62,5 +62,6 @@ Bot 输出需收到平台成功回执后才会更新相邻消息状态；发送�
 | `llm_response_log_id` | 发送时该会话最新的 `LLM_RESPONSE` 日志 ID（0 表示未知） |
 | `tool_log_id` | 由工具调用发出时，该会话最新的 `TOOL` 日志 ID；纯文本回复为 0 |
 | `message` | 交给平台的原始消息段 |
+| `tempchat` | 仅 [`/tempchat`](tempchat.md) 临时对话发出的消息才有：`no_personality`、`no_memory` 表示该次禁用了什么 |
 
 Agent 通过 SSH 进入后端后，可调用 `LogService.ListLogs`，设置 `message_ref_id` 即可精确取回该记录，忽略分页和过滤；跨实例或日志来源不同会返回 NotFound。该记录沿用日志存储的保留与落盘策略：日志被清理、超出预算或覆盖后，RefID 随之失效。

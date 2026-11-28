@@ -395,6 +395,13 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 
 	reader := heartbeat.Start(wsConn.Context(), conn, wsConn.Close)
 	defer reader.Close()
+	if !wsConn.mock {
+		wsConn.inFlight.Add(1)
+		go func() {
+			defer wsConn.inFlight.Done()
+			wsConn.detectImplementation()
+		}()
+	}
 	for {
 		_, message, err := reader.ReadMessage()
 		if err != nil {
@@ -428,7 +435,14 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 		wsConn.rememberInboundFileNotice(event)
 		previousError := wsConn.takePreviousError(event)
-		wsConn.recordIncomingHistory(event)
+		// A temporary conversation never enters the chat archive.
+		var tempChat *tempChatRequest
+		if !wsConn.mock {
+			tempChat, _ = parseTempChatCommand(event)
+		}
+		if tempChat == nil {
+			wsConn.recordIncomingHistory(event)
+		}
 
 		if event.PostType == "notice" && !wsConn.mock && a.engine != nil && a.engine.GroupManager != nil {
 			groupIDStr := strconv.FormatInt(event.GroupID, 10)
@@ -476,6 +490,17 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if handleMsgIDCommand(wsConn, event, a.engine) {
 			continue
 		}
+		var tempChatOptions *llm.TempChat
+		if tempChat != nil {
+			if tempChat.empty {
+				replyTempChatUsage(wsConn, event, a.engine)
+				continue
+			}
+			// Reserved commands above saw the raw message. From here on only the
+			// prompt remains, and it must not be mistaken for another command.
+			event = tempChat.event
+			tempChatOptions = &tempChat.options
+		}
 
 		var warningNotice string
 		var botLoopSoft bool
@@ -500,6 +525,10 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 				Derived:     true,
 				WakeSignals: DetectGroupWakeSignals(event, scope),
 			}
+			if tempChat != nil && event.MessageType == "group" {
+				// The command itself addresses the bot; never roll a proactive reply.
+				routing.WakeSignals = GroupWakeSignals{AtBot: true}
+			}
 			if a.engine != nil && a.engine.SessionManager != nil {
 				botLoopConfig = botloop.Parse(a.engine.Getenv, a.engine.Scope.BotLoopRevision())
 				if botLoopConfig.Enabled() {
@@ -510,12 +539,12 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					)
 				}
 			}
-			if !wsConn.mock && handleAdminCommand(wsConn, event, a.engine, previousError) {
+			if !wsConn.mock && tempChat == nil && handleAdminCommand(wsConn, event, a.engine, previousError) {
 				botLoopObservation.Finish(false, botLoopConfig.Limit())
 				continue
 			}
 		}
-		canDispatch := !wsConn.mock && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
+		canDispatch := !wsConn.mock && tempChat == nil && a.incomingDispatcher != nil && a.incomingDispatcher.IsEnabled() && a.incomingDispatcher.IsConfigured() &&
 			event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private")
 		if a.engine != nil && a.engine.Security != nil && event.PostType == "message" &&
 			(isWoken(event, a.engine, routing) || canDispatch || hasInboundFiles(event)) {
@@ -551,7 +580,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
 				} else {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
-					if event.MessageType == "group" && decision.SanitizedContent != "" {
+					if event.MessageType == "group" && decision.SanitizedContent != "" && tempChat == nil {
 						captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 					}
 				}
@@ -566,7 +595,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 						type1 = "group_id"
 						id = strconv.FormatInt(event.GroupID, 10)
 					}
-					sendDirectReply(action, type1, id, "echo_security_gate", event, wsConn, msg)
+					sendDirectReplyFor(tempChatOrigin(tempChatOptions), action, type1, id, "echo_security_gate", event, wsConn, msg)
 				}
 				continue
 			} else if decision.Action == security.WatchdogFilter && decision.SanitizedContent != "" {
@@ -658,7 +687,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		var turn *llm.SessionTurn
 		if a.engine != nil && a.engine.SessionManager != nil && event.PostType == "message" &&
 			(event.MessageType == "group" || event.MessageType == "private") {
-			if isWoken(event, a.engine, routing) {
+			// A temporary conversation reads the session but is never queued in it.
+			if tempChat == nil && isWoken(event, a.engine, routing) {
 				lane := "sender:" + strconv.FormatInt(event.UserID, 10)
 				proactiveTurn := routing.WakeSignals.Proactive
 				if proactiveTurn {
@@ -670,7 +700,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 
 		if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
-			if a.engine != nil && a.engine.GroupManager != nil {
+			// Member profiles and memory routes are memory: temporary runs leave them be.
+			if a.engine != nil && a.engine.GroupManager != nil && tempChat == nil {
 				groupIDStr := strconv.FormatInt(event.GroupID, 10)
 				userIDStr := strconv.FormatInt(event.UserID, 10)
 				if groupIDStr != "" && userIDStr != "" {
@@ -698,7 +729,9 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					}
 				}
 			}
-			if isExplicitlyWoken(event, a.engine, routing) {
+			if tempChat != nil {
+				// Never buffered for group compaction.
+			} else if isExplicitlyWoken(event, a.engine, routing) {
 				guard := stageGroupCompactMessage(event, a.engine)
 				if turn != nil {
 					turn.AttachStagedGuard(guard)
@@ -708,7 +741,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			}
 		}
 
-		if !wsConn.mock {
+		if !wsConn.mock && tempChat == nil {
 			if a.engine != nil && a.engine.Awareness != nil && event.PostType == "message" && (event.MessageType == "group" || event.MessageType == "private") {
 				id := strconv.FormatInt(event.UserID, 10)
 				if event.MessageType == "group" {
@@ -723,7 +756,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		wsConn.inFlight.Add(1)
 		if !a.engine.Go(func() {
 			defer wsConn.inFlight.Done()
-			processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing, botLoopSoft)
+			processEvent(wsConn, event, a.engine, turn, routeSnapshot, warningNotice, routing, botLoopSoft, tempChatOptions)
 		}) {
 			wsConn.inFlight.Done()
 			if turn != nil {

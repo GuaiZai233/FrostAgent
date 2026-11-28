@@ -64,7 +64,8 @@ func (e *Engine) saveToolHistory(ctx context.Context, record toolhistory.Record)
 func (e *Engine) executeRecordedTool(ctx context.Context, tool ToolExecutor, call ToolCall) (core.ToolExecutionResult, error) {
 	run, _ := RunContextFromContext(ctx)
 	scope, allowed := ToolHistoryScope(run)
-	if e.ToolHistory == nil || !allowed {
+	// A temporary conversation may read the archive but never adds to it.
+	if e.ToolHistory == nil || !allowed || run.TempChat != nil {
 		return executeInterruptibleTool(ctx, tool, call)
 	}
 	runID := run.ToolHistoryRunID

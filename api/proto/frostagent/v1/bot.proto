@@ -114,6 +114,7 @@ message GetOverviewResponse {
   repeated ToolInfo tools = 8;
   string ws_listen_addr = 9;
   TokenUsageOverview token_usage = 10;
+  StorageUsageOverview storage_usage = 11;
 }
 
 message GetSessionsRequest {
@@ -294,6 +295,18 @@ message TokenUsageModule {
   TokenUsageCounter total = 5;
   TokenUsageCounter cached = 6;
   TokenUsageCounter cache_hits = 7;
+}
+
+message StorageUsageItem {
+  // chat | images | stickers | memory | other
+  string category = 1;
+  int64 bytes = 2;
+}
+
+message StorageUsageOverview {
+  bool available = 1;
+  repeated StorageUsageItem items = 2;
+  int64 total_bytes = 3;
 }
 
 message TokenUsageOverview {
