@@ -99,6 +99,14 @@ func (m *Manager) ApplyGlobalSettings() error {
 	}
 	m.billing.Store(billing.NewClient(baseURL, billingCfg.ServiceToken, billingCfg.Timeout))
 	m.sandbox.ApplySnapshot(sandboxCfg)
+	// Settings imports reach this path too, so a switch turned off (or absent) there
+	// must revoke existing public workers like a direct update does.
+	syncCtx, cancelSync := context.WithTimeout(context.Background(), 15*time.Second)
+	syncErr := m.sandbox.SyncNetworkPolicy(syncCtx)
+	cancelSync()
+	if syncErr != nil {
+		return fmt.Errorf("sandbox network policy not applied: %w", syncErr)
+	}
 	rawTimeout := strings.TrimSpace(m.global.Get("SECURITY_GATEWAY_TIMEOUT"))
 	if rawTimeout == "" {
 		rawTimeout = strings.TrimSpace(m.global.Get("SECURITY_CLASSIFIER_TIMEOUT"))

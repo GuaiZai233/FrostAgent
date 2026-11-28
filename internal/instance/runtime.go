@@ -226,10 +226,12 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 	if sandboxManager != nil {
 		dynamicSandbox = sandbox.NewDynamicBackend(func() sandbox.Config {
 			cfg := sandboxManager.Get()
+			cfg.PolicyOwner = cfg.Owner()
 			cfg.SessionNamespace = strings.TrimRight(cfg.SessionNamespace, "/") + "/" + instanceID
 			return cfg
 		}, func(cfg sandbox.Config) sandbox.Backend {
-			return codeinterpreter.New(cfg, codeinterpreter.WithLogger(logger))
+			return codeinterpreter.New(cfg, codeinterpreter.WithLogger(logger),
+				codeinterpreter.WithNetworkPolicy(func() bool { return sandboxManager.Get().AllowNetwork }))
 		})
 		commandTool := tools.ExecuteCommandTool(dynamicSandbox)
 		registry[commandTool.Name()] = commandTool

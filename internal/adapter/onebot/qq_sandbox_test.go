@@ -34,6 +34,10 @@ func sandboxArtifactGateway(t *testing.T, files map[string][]byte, generate func
 	ready := generate == nil
 	sessions := make(chan string, 64)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sessions" && r.Header.Get("X-Auth-Token") == "fixture-token" {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
 		if r.URL.Path != "/api/v1/shell/exec" || r.Header.Get("X-Auth-Token") != "fixture-token" {
 			http.Error(w, "invalid sandbox request", http.StatusBadRequest)
 			return

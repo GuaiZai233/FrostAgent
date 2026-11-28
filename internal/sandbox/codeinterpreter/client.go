@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,6 +45,9 @@ type Client struct {
 	baseURL          string
 	authToken        string
 	sessionNamespace string
+	allowNetwork     bool
+	owner            string
+	networkPolicy    func() bool
 	httpClient       *http.Client
 	projectNamespace [16]byte
 	logger           *logs.Store
@@ -73,6 +77,14 @@ func WithLogger(logger *logs.Store) Option {
 	return func(c *Client) { c.logger = logger }
 }
 
+// WithNetworkPolicy makes the client read the network switch live instead of from
+// the configuration snapshot it was built with. Every command re-reads it after
+// provisioning, so a client created before the switch changed cannot keep
+// provisioning public workers once access has been revoked.
+func WithNetworkPolicy(allow func() bool) Option {
+	return func(c *Client) { c.networkPolicy = allow }
+}
+
 // New creates a new code-interpreter sandbox Backend client.
 func New(cfg sandbox.Config, opts ...Option) *Client {
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
@@ -81,6 +93,8 @@ func New(cfg sandbox.Config, opts ...Option) *Client {
 		baseURL:          baseURL,
 		authToken:        cfg.AuthToken,
 		sessionNamespace: cfg.SessionNamespace,
+		allowNetwork:     cfg.AllowNetwork,
+		owner:            cfg.Owner(),
 		httpClient: &http.Client{
 			Timeout: cfg.ClientTimeout,
 		},
@@ -154,6 +168,10 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 
 	userUUID := c.SessionIDToUUID(sessionID)
+	entry, done := c.acquireSession(userUUID)
+	defer done()
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	releaseURL, err := url.Parse(c.baseURL + "/api/v1/release")
 	if err != nil {
 		return fmt.Errorf("invalid release URL: %w", err)
@@ -191,6 +209,209 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 
 	return fmt.Errorf("sandbox gateway release returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
+}
+
+// sessionProfile is the gateway profile FrostAgent sessions use; the network
+// policy is scoped to it so other gateway tenants are never affected.
+const sessionProfile = "minimal"
+
+const (
+	networkModePublic   = "public"
+	networkModeIsolated = "isolated"
+)
+
+type gatewaySessionRequest struct {
+	UserUUID string `json:"user_uuid"`
+	Profile  string `json:"profile"`
+	Network  string `json:"network"`
+	Owner    string `json:"owner"`
+}
+
+func (c *Client) allowsNetwork() bool {
+	if c.networkPolicy != nil {
+		return c.networkPolicy()
+	}
+	return c.allowNetwork
+}
+
+func (c *Client) currentNetworkMode() string {
+	if c.allowsNetwork() {
+		return networkModePublic
+	}
+	return networkModeIsolated
+}
+
+// sessionEntry serializes provisioning and release of one gateway session.
+type sessionEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// sessionRegistry is shared by every client in the process so that clients built
+// for different instances or configuration generations coordinate on the same
+// gateway session.
+var sessionRegistry = struct {
+	mu      sync.Mutex
+	entries map[string]*sessionEntry
+}{entries: map[string]*sessionEntry{}}
+
+func (c *Client) sessionKey(userUUID string) string { return c.baseURL + "|" + userUUID }
+
+// acquireSession returns the shared entry for the session. The returned function
+// must be called once the caller is done; unused entries are dropped.
+func (c *Client) acquireSession(userUUID string) (*sessionEntry, func()) {
+	key := c.sessionKey(userUUID)
+	sessionRegistry.mu.Lock()
+	entry := sessionRegistry.entries[key]
+	if entry == nil {
+		entry = &sessionEntry{}
+		sessionRegistry.entries[key] = entry
+	}
+	entry.refs++
+	sessionRegistry.mu.Unlock()
+	return entry, func() {
+		sessionRegistry.mu.Lock()
+		defer sessionRegistry.mu.Unlock()
+		entry.refs--
+		if entry.refs == 0 && sessionRegistry.entries[key] == entry {
+			delete(sessionRegistry.entries, key)
+		}
+	}
+}
+
+// maxPolicyAttempts bounds how often provisioning is repeated when the switch
+// keeps flipping while a command is being prepared.
+const maxPolicyAttempts = 3
+
+// ensureSession binds the session to a worker whose network mode matches the
+// switch and does so before every command. The gateway chooses the worker
+// firewall from the mode given when a session is created, an implicit session is
+// always isolated, and it only replaces a worker whose policy differs when a
+// session is requested. A previous success therefore proves nothing about the
+// current worker (it may have been recycled, or provisioned under an older
+// policy), so the policy is reasserted each time; the gateway reuses a matching
+// worker. The switch is read again after provisioning so that a change racing the
+// request is applied before the command runs.
+func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
+	entry, done := c.acquireSession(userUUID)
+	defer done()
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	for attempt := 0; attempt < maxPolicyAttempts; attempt++ {
+		mode := c.currentNetworkMode()
+		if mode == networkModePublic {
+			if err := c.requirePublicNetworkAllowed(ctx); err != nil {
+				return err
+			}
+		}
+		if err := c.postSession(ctx, userUUID, mode, entry); err != nil {
+			return err
+		}
+		if c.currentNetworkMode() == mode {
+			return nil
+		}
+	}
+	return errors.New("sandbox network policy changed repeatedly while preparing the session")
+}
+
+// postSession provisions the session in the given mode. entry.mu must be held.
+// Every failure, including a gateway that has no sessions endpoint, is an error:
+// without the endpoint the requested mode cannot be enforced or verified, so the
+// command is not run.
+func (c *Client) postSession(ctx context.Context, userUUID, mode string, _ *sessionEntry) error {
+	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: sessionProfile, Network: mode, Owner: c.owner})
+	if err != nil {
+		return fmt.Errorf("failed to marshal session payload: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/sessions", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to build session request: %w", err)
+	}
+	httpReq.Header.Set("X-Auth-Token", c.authToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("sandbox session request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		return fmt.Errorf("sandbox gateway session setup (network=%s) returned HTTP %d: %s", mode, resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+	return nil
+}
+
+type gatewayNetworkPolicyRequest struct {
+	Profile       string `json:"profile"`
+	Owner         string `json:"owner"`
+	PublicAllowed bool   `json:"public_allowed"`
+}
+
+// requirePublicNetworkAllowed confirms with the gateway that public networking is
+// currently allowed for this FrostAgent before a public session is requested. A
+// gateway that cannot answer (no policy endpoint, an error, a lost policy) or that
+// has not been told to allow networking refuses the command, so a failed policy
+// sync never leaves public networking silently enabled.
+func (c *Client) requirePublicNetworkAllowed(ctx context.Context) error {
+	q := url.Values{"profile": {sessionProfile}, "owner": {c.owner}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/network-policy?"+q.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to build network policy request: %w", err)
+	}
+	req.Header.Set("X-Auth-Token", c.authToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sandbox network policy check failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		return fmt.Errorf("sandbox gateway network policy check returned HTTP %d: %s (the gateway must support GET /api/v1/network-policy)", resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+	var policy struct {
+		PublicAllowed bool `json:"public_allowed"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxErrorBodyBytes)).Decode(&policy); err != nil {
+		return fmt.Errorf("sandbox gateway network policy response is invalid: %w", err)
+	}
+	if !policy.PublicAllowed {
+		return errors.New("sandbox gateway has not acknowledged public network access; the policy is applied when the setting is saved, retry after saving it again")
+	}
+	return nil
+}
+
+// SetPublicNetwork tells the gateway whether FrostAgent sessions may use public
+// networking. Denying is authoritative on the gateway: it destroys every live
+// public worker of the profile, including sessions this process never saw (other
+// replicas, sessions from before a restart), and rejects further public session
+// requests, so a command that was already being prepared cannot create a new one.
+// Unrelated profiles and isolated workers are untouched. A gateway without the
+// endpoint is an error; the caller must not treat it as revoked.
+func (c *Client) SetPublicNetwork(ctx context.Context, allowed bool) error {
+	body, err := json.Marshal(gatewayNetworkPolicyRequest{Profile: sessionProfile, Owner: c.owner, PublicAllowed: allowed})
+	if err != nil {
+		return fmt.Errorf("failed to marshal network policy payload: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/api/v1/network-policy", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to build network policy request: %w", err)
+	}
+	req.Header.Set("X-Auth-Token", c.authToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sandbox network policy request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		return fmt.Errorf("sandbox gateway network policy (public_allowed=%t) returned HTTP %d: %s (the gateway must support PUT /api/v1/network-policy)", allowed, resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+	return nil
 }
 
 type gatewayExecRequest struct {
@@ -240,6 +461,9 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	}
 
 	userUUID := c.SessionIDToUUID(req.SessionID)
+	if err := c.ensureSession(ctx, userUUID); err != nil {
+		return sandbox.ExecResult{}, err
+	}
 	execURL, err := url.Parse(c.baseURL + "/api/v1/shell/exec")
 	if err != nil {
 		return sandbox.ExecResult{}, fmt.Errorf("invalid exec URL: %w", err)

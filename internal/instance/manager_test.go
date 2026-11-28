@@ -204,6 +204,8 @@ func TestSandboxIsNamespacedPerInstanceAndRegisteredFromGlobalConfig(t *testing.
 		switch r.URL.Path {
 		case "/api/v1/status":
 			w.WriteHeader(http.StatusOK)
+		case "/api/v1/sessions":
+			w.WriteHeader(http.StatusCreated)
 		case "/api/v1/shell/exec":
 			mu.Lock()
 			userUUIDs = append(userUUIDs, r.URL.Query().Get("user_uuid"))
@@ -1713,5 +1715,77 @@ func TestRuntimesShareGlobalSecurityController(t *testing.T) {
 	}
 	if err := engineB.Security.CheckAccess(principal); !errors.Is(err, security.ErrLocked) {
 		t.Fatalf("engine B access=%v", err)
+	}
+}
+
+func TestGlobalSettingsApplyPushesSandboxNetworkPolicyToGateway(t *testing.T) {
+	var mu sync.Mutex
+	var policies []bool
+	status := http.StatusOK
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/network-policy" || r.Header.Get("X-Auth-Token") != "synthetic-token" {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			PublicAllowed bool `json:"public_allowed"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		defer mu.Unlock()
+		if status != http.StatusOK {
+			http.Error(w, "down", status)
+			return
+		}
+		policies = append(policies, body.PublicAllowed)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer gateway.Close()
+
+	m := testManagerWithGlobal(t, map[string]string{
+		"SANDBOX_ENABLED": "true", "SANDBOX_BASE_URL": gateway.URL,
+		"SANDBOX_AUTH_TOKEN": "synthetic-token", "SANDBOX_ALLOW_NETWORK": "true",
+	})
+	last := func() (bool, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(policies) == 0 {
+			return false, 0
+		}
+		return policies[len(policies)-1], len(policies)
+	}
+	if allow, n := last(); n == 0 || !allow {
+		t.Fatalf("startup must push the persisted switch, got %v (%d calls)", allow, n)
+	}
+
+	// An import/update that drops the key (default off) goes through ApplyGlobalSettings.
+	if err := m.global.Update("SANDBOX_ALLOW_NETWORK", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ApplyGlobalSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if allow, _ := last(); allow {
+		t.Fatal("removing the switch must revoke public workers on the gateway")
+	}
+
+	// A gateway failure is reported to the importer and retried on the next apply.
+	if err := m.global.Update("SANDBOX_ALLOW_NETWORK", "true", false); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	status = http.StatusInternalServerError
+	mu.Unlock()
+	if err := m.ApplyGlobalSettings(); err == nil {
+		t.Fatal("apply must fail when the gateway does not acknowledge the policy")
+	}
+	mu.Lock()
+	status = http.StatusOK
+	mu.Unlock()
+	if err := m.ApplyGlobalSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if allow, _ := last(); !allow {
+		t.Fatal("retry did not deliver the policy")
 	}
 }

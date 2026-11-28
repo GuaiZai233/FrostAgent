@@ -113,6 +113,7 @@ var knownEnvVars = map[string]envEntry{
 	"ALCYONE_SERVICE_TOKEN":                {"Alcyone 计费服务通信 Token", true, true, false},
 	"ALCYONE_TIMEOUT":                      {"计费请求超时时间", false, true, false},
 	"SANDBOX_ENABLED":                      {"是否启用隔离命令执行", false, false, false},
+	"SANDBOX_ALLOW_NETWORK":                {"是否允许沙箱内命令访问公网（内网与云元数据地址仍被禁止）", false, false, false},
 	"SANDBOX_BASE_URL":                     {"Sandbox Gateway 地址", false, true, false},
 	"SANDBOX_AUTH_TOKEN":                   {"Sandbox Gateway 认证 Token", true, true, false},
 	"SANDBOX_SESSION_NAMESPACE":            {"Sandbox 会话基础命名空间", false, true, false},
@@ -159,6 +160,9 @@ type SandboxManager interface {
 	ApplySnapshot(cfg sandbox.Config)
 	SetEnabled(enabled bool)
 	RefreshEnabled(load func() bool)
+	SetAllowNetwork(allow bool)
+	RefreshAllowNetwork(load func() bool)
+	SyncNetworkPolicy(ctx context.Context) error
 	Get() sandbox.Config
 }
 
@@ -346,10 +350,9 @@ func (s *Service) UpdateEnvVar(
 			res := &v1.UpdateEnvVarResponse{Success: err == nil}
 			if err != nil {
 				res.Error = err.Error()
-			} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
-				s.sandboxManager.RefreshEnabled(func() bool {
-					return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
-				})
+			} else if err := s.refreshSandboxFlag(ctx, key); err != nil {
+				res.Success = false
+				res.Error = err.Error()
 			}
 			return connect.NewResponse(res), nil
 		}
@@ -372,8 +375,16 @@ func (s *Service) UpdateEnvVar(
 		}), nil
 	}
 	delete(s.externalOverrides, key)
-	if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
-		s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
+	if s.sandboxManager != nil {
+		switch key {
+		case "SANDBOX_ENABLED":
+			s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
+		case "SANDBOX_ALLOW_NETWORK":
+			s.sandboxManager.SetAllowNetwork(sandbox.ParseBool(value, false))
+			if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+				return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: networkSyncFailure(err)}), nil
+			}
+		}
 	}
 
 	return connect.NewResponse(&v1.UpdateEnvVarResponse{Success: true}), nil
@@ -409,10 +420,9 @@ func (s *Service) DeleteEnvVar(
 			res := &v1.DeleteEnvVarResponse{Success: err == nil}
 			if err != nil {
 				res.Error = err.Error()
-			} else if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
-				s.sandboxManager.RefreshEnabled(func() bool {
-					return sandbox.ParseBool(s.global.Get("SANDBOX_ENABLED"), false)
-				})
+			} else if err := s.refreshSandboxFlag(ctx, key); err != nil {
+				res.Success = false
+				res.Error = err.Error()
 			}
 			return connect.NewResponse(res), nil
 		}
@@ -434,8 +444,16 @@ func (s *Service) DeleteEnvVar(
 		}), nil
 	}
 	delete(s.externalOverrides, key)
-	if key == "SANDBOX_ENABLED" && s.sandboxManager != nil {
-		s.sandboxManager.SetEnabled(false)
+	if s.sandboxManager != nil {
+		switch key {
+		case "SANDBOX_ENABLED":
+			s.sandboxManager.SetEnabled(false)
+		case "SANDBOX_ALLOW_NETWORK":
+			s.sandboxManager.SetAllowNetwork(false)
+			if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+				return connect.NewResponse(&v1.DeleteEnvVarResponse{Error: networkSyncFailure(err)}), nil
+			}
+		}
 	}
 
 	return connect.NewResponse(&v1.DeleteEnvVarResponse{Success: true}), nil
@@ -515,6 +533,9 @@ func (s *Service) UpdateRawEnvFile(
 	}
 	if s.sandboxManager != nil {
 		s.sandboxManager.ApplySnapshot(s.computeEffectiveSandboxConfig(newEnv))
+		if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+			return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Error: networkSyncFailure(err)}), nil
+		}
 	}
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
@@ -524,6 +545,7 @@ func (s *Service) computeEffectiveSandboxConfig(newEnv map[string]string) sandbo
 	effective := make(map[string]string)
 	for _, key := range []string{
 		"SANDBOX_ENABLED",
+		"SANDBOX_ALLOW_NETWORK",
 		"SANDBOX_BASE_URL",
 		"SANDBOX_AUTH_TOKEN",
 		"SANDBOX_SESSION_NAMESPACE",
@@ -719,10 +741,40 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 			}
 		}
 	}
-	if seen["SANDBOX_ENABLED"] && s.sandboxManager != nil {
-		s.sandboxManager.RefreshEnabled(func() bool { return sandbox.ParseBool(s.store("SANDBOX_ENABLED").Get("SANDBOX_ENABLED"), false) })
+	for _, key := range []string{"SANDBOX_ENABLED", "SANDBOX_ALLOW_NETWORK"} {
+		if seen[key] {
+			if err := s.refreshSandboxFlag(ctx, key); err != nil {
+				return failure(err)
+			}
+		}
 	}
 	return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true}), nil
+}
+
+// refreshSandboxFlag republishes a live sandbox flag from its authoritative store.
+// The gateway is told about every change of the network switch; turning it off
+// makes the gateway destroy all public workers. The stored value is kept if that
+// fails, so new commands are isolated, but the failure is reported instead of
+// claiming the access was revoked.
+func (s *Service) refreshSandboxFlag(ctx context.Context, key string) error {
+	if s.sandboxManager == nil {
+		return nil
+	}
+	load := func() bool { return sandbox.ParseBool(s.store(key).Get(key), false) }
+	switch key {
+	case "SANDBOX_ENABLED":
+		s.sandboxManager.RefreshEnabled(load)
+	case "SANDBOX_ALLOW_NETWORK":
+		s.sandboxManager.RefreshAllowNetwork(load)
+		if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+			return errors.New(networkSyncFailure(err))
+		}
+	}
+	return nil
+}
+
+func networkSyncFailure(err error) string {
+	return fmt.Sprintf("沙箱联网开关已保存，但同步到沙箱网关失败（关闭联网时已有沙箱的联网权限可能尚未回收）：%v", err)
 }
 
 func validateUpdate(key, value string) error {

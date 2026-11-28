@@ -45,6 +45,7 @@ export const settingFields: Record<string, SettingField> = {
   BILLING_PROMPT_PRICE_PER_MILLION: { label: '每百万输入 Token 价格', group: '计费', type: 'number', min: 0, step: 1, hint: '填写内部最小计费单位的整数：100 单位＝1 雪花＝0.01 元；留空使用模型价格表' },
   BILLING_COMPLETION_PRICE_PER_MILLION: { label: '每百万输出 Token 价格', group: '计费', type: 'number', min: 0, step: 1, hint: '填写内部最小计费单位的整数：100 单位＝1 雪花＝0.01 元；留空使用模型价格表' },
   SANDBOX_ENABLED: { label: '启用隔离命令执行', group: '沙箱', type: 'switch', hot: true },
+  SANDBOX_ALLOW_NETWORK: { label: '允许沙箱联网', group: '沙箱', type: 'switch', hot: true, hint: '开启后沙箱内的命令可以访问公网；内网、本机和云元数据地址仍然禁止。关闭时网关会立即销毁所有已联网的沙箱，其中未保存的文件会丢失。需要沙箱网关支持 PUT /api/v1/network-policy，旧网关会拒绝执行命令' },
   SANDBOX_BASE_URL: { label: '沙箱网关地址', group: '沙箱', hot: true },
   SANDBOX_AUTH_TOKEN: { label: '沙箱网关 Token', group: '沙箱', type: 'secret', hot: true },
   SANDBOX_SESSION_NAMESPACE: { label: '沙箱会话命名空间', group: '沙箱', hot: true },

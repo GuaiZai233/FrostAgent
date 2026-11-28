@@ -20,6 +20,10 @@ type BackendFactory func(Config) Backend
 type ConfigManager struct {
 	mu      sync.RWMutex
 	current Config
+	applier NetworkPolicyApplier
+
+	syncMu  sync.Mutex // serializes SyncNetworkPolicy and guards applied
+	applied map[gatewayKey]appliedPolicy
 }
 
 // NewConfigManager creates a new ConfigManager with the initial configuration.
@@ -55,6 +59,97 @@ func (m *ConfigManager) RefreshEnabled(load func() bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.current.Enabled = load()
+}
+
+// NetworkPolicyApplier pushes the network switch to the gateway described by cfg.
+type NetworkPolicyApplier func(ctx context.Context, cfg Config, allow bool) error
+
+type gatewayKey struct{ baseURL, owner string }
+
+// appliedPolicy records what a gateway may have been told. allow is true when it
+// may currently allow networking; confirmed is true once the gateway acknowledged
+// exactly this state.
+type appliedPolicy struct {
+	authToken string
+	allow     bool
+	confirmed bool
+}
+
+// SetNetworkPolicyApplier registers the function that pushes the network switch
+// to a gateway. It must be idempotent.
+func (m *ConfigManager) SetNetworkPolicyApplier(apply NetworkPolicyApplier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.applier = apply
+}
+
+// SyncNetworkPolicy makes every gateway and ownership domain this manager has
+// talked to match the switch. A gateway that may have been told to allow
+// networking and is no longer the configured one (endpoint, token or owner
+// changed, or the sandbox was unconfigured) is told to deny, so a combined
+// change and disable still revokes the old workers. Allowing is recorded before
+// it is sent, because a lost response may still have been applied; the record is
+// dropped only after a deny is acknowledged. Failures are returned and retried by
+// the next call. Gateways are only contacted once a token is configured.
+func (m *ConfigManager) SyncNetworkPolicy(ctx context.Context) error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+
+	m.mu.RLock()
+	cfg, apply := m.current, m.applier
+	m.mu.RUnlock()
+	if apply == nil {
+		return nil
+	}
+	if m.applied == nil {
+		m.applied = map[gatewayKey]appliedPolicy{}
+	}
+	current := gatewayKey{cfg.BaseURL, cfg.Owner()}
+	configured := cfg.AuthToken != "" && cfg.BaseURL != ""
+
+	var errs []error
+	for key, state := range m.applied {
+		if (configured && key == current) || !state.allow {
+			continue
+		}
+		old := cfg
+		old.BaseURL, old.AuthToken, old.PolicyOwner = key.baseURL, state.authToken, key.owner
+		if err := apply(ctx, old, false); err != nil {
+			errs = append(errs, fmt.Errorf("revoke on previous gateway %s: %w", key.baseURL, err))
+			continue
+		}
+		m.applied[key] = appliedPolicy{authToken: state.authToken, confirmed: true}
+	}
+
+	if !configured {
+		return errors.Join(errs...)
+	}
+	if state, ok := m.applied[current]; !ok || !state.confirmed || state.allow != cfg.AllowNetwork || state.authToken != cfg.AuthToken {
+		if cfg.AllowNetwork {
+			m.applied[current] = appliedPolicy{authToken: cfg.AuthToken, allow: true}
+		}
+		if err := apply(ctx, cfg, cfg.AllowNetwork); err != nil {
+			errs = append(errs, err)
+		} else {
+			m.applied[current] = appliedPolicy{authToken: cfg.AuthToken, allow: cfg.AllowNetwork, confirmed: true}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// RefreshAllowNetwork updates AllowNetwork from an authoritative source while
+// holding the manager lock.
+func (m *ConfigManager) RefreshAllowNetwork(load func() bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current.AllowNetwork = load()
+}
+
+// SetAllowNetwork updates only the AllowNetwork flag.
+func (m *ConfigManager) SetAllowNetwork(allow bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current.AllowNetwork = allow
 }
 
 // DynamicBackend implements Backend with runtime-configurable sandbox support.

@@ -377,3 +377,144 @@ func TestLoadConfigFromMap(t *testing.T) {
 		t.Errorf("got SessionNamespace %s, want corp-ns", cfg.SessionNamespace)
 	}
 }
+
+func TestConfigManagerAllowNetworkIsIndependentOfEnabled(t *testing.T) {
+	m := NewConfigManager(Config{Enabled: true})
+	m.SetAllowNetwork(true)
+	if cfg := m.Get(); !cfg.AllowNetwork || !cfg.Enabled {
+		t.Fatalf("SetAllowNetwork must only change AllowNetwork: %+v", cfg)
+	}
+	m.RefreshAllowNetwork(func() bool { return false })
+	m.SetEnabled(false)
+	if cfg := m.Get(); cfg.AllowNetwork || cfg.Enabled {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestDynamicBackendRebuildsClientWhenAllowNetworkChanges(t *testing.T) {
+	m := NewConfigManager(Config{Enabled: true, BaseURL: "http://127.0.0.1:1", AuthToken: "t", SessionNamespace: "ns"})
+	var built []bool
+	d := NewDynamicBackend(m.Get, func(c Config) Backend {
+		built = append(built, c.AllowNetwork)
+		return &stubBackend{}
+	})
+	_ = d.Health(context.Background())
+	m.SetAllowNetwork(true)
+	_ = d.Health(context.Background())
+	_ = d.Health(context.Background())
+	if len(built) != 2 || built[0] || !built[1] {
+		t.Fatalf("backend must be rebuilt exactly once per AllowNetwork change, got %v", built)
+	}
+}
+
+type policyCall struct {
+	baseURL string
+	allow   bool
+}
+
+func TestSyncNetworkPolicyPushesChangesAndRevokesPreviousGateway(t *testing.T) {
+	m := NewConfigManager(Config{BaseURL: "http://old", AuthToken: "t1", AllowNetwork: true})
+	var calls []policyCall
+	var failNext error
+	m.SetNetworkPolicyApplier(func(_ context.Context, cfg Config, allow bool) error {
+		if failNext != nil {
+			return failNext
+		}
+		calls = append(calls, policyCall{cfg.BaseURL, allow})
+		return nil
+	})
+	ctx := context.Background()
+
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != 1 || calls[0] != (policyCall{"http://old", true}) {
+		t.Fatalf("initial sync: calls=%v err=%v", calls, err)
+	}
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != 1 {
+		t.Fatalf("unchanged state must not call the gateway again: %v", calls)
+	}
+
+	// Endpoint change and disable in one update: the old gateway must be revoked.
+	m.ApplySnapshot(Config{BaseURL: "http://new", AuthToken: "t2", AllowNetwork: false})
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := map[policyCall]bool{}
+	for _, c := range calls[1:] {
+		got[c] = true
+	}
+	if len(calls) != 3 || !got[policyCall{"http://old", false}] || !got[policyCall{"http://new", false}] {
+		t.Fatalf("old gateway not revoked: %v", calls)
+	}
+
+	// Failures are returned and retried, never recorded as applied.
+	m.SetAllowNetwork(true)
+	failNext = errors.New("gateway down")
+	if err := m.SyncNetworkPolicy(ctx); err == nil {
+		t.Fatal("failure must be returned")
+	}
+	failNext = nil
+	n := len(calls)
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != n+1 || calls[n] != (policyCall{"http://new", true}) {
+		t.Fatalf("retry after failure: %v err=%v", calls[n:], err)
+	}
+
+	if err := NewConfigManager(Config{AllowNetwork: true}).SyncNetworkPolicy(ctx); err != nil {
+		t.Fatalf("unconfigured manager must be a no-op: %v", err)
+	}
+}
+
+func TestSyncNetworkPolicyKeepsOwnershipUntilDenyIsAcknowledged(t *testing.T) {
+	ctx := context.Background()
+	m := NewConfigManager(Config{BaseURL: "http://old", AuthToken: "t1", SessionNamespace: "ns", AllowNetwork: true})
+	var calls []policyCall
+	lostAck := true
+	m.SetNetworkPolicyApplier(func(_ context.Context, cfg Config, allow bool) error {
+		calls = append(calls, policyCall{cfg.BaseURL, allow})
+		if allow && lostAck {
+			return errors.New("response lost") // the gateway may have applied it anyway
+		}
+		return nil
+	})
+	if err := m.SyncNetworkPolicy(ctx); err == nil {
+		t.Fatal("lost acknowledgement must be reported")
+	}
+
+	// The credentials are removed while the allow was never acknowledged: the old
+	// gateway must still be told to deny.
+	m.ApplySnapshot(Config{SessionNamespace: "ns"})
+	calls = nil
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != (policyCall{"http://old", false}) {
+		t.Fatalf("old gateway not revoked after credentials were removed: %v", calls)
+	}
+	calls = nil
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != 0 {
+		t.Fatalf("acknowledged deny must not be repeated: %v err=%v", calls, err)
+	}
+}
+
+func TestSyncNetworkPolicyRevokesPreviousOwnerWhenNamespaceChanges(t *testing.T) {
+	ctx := context.Background()
+	m := NewConfigManager(Config{BaseURL: "http://gw", AuthToken: "t", SessionNamespace: "ns-a", AllowNetwork: true})
+	var owners []string
+	m.SetNetworkPolicyApplier(func(_ context.Context, cfg Config, allow bool) error {
+		owners = append(owners, cfg.Owner()+map[bool]string{true: "+", false: "-"}[allow])
+		return nil
+	})
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m.ApplySnapshot(Config{BaseURL: "http://gw", AuthToken: "t", SessionNamespace: "ns-b", AllowNetwork: true})
+	owners = nil
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, o := range owners {
+		got[o] = true
+	}
+	if len(owners) != 2 || !got["ns-a-"] || !got["ns-b+"] {
+		t.Fatalf("namespace change must revoke the previous owner: %v", owners)
+	}
+}

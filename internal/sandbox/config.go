@@ -24,7 +24,22 @@ type Config struct {
 	BaseURL          string
 	AuthToken        string
 	SessionNamespace string
-	ClientTimeout    time.Duration
+	// AllowNetwork lets sandbox workers reach the public internet. Private,
+	// loopback and metadata ranges stay blocked by the gateway.
+	AllowNetwork bool
+	// PolicyOwner identifies this FrostAgent to the gateway's network policy. Empty
+	// means SessionNamespace. Instances derive their own SessionNamespace, so the
+	// runtime sets it to the shared base namespace.
+	PolicyOwner   string
+	ClientTimeout time.Duration
+}
+
+// Owner returns the ownership domain used for the gateway network policy.
+func (c Config) Owner() string {
+	if c.PolicyOwner != "" {
+		return c.PolicyOwner
+	}
+	return c.SessionNamespace
 }
 
 // LoadConfig reads sandbox configuration through the supplied lookup function.
@@ -57,6 +72,7 @@ func LoadConfig(getenv func(string) string) Config {
 		BaseURL:          baseURL,
 		AuthToken:        authToken,
 		SessionNamespace: sessionNamespace,
+		AllowNetwork:     ParseBool(getenv("SANDBOX_ALLOW_NETWORK"), false),
 		ClientTimeout:    135 * time.Second, // Max execution timeout (120s) + 15s envelope
 	}
 }

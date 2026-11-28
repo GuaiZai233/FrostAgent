@@ -55,6 +55,7 @@ var resetHints = map[string]string{
 	"BILLING_PROMPT_PRICE_PER_MILLION":     "使用模型价格表；未登记模型为 2000 单位/百万 Token",
 	"BILLING_COMPLETION_PRICE_PER_MILLION": "使用模型价格表；未登记模型为 8000 单位/百万 Token",
 	"SANDBOX_ENABLED":                      "关闭",
+	"SANDBOX_ALLOW_NETWORK":                "关闭（沙箱不能访问公网）",
 	"SANDBOX_BASE_URL":                     "http://127.0.0.1:3874",
 	"SANDBOX_AUTH_TOKEN":                   "未配置 Token",
 	"SANDBOX_SESSION_NAMESPACE":            "frostagent",
