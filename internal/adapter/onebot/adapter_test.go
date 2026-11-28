@@ -10,6 +10,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -104,6 +105,22 @@ func TestStickerSourcesFromSegmentsOnlyReturnsStickerImages(t *testing.T) {
 		if sources[i] != want[i] {
 			t.Fatalf("sticker sources[%d] = %q, want %q", i, sources[i], want[i])
 		}
+	}
+}
+
+func TestStickerSourcesPreserveUnreadableStickerSlots(t *testing.T) {
+	segments := ParseMessageSegments([]byte(`[
+		{"type":"image","data":{"file":"4abf08c4ed410cf142ce91adad07e7a6.png","sub_type":1}},
+		{"type":"image","data":{"url":"https://example.com/second.png","sub_type":1}}
+	]`))
+	sources := stickerSourcesFromSegments(segments)
+	want := []string{"", "https://example.com/second.png"}
+	if !reflect.DeepEqual(sources, want) {
+		t.Fatalf("sticker sources = %v, want %v", sources, want)
+	}
+	attachments := stickerAttachmentsFromSegments(segments)
+	if len(attachments) != 2 || attachments[0].fileName == "" || attachments[1].source == "" {
+		t.Fatalf("sticker attachments lost stable slots: %+v", attachments)
 	}
 }
 
