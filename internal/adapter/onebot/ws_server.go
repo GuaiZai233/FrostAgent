@@ -287,8 +287,11 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 	var notice string
 	var routing EventRouting
 	var botLoopSoft bool
+	var tempChat *llm.TempChat
 	for _, arg := range args {
 		switch v := arg.(type) {
+		case *llm.TempChat:
+			tempChat = v
 		case string:
 			notice = v
 		case bool:
@@ -339,8 +342,8 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				}
 			}
 		}
-		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot)
-		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, wakeSignals, botLoopSoft, notice)
+		responseContext := buildResponseContext(event, wakeSignals, replyContext.MentionsBot, conn.tempChatQuoteGuidance(event, replyContext))
+		reply("send_group_msg", "group_id", strconv.FormatInt(event.GroupID, 10), "echo_agent_req_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, wakeSignals, botLoopSoft, tempChat, notice)
 
 	} else if event.MessageType == "private" {
 		engine.Log().Info(
@@ -361,20 +364,37 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				}
 			}
 		}
-		responseContext := buildResponseContext(event, GroupWakeSignals{}, false)
-		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, GroupWakeSignals{}, botLoopSoft, notice)
+		responseContext := buildResponseContext(event, GroupWakeSignals{}, false, conn.tempChatQuoteGuidance(event, replyContext))
+		reply("send_private_msg", "user_id", strconv.FormatInt(event.UserID, 10), "echo_private_001", event, engine, conn, replyContext, responseContext, routeSnapshot, startEpoch, turn, GroupWakeSignals{}, botLoopSoft, tempChat, notice)
 	}
 }
 
 // reply records terminal silence without sending or batching memory.
-func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, warningNotice ...string) {
+func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, tempChat *llm.TempChat, warningNotice ...string) {
 	var billingReported atomic.Bool
+	origin := tempChatOrigin(tempChat)
+	// A temporary run reserves no SessionTurn, so it keeps its own billing ledger
+	// for the early-exit receipt fallback.
+	var tempBilling *llm.BillingRunState
+	// Error and notice replies of a temporary conversation stay out of the archive too.
+	sendDirectReply := func(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {
+		sendDirectReplyFor(origin, action, type1, id, echo, event, conn, text, turns...)
+	}
 	defer func() {
 		if engine == nil || conn == nil || billingReported.Load() {
 			return
 		}
-		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
-			_, _ = conn.sendActionAndWaitTurn(model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": receipt}, Echo: echo}, actionACKTimeout(conn.Scope), turn)
+		receipt := turn.UnreportedReceipt(engine)
+		if receipt == "" && tempBilling != nil {
+			receipt = engine.UnreportedBillingReceipt(engine.Context(), tempBilling)
+		}
+		if receipt != "" {
+			receiptAction := model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": receipt}, Echo: echo, TempChat: origin}
+			response, err := conn.sendActionAndWaitTurn(receiptAction, actionACKTimeout(conn.Scope), turn)
+			if err == nil && origin != nil {
+				// Temporary messages are all marked, so a quote of this one is recognised.
+				conn.recordBotMessageRef(conn.historyKey(event), receiptAction, response, false)
+			}
 		}
 	}()
 	if conn != nil && conn.mock && conn.isClosed() {
@@ -670,10 +690,15 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				}
 			}
 		}
+		if session != nil && tempChat != nil && startEpoch == 0 {
+			// No turn was reserved, so the session may not have existed when the
+			// event was routed. Pin the epoch the run actually starts from.
+			startEpoch = session.Epoch()
+		}
 		if session != nil && session.Epoch() != startEpoch {
 			return
 		}
-		if event.MessageType == "group" {
+		if event.MessageType == "group" && !(tempChat != nil && tempChat.NoMemory) {
 			limit := engine.GroupRawLimit()
 			maxChars := engine.GroupRawMaxChars()
 			var msgID string
@@ -701,7 +726,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if event.MessageType == "group" {
 		requestPrompt += "\n\n<outbound_message_guidance>\n" + tools.NativeMentionGuidance + "\n</outbound_message_guidance>"
 	}
-	if session != nil {
+	if session != nil && tempChat == nil {
 		if deliveryFailure := session.TakeDeliveryFailure(); deliveryFailure != nil {
 			deliveryTag := deliveryFailure.FormatDeliveryContext()
 			if deliveryTag != "" {
@@ -854,16 +879,28 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 
-		messages, billingState, inputID := session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
-		if event.MessageType != "group" {
-			// Group messages carry their keys in the group buffer instead.
-			session.SetHistoryImageKeys(inputID, retainEventImages(event, engine))
+		var messages []llm.ChatMessage
+		var inputID uint64
+		if tempChat != nil {
+			tempBilling = billingState
+			// Read-only snapshot: neither this prompt nor its reply reaches the session.
+			messages = session.EphemeralMessages(!tempChat.NoMemory, requestPrompt)
+		} else {
+			messages, billingState, inputID = session.PrepareTurnMessages(turn, durablePrompt, requestPrompt, billingState)
+			if event.MessageType != "group" {
+				// Group messages carry their keys in the group buffer instead.
+				session.SetHistoryImageKeys(inputID, retainEventImages(event, engine))
+			}
 		}
 		if len(messages) > 0 {
 			messages[len(messages)-1].Content = promptContentWithImages(requestPrompt, directImageParts)
 		}
 
-		deliveries = llm.NewPublicReplyLog(session, startEpoch)
+		if tempChat != nil {
+			deliveries = llm.NewTransientReplyLog()
+		} else {
+			deliveries = llm.NewPublicReplyLog(session, startEpoch)
+		}
 		defer func() {
 			if wakeSignals.Proactive {
 				deliveries.CommitDelivered()
@@ -927,7 +964,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					type1:     id,
 					"message": oneBotSegments,
 				},
-				Echo: echo,
+				Echo:     echo,
+				TempChat: origin,
 			}
 			if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
 				return errors.New("会话已重置，取消发送中间消息")
@@ -957,19 +995,19 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		commitAssistantHistory = func(replyText string, alreadyStaged bool) {
-			if session == nil {
+			if session == nil || tempChat != nil {
 				return
 			}
 			session.WithEpochCommit(startEpoch, func() {
 				if strings.TrimSpace(replyText) == "" {
-					engine.TrimSession(session, routeScope)
+					trimSessionHistory(tempChat, engine, session, routeScope)
 					return
 				}
 
 				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
 					return
 				}
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 
 				if event.MessageType == "group" {
 					var msgID string
@@ -1071,7 +1109,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		stopThinking := conn.startThinkingStatus(event, engine, turn)
 		defer stopThinking()
 		var refreshPrompt func(context.Context) (llm.PromptRefresh, error)
-		if event.MessageType == "group" && session != nil {
+		if event.MessageType == "group" && session != nil && tempChat == nil {
 			refreshPrompt = func(ctx context.Context) (llm.PromptRefresh, error) {
 				snapshot := session.SnapshotGroupContext(engine.GroupRawLimit(), engine.GroupRawMaxChars(), strconv.FormatInt(int64(event.MessageID), 10))
 				groupContext, notice, err := engine.GroupContextPrompt(ctx, llm.RunContext{SessionID: conn.historyKey(event), ActorPlatform: securityPlatform, ActorUserID: strconv.FormatInt(event.UserID, 10), Mock: conn.mock}, snapshot)
@@ -1081,6 +1119,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		runResult = engine.RunMessagesWithContext(messages, llm.RunContext{
 			Turn:        turn,
+			TempChat:    tempChat,
 			Context:     runCtx,
 			Epoch:       startEpoch,
 			SessionID:   conn.historyKey(event),
@@ -1094,7 +1133,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			InstanceID:         engine.InstanceID,
 			SendHook:           sendHook,
 			RefreshPrompt:      refreshPrompt,
-			PlatformActionHook: conn.qqActionHook(event, turn, recordDelivery, engine),
+			PlatformActionHook: conn.qqActionHookFor(origin, event, turn, recordDelivery, engine),
 			FinalReplyText:     plainFinalReplyText,
 			CanReplyToMessage: func(messageID string) bool {
 				mid, ok := numericMessageID(messageID)
@@ -1135,7 +1174,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		if runResult.Banned {
-			if session != nil {
+			if session != nil && tempChat == nil {
 				session.DropMessage(inputID)
 				if event.MessageType == "group" {
 					var msgID string
@@ -1179,13 +1218,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		if wakeSignals.Proactive && (runResult.Error != nil || runResult.OutputBlocked) {
-			engine.TrimSession(session, routeScope)
+			trimSessionHistory(tempChat, engine, session, routeScope)
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
 			return
 		}
 
 		if !conn.allowLLMErrorReply(runResult) {
-			engine.TrimSession(session, routeScope)
+			trimSessionHistory(tempChat, engine, session, routeScope)
 			if receiptText == "" {
 				return
 			}
@@ -1204,8 +1243,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveries.Text() != "" {
 				deliveries.CommitDelivered()
 			}
-			engine.TrimSession(session, routeScope)
-			if event.MessageType == "group" && !runResult.Banned {
+			trimSessionHistory(tempChat, engine, session, routeScope)
+			if event.MessageType == "group" && !runResult.Banned && tempChat == nil {
 				var msgID string
 				if event.MessageID != 0 {
 					msgID = strconv.FormatInt(int64(event.MessageID), 10)
@@ -1225,7 +1264,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if spoken := deliveries.SpokeText(); spoken != "" {
 				silentRecord = spoken
 			}
-			if runResult.StaySilentCalled && !conn.mock && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
+			if runResult.StaySilentCalled && !conn.mock && tempChat == nil && strings.TrimSpace(userText) != "" && !runResult.MemoryWritten {
 				if event.MessageType == "group" {
 					groupIDStr := strconv.FormatInt(event.GroupID, 10)
 					userIDStr := strconv.FormatInt(event.UserID, 10)
@@ -1300,8 +1339,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveredText := deliveries.Text(); deliveredText != "" {
 				commitAssistantHistory(deliveredText, true)
 			} else {
-				engine.TrimSession(session, routeScope)
-				if event.MessageType == "group" && !runResult.Banned {
+				trimSessionHistory(tempChat, engine, session, routeScope)
+				if event.MessageType == "group" && !runResult.Banned && tempChat == nil {
 					var msgID string
 					if event.MessageID != 0 {
 						msgID = strconv.FormatInt(int64(event.MessageID), 10)
@@ -1351,7 +1390,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		request, _ := json.Marshal(tools.QQRequest{Action: "send", Arguments: tools.QQArguments{Messages: finalMessages}})
 		turn.AwaitDelivery(func() {
 			var acknowledged []tools.Msg
-			result, err := conn.qqActionHook(event, turn, func(messages []tools.Msg) {
+			result, err := conn.qqActionHookFor(origin, event, turn, func(messages []tools.Msg) {
 				stickerSent := false
 				for _, m := range messages {
 					stickerSent = stickerSent || m.IsSticker || m.Type == "mface"
@@ -1377,16 +1416,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
 				return
 			}
-			if len(acknowledged) > 0 {
+			if len(acknowledged) > 0 && tempChat == nil {
 				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged), qqDeliveredImageKeys(acknowledged)...)
 			}
-			if session != nil {
+			if session != nil && tempChat == nil {
 				reason := result.Content
 				if err != nil {
 					reason = err.Error()
 				}
 				session.SetDeliveryFailure(llm.DeliveryFailure{Platform: "onebot", Action: "qq.send", Wording: reason})
-				engine.TrimSession(session)
+				trimSessionHistory(tempChat, engine, session)
 			}
 		})
 		return
@@ -1398,7 +1437,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
 			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "引用消息校验失败", err, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 				return
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
@@ -1408,7 +1447,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if buildErr != nil {
 			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", buildErr, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 				return
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
@@ -1441,7 +1480,8 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			type1:     id,
 			"message": finalMessage, // Use the processed finalMessage
 		},
-		Echo: echo,
+		Echo:     echo,
+		TempChat: origin,
 	}
 
 	if turn.Interrupted() || (session != nil && session.Epoch() != startEpoch) {
@@ -1464,13 +1504,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						body = wrapGroupReply(base, event, engine.Scope)
 					}
 				}
-				actions = append(actions, model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": body}, Echo: echo})
+				actions = append(actions, model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": body}, Echo: echo, TempChat: origin})
 			}
 		}
 		var delivered []string
 		completed := false
 		defer func() {
-			if !completed && len(delivered) > 0 {
+			if !completed && len(delivered) > 0 && tempChat == nil {
 				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", strings.Join(delivered, "\n\n"))
 			}
 		}()
@@ -1507,7 +1547,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		} else {
 			// Do not record the failed suffix. The deferred callback preserves
 			// any acknowledged prefix without automatic memory extraction.
-			if event.MessageType == "group" && session != nil && len(delivered) == 0 {
+			if event.MessageType == "group" && session != nil && tempChat == nil && len(delivered) == 0 {
 				var msgID string
 				if event.MessageID != 0 {
 					msgID = strconv.FormatInt(int64(event.MessageID), 10)
@@ -1528,7 +1568,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if reason == "" {
 				reason = err.Error()
 			}
-			if session != nil {
+			if session != nil && tempChat == nil {
 				session.SetDeliveryFailure(llm.DeliveryFailure{
 					Platform: "onebot",
 					Action:   action,
@@ -1537,7 +1577,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Wording:  reason,
 				})
 				if engine != nil {
-					engine.TrimSession(session, routeScope)
+					trimSessionHistory(tempChat, engine, session, routeScope)
 				}
 			}
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
@@ -1567,6 +1607,12 @@ func promptContentWithImages(prompt string, images []core.ContentPart) any {
 }
 
 func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {
+	sendDirectReplyFor(nil, action, type1, id, echo, event, conn, text, turns...)
+}
+
+// sendDirectReplyFor sends a plain reply; origin marks it as belonging to a
+// temporary conversation, which keeps it out of the chat archive.
+func sendDirectReplyFor(origin *model.TempChatOrigin, action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {
 	var turn *llm.SessionTurn
 	if len(turns) > 0 {
 		turn = turns[0]
@@ -1594,10 +1640,26 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 			type1:     id,
 			"message": finalMessage,
 		},
-		Echo: echo,
+		Echo:     echo,
+		TempChat: origin,
 	}
 
 	botAction = conn.adaptMentionSpacing(botAction)
+	if origin != nil {
+		// Temporary replies must stay findable by /msgid and by quote guidance, so
+		// the ACK carrying the message ID is awaited. Callers may be the read loop
+		// that delivers ACKs, so the wait cannot block them. These replies still
+		// skip the chat archive.
+		go func() {
+			response, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+			if err != nil {
+				conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
+				return
+			}
+			conn.recordBotMessageRef(conn.historyKey(event), botAction, response, false)
+		}()
+		return
+	}
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
@@ -1856,4 +1918,13 @@ func validateQuoteMessages(conn *wsConnection, msgs []tools.Msg, sessionID strin
 		}
 	}
 	return nil
+}
+
+// trimSessionHistory trims shared history after a turn. A temporary conversation
+// never ran against it, so it must not trigger trimming or private compaction.
+func trimSessionHistory(tempChat *llm.TempChat, engine *llm.Engine, session *llm.SessionContext, routes ...modelrouter.Scope) {
+	if tempChat != nil {
+		return
+	}
+	engine.TrimSession(session, routes...)
 }

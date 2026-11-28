@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/parity"
@@ -15,6 +16,7 @@ func buildResponseContext(
 	event model.OneBotEvent,
 	wakeSignals GroupWakeSignals,
 	quotedAlias bool,
+	extraGuidance ...string,
 ) string {
 	triggers := make([]string, 0, 4)
 	if event.MessageType == "private" {
@@ -41,11 +43,18 @@ func buildResponseContext(
 	if wakeSignals.Alias {
 		guidance = parity.AliasWakeGuidance + " " + guidance
 	}
+	guidance += parity.CurrentTimeGuidance(time.Now())
+	// Backend-owned notes close the guidance, after the time line.
+	for _, extra := range extraGuidance {
+		if extra = strings.TrimSpace(extra); extra != "" {
+			guidance += "\n" + extra
+		}
+	}
 	context := map[string]interface{}{
 		"mode":              event.MessageType,
 		"triggers":          triggers,
 		"silence_available": true,
-		"guidance":          guidance + parity.CurrentTimeGuidance(time.Now()),
+		"guidance":          guidance,
 	}
 	encoded, _ := json.Marshal(context)
 	return string(encoded)

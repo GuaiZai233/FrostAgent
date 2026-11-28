@@ -2,10 +2,12 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/GuaiZai233/FrostAgent/internal/core"
+	"github.com/GuaiZai233/FrostAgent/internal/logs"
 	"github.com/GuaiZai233/FrostAgent/internal/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 )
@@ -69,6 +71,11 @@ type RunContext struct {
 	ReplyToBotMentionOnly bool
 	Epoch                 uint64
 
+	// TempChat marks a "/tempchat" run. Nothing it reads is written back: no
+	// session history, group buffer, memory, extraction, tool history or prompt
+	// trace. nil for every other run.
+	TempChat *TempChat
+
 	// CanReplyToMessage validates an opaque message ID against trusted,
 	// adapter-owned current-session observations, never model-supplied text.
 	CanReplyToMessage func(messageID string) bool
@@ -76,6 +83,34 @@ type RunContext struct {
 	// FinalReplyText returns the adapter's rendered text for a text-only final
 	// message. False retains the original output, including media and rich content.
 	FinalReplyText func(string) (string, bool)
+}
+
+// TempChat selects what a temporary conversation may read. Whatever the
+// options, a temporary conversation never writes to backend history.
+type TempChat struct {
+	// NoPersonality drops SYSTEM_PROMPT, the dialogue persona (including its
+	// example dialogues) and the memory catalog index.
+	NoPersonality bool
+	// NoMemory drops recalled memory, the session history, group summaries and
+	// recent group messages, and the tools that read memory or past chats.
+	NoMemory bool
+}
+
+// TempChatQuotedGuidance is appended to the prompt when the user quotes an
+// Assistant message that was produced in a temporary conversation.
+func TempChatQuotedGuidance(m logs.TempChatMark) string {
+	var disabled []string
+	if m.NoPersonality {
+		disabled = append(disabled, "禁用了人格提示词")
+	}
+	if m.NoMemory {
+		disabled = append(disabled, "禁用了记忆")
+	}
+	text := "用户引用的消息，为 Assistant 处于“临时对话”下所产生的，内容原则上不影响正常消息队列，仅供参考。"
+	if len(disabled) > 0 {
+		text += "此次临时对话(" + strings.Join(disabled, "、") + ")"
+	}
+	return text
 }
 
 type PromptRefresh struct {

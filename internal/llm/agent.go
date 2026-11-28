@@ -340,7 +340,8 @@ func (e *Engine) RunMessagesWithContext(
 		return AgentRunResult{Silent: true, SilenceReason: "security_block", Error: err}
 	}
 	owner := runContext.Owner
-	if owner != "" && e.MemoryWriter != nil {
+	tempChat := runContext.TempChat
+	if owner != "" && e.MemoryWriter != nil && tempChat == nil {
 		e.MemoryWriter.RememberRoute(owner, core.RouteContext{
 			Platform: runContext.RouteScope.Platform,
 			GroupID:  runContext.RouteScope.GroupID,
@@ -379,6 +380,14 @@ func (e *Engine) RunMessagesWithContext(
 	}
 	if runContext.Awareness || len(messages) == 0 || messages[0].Role != "system" {
 		systemPrompt := buildContextSystemPrompt(e.Getenv("SYSTEM_PROMPT"), e.PersonaDialogue())
+		// A temporary conversation reads memory without ever recording a recall,
+		// and each option removes its own slice of the prompt.
+		noCatalog := tempChat != nil && (tempChat.NoPersonality || tempChat.NoMemory)
+		noRecall := tempChat != nil && tempChat.NoMemory
+		recordRecall := !runContext.Mock && tempChat == nil
+		if tempChat != nil && tempChat.NoPersonality {
+			systemPrompt = ""
+		}
 
 		basePrompt := systemPrompt
 		memoryErr := func() error {
@@ -390,7 +399,7 @@ func (e *Engine) RunMessagesWithContext(
 				}
 				senderID := runContext.ActorUserID
 
-				if e.GroupManager != nil && groupID != "" {
+				if e.GroupManager != nil && groupID != "" && !(noCatalog && noRecall) {
 					groupStore, gErr := e.GroupManager.GetGroupStoreForPlatform(runContext.RouteScope.Platform, groupID)
 					if gErr != nil {
 						return fmt.Errorf("open group memory: %w", gErr)
@@ -403,12 +412,12 @@ func (e *Engine) RunMessagesWithContext(
 						var senderProfile *memory.MemberProfile
 						if profile != nil {
 							senderProfile = profile.GetMember(senderID)
-							if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" {
+							if memberPrompt := memory.MemberContextPrompt(senderProfile); memberPrompt != "" && !noRecall {
 								systemPrompt += "\n\n" + memberPrompt
 							}
 						}
 
-						if groupStore.CatalogStore() != nil {
+						if groupStore.CatalogStore() != nil && !noCatalog {
 							catalogContext, cErr := groupStore.CatalogStore().FormatForGroupPrompt(groupID)
 							if cErr != nil {
 								return fmt.Errorf("read group memory catalog: %w", cErr)
@@ -417,7 +426,7 @@ func (e *Engine) RunMessagesWithContext(
 							}
 						}
 
-						if e.MemoryGateway != nil {
+						if e.MemoryGateway != nil && !noRecall {
 							lastUserMsg := extractLastUserMessage(messages)
 							var raw []memory.MemoryEntry
 							var sErr error
@@ -442,7 +451,7 @@ func (e *Engine) RunMessagesWithContext(
 								if len(filtered) > 0 {
 									groupMemContext := e.MemoryGateway.FormatForGroupContext(filtered, groupID, senderID, senderProfile)
 									systemPrompt += "\n\n" + groupMemContext
-									if !runContext.Mock {
+									if recordRecall {
 										if err := groupStore.RecordRecall(filtered); err != nil {
 											return fmt.Errorf("record group memory recall: %w", err)
 										}
@@ -452,12 +461,12 @@ func (e *Engine) RunMessagesWithContext(
 						}
 					}
 				}
-				if e.MemoryReader != nil && e.MemoryGateway != nil {
+				if e.MemoryReader != nil && e.MemoryGateway != nil && !(noCatalog && noRecall) {
 					for _, scope := range runContext.MemoryReadScopes() {
 						if scope.Type != memory.ScopePrivate {
 							continue
 						}
-						if e.MemoryCatalog != nil {
+						if e.MemoryCatalog != nil && !noCatalog {
 							catalogContext, err := e.MemoryCatalog.FormatForPrompt(scope.Owner)
 							if err != nil {
 								return fmt.Errorf("read sender memory catalog: %w", err)
@@ -479,7 +488,7 @@ func (e *Engine) RunMessagesWithContext(
 							continue
 						}
 						systemPrompt += "\n\n" + e.MemoryGateway.FormatForGroupUserContext(entries, scope.Owner)
-						if !runContext.Mock {
+						if recordRecall {
 							if err := e.RecordMemoryScopeRecall(scope, entries); err != nil {
 								return fmt.Errorf("record sender memory recall: %w", err)
 							}
@@ -487,7 +496,7 @@ func (e *Engine) RunMessagesWithContext(
 					}
 				}
 			} else {
-				if owner != "" && e.MemoryCatalog != nil {
+				if owner != "" && e.MemoryCatalog != nil && !noCatalog {
 					catalogContext, err := e.MemoryCatalog.FormatForPrompt(owner)
 					if err != nil {
 						return fmt.Errorf("read memory catalog: %w", err)
@@ -497,7 +506,7 @@ func (e *Engine) RunMessagesWithContext(
 				}
 
 				// 召回 → 网关过滤 → 注入
-				if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil {
+				if owner != "" && e.MemoryReader != nil && e.MemoryGateway != nil && !noRecall {
 					lastUserMsg := extractLastUserMessage(messages)
 					var raw []memory.MemoryEntry
 					var err error
@@ -519,7 +528,7 @@ func (e *Engine) RunMessagesWithContext(
 					if len(filtered) > 0 {
 						memoryContext := e.MemoryGateway.FormatForPrivateContext(filtered, owner)
 						systemPrompt += "\n\n" + memoryContext
-						if !runContext.Mock {
+						if recordRecall {
 							if err := e.MemoryReader.RecordRecall(filtered); err != nil {
 								return fmt.Errorf("record memory recall: %w", err)
 							}
@@ -561,7 +570,7 @@ func (e *Engine) RunMessagesWithContext(
 				}
 				// Mock (Direct Chat) runs never publish their prompt to the
 				// session-level Prompt Inspector.
-				if sysContent, ok := messages[0].Content.(string); ok && !runContext.Mock {
+				if sysContent, ok := messages[0].Content.(string); ok && !runContext.Mock && tempChat == nil {
 					modelName := e.ModelName
 					if e.ModelRouter != nil {
 						if target, err := runContext.RouteSnapshot.Resolve(modelrouter.WorkloadDialogue, runContext.RouteScope); err == nil {
@@ -1021,7 +1030,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 		if forcedSleepGuidance != "" {
 			requestMessages = slices.Insert(requestMessages, 1, ChatMessage{Role: "system", Content: forcedSleepGuidance})
 		}
-		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && runCtx.Mock) {
+		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && (runCtx.Mock || runCtx.TempChat != nil)) {
 			var system []string
 			for _, message := range requestMessages {
 				if message.Role == "system" {
@@ -1063,6 +1072,9 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				}
 			}
 			modelTools = proactiveTools
+		}
+		if hasRunCtx && runCtx.TempChat != nil {
+			modelTools = tempChatTools(modelTools, runCtx.TempChat)
 		}
 
 		// Build transient constraints from current availability so a disabled
@@ -1257,7 +1269,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			},
 			TraceID: runCtx.SessionID,
 		}
-		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && runCtx.Mock) {
+		if sess := e.promptTraceSession(ctx); sess != nil && !(hasRunCtx && (runCtx.Mock || runCtx.TempChat != nil)) {
 			sess.SetLastActualRequest(runCtx.Epoch, modelName, chatReq)
 		}
 
@@ -1496,7 +1508,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			var execution core.ToolExecutionResult
 			toolSucceeded := false
 			// 从 map 或 MCP Manager 中找到工具执行
-			if tool, exists := e.findToolExecutor(tc.Function.Name); exists {
+			if tool, exists := e.findToolExecutor(tc.Function.Name); exists && !(hasRunCtx && tempChatToolBlocked(tc.Function.Name, runCtx.TempChat)) {
 				var err error
 				startedTools[tc.ID] = true
 				execution, err = e.executeRecordedTool(ctx, tool, tc)
