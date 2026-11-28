@@ -280,6 +280,56 @@ try {
     cleanupRealPrefix();
   }
   process.stdout.write('PASS: real mock-prefix group and private sessions expose history in both views\n');
+
+  // Session timeline tool cards come from the archive, not from session history.
+  for (const archive of ['available', 'failing', 'legacy-server'] as const) {
+    const toolRoot = dom.root();
+    const toolCalls: Array<[string, string[]]> = [];
+    const errorsBefore = errors.length;
+    const toolAPI = {
+      ...api,
+      async getSessions() {
+        return { sessions: [session], pagination: { total: 1, pageToken: '' } };
+      },
+      async getSessionContext(id: string) {
+        return {
+          sessionId: id, platform: 'onebot', model: 'test-model', promptText: '{}',
+          recentStructuredMessages: [
+            { role: 'user', content: 'question', sender: '', senderId: '', messageId: 'src-1', time: '' },
+            { role: 'assistant', content: 'delivered reply', sender: '', senderId: '', messageId: '', time: '' },
+          ],
+        };
+      },
+      ...(archive === 'legacy-server' ? {} : {
+        async getSessionToolActivity(id: string, sourceIds: string[]) {
+          toolCalls.push([id, sourceIds]);
+          if (archive === 'failing') throw new Error('unimplemented');
+          return {
+            activities: [{
+              sourceMessageId: 'src-1', total: 1,
+              entries: [{ refId: 'fa_toolcall_550e8400-e29b-41d4-a716-446655440020', tool: 'stay_silent' }],
+            }],
+          };
+        },
+      }),
+    } as unknown as ReturnType<typeof createInstanceAPI>;
+    const cleanupTools = mountPromptPage(toolRoot, toolAPI);
+    await settle();
+    query(toolRoot, '.prompt-session-card').click();
+    await settle();
+    const html = query(toolRoot, '#prompt-inspector-mount').innerHTML;
+    assert.match(html, /delivered reply/, `${archive}: timeline must always render`);
+    assert.equal(errors.length, errorsBefore, `${archive}: tool activity is supplementary and must not toast`);
+    if (archive === 'available') {
+      assert.deepEqual(toolCalls, [[session.sessionId, ['src-1']]]);
+      assert.match(html, /stay_silent/);
+      assert.match(html, /fa_toolcall_550e8400-e29b-41d4-a716-446655440020/);
+    } else {
+      assert.doesNotMatch(html, /stay_silent/);
+    }
+    cleanupTools();
+  }
+  process.stdout.write('PASS: session timeline lists archived tool calls and degrades without them\n');
   instanceState.select(null);
 } finally {
   instanceState.select(null);

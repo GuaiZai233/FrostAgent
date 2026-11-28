@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -89,3 +90,60 @@ func resultPage(text string, offset, limit int) (page string, total, end int, ok
 // toolHistoryResultPageChars matches the read_tool_history page size, so a
 // result page is bounded regardless of how large the archived result is.
 const toolHistoryResultPageChars = 8000
+
+const (
+	sessionToolActivityMaxSources   = 200
+	sessionToolActivityPerSource    = 10
+	sessionToolActivityMaxSourceLen = 256
+)
+
+// GetSessionToolActivity lists archived tool calls per displayed source message
+// so the session timeline can show tool cards without storing them in history.
+// It returns call metadata only; arguments and results stay behind
+// GetToolHistoryEntry.
+func (s *Service) GetSessionToolActivity(ctx context.Context, req *connect.Request[v1.GetSessionToolActivityRequest]) (*connect.Response[v1.GetSessionToolActivityResponse], error) {
+	invalid := func() (*connect.Response[v1.GetSessionToolActivityResponse], error) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("会话或来源消息参数无效"))
+	}
+	sessionID := strings.TrimSpace(req.Msg.GetSessionId())
+	ids := req.Msg.GetSourceMessageIds()
+	if len(sessionID) > 2048 || len(ids) > sessionToolActivityMaxSources {
+		return invalid()
+	}
+	for _, id := range ids {
+		if len(id) > sessionToolActivityMaxSourceLen {
+			return invalid()
+		}
+	}
+	scope, ok := chatHistoryScope(sessionID)
+	if !ok || s.isMockSessionScope(scope) {
+		return invalid()
+	}
+	if s.engine.ToolHistory == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("工具历史暂不可用"))
+	}
+	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	sources, err := s.engine.ToolHistory.RefsBySources(readCtx, scope, ids, sessionToolActivityPerSource)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("工具记录读取失败"))
+	}
+	response := &v1.GetSessionToolActivityResponse{}
+	for _, source := range sources {
+		activity := &v1.SessionToolActivity{SourceMessageId: source.SourceMessageID, Total: int32(source.Total)}
+		for _, ref := range source.Refs {
+			record, err := s.engine.ToolHistory.Read(readCtx, scope, ref)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal, errors.New("工具记录读取失败"))
+			}
+			activity.Entries = append(activity.Entries, &v1.SessionToolActivityEntry{RefId: record.RefID, Tool: record.Tool})
+		}
+		if len(activity.Entries) > 0 {
+			response.Activities = append(response.Activities, activity)
+		}
+	}
+	return connect.NewResponse(response), nil
+}

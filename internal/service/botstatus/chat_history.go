@@ -26,14 +26,8 @@ func (s *Service) GetSessionHistory(ctx context.Context, req *connect.Request[v1
 	if !ok {
 		return invalid()
 	}
-	if s.engine.SessionManager != nil {
-		// Compare the same canonical archive identities on both sides: raw
-		// session keys may differ in platform casing, aliases or whitespace.
-		for _, id := range s.engine.SessionManager.MockSessionIDs() {
-			if mockScope, ok := chatHistoryScope(id); ok && mockScope == scope {
-				return invalid()
-			}
-		}
+	if s.isMockSessionScope(scope) {
+		return invalid()
 	}
 	query := chathistory.ListQuery{Limit: int(req.Msg.GetPageSize()), Cursor: req.Msg.GetPageToken()}
 	for _, field := range []struct {
@@ -89,4 +83,19 @@ func chatHistoryScope(sessionID string) (chathistory.Scope, bool) {
 	}
 	scope = scope.Canonical()
 	return scope, scope.Validate() == nil
+}
+
+// isMockSessionScope reports whether a scope belongs to a simulated session.
+// Compare the same canonical archive identities on both sides: raw session keys
+// may differ in platform casing, aliases or whitespace.
+func (s *Service) isMockSessionScope(scope chathistory.Scope) bool {
+	if s.engine.SessionManager == nil {
+		return false
+	}
+	for _, id := range s.engine.SessionManager.MockSessionIDs() {
+		if mockScope, ok := chatHistoryScope(id); ok && mockScope == scope {
+			return true
+		}
+	}
+	return false
 }

@@ -17,6 +17,7 @@ service BotStatusService {
   rpc GetSessionContext(GetSessionContextRequest) returns (GetSessionContextResponse);
   rpc GetSessionHistory(GetSessionHistoryRequest) returns (GetSessionHistoryResponse);
   rpc GetToolHistoryEntry(GetToolHistoryEntryRequest) returns (GetToolHistoryEntryResponse);
+  rpc GetSessionToolActivity(GetSessionToolActivityRequest) returns (GetSessionToolActivityResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
 
@@ -163,6 +164,32 @@ message SessionChatRecord {
 message GetSessionHistoryResponse {
   repeated SessionChatRecord records = 1;
   string next_page_token = 2;
+}
+
+// Lists archived tool calls for messages shown in one session timeline. Only
+// call metadata is returned; arguments and results load through
+// GetToolHistoryEntry when a card is expanded.
+message GetSessionToolActivityRequest {
+  string session_id = 1;
+  // Source message IDs of the timeline items currently displayed (at most 200).
+  repeated string source_message_ids = 2;
+}
+
+message SessionToolActivityEntry {
+  string ref_id = 1;
+  string tool = 2;
+}
+
+message SessionToolActivity {
+  string source_message_id = 1;
+  // Newest calls of the source message, oldest first (at most 10).
+  repeated SessionToolActivityEntry entries = 2;
+  // Exact number of archived calls of the source message.
+  int32 total = 3;
+}
+
+message GetSessionToolActivityResponse {
+  repeated SessionToolActivity activities = 1;
 }
 
 message GetToolHistoryEntryRequest {

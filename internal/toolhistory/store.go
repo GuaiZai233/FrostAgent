@@ -271,3 +271,59 @@ func (s *Store) Export(ctx context.Context) ([]Record, error) {
 	}
 	return result, rows.Err()
 }
+
+// RefsBySources returns, for each requested source message that has archived
+// calls in one conversation scope, its exact call total and its newest perSource
+// references in chronological order. Sources without calls are omitted. Each
+// source is answered from the scope covering index alone, so no body is read.
+func (s *Store) RefsBySources(ctx context.Context, scope chathistory.Scope, sourceIDs []string, perSource int) ([]RecentSource, error) {
+	scope = scope.Canonical()
+	if err := scope.Validate(); err != nil {
+		return nil, err
+	}
+	sources := []RecentSource{}
+	if perSource <= 0 {
+		return sources, nil
+	}
+	seen := make(map[string]bool, len(sourceIDs))
+	for _, id := range sourceIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		source := RecentSource{SourceMessageID: id}
+		if err := s.db.SQL.QueryRowContext(ctx, s.db.Bind(`SELECT COUNT(*) FROM tool_history
+			WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND source_message_id=?`),
+			s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, id).Scan(&source.Total); err != nil {
+			return nil, err
+		}
+		if source.Total == 0 {
+			continue
+		}
+		rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT ref_id FROM tool_history
+			WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND source_message_id=?
+			ORDER BY occurred_at DESC, ref_id DESC LIMIT ?`),
+			s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, id, perSource)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var ref string
+			if err := rows.Scan(&ref); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			source.Refs = append(source.Refs, ref)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		for i, j := 0, len(source.Refs)-1; i < j; i, j = i+1, j-1 {
+			source.Refs[i], source.Refs[j] = source.Refs[j], source.Refs[i]
+		}
+		sources = append(sources, source)
+	}
+	return sources, nil
+}
