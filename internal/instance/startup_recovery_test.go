@@ -42,6 +42,7 @@ func TestDatabaseStartupClearsRecoveredDisabledError(t *testing.T) {
 	// Reproduce a failed startup on the other branch's v12. Startup must
 	// reconcile the columns and the old instance error, without enabling it.
 	for _, statement := range []string{
+		`DROP TABLE session_images`,
 		`DROP TABLE session_states`,
 		`DROP TABLE chat_history`,
 		`DROP TABLE tool_history`,

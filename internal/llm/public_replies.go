@@ -48,6 +48,9 @@ type PublicReplyLog struct {
 	// speakable text (image, file, audio). It is separate from texts so media-only
 	// deliveries are not mistaken for silence.
 	confirmed bool
+	// imageKeys holds one console preview key per image placeholder across the
+	// recorded texts, in order, so the final history entry can be paired.
+	imageKeys []string
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
@@ -132,14 +135,22 @@ func (p *PublicReplyLog) updateFinalLocked(text string) core.ChatMessage {
 		if p.finalID != 0 && id == p.finalID {
 			p.session.History[i].Content = text
 			p.session.History[i].ProviderState = message.ProviderState
+			p.applyImageKeysLocked(text)
 			return message
 		}
 	}
 	p.finalID = p.session.addMessageLocked(message)
+	p.applyImageKeysLocked(text)
 	return message
 }
 
 func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
+	p.RecordWithImages(text, nil, compact)
+}
+
+// RecordWithImages is Record with one console preview key per image placeholder
+// in text ("" when unavailable).
+func (p *PublicReplyLog) RecordWithImages(text string, imageKeys []string, compact func(live bool)) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -158,9 +169,11 @@ func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
 		if id == 0 {
 			return
 		}
+		p.session.SetHistoryImageKeys(id, imageKeys)
 		if !p.closed {
 			p.ids = append(p.ids, id)
 			p.texts = append(p.texts, text)
+			p.imageKeys = append(p.imageKeys, alignImageKeys(text, imageKeys)...)
 		}
 		if compact != nil {
 			compact(!p.closed)
@@ -248,9 +261,29 @@ func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 	if p.finalID != 0 {
 		p.updateFinalLocked(text)
 	} else {
-		p.session.addMessageLocked(p.finalMessageForText(text))
+		id := p.session.addMessageLocked(p.finalMessageForText(text))
+		if p.imageKeysMatch(text) {
+			p.session.setHistoryImageKeysLocked(id, p.imageKeys)
+		}
 	}
 	return true
+}
+
+// imageKeysMatch reports whether the recorded keys pair with text's placeholders.
+// Beyond the placeholder count, the final text must be exactly the recorded
+// replies joined, so keys are never borrowed by a different text.
+func (p *PublicReplyLog) imageKeysMatch(text string) bool {
+	if len(p.imageKeys) == 0 || !anyImageKey(p.imageKeys) || CountImagePlaceholders(text) != len(p.imageKeys) {
+		return false
+	}
+	return text == strings.Join(p.texts, "\n") || text == strings.Join(p.texts, "\n\n")
+}
+
+// The caller holds both the reply-log and session mutexes.
+func (p *PublicReplyLog) applyImageKeysLocked(text string) {
+	if p.finalID != 0 && p.imageKeysMatch(text) {
+		p.session.setHistoryImageKeysLocked(p.finalID, p.imageKeys)
+	}
 }
 
 // Completed attempts preserve the existing final-answer history policy.

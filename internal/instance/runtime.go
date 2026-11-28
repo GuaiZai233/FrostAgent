@@ -81,6 +81,9 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		}
 	}
 	scope := runtimescope.New(config, global, logger)
+	if db != nil {
+		logger.SetSessionImageBackend(sqlSessionImages{db: db, instanceID: instanceID, quota: SessionImageQuotaBytes})
+	}
 	scope.SetInstanceID(instanceID)
 	if !enabled {
 		scope.Cancel()
