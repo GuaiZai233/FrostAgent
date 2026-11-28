@@ -13,9 +13,11 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/toolhistory"
 )
 
-// GetToolHistoryEntry loads parameters and original results only when an
-// authenticated inspector expands a call. Quarantined records and private
-// diagnostics are never returned.
+// GetToolHistoryEntry loads archived parameters, original results, and error/MCP
+// diagnostics for an authenticated inspector. Model-side read_tool_history
+// continues to enforce Record.ForModel() quarantine independently.
+// "running" remains pending; "executed" returns archived outputs while flagging
+// non-final state so callers can refresh for final review/delivery metadata.
 func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[v1.GetToolHistoryEntryRequest]) (*connect.Response[v1.GetToolHistoryEntryResponse], error) {
 	ref := req.Msg.GetRefId()
 	if !toolhistory.ValidRef(ref) {
@@ -39,12 +41,21 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("tool call is outside the selected session"))
 		}
 	}
-	visible := record.ForModel()
-	available := !record.Restricted && record.State == "complete"
-	response := &v1.GetToolHistoryEntryResponse{RefId: record.RefID, Tool: record.Tool,
-		ArgumentsAvailable: available, ArgumentsPending: record.State != "complete"}
+	pending := record.State == "running"
+	available := record.State == "complete" || record.State == "executed"
+	restricted := record.Restricted || record.State != "complete"
+	response := &v1.GetToolHistoryEntryResponse{
+		RefId:              record.RefID,
+		Tool:               record.Tool,
+		ArgumentsAvailable: available,
+		ArgumentsPending:   pending,
+		Restricted:         restricted,
+		State:              record.State,
+	}
 	if !req.Msg.GetIncludeResult() {
-		response.ArgumentsRaw = visible.ArgumentsRaw
+		if available {
+			response.ArgumentsRaw = record.ArgumentsRaw
+		}
 		return connect.NewResponse(response), nil
 	}
 	offset := int(req.Msg.GetResultOffset())
@@ -55,7 +66,7 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 	if !available {
 		return connect.NewResponse(response), nil
 	}
-	page, total, end, ok := resultPage(visible.ResultRaw, offset, toolHistoryResultPageChars)
+	page, total, end, ok := resultPage(record.ResultRaw, offset, toolHistoryResultPageChars)
 	if !ok {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("结果偏移量超过记录长度"))
 	}
@@ -66,7 +77,27 @@ func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[
 	if response.ResultHasMore {
 		response.ResultNextOffset = int32(end)
 	}
+	if offset == 0 {
+		response.ErrorRaw = boundedToolText(record.Error, toolHistoryResultPageChars)
+		if restricted || record.Error != "" {
+			response.McpResultRaw = boundedToolText(record.MCPResultRaw, toolHistoryResultPageChars)
+		}
+		if restricted {
+			response.ModelResultRaw = boundedToolText(record.ModelResultRaw, toolHistoryResultPageChars)
+		}
+	}
 	return connect.NewResponse(response), nil
+}
+
+func boundedToolText(text string, limit int) string {
+	if text == "" {
+		return ""
+	}
+	page, total, _, ok := resultPage(text, 0, limit)
+	if !ok || total <= limit {
+		return text
+	}
+	return page + "\n...(内容过长，已截断)"
 }
 
 // resultPage returns up to limit characters of text starting at character
