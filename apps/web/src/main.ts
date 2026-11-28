@@ -18,7 +18,6 @@ import { lazyMount } from './lazy-page';
 import { mountOverviewPage } from './pages/overview';
 import { mountConnectionsPage } from './pages/connections';
 import { mountDialoguePage } from './pages/dialogue';
-import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
@@ -43,6 +42,9 @@ const mountFrontendSettingsPage = lazyMount(() =>
   import('./pages/frontend-settings').then(
     ({ mountFrontendSettingsPage }) => mountFrontendSettingsPage,
   ),
+);
+const mountPromptPage = lazyMount(() =>
+  import('./pages/prompt').then(({ mountPromptPage }) => mountPromptPage),
 );
 const mountMemoryPage = lazyMount(() =>
   import('./pages/memory').then(({ mountMemoryPage }) => mountMemoryPage),
