@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
@@ -170,6 +171,150 @@ func TestImplementationProbeControlsMentionSpacingOnTheWire(t *testing.T) {
 			if len(sent.Params.Message) != 2 || sent.Params.Message[1].Data["text"] != tc.want {
 				data, _ := json.Marshal(sent)
 				t.Fatalf("wire message = %s, want text %q", data, tc.want)
+			}
+		})
+	}
+}
+
+// probedPeer connects a fake OneBot peer that identifies itself as appName and
+// waits until the connection has applied that identity.
+func probedPeer(t *testing.T, appName string) (*websocket.Conn, *wsConnection, *llm.Engine) {
+	t.Helper()
+	implementationProbeEnabled = true
+	t.Cleanup(func() { implementationProbeEnabled = false })
+	engine := newTestEngine(&mockLLMProvider{})
+	engine.Scope = newAdminTestScope(t, map[string]string{"ENABLE_AT_IN_GROUP_MSG": "true"})
+	t.Cleanup(engine.Cancel)
+	adapter := NewAdapter(engine)
+	server := httptest.NewServer(http.HandlerFunc(adapter.Handler()))
+	t.Cleanup(server.Close)
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { client.Close() })
+
+	client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var probe model.OneBotAction
+	if err := client.ReadJSON(&probe); err != nil || probe.Action != "get_version_info" {
+		t.Fatalf("expected get_version_info probe, got %+v (%v)", probe, err)
+	}
+	if err := client.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": probe.Echo,
+		"data": map[string]any{"app_name": appName}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var conn *wsConnection
+	for conn == nil && time.Now().Before(deadline) {
+		if conn = adapter.awarenessConnection(); conn == nil {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if conn == nil {
+		t.Fatal("connection never registered")
+	}
+	for appName == "SnowLuma" && !conn.peerMentionSpace.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	return client, conn, engine
+}
+
+type wireFrame struct {
+	Action string `json:"action"`
+	Echo   string `json:"echo"`
+	Params struct {
+		Message []struct {
+			Type string         `json:"type"`
+			Data map[string]any `json:"data"`
+		} `json:"message"`
+	} `json:"params"`
+}
+
+func readWireFrame(t *testing.T, client *websocket.Conn) wireFrame {
+	t.Helper()
+	client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var frame wireFrame
+	if err := client.ReadJSON(&frame); err != nil {
+		t.Fatal(err)
+	}
+	return frame
+}
+
+// Direct replies (security blocks, billing failures, over-long input) are
+// written without waiting for an ACK, but must follow the same spacing rule.
+func TestDirectReplyAdaptsMentionSpacingPerPeer(t *testing.T) {
+	for _, tc := range []struct {
+		appName string
+		want    string
+	}{
+		{"SnowLuma", "正文"},
+		{"NapCat.Onebot", " 正文"},
+	} {
+		t.Run(tc.appName, func(t *testing.T) {
+			client, conn, _ := probedPeer(t, tc.appName)
+			// Numeric identities are small synthetic transport fixtures.
+			event := model.OneBotEvent{SelfID: 101, UserID: 202, GroupID: 303, MessageID: 5, PostType: "message", MessageType: "group"}
+			sendDirectReply("send_group_msg", "group_id", "303", "direct-1", event, conn, "正文")
+			frame := readWireFrame(t, client)
+			if frame.Action != "send_group_msg" || len(frame.Params.Message) != 2 ||
+				frame.Params.Message[0].Type != "at" || frame.Params.Message[1].Data["text"] != tc.want {
+				t.Fatalf("direct reply frame = %+v, want at + %q", frame, tc.want)
+			}
+		})
+	}
+}
+
+// The RefID record must hold the segments that actually reached the wire.
+func TestMessageRefRecordsAdaptedWireSegments(t *testing.T) {
+	for _, tc := range []struct {
+		appName string
+		want    string
+	}{
+		{"SnowLuma", "正文"},
+		{"NapCat.Onebot", " 正文"},
+	} {
+		t.Run(tc.appName, func(t *testing.T) {
+			client, conn, engine := probedPeer(t, tc.appName)
+			original := mentionAction("send_group_msg", " 正文")
+			type result struct {
+				response oneBotAPIResponse
+				err      error
+			}
+			done := make(chan result, 1)
+			go func() {
+				response, err := conn.SendActionAndWait(original, 3*time.Second)
+				done <- result{response, err}
+			}()
+			frame := readWireFrame(t, client)
+			if len(frame.Params.Message) != 2 || frame.Params.Message[1].Data["text"] != tc.want {
+				t.Fatalf("wire frame = %+v, want text %q", frame, tc.want)
+			}
+			if err := client.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": frame.Echo, "data": map[string]any{"message_id": 4242}}); err != nil {
+				t.Fatal(err)
+			}
+			got := <-done
+			if got.err != nil {
+				t.Fatal(got.err)
+			}
+			conn.recordBotMessageRef("group:303", original, got.response, false)
+
+			refID, ok := engine.Log().FindMessageRefByMessageID("group:303", "4242")
+			if !ok {
+				t.Fatal("delivered message was not recorded")
+			}
+			entry, _ := engine.Log().FindMessageRef(refID)
+			var ref struct {
+				Message []struct {
+					Type string         `json:"type"`
+					Data map[string]any `json:"data"`
+				} `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(entry.Content), &ref); err != nil || len(ref.Message) != 2 ||
+				ref.Message[1].Data["text"] != tc.want {
+				t.Fatalf("RefID record = %s, want wire text %q", entry.Content, tc.want)
+			}
+			if texts := messageTexts(t, original); texts[0] != " 正文" {
+				t.Fatalf("caller action was mutated: %q", texts)
 			}
 		})
 	}
