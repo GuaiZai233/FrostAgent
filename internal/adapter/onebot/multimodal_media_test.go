@@ -147,7 +147,9 @@ func TestOneBotMediaRouting(t *testing.T) {
 			if stored, _ := sess.LastActualRequest(); tc.wantData != "" && strings.Contains(stored, tc.wantData) {
 				t.Fatalf("checkpointed request kept audio bytes: %s", stored)
 			}
-			for _, history := range sess.History {
+			// The reply goroutine may still be committing history after the
+			// send ACK, so read it through the locked snapshot.
+			for _, history := range sess.Snapshot() {
 				if text, _ := history.Content.(string); tc.wantData != "" && strings.Contains(text, tc.wantData) {
 					t.Fatalf("history kept audio bytes: %s", text)
 				}
