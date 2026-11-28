@@ -66,6 +66,7 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 
 	echo, responseChannel := c.registerActionRequest(action.Action, action.Echo)
 	action.Echo = echo
+	action = c.adaptMentionSpacing(action)
 
 	actionBytes, err := json.Marshal(action)
 	if err != nil {

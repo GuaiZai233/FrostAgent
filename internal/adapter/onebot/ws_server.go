@@ -88,38 +88,41 @@ var nextConnGeneration uint64
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	*runtimescope.Scope
-	engine              *llm.Engine
-	llmErrorReplies     *llmErrorReplyLimiter
-	conn                *websocket.Conn
-	generation          string
-	stealer             *sticker.Stealer
-	mock                bool
-	mockSessions        sync.Map
-	inFlight            sync.WaitGroup
-	closed              atomic.Bool
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	writeMu             sync.Mutex
-	previousErrorMu     sync.Mutex
-	previousErrors      map[string]*previousErrorReply // Protected by previousErrorMu; no message text is retained.
-	outgoingErrorEchoes map[outgoingErrorEcho]struct{} // Protected by previousErrorMu; independent of lookup candidates.
-	errorEchoOrder      []outgoingErrorEcho
-	nextErrorEcho       int
-	messageMu           sync.Mutex
-	pendingMessage      map[string]chan oneBotAPIResponse
-	nextMessageEcho     uint64
-	messageSessionMu    sync.Mutex
-	messageSessions     map[int64]string
-	ownMessageSessions  map[int64]string
-	messageSessionOrder []int64
-	groupMu             sync.Mutex
-	groupCache          map[int64]cachedGroupInfo
-	pendingGroupByEcho  map[string]pendingGroupInfo
-	pendingGroupByID    map[int64]string
-	nextGroupEcho       uint64
-	inboundFileMu       sync.Mutex
-	inboundFiles        []*inboundFile
-	fileHTTPClient      *http.Client
+	engine          *llm.Engine
+	llmErrorReplies *llmErrorReplyLimiter
+	conn            *websocket.Conn
+	generation      string
+	stealer         *sticker.Stealer
+	mock            bool
+	mockSessions    sync.Map
+	inFlight        sync.WaitGroup
+	closed          atomic.Bool
+	// platformMentionSpace is set once the peer identifies itself as an
+	// implementation that appends its own space after @ elements.
+	platformMentionSpace atomic.Bool
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	writeMu              sync.Mutex
+	previousErrorMu      sync.Mutex
+	previousErrors       map[string]*previousErrorReply // Protected by previousErrorMu; no message text is retained.
+	outgoingErrorEchoes  map[outgoingErrorEcho]struct{} // Protected by previousErrorMu; independent of lookup candidates.
+	errorEchoOrder       []outgoingErrorEcho
+	nextErrorEcho        int
+	messageMu            sync.Mutex
+	pendingMessage       map[string]chan oneBotAPIResponse
+	nextMessageEcho      uint64
+	messageSessionMu     sync.Mutex
+	messageSessions      map[int64]string
+	ownMessageSessions   map[int64]string
+	messageSessionOrder  []int64
+	groupMu              sync.Mutex
+	groupCache           map[int64]cachedGroupInfo
+	pendingGroupByEcho   map[string]pendingGroupInfo
+	pendingGroupByID     map[int64]string
+	nextGroupEcho        uint64
+	inboundFileMu        sync.Mutex
+	inboundFiles         []*inboundFile
+	fileHTTPClient       *http.Client
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
