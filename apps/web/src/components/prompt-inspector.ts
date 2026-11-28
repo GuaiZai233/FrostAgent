@@ -366,6 +366,91 @@ function mergeGroupToolHistory(
   return merged;
 }
 
+/** Archived calls of one source message, as listed by GetSessionToolActivity. */
+export interface SessionToolActivityItem {
+  sourceMessageId: string;
+  entries: Array<{ refId: string; tool: string }>;
+  total?: number;
+}
+
+// The archive keys calls by the platform message ID. Group items carry it as
+// `id`; private user turns only carry it inside their system_context envelope.
+function messageSourceId(message: GroupMessageItem): string | undefined {
+  if (message.role === 'assistant') return undefined;
+  if (message.id) return message.id;
+  const context = message.promptContexts?.find((item) => item.name === 'system_context');
+  if (!context) return undefined;
+  try {
+    const value: unknown = JSON.parse(context.content);
+    if (value && typeof value === 'object' && 'message_id' in value &&
+      (typeof value.message_id === 'string' || typeof value.message_id === 'number')) {
+      return String(value.message_id);
+    }
+  } catch {
+    /* A malformed envelope simply has no source ID. */
+  }
+  return undefined;
+}
+
+function collectSessionMessages(prompt: ParsedPrompt): GroupMessageItem[][] {
+  return [...prompt.summaryGroups.map((group) => group.parsedMessages || []), prompt.recentMessages];
+}
+
+/** Source message IDs shown in the session timeline, in display order and without duplicates. */
+export function sessionToolActivitySourceIds(prompt: ParsedPrompt): string[] {
+  const ids = new Set<string>();
+  for (const messages of collectSessionMessages(prompt)) {
+    for (const message of messages) {
+      const id = messageSourceId(message);
+      if (id) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Inserts archived tool cards after the user message that triggered them. Calls
+ * already shown (for example by pre-upgrade history notes) are skipped, and a
+ * source message that is not displayed gets no card.
+ */
+export function mergeSessionToolActivity(prompt: ParsedPrompt, activities: SessionToolActivityItem[]): ParsedPrompt {
+  if (!activities.length) return prompt;
+  const bySource = new Map(activities.map((item) => [item.sourceMessageId, item]));
+  const seenRefs = new Set<string>();
+  const lists = collectSessionMessages(prompt);
+  for (const messages of lists) {
+    for (const message of messages) {
+      for (const entry of messageToolActivity(message)?.entries || []) if (entry.refId) seenRefs.add(entry.refId);
+    }
+  }
+  const placed = new Set<string>();
+  const merged = lists.map((messages) => messages.flatMap((message) => {
+    const sourceId = messageSourceId(message);
+    const item = sourceId && !placed.has(sourceId) ? bySource.get(sourceId) : undefined;
+    if (!sourceId || !item) return [message];
+    placed.add(sourceId);
+    const entries = item.entries.filter((entry) => !seenRefs.has(entry.refId));
+    if (!entries.length) return [message];
+    for (const entry of entries) seenRefs.add(entry.refId);
+    const omitted = (item.total ?? entries.length) - item.entries.length;
+    const note: GroupMessageItem = {
+      role: 'assistant', content: '', rawText: '',
+      toolActivity: {
+        entries: entries.map((entry) => ({ tool: entry.tool, refId: entry.refId })),
+        sourceMessageId: sourceId,
+        placementHint: omitted > 0 ? `另有 ${omitted} 条较早记录未列出` : undefined,
+      },
+    };
+    return [message, note];
+  }));
+  const groupCount = prompt.summaryGroups.length;
+  return {
+    ...prompt,
+    summaryGroups: prompt.summaryGroups.map((group, index) => ({ ...group, parsedMessages: merged[index] })),
+    recentMessages: merged[groupCount],
+  };
+}
+
 /**
  * Builds a structured ParsedPrompt from backend GetSessionContext response.
  */

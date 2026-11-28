@@ -280,6 +280,117 @@ try {
     cleanupRealPrefix();
   }
   process.stdout.write('PASS: real mock-prefix group and private sessions expose history in both views\n');
+
+  // Session timeline tool cards come from the archive, not from session history.
+  for (const archive of ['available', 'failing', 'legacy-server'] as const) {
+    const toolRoot = dom.root();
+    const toolCalls: Array<[string, string[]]> = [];
+    const errorsBefore = errors.length;
+    const toolAPI = {
+      ...api,
+      async getSessions() {
+        return { sessions: [session], pagination: { total: 1, pageToken: '' } };
+      },
+      async getSessionContext(id: string) {
+        return {
+          sessionId: id, platform: 'onebot', model: 'test-model', promptText: '{}',
+          recentStructuredMessages: [
+            { role: 'user', content: 'question', sender: '', senderId: '', messageId: 'src-1', time: '' },
+            { role: 'assistant', content: 'delivered reply', sender: '', senderId: '', messageId: '', time: '' },
+          ],
+        };
+      },
+      ...(archive === 'legacy-server' ? {} : {
+        async getSessionToolActivity(id: string, sourceIds: string[]) {
+          toolCalls.push([id, sourceIds]);
+          if (archive === 'failing') throw new Error('unimplemented');
+          return {
+            activities: [{
+              sourceMessageId: 'src-1', total: 1,
+              entries: [{ refId: 'fa_toolcall_550e8400-e29b-41d4-a716-446655440020', tool: 'stay_silent' }],
+            }],
+          };
+        },
+      }),
+    } as unknown as ReturnType<typeof createInstanceAPI>;
+    const cleanupTools = mountPromptPage(toolRoot, toolAPI);
+    await settle();
+    query(toolRoot, '.prompt-session-card').click();
+    await settle();
+    const html = query(toolRoot, '#prompt-inspector-mount').innerHTML;
+    assert.match(html, /delivered reply/, `${archive}: timeline must always render`);
+    assert.equal(errors.length, errorsBefore, `${archive}: tool activity is supplementary and must not toast`);
+    if (archive === 'available') {
+      assert.deepEqual(toolCalls, [[session.sessionId, ['src-1']]]);
+      assert.match(html, /stay_silent/);
+      assert.match(html, /fa_toolcall_550e8400-e29b-41d4-a716-446655440020/);
+    } else {
+      assert.doesNotMatch(html, /stay_silent/);
+    }
+    cleanupTools();
+  }
+  process.stdout.write('PASS: session timeline lists archived tool calls and degrades without them\n');
+
+  // A late archive outcome for a session the user already left must not render.
+  for (const outcome of ['rejects', 'resolves'] as const) {
+    for (const scenario of ['switched', 'unmounted'] as const) {
+      const lateRoot = dom.root();
+      const sessions = [
+        { ...session, sessionId: 'onebot:group:late-a' },
+        { ...session, sessionId: 'onebot:group:late-b' },
+      ];
+      const pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+      const errorsBefore = errors.length;
+      const lateAPI = {
+        ...api,
+        async getSessions() {
+          return { sessions, pagination: { total: 2, pageToken: '' } };
+        },
+        async getSessionContext(id: string) {
+          return {
+            sessionId: id, platform: 'onebot', model: 'test-model', promptText: '{}',
+            recentStructuredMessages: [
+              { role: 'user', content: 'content of ' + id, sender: '', senderId: '', messageId: 'src-' + id, time: '' },
+            ],
+          };
+        },
+        getSessionToolActivity(id: string) {
+          if (id.endsWith('late-b')) return Promise.resolve({ activities: [] });
+          return new Promise((resolve, reject) => { pending.set(id, { resolve, reject }); });
+        },
+      } as unknown as ReturnType<typeof createInstanceAPI>;
+      const cleanupLate = mountPromptPage(lateRoot, lateAPI);
+      await settle();
+      const cards = () => lateRoot.querySelectorAll('.prompt-session-card');
+      cards()[0].click();
+      await settle();
+      assert.ok(pending.has('onebot:group:late-a'), 'session A must be waiting for its archive');
+      let expected = '';
+      if (scenario === 'switched') {
+        cards()[1].click();
+        await settle();
+        expected = query(lateRoot, '#prompt-inspector-mount').innerHTML;
+        assert.match(expected, /content of onebot:group:late-b/);
+      } else {
+        cleanupLate();
+        expected = lateRoot.innerHTML;
+      }
+      const late = pending.get('onebot:group:late-a')!;
+      if (outcome === 'rejects') late.reject(new Error('timeout'));
+      else late.resolve({ activities: [{ sourceMessageId: 'src-onebot:group:late-a', total: 1, entries: [{ refId: 'fa_toolcall_550e8400-e29b-41d4-a716-446655440030', tool: 'stale_tool' }] }] });
+      await settle();
+      if (scenario === 'switched') {
+        const html = query(lateRoot, '#prompt-inspector-mount').innerHTML;
+        assert.equal(html, expected, `${outcome}: a stale archive reply replaced the newer session`);
+        assert.doesNotMatch(html, /content of onebot:group:late-a|stale_tool/);
+        cleanupLate();
+      } else {
+        assert.equal(lateRoot.innerHTML, expected, `${outcome}: an unmounted page rendered again`);
+      }
+      assert.equal(errors.length, errorsBefore, `${outcome}/${scenario}: stale outcomes must not toast`);
+    }
+  }
+  process.stdout.write('PASS: stale archive outcomes never replace a newer session or render after unmount\n');
   instanceState.select(null);
 } finally {
   instanceState.select(null);

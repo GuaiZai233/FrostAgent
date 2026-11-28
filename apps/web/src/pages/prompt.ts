@@ -13,6 +13,8 @@ import {
   DEFAULT_BOT_NAME,
   renderPromptInspector,
   buildInspectorDataFromSessionContext,
+  mergeSessionToolActivity,
+  sessionToolActivitySourceIds,
   type ParsedPrompt,
 } from '../components/prompt-inspector';
 
@@ -372,7 +374,27 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
       if (selectedSession?.sessionId === sessionId && typeof resp.runningSummary === 'string') {
         selectedSession.groupSummary = resp.runningSummary;
       }
-      const parsed = buildInspectorDataFromSessionContext(resp, botName);
+      let parsed = buildInspectorDataFromSessionContext(resp, botName);
+      // Tool calls are archived outside the session history; list the ones for the
+      // displayed messages. They are supplementary, so a failure keeps the timeline.
+      if (typeof api.getSessionToolActivity === 'function') {
+        const sourceIds = sessionToolActivitySourceIds(parsed).slice(-200);
+        if (sourceIds.length) {
+          try {
+            const activity = await api.getSessionToolActivity(sessionId, sourceIds);
+            parsed = mergeSessionToolActivity(parsed, activity.activities.map((item) => ({
+              sourceMessageId: item.sourceMessageId,
+              entries: item.entries.map((entry) => ({ refId: entry.refId, tool: entry.tool })),
+              total: item.total,
+            })));
+          } catch {
+            /* Older servers lack this RPC; show the timeline without tool cards. */
+          }
+        }
+      }
+      // The archive call may settle (or fail) after the user moved on or left the
+      // page, so every outcome passes this guard before touching the DOM.
+      if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
       renderInspector(parsed, `会话上下文预览 (${sessionId})`, selectedSession?.sessionId === sessionId ? selectedSession : undefined);
     } catch (err) {
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;

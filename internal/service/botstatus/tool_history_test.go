@@ -227,3 +227,85 @@ func TestResultPageCountsCharactersAcrossMixedWidths(t *testing.T) {
 		t.Fatal("offset past end accepted")
 	}
 }
+
+func TestSessionToolActivityListsMetadataForDisplayedSources(t *testing.T) {
+	ctx := context.Background()
+	db, err := storage.Open(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, id := range []string{"fixture-a", "fixture-b"} {
+		if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: id, Name: id, CreatedAt: time.Now()}, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"}
+	base := time.Now().UTC().Truncate(time.Second)
+	save := func(store *toolhistory.Store, sc chathistory.Scope, source, tool, state string, at int) toolhistory.Record {
+		record := toolhistory.Record{Scope: sc, RefID: toolhistory.NewRef(), RunID: "fixture-run", ActorID: "fixture-user", Tool: tool,
+			SourceMessageID: source, State: state, OccurredAt: base.Add(time.Duration(at) * time.Second),
+			ArgumentsRaw: "fixture-private-arguments", ResultRaw: "fixture-private-result"}
+		if err := store.Save(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	store := toolhistory.NewStore(db, "fixture-a")
+	first := save(store, scope, "source-1", "memory", "complete", 1)
+	second := save(store, scope, "source-1", "send_message", "running", 2)
+	save(store, scope, "source-2", "stay_silent", "complete", 3)
+	save(store, chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-other-user"}, "source-1", "other_scope_tool", "complete", 4)
+	save(toolhistory.NewStore(db, "fixture-b"), scope, "source-1", "other_instance_tool", "complete", 5)
+
+	service := New(&llm.Engine{ToolHistory: store}, "test", "")
+	response, err := service.GetSessionToolActivity(ctx, connect.NewRequest(&v1.GetSessionToolActivityRequest{
+		SessionId: "private:fixture-user", SourceMessageIds: []string{"source-1", "source-absent"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Msg.Activities) != 1 {
+		t.Fatalf("only the requested source with calls may be listed: %v", response.Msg.Activities)
+	}
+	activity := response.Msg.Activities[0]
+	if activity.SourceMessageId != "source-1" || activity.Total != 2 || len(activity.Entries) != 2 {
+		t.Fatalf("unexpected activity: %v", activity)
+	}
+	if activity.Entries[0].RefId != first.RefID || activity.Entries[0].Tool != "memory" {
+		t.Fatalf("calls must be listed oldest first: %v", activity.Entries[0])
+	}
+	if activity.Entries[1].RefId != second.RefID || activity.Entries[1].Tool != "send_message" {
+		t.Fatalf("unfinished calls must stay listed: %v", activity.Entries[1])
+	}
+	wire, err := protojson.Marshal(response.Msg)
+	if err != nil || strings.Contains(string(wire), "fixture-private") {
+		t.Fatalf("listing leaked arguments or results: %s %v", wire, err)
+	}
+}
+
+func TestSessionToolActivityRejectsInvalidRequests(t *testing.T) {
+	ctx := context.Background()
+	manager := llm.NewSessionManager()
+	mock := manager.GetOrCreate("private:fixture-mock-user")
+	mock.MarkMock()
+	service := New(&llm.Engine{ToolHistory: &toolhistory.Store{}, SessionManager: manager}, "test", "")
+	tooMany := make([]string, sessionToolActivityMaxSources+1)
+	for i := range tooMany {
+		tooMany[i] = "source"
+	}
+	for name, request := range map[string]*v1.GetSessionToolActivityRequest{
+		"empty session":  {},
+		"bad session":    {SessionId: "not-a-session"},
+		"too many ids":   {SessionId: "private:fixture-user", SourceMessageIds: tooMany},
+		"oversized id":   {SessionId: "private:fixture-user", SourceMessageIds: []string{strings.Repeat("x", sessionToolActivityMaxSourceLen+1)}},
+		"simulated chat": {SessionId: mock.ID(), SourceMessageIds: []string{"source"}},
+	} {
+		if _, err := service.GetSessionToolActivity(ctx, connect.NewRequest(request)); connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Fatalf("%s accepted: %v", name, err)
+		}
+	}
+	unavailable := New(&llm.Engine{}, "test", "")
+	if _, err := unavailable.GetSessionToolActivity(ctx, connect.NewRequest(&v1.GetSessionToolActivityRequest{SessionId: "private:fixture-user"})); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatal("missing archive availability ignored", err)
+	}
+}
