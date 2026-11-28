@@ -45,12 +45,12 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 				},
 				"source_media": map[string]any{
 					"type":        "string",
-					"enum":        []string{"text", "image"},
-					"description": "write 时的事实来源：从当前图片识别结果记住的内容使用 image；直接来自当前用户文字使用 text。图片内容不作为发图者原话。",
+					"enum":        []string{"text", "image", "media"},
+					"description": "write 时的事实来源：从当前图片识别结果记住的内容使用 image；从当前语音/视频转述结果记住的内容使用 media；直接来自当前用户文字使用 text。图片与音视频转述内容不作为发送者原话。",
 				},
 				"evidence": map[string]any{
 					"type":        "string",
-					"description": "write 时可提供当前用户文字或图片识别结果中的原文片段。图文混合消息中，写入文字摘要时应提供文字原文作为 evidence。",
+					"description": "write 时可提供当前用户文字、图片识别结果或音视频转述结果中的原文片段。图文混合消息中，写入文字摘要时应提供文字原文作为 evidence。",
 				},
 				"query": map[string]any{"type": "string", "description": "搜索时的自然语言查询。与tags同时提供时优先使用query；未提供query时使用tags。"},
 				"tags": map[string]any{
@@ -158,7 +158,15 @@ func NewMemoryTool(engine *llm.Engine) Tool {
 					_, hasTextEvidence := memory.ValidateEvidence(runContext.MemorySource.Content, params.Evidence)
 					isText := params.SourceMedia == "text" &&
 						(hasTextEvidence || strings.Contains(runContext.MemorySource.Content, params.Content))
-					if runContext.MemorySource.ImageDescription != "" && !isText {
+					imageSource := runContext.MemorySource.ImageDescription != ""
+					mediaSource := runContext.MemorySource.MediaDescription != ""
+					if mediaSource && (params.SourceMedia == "media" || !imageSource) && !isText {
+						entry.SourceMedia = memory.SourceMediaMedia
+						entry.Summary = memory.SanitizeSummary(params.Content)
+						entry.Evidence, _ = memory.ValidateEvidence(runContext.MemorySource.MediaDescription, params.Evidence)
+						entry.SourceMessageID = runContext.MemorySource.MessageID
+						entry.SourceSenderID = runContext.ActorUserID
+					} else if imageSource && !isText {
 						entry.SourceMedia = memory.SourceMediaImage
 						entry.Summary = memory.SanitizeSummary(params.Content)
 						entry.Evidence, _ = memory.ValidateEvidence(runContext.MemorySource.ImageDescription, params.Evidence)

@@ -17,4 +17,5 @@ type PendingExtractionItem struct {
 	Message          core.ChatMessage  // 消息内容（user 或 assistant）
 	MessageID        string            // 平台消息唯一 ID（用于溯源与幂等）
 	ImageDescription string            // 适配器传入的识图结果，与用户文字分开传递
+	MediaDescription string            // 适配器传入的音视频转述结果，与用户文字分开传递
 }

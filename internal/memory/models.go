@@ -18,6 +18,9 @@ const (
 	// SourceMediaImage identifies evidence extracted by the bot from an image.
 	SourceMediaImage  = "image"
 	ImageSourceNotice = "（原source为图片形式）"
+	// SourceMediaMedia identifies evidence transcribed by the bot from audio or video.
+	SourceMediaMedia  = "media"
+	MediaSourceNotice = "（原source为音视频转述）"
 )
 
 // OwnerType 区分 owner 是「单个用户」还是「某个群」——两套 owner 体系互不干扰：
