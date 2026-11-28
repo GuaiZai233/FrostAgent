@@ -98,7 +98,7 @@ func TestSnapshotGroupsCategoriesPerInstance(t *testing.T) {
 func TestSnapshotCountsSessionImagesBySizeColumn(t *testing.T) {
 	db := testDB(t)
 	// Same shape as the image store's migration: Base64 TEXT payload, decoded size.
-	if _, err := db.SQL.Exec(`CREATE TABLE session_images (
+	if _, err := db.SQL.Exec(`CREATE TABLE IF NOT EXISTS session_images (
 		instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
 		key TEXT NOT NULL, content_type TEXT NOT NULL, size BIGINT NOT NULL, data TEXT NOT NULL,
 		created_at BIGINT NOT NULL, last_used_at BIGINT NOT NULL,
