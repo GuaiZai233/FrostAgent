@@ -22,13 +22,12 @@ type persistJob struct {
 // is bounded and de-duplicated, and a full queue drops the job: the image stays
 // marked unpersisted and is retried the next time it is stored or fetched.
 type sessionPersister struct {
-	mu          sync.Mutex
-	queue       []persistJob
-	queued      map[persistJob]struct{}
-	running     bool
-	unpersisted map[string]struct{}
-	touched     map[string]time.Time
-	lastWarn    time.Time
+	mu       sync.Mutex
+	queue    []persistJob
+	queued   map[persistJob]struct{}
+	running  bool
+	touched  map[string]time.Time
+	lastWarn time.Time
 }
 
 func (p *sessionPersister) enqueueLocked(job persistJob) bool {
@@ -49,13 +48,12 @@ func (p *sessionPersister) enqueueLocked(job persistJob) bool {
 // schedule queues a persist (or LRU touch) and starts a drain goroutine if none runs.
 func (s *Store) scheduleSessionJob(job persistJob) {
 	p := &s.sessionPersist
-	p.mu.Lock()
 	if !job.touch {
-		if p.unpersisted == nil {
-			p.unpersisted = make(map[string]struct{})
-		}
-		p.unpersisted[job.key] = struct{}{}
+		// Set before queuing: a full queue drops the job, and the flag is what a
+		// later Put or Fetch of the same image uses to try again.
+		s.sessionImages.setUnpersisted(job.key, true)
 	}
+	p.mu.Lock()
 	p.enqueueLocked(job)
 	start := !p.running && len(p.queue) > 0
 	if start {
@@ -70,11 +68,7 @@ func (s *Store) scheduleSessionJob(job persistJob) {
 // retrySessionPersist requeues an image that is cached in memory but whose
 // durable write has not succeeded yet.
 func (s *Store) retrySessionPersist(key string) {
-	p := &s.sessionPersist
-	p.mu.Lock()
-	_, pending := p.unpersisted[key]
-	p.mu.Unlock()
-	if pending {
+	if image, ok := s.sessionImages.get(key); ok && image.unpersisted {
 		s.scheduleSessionJob(persistJob{key: key})
 	}
 }
@@ -129,19 +123,15 @@ func (s *Store) runSessionJob(job persistJob) {
 	}
 	image, ok := s.sessionImages.get(job.key)
 	if !ok {
-		// Evicted from memory before it could be written; nothing left to retry.
-		p.mu.Lock()
-		delete(p.unpersisted, job.key)
-		p.mu.Unlock()
+		// Evicted from memory before it could be written; its flag went with it.
 		return
 	}
 	err := backend.PutSessionImage(job.key, image.contentType, image.data)
-	p.mu.Lock()
 	if err == nil {
-		delete(p.unpersisted, job.key)
-		p.mu.Unlock()
+		s.sessionImages.setUnpersisted(job.key, false)
 		return
 	}
+	p.mu.Lock()
 	warn := time.Since(p.lastWarn) >= sessionPersistWarnGap
 	if warn {
 		p.lastWarn = time.Now()

@@ -35,6 +35,10 @@ type sessionImage struct {
 	key         string
 	contentType string
 	data        []byte
+	// unpersisted marks an image whose durable write has not succeeded. It lives
+	// on the cache entry, so eviction discards it together with the bytes and the
+	// retry state can never outgrow the cache.
+	unpersisted bool
 }
 
 // sessionImageCache is a small in-memory LRU for images referenced by
@@ -66,6 +70,16 @@ func (c *sessionImageCache) put(key, contentType string, data []byte) {
 		c.order.Remove(oldest)
 		delete(c.items, evicted.key)
 		c.bytes -= len(evicted.data)
+	}
+}
+
+// setUnpersisted records whether the cached image still needs a durable write.
+// It is a no-op for an image that is no longer cached.
+func (c *sessionImageCache) setUnpersisted(key string, value bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if element, ok := c.items[key]; ok {
+		element.Value.(*sessionImage).unpersisted = value
 	}
 }
 

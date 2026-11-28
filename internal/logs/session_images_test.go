@@ -189,6 +189,18 @@ func (b *memorySessionBackend) stored() int {
 	return len(b.images)
 }
 
+func (c *sessionImageCache) unpersistedCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, element := range c.items {
+		if element.Value.(*sessionImage).unpersisted {
+			count++
+		}
+	}
+	return count
+}
+
 func TestSessionImageSurvivesCacheLossThroughBackend(t *testing.T) {
 	backend := &memorySessionBackend{images: map[string]sessionImage{}}
 	store := New("", "test", 10)
@@ -287,5 +299,37 @@ func TestSessionImageViewTouchesDurableLRUOnMemoryHit(t *testing.T) {
 	defer backend.mu.Unlock()
 	if backend.touches != 1 {
 		t.Fatalf("touches must be throttled per key, got %d", backend.touches)
+	}
+}
+
+func TestSessionImageRetryStateStaysBoundedUnderOutage(t *testing.T) {
+	backend := &memorySessionBackend{images: map[string]sessionImage{}, block: make(chan struct{})}
+	store := New("", "test", 10)
+	store.SetSessionImageBackend(backend)
+
+	// Far more distinct images than either the queue or the LRU can hold.
+	total := maxSessionImages*4 + 50
+	for i := 0; i < total; i++ {
+		store.PutSessionImage(SessionImageKey(fmt.Sprint("outage", i)), testPNG)
+	}
+	store.sessionPersist.mu.Lock()
+	queued := len(store.sessionPersist.queue)
+	store.sessionPersist.mu.Unlock()
+	if queued > maxSessionPersistQueue {
+		t.Fatalf("queue grew to %d", queued)
+	}
+	if pending := store.sessionImages.unpersistedCount(); pending > maxSessionImages {
+		t.Fatalf("retry state tracks %d images, more than the %d the cache can hold", pending, maxSessionImages)
+	}
+
+	// Recovery drains what is queued; nothing evicted is left behind.
+	close(backend.block)
+	waitFor(t, "queue to drain", func() bool {
+		store.sessionPersist.mu.Lock()
+		defer store.sessionPersist.mu.Unlock()
+		return !store.sessionPersist.running && len(store.sessionPersist.queue) == 0
+	})
+	if pending := store.sessionImages.unpersistedCount(); pending > maxSessionImages {
+		t.Fatalf("retry state %d exceeds cache capacity after recovery", pending)
 	}
 }
