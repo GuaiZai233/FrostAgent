@@ -207,7 +207,7 @@ message GetToolHistoryEntryResponse {
   string tool = 2;
   string arguments_raw = 3;
   bool arguments_available = 4;
-  // Execution is still running; the inspector may retry later.
+  // Execution is still running with no output archived yet; the inspector may retry later.
   bool arguments_pending = 5;
   // One bounded page of the original execution result, visible to the
   // authenticated inspector even when quarantined from the model. Present only
@@ -220,7 +220,7 @@ message GetToolHistoryEntryResponse {
   int32 result_next_offset = 11;
   // True when model-side read_tool_history shields the raw call details.
   bool restricted = 12;
-  // Archive lifecycle state: "running", "executed", or "complete".
+  // Archive lifecycle state: "running", "executed" (awaiting review/delivery or interrupted), or "complete".
   string state = 13;
   // Recorded Go execution error, sent only when include_result=true and offset=0.
   string error_raw = 14;

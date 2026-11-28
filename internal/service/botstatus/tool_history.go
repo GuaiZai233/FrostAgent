@@ -16,6 +16,8 @@ import (
 // GetToolHistoryEntry loads archived parameters, original results, and error/MCP
 // diagnostics for an authenticated inspector. Model-side read_tool_history
 // continues to enforce Record.ForModel() quarantine independently.
+// "running" remains pending; "executed" returns archived outputs while flagging
+// non-final state so callers can refresh for final review/delivery metadata.
 func (s *Service) GetToolHistoryEntry(ctx context.Context, req *connect.Request[v1.GetToolHistoryEntryRequest]) (*connect.Response[v1.GetToolHistoryEntryResponse], error) {
 	ref := req.Msg.GetRefId()
 	if !toolhistory.ValidRef(ref) {

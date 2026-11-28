@@ -1100,25 +1100,161 @@ assert.equal(extractToolActivityBlock(finalTurn), undefined);
   assert.match(watchdogRes.querySelector('.tool-activity-diagnostics')!.textContent!, /安全审查拦截/);
   cleanup();
 
+  let execPhase: 'executed' | 'complete-pass' | 'complete-blocked' = 'executed';
+  let execLoads = 0;
   cleanup = renderPromptInspector(container, data, {
-    loadToolArguments: async (refId, options) => ({
-      refId,
-      tool: 'send_message',
-      argumentsRaw: options?.includeResult ? '' : queryArguments,
-      argumentsAvailable: !options?.includeResult,
-      resultRaw: options?.includeResult ? 'late external result' : '',
-      resultAvailable: Boolean(options?.includeResult),
-      restricted: true,
-      state: 'executed',
-    }),
+    loadToolArguments: async (refId, options) => {
+      execLoads++;
+      if (!options?.includeResult) {
+        return {
+          refId,
+          tool: 'send_message',
+          argumentsRaw: queryArguments,
+          argumentsAvailable: true,
+          restricted: execPhase !== 'complete-pass',
+          state: execPhase === 'executed' ? 'executed' : 'complete',
+        };
+      }
+      const offset = options.resultOffset ?? 0;
+      const pages = ['第一页执行原文 ', '第二页执行原文'];
+      return {
+        refId,
+        tool: 'send_message',
+        argumentsRaw: '',
+        argumentsAvailable: false,
+        resultRaw: pages[offset] ?? '',
+        resultAvailable: true,
+        resultHasMore: offset === 0,
+        resultNextOffset: offset === 0 ? 1 : 0,
+        restricted: execPhase !== 'complete-pass',
+        state: execPhase === 'executed' ? 'executed' : 'complete',
+        modelResultRaw:
+          execPhase === 'complete-blocked' && offset === 0
+            ? `安全审查拦截：外部工具结果已隔离\n(ref_id: ${refId})`
+            : '',
+      };
+    },
   });
+
+  // Permanently executed (interrupted) records stay viewable, do not falsely claim interruption, and allow refresh without duplicating pages.
+  const execArgs = container.querySelector(
+    `details[data-tool-ref="${originalRef}"]:not([data-tool-field])`,
+  ) as HTMLDetailsElement;
+  execArgs.open = true;
+  await flush();
+  assert.equal(execArgs.querySelector('pre')!.textContent, queryArguments);
+  assert.equal(execArgs.dataset.argumentsState, 'executed');
+  assert.match(execArgs.querySelector('.tool-activity-notice')!.textContent!, /等待安全审查或最终结果确认/);
+  assert.doesNotMatch(execArgs.querySelector('.tool-activity-notice')!.textContent!, /调用在完成前被中断/);
+  const argsRefresh = execArgs.querySelector('.tool-activity-refresh') as HTMLButtonElement;
+  assert.equal(argsRefresh.hidden, false);
+
   const execRes = container.querySelector(
     `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
   ) as HTMLDetailsElement;
   execRes.open = true;
   await flush();
-  assert.equal(execRes.querySelector('pre')!.textContent, 'late external result');
-  assert.match(execRes.querySelector('.tool-activity-notice')!.textContent!, /调用在完成前被中断/);
+  assert.equal(execRes.querySelector('pre')!.textContent, '第一页执行原文 ');
+  assert.equal(execRes.dataset.resultState, 'executed');
+  const resRefresh = execRes.querySelector('.tool-activity-refresh') as HTMLButtonElement;
+  assert.equal(resRefresh.hidden, false);
+  // Paging while executed loads page 2 without duplicating page 1; reopening refreshes cleanly.
+  (execRes.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+  await flush();
+  assert.equal(execRes.querySelector('pre')!.textContent, '第一页执行原文 第二页执行原文');
+  assert.equal(resRefresh.hidden, false);
+  execRes.open = false;
+  await flush();
+  execRes.open = true;
+  await flush();
+  assert.equal(execRes.querySelector('pre')!.textContent, '第一页执行原文 ');
+  assert.equal(resRefresh.hidden, false);
+
+  // Transition executed -> complete (normal pass): refresh clears provisional notice and loads pages cleanly without duplicates.
+  execPhase = 'complete-pass';
+  argsRefresh.click();
+  await flush();
+  assert.equal(execArgs.dataset.argumentsState, 'loaded');
+  assert.equal(execArgs.querySelector<HTMLElement>('.tool-activity-notice')!.hidden, true);
+  assert.equal(argsRefresh.hidden, true);
+  resRefresh.click();
+  await flush();
+  assert.equal(execRes.dataset.resultState, 'loaded');
+  assert.equal(execRes.querySelector<HTMLElement>('.tool-activity-notice')!.hidden, true);
+  assert.equal(execRes.querySelector<HTMLElement>('.tool-activity-diagnostics')!.hidden, true);
+  assert.equal(resRefresh.hidden, true);
+  assert.equal(execRes.querySelector('pre')!.textContent, '第一页执行原文 ');
+  (execRes.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+  await flush();
+  assert.equal(execRes.querySelector('pre')!.textContent, '第一页执行原文 第二页执行原文');
+  // Reopening a completed record stays cached.
+  const loadsBeforeReopen = execLoads;
+  execRes.open = false;
+  await flush();
+  execRes.open = true;
+  await flush();
+  assert.equal(execLoads, loadsBeforeReopen);
+  cleanup();
+
+  // Transition executed -> complete (watchdog blocked): notice and diagnostics update on re-open/refresh, and page 2 never duplicates.
+  execPhase = 'executed';
+  cleanup = renderPromptInspector(container, data, {
+    loadToolArguments: async (refId, options) => {
+      if (!options?.includeResult) {
+        return {
+          refId,
+          tool: 'send_message',
+          argumentsRaw: queryArguments,
+          argumentsAvailable: true,
+          restricted: true,
+          state: execPhase === 'executed' ? 'executed' : 'complete',
+        };
+      }
+      const offset = options.resultOffset ?? 0;
+      const pages = ['拦截第一页 ', '拦截第二页'];
+      return {
+        refId,
+        tool: 'send_message',
+        argumentsRaw: '',
+        argumentsAvailable: false,
+        resultRaw: pages[offset] ?? '',
+        resultAvailable: true,
+        resultHasMore: offset === 0,
+        resultNextOffset: offset === 0 ? 1 : 0,
+        restricted: true,
+        state: execPhase === 'executed' ? 'executed' : 'complete',
+        modelResultRaw:
+          execPhase === 'complete-blocked' && offset === 0
+            ? `安全审查拦截：外部工具结果已隔离\n(ref_id: ${refId})`
+            : '',
+      };
+    },
+  });
+  const transitionRes = container.querySelector(
+    `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+  ) as HTMLDetailsElement;
+  transitionRes.open = true;
+  await flush();
+  assert.match(transitionRes.querySelector('.tool-activity-notice')!.textContent!, /等待安全审查/);
+  assert.equal(transitionRes.querySelector<HTMLElement>('.tool-activity-diagnostics')!.hidden, true);
+  execPhase = 'complete-blocked';
+  // Even if offset > 0 observes complete first, refresh remains available until offset 0 updates notice & diagnostics.
+  (transitionRes.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+  await flush();
+  assert.equal(transitionRes.querySelector('pre')!.textContent, '拦截第一页 拦截第二页');
+  assert.equal(transitionRes.dataset.resultState, 'executed');
+  const transitionRefresh = transitionRes.querySelector('.tool-activity-refresh') as HTMLButtonElement;
+  assert.equal(transitionRefresh.hidden, false);
+  transitionRefresh.click();
+  await flush();
+  assert.equal(transitionRes.dataset.resultState, 'loaded');
+  assert.equal(transitionRefresh.hidden, true);
+  assert.match(transitionRes.querySelector('.tool-activity-notice')!.textContent!, /模型调用 read_tool_history 无法读取/);
+  assert.match(transitionRes.querySelector('.tool-activity-diagnostics')!.textContent!, /安全审查拦截/);
+  assert.equal(transitionRes.querySelector('pre')!.textContent, '拦截第一页 ');
+  (transitionRes.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+  await flush();
+  assert.equal(transitionRes.querySelector('pre')!.textContent, '拦截第一页 拦截第二页');
   cleanup();
 }
 

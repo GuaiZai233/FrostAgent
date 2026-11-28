@@ -132,8 +132,47 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 		t.Fatal(err)
 	}
 	response, err = service.GetToolHistoryEntry(ctx, request)
-	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.Restricted || response.Msg.ArgumentsRaw != record.ArgumentsRaw {
+	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.Restricted || response.Msg.State != "complete" || response.Msg.ArgumentsRaw != record.ArgumentsRaw {
 		t.Fatal("completed call did not become available", err)
+	}
+	// Verify the realistic executed -> complete transition (both normal pass and watchdog block) on the same ref.
+	lifecycle := toolhistory.Record{
+		Scope:        chathistory.Scope{Platform: "qq", MessageType: "private", TargetID: "fixture-user"},
+		RefID:        toolhistory.NewRef(),
+		RunID:        "fixture-lifecycle-run",
+		ActorID:      "fixture-user",
+		Tool:         "mcp__anysearch__extract",
+		ArgumentsRaw: `{"url":"https://example.invalid/live"}`,
+		ResultRaw:    "raw external body",
+		MCPResultRaw: `{"content":[{"type":"text","text":"raw external body"}]}`,
+		State:        "executed",
+		Restricted:   true,
+		OccurredAt:   time.Now().UTC(),
+	}
+	if err := store.Save(ctx, lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	execView, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: lifecycle.RefID, IncludeResult: true}))
+	if err != nil || !execView.Msg.ResultAvailable || execView.Msg.ArgumentsPending || execView.Msg.State != "executed" || !execView.Msg.Restricted || execView.Msg.ResultRaw != "raw external body" || execView.Msg.ModelResultRaw != "" {
+		t.Fatalf("executed view wrong: %+v %v", execView, err)
+	}
+	// Transitioning to complete (normal pass) clears restricted flag and stops sending redundant MCP envelope.
+	lifecycle.State, lifecycle.Restricted, lifecycle.ModelResultRaw = "complete", false, "raw external body\n(ref_id: "+lifecycle.RefID+")"
+	if err := store.Save(ctx, lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	passView, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: lifecycle.RefID, IncludeResult: true}))
+	if err != nil || passView.Msg.State != "complete" || passView.Msg.Restricted || passView.Msg.McpResultRaw != "" || passView.Msg.ModelResultRaw != "" {
+		t.Fatalf("complete pass transition wrong: %+v %v", passView, err)
+	}
+	// Transitioning to complete (watchdog block) keeps original result and adds final ModelResultRaw.
+	lifecycle.Restricted, lifecycle.ModelResultRaw = true, "安全审查拦截：外部工具结果已隔离\n(ref_id: "+lifecycle.RefID+")"
+	if err := store.Save(ctx, lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	blockedView, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: lifecycle.RefID, IncludeResult: true}))
+	if err != nil || blockedView.Msg.State != "complete" || !blockedView.Msg.Restricted || blockedView.Msg.ResultRaw != "raw external body" || blockedView.Msg.ModelResultRaw != lifecycle.ModelResultRaw {
+		t.Fatalf("complete blocked transition wrong: %+v %v", blockedView, err)
 	}
 	if _, err := New(&llm.Engine{}, "test", "").GetToolHistoryEntry(ctx, request); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatal("missing archive availability ignored", err)

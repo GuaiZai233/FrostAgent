@@ -783,7 +783,7 @@ export type GetToolHistoryEntryResponse = Message<"frostagent.v1.GetToolHistoryE
   argumentsAvailable: boolean;
 
   /**
-   * Execution is still running; the inspector may retry later.
+   * Execution is still running with no output archived yet; the inspector may retry later.
    *
    * @generated from field: bool arguments_pending = 5;
    */
@@ -831,7 +831,7 @@ export type GetToolHistoryEntryResponse = Message<"frostagent.v1.GetToolHistoryE
   restricted: boolean;
 
   /**
-   * Archive lifecycle state: "running", "executed", or "complete".
+   * Archive lifecycle state: "running", "executed" (awaiting review/delivery or interrupted), or "complete".
    *
    * @generated from field: string state = 13;
    */
