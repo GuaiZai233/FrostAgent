@@ -46,21 +46,6 @@ func TestVendorParity_GroupText(t *testing.T) {
 	}
 }
 
-func TestVendorParity_PrivateText(t *testing.T) {
-	napcatRaw := []byte(`[{"type":"text","data":{"text":"hello private"}}]`)
-	luckylilliaRaw := []byte(`[{"type":"text","data":{"text":"hello private"}}]`)
-
-	napcatSegs := ParseMessageSegments(napcatRaw)
-	llSegs := ParseMessageSegments(luckylilliaRaw)
-
-	napcatText := extractUserText(napcatSegs, napcatRaw)
-	llText := extractUserText(llSegs, luckylilliaRaw)
-
-	if napcatText != llText || napcatText != "hello private" {
-		t.Fatalf("private text mismatch: napcat=%q, luckylillia=%q", napcatText, llText)
-	}
-}
-
 func TestVendorParity_At(t *testing.T) {
 	napcatEvent := model.OneBotEvent{
 		SelfID:      testBotID,

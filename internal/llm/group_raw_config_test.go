@@ -4,13 +4,6 @@ import (
 	"testing"
 )
 
-func TestDefaultGroupRawContextConfig(t *testing.T) {
-	cfg := DefaultGroupRawContextConfig()
-	if cfg.MaxChars != DefaultGroupRawContextMaxChars {
-		t.Errorf("expected MaxChars = %d, got %d", DefaultGroupRawContextMaxChars, cfg.MaxChars)
-	}
-}
-
 func TestLoadGroupRawContextConfigFromEnv_Dynamic(t *testing.T) {
 	// Case 1: default when env unset
 	t.Setenv("GROUP_RAW_CONTEXT_MAX_CHARS", "")

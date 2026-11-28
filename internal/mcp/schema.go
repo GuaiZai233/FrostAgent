@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"github.com/GuaiZai233/FrostAgent/internal/core"
 )
 
 // NormalizeSchema normalizes an MCP inputSchema into an OpenAI-compatible function parameter schema.
@@ -53,6 +54,11 @@ func NormalizeSchema(input any) map[string]any {
 
 	if schema == nil {
 		return fallback
+	}
+
+	// Drop non-standard keywords (e.g. returnDirect) that strict providers reject.
+	if cleaned, ok := core.SanitizeToolSchema(schema).(map[string]any); ok {
+		schema = cleaned
 	}
 
 	// Ensure "type" is "object"

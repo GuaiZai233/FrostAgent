@@ -28,10 +28,12 @@ type Build struct {
 }
 
 type Channel struct {
-	Value  string `json:"value,omitempty"`
-	URL    string `json:"url,omitempty"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Value    string `json:"value,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+	BehindBy int    `json:"behind_by,omitempty"`
+	AheadBy  int    `json:"ahead_by,omitempty"`
 }
 
 type Result struct {
@@ -55,6 +57,12 @@ type releaseResponse struct {
 
 type commitResponse struct {
 	SHA string `json:"sha"`
+}
+
+type compareResponse struct {
+	Status   string `json:"status"`
+	AheadBy  int    `json:"ahead_by"`
+	BehindBy int    `json:"behind_by"`
 }
 
 func (s Source) Check(ctx context.Context) Result {
@@ -112,15 +120,70 @@ func (s Source) latest(ctx context.Context) Channel {
 	if len(commits) != 1 || !revisionPattern.MatchString(commits[0].SHA) {
 		return unavailable(errors.New("invalid commit"))
 	}
+
 	sha := strings.ToLower(commits[0].SHA)
-	status := "unknown"
-	if revisionPattern.MatchString(s.Current.Commit) {
-		status = "different"
-		if strings.EqualFold(s.Current.Commit, sha) {
-			status = "up-to-date"
-		}
+	channel := Channel{Value: sha, URL: repositoryURL + "/commit/" + sha, Status: "unknown"}
+	if !revisionPattern.MatchString(s.Current.Commit) {
+		return channel
 	}
-	return Channel{Value: sha, URL: repositoryURL + "/commit/" + sha, Status: status}
+	if strings.EqualFold(s.Current.Commit, sha) {
+		channel.Status = "up-to-date"
+		return channel
+	}
+
+	var comparison compareResponse
+	path := "/repos/" + Repository + "/compare/" + strings.ToLower(s.Current.Commit) + "..." + sha + "?per_page=1&page=2"
+	if err := s.get(ctx, path, &comparison); err != nil {
+		return comparisonUnavailable(channel, err)
+	}
+	if comparison.AheadBy < 0 || comparison.BehindBy < 0 {
+		return comparisonUnavailable(channel, errors.New("invalid comparison"))
+	}
+
+	switch comparison.Status {
+	case "identical":
+		if comparison.AheadBy != 0 || comparison.BehindBy != 0 {
+			return comparisonUnavailable(channel, errors.New("inconsistent comparison"))
+		}
+		channel.Status = "up-to-date"
+	case "ahead":
+		// The remote HEAD (compare head) is ahead of the installed commit (base).
+		if comparison.AheadBy == 0 || comparison.BehindBy != 0 {
+			return comparisonUnavailable(channel, errors.New("inconsistent comparison"))
+		}
+		channel.Status = "behind"
+		channel.BehindBy = comparison.AheadBy
+	case "behind":
+		// The installed commit (base) is ahead of the remote HEAD (compare head).
+		if comparison.BehindBy == 0 || comparison.AheadBy != 0 {
+			return comparisonUnavailable(channel, errors.New("inconsistent comparison"))
+		}
+		channel.Status = "ahead"
+		channel.AheadBy = comparison.BehindBy
+	case "diverged":
+		if comparison.AheadBy == 0 || comparison.BehindBy == 0 {
+			return comparisonUnavailable(channel, errors.New("inconsistent comparison"))
+		}
+		channel.Status = "diverged"
+		channel.BehindBy = comparison.AheadBy
+		channel.AheadBy = comparison.BehindBy
+	default:
+		return comparisonUnavailable(channel, errors.New("unknown comparison status"))
+	}
+	return channel
+}
+
+func comparisonUnavailable(channel Channel, err error) Channel {
+	channel.Status = "unavailable"
+	switch {
+	case errors.Is(err, githubStatus(http.StatusForbidden)), errors.Is(err, githubStatus(http.StatusTooManyRequests)):
+		channel.Error = "GitHub 拒绝请求或触发限流，请稍后重试"
+	case errors.Is(err, githubStatus(http.StatusNotFound)):
+		channel.Error = "当前 Commit 不在官方仓库历史中，无法计算提交差距"
+	default:
+		channel.Error = "无法计算提交差距，请稍后重试"
+	}
+	return channel
 }
 
 func VersionHandler(source Source) http.Handler {

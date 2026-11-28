@@ -1,6 +1,6 @@
 import { instanceURL } from '../instance-state';
 import { icon } from './icons';
-import { escapeHtml, isPrivateSession } from '../utils/formatters';
+import { escapeHtml, formatMessageTime, isPrivateSession } from '../utils/formatters';
 import { copyToClipboard } from '../utils/clipboard';
 import { toast } from './toast';
 import { openDialog } from './dialog';
@@ -15,6 +15,7 @@ export interface GroupMessageItem {
   content: string;
   rawText: string;
   toolHistoryRunId?: string;
+  imageHashes?: string[];
   toolActivity?: ToolActivity;
   isSummarized?: boolean;
   promptContexts?: Array<{ name: string; content: string }>;
@@ -40,6 +41,7 @@ export interface StructuredGroupMessage {
   messageId: string;
   time: string;
   toolHistoryRunId?: string;
+  imageHashes?: string[];
 }
 
 export interface PromptImage {
@@ -149,7 +151,7 @@ export function parseMessageLine(line: string, botName?: string): GroupMessageIt
       }
       text = text.slice(tagMatch[0].length);
       matchedTag = true;
-    } else if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
+    } else if (/^(?:\d{4}-\d{2}-\d{2}\s+)?\d{1,2}:\d{2}(?::\d{2})?$/.test(tagContent)) {
       if (!time) {
         time = tagContent;
       }
@@ -254,6 +256,7 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
     content: record.content,
     rawText: JSON.stringify(record),
     toolHistoryRunId: record.toolHistoryRunId,
+    imageHashes: record.imageHashes?.length ? record.imageHashes : undefined,
   };
 }
 
@@ -361,6 +364,91 @@ function mergeGroupToolHistory(
   // them to a nearby user or inventing an execution time.
   merged[merged.length - 1].unshift(...unlocated);
   return merged;
+}
+
+/** Archived calls of one source message, as listed by GetSessionToolActivity. */
+export interface SessionToolActivityItem {
+  sourceMessageId: string;
+  entries: Array<{ refId: string; tool: string }>;
+  total?: number;
+}
+
+// The archive keys calls by the platform message ID. Group items carry it as
+// `id`; private user turns only carry it inside their system_context envelope.
+function messageSourceId(message: GroupMessageItem): string | undefined {
+  if (message.role === 'assistant') return undefined;
+  if (message.id) return message.id;
+  const context = message.promptContexts?.find((item) => item.name === 'system_context');
+  if (!context) return undefined;
+  try {
+    const value: unknown = JSON.parse(context.content);
+    if (value && typeof value === 'object' && 'message_id' in value &&
+      (typeof value.message_id === 'string' || typeof value.message_id === 'number')) {
+      return String(value.message_id);
+    }
+  } catch {
+    /* A malformed envelope simply has no source ID. */
+  }
+  return undefined;
+}
+
+function collectSessionMessages(prompt: ParsedPrompt): GroupMessageItem[][] {
+  return [...prompt.summaryGroups.map((group) => group.parsedMessages || []), prompt.recentMessages];
+}
+
+/** Source message IDs shown in the session timeline, in display order and without duplicates. */
+export function sessionToolActivitySourceIds(prompt: ParsedPrompt): string[] {
+  const ids = new Set<string>();
+  for (const messages of collectSessionMessages(prompt)) {
+    for (const message of messages) {
+      const id = messageSourceId(message);
+      if (id) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Inserts archived tool cards after the user message that triggered them. Calls
+ * already shown (for example by pre-upgrade history notes) are skipped, and a
+ * source message that is not displayed gets no card.
+ */
+export function mergeSessionToolActivity(prompt: ParsedPrompt, activities: SessionToolActivityItem[]): ParsedPrompt {
+  if (!activities.length) return prompt;
+  const bySource = new Map(activities.map((item) => [item.sourceMessageId, item]));
+  const seenRefs = new Set<string>();
+  const lists = collectSessionMessages(prompt);
+  for (const messages of lists) {
+    for (const message of messages) {
+      for (const entry of messageToolActivity(message)?.entries || []) if (entry.refId) seenRefs.add(entry.refId);
+    }
+  }
+  const placed = new Set<string>();
+  const merged = lists.map((messages) => messages.flatMap((message) => {
+    const sourceId = messageSourceId(message);
+    const item = sourceId && !placed.has(sourceId) ? bySource.get(sourceId) : undefined;
+    if (!sourceId || !item) return [message];
+    placed.add(sourceId);
+    const entries = item.entries.filter((entry) => !seenRefs.has(entry.refId));
+    if (!entries.length) return [message];
+    for (const entry of entries) seenRefs.add(entry.refId);
+    const omitted = (item.total ?? entries.length) - item.entries.length;
+    const note: GroupMessageItem = {
+      role: 'assistant', content: '', rawText: '',
+      toolActivity: {
+        entries: entries.map((entry) => ({ tool: entry.tool, refId: entry.refId })),
+        sourceMessageId: sourceId,
+        placementHint: omitted > 0 ? `另有 ${omitted} 条较早记录未列出` : undefined,
+      },
+    };
+    return [message, note];
+  }));
+  const groupCount = prompt.summaryGroups.length;
+  return {
+    ...prompt,
+    summaryGroups: prompt.summaryGroups.map((group, index) => ({ ...group, parsedMessages: merged[index] })),
+    recentMessages: merged[groupCount],
+  };
 }
 
 /**
@@ -1185,7 +1273,7 @@ export function renderSingleMessageRow(
             ? `<span class="badge badge-purple msg-role-badge text-[10px] py-0 px-1 font-medium" title="当前上下文模型，历史回复当时使用的模型可能不同">Bot (${escapeHtml(model || '未知模型')})</span>`
             : `<span class="badge badge-outline msg-role-badge text-[10px] py-0 px-1 font-medium text-muted">User</span>`
         }
-        ${msg.time ? `<span class="msg-time">${escapeHtml(msg.time)}</span>` : ''}
+        ${msg.time ? `<span class="msg-time">${escapeHtml(formatMessageTime(msg.time))}</span>` : ''}
         <span class="msg-sender ${isAssistant ? 'text-purple-600 dark:text-purple-400 font-semibold' : ''}">${escapeHtml(displaySender)}</span>
         ${
           msg.senderId
@@ -1194,7 +1282,7 @@ export function renderSingleMessageRow(
         }
         ${msg.id ? `<span class="msg-id">#${escapeHtml(msg.id)}</span>` : ''}
       </div>
-      <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${escapeHtml(msg.content)}</div>
+      <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${renderMessageContent(msg.content, msg.imageHashes)}</div>
       ${msg.promptContexts?.length ? `
         <details class="mt-2 text-xs">
           <summary class="cursor-pointer text-muted select-none">附加上下文</summary>
@@ -1206,6 +1294,33 @@ export function renderSingleMessageRow(
       ` : ''}
     </div>
   `;
+}
+
+const messageImagePlaceholder = /\[图片\]|\[image(?: [^\]]*)?\]/g;
+const imageHashPattern = /^[a-f0-9]{64}$/;
+
+/**
+ * Escapes message text and turns each image placeholder ([图片] from users,
+ * [image ...] from the bot) into a hover-previewable reference when the backend
+ * supplied one key per placeholder. A count mismatch means the mapping is
+ * unreliable, so every placeholder stays plain text.
+ */
+export function renderMessageContent(content: string, imageHashes?: string[]): string {
+  const matches = [...content.matchAll(messageImagePlaceholder)];
+  if (!imageHashes?.length || matches.length !== imageHashes.length) return escapeHtml(content);
+
+  let rendered = '';
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    const start = match.index ?? 0;
+    rendered += escapeHtml(content.slice(cursor, start));
+    const hash = imageHashes[index];
+    rendered += imageHashPattern.test(hash)
+      ? `<span class="msg-image-ref" tabindex="0" data-image-url="${escapeHtml(instanceURL(`/api/log-images/${hash}`))}">${escapeHtml(match[0])}</span>`
+      : escapeHtml(match[0]);
+    cursor = start + match[0].length;
+  });
+  return rendered + escapeHtml(content.slice(cursor));
 }
 
 const loggedImagePlaceholder = /^\[image omitted: type=([^,\]]+), size=(\d+) bytes, sha256=([a-f0-9]{64})\]$/;

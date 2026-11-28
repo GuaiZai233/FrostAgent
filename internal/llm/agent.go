@@ -1014,7 +1014,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 			}
 			messages = skillMessages
 		}
-		messages = e.messageGuidanceMessages(messages)
+		messages = e.messageGuidanceMessagesFor(messages, !(hasRunCtx && (runCtx.Proactive || runCtx.Awareness)))
 		compactArchivedToolMessages(messages)
 		// Attach trusted metadata only to the provider request and its trace.
 		requestMessages := withToolActivity(messages, toolActivity)

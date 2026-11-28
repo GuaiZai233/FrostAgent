@@ -140,8 +140,16 @@ func TestOneBotOutboundPreservesText(t *testing.T) {
 						want = append(want, tools.OneBotSegment{Type: "at", Data: map[string]any{"qq": "12"}})
 					}
 					wantText := text
-					if route.mention && text == "正文" {
-						wantText = " 正文"
+					if route.mention {
+						// A mention is always followed by exactly one space.
+						switch text {
+						case "正文":
+							wantText = " 正文"
+						case " \t正文\n  ":
+							wantText = " 正文\n  "
+						default:
+							t.Fatalf("no expected mention text for %q", text)
+						}
 					}
 					want = append(want, tools.OneBotSegment{Type: "text", Data: map[string]any{"text": wantText}})
 					data, err := json.Marshal(message)

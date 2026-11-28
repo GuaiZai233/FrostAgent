@@ -10,19 +10,21 @@ the generated `<frostagent_skills>` system message, after the primary system
 message. It refreshes every model iteration and appears in Prompt Inspector,
 not persistent conversation history.
 The guidance starts with “为保证拟真的对话效果，你被允许多段回复用户消息。”;
-the marker and literal-backtick instructions follow unchanged.
+it ends by telling the model that `send_message` accepts `forcefully_avoid_separation: true`
+when the literal marker text must be sent without segmentation.
 
 Ordinary final text is split on bare `<FROSTAGENT_SEGMENT_MARK>` and blank
 paragraph separators (LF or CRLF double newlines). Single newlines stay intact.
-Matched inline backtick spans and line-based backtick fences preserve their
-content, including literal markers and blank lines. A fence closes only on a
-delimiter-only line with up to three leading spaces and at least as many
-backticks as its opener; an unclosed fence extends to the end of the response.
-Empty segments are skipped. When disabled, bare
-markers are removed but paragraph breaks and backtick-protected markers remain.
+Backticks have no special meaning: markers and blank lines inside backtick spans
+or fences are split or removed like any other text. Empty segments are skipped.
+When disabled, bare markers are removed but paragraph breaks remain.
 In structured `send_message` chains and legacy structured final replies, plain
-text components drop bare markers in either mode and preserve markers inside
-backtick code.
+text components drop markers in either mode. The optional top-level
+`send_message.forcefully_avoid_separation` (default false) keeps markers in plain
+components as ordinary literal text when true. It is not part of the restricted
+proactive specific-reply or awareness send schemas: their guidance omits the
+instruction, and `send_message` rejects the flag at execution time for those
+runs, so they always drop markers.
 
 The optional **分段消息上限** (`MULTI_SEGMENT_REPLY_MAX_SEGMENTS`, 0–20, default
 0 = unlimited, applies only while segmentation is enabled) caps delivered

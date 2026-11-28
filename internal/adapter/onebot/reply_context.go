@@ -322,7 +322,7 @@ func (c *wsConnection) resolveReplyResponse(event model.OneBotEvent, messageID i
 
 	c.rememberMessageSession(messageID, historyKey(event))
 
-	segments := ParseMessageSegments(data.Message)
+	segments := c.resolveLocalImageSegments(ParseMessageSegments(data.Message))
 	visibleText := extractUserText(segments, data.Message, c.Scope)
 	context := map[string]interface{}{
 		"message_id": messageID,
@@ -492,12 +492,12 @@ func (c *wsConnection) observeResolvedReply(event model.OneBotEvent, reply resol
 	if c == nil || c.stealer == nil || reply.MessageID == "" || reply.SessionID != historyKey(event) {
 		return
 	}
-	observeStickerSources(
+	observeStickerSegments(
 		c.stealer,
 		c.generation,
 		historyKey(event),
 		reply.MessageID,
-		stickerSourcesFromSegments(reply.Segments),
+		reply.Segments,
 		false,
 	)
 }
@@ -512,10 +512,10 @@ func (c *wsConnection) loadObservedSticker(
 ) ([]byte, error) {
 	currentMessageID := strconv.FormatInt(int64(event.MessageID), 10)
 	if messageID == currentMessageID {
-		return stickerDataFromSegments(ctx, currentSegments, stickerIndex)
+		return c.stickerDataFromSegments(ctx, currentSegments, stickerIndex)
 	}
 	if messageID == reply.MessageID && reply.SessionID == historyKey(event) && len(reply.Segments) > 0 {
-		return stickerDataFromSegments(ctx, reply.Segments, stickerIndex)
+		return c.stickerDataFromSegments(ctx, reply.Segments, stickerIndex)
 	}
 
 	numericID, ok := numericMessageID(messageID)
@@ -526,15 +526,26 @@ func (c *wsConnection) loadObservedSticker(
 	if len(resolved.Segments) == 0 {
 		return nil, fmt.Errorf("OneBot get_msg returned no usable message segments for %s", messageID)
 	}
-	return stickerDataFromSegments(ctx, resolved.Segments, stickerIndex)
+	return c.stickerDataFromSegments(ctx, resolved.Segments, stickerIndex)
 }
 
-func stickerDataFromSegments(ctx context.Context, segments []content.MessageSegment, stickerIndex int) ([]byte, error) {
-	sources := stickerSourcesFromSegments(segments)
-	if stickerIndex < 0 || stickerIndex >= len(sources) {
+func (c *wsConnection) stickerDataFromSegments(ctx context.Context, segments []content.MessageSegment, stickerIndex int) ([]byte, error) {
+	attachments := stickerAttachmentsFromSegments(segments)
+	if stickerIndex < 0 || stickerIndex >= len(attachments) {
 		return nil, fmt.Errorf("sticker index %d is unavailable", stickerIndex)
 	}
-	return sticker.LoadImageSource(ctx, sources[stickerIndex])
+	attachment := attachments[stickerIndex]
+	if attachment.source != "" {
+		return sticker.LoadImageSource(ctx, attachment.source)
+	}
+	if c == nil || c.stealer == nil || attachment.fileName == "" {
+		return nil, fmt.Errorf("sticker index %d has no readable source", stickerIndex)
+	}
+	data, ok := c.stealer.ResolveLocalImage(attachment.fileName)
+	if !ok {
+		return nil, fmt.Errorf("sticker index %d is not in the local collection", stickerIndex)
+	}
+	return data, nil
 }
 
 // loadObservedImage resolves one trusted image attachment selected by message

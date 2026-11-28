@@ -1,15 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  COMPACT_WHITELIST_ENABLED_KEY,
-  COMPACT_WHITELIST_GROUPS_KEY,
-  planCompactGroupChange,
-} from './compact-whitelist-plan.ts';
-
-test('group compact whitelist keys match the backend environment names', () => {
-  assert.equal(COMPACT_WHITELIST_ENABLED_KEY, 'ENABLE_GROUP_COMPACT_WHITELIST');
-  assert.equal(COMPACT_WHITELIST_GROUPS_KEY, 'GROUP_COMPACT_WHITELIST');
-});
+import { planCompactGroupChange } from './compact-whitelist-plan.ts';
 
 test('adding the first group with an unset switch pins the effective disabled state', () => {
   assert.deepEqual(

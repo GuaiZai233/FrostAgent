@@ -1,12 +1,57 @@
 package sticker
 
 import (
+	"crypto/md5"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestStoreResolveFileNameMatchesOneBotMD5Name(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
+	}
+	want := []byte("synthetic sticker bytes")
+	id := HashBytes(want)
+	if err := store.Add(id, id+".jpg", want); err != nil {
+		t.Fatalf("add sticker: %v", err)
+	}
+
+	md5Name := fmt.Sprintf("%x.png", md5.Sum(want))
+	got, ok := store.ResolveFileName(md5Name)
+	if !ok || string(got) != string(want) {
+		t.Fatalf("ResolveFileName(%q) = (%q, %v), want fixture bytes", md5Name, got, ok)
+	}
+	if _, ok := store.ResolveFileName("missing.png"); ok {
+		t.Fatal("ResolveFileName matched an unknown filename")
+	}
+}
+
+func TestStoreResolveFileNameMissDoesNotChangeSourceIndexes(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "stickers"))
+	if err != nil {
+		t.Fatalf("create sticker store: %v", err)
+	}
+	want := []byte("synthetic sticker bytes")
+	id := HashBytes(want)
+	if err := store.Add(id, id+".jpg", want); err != nil {
+		t.Fatalf("add sticker: %v", err)
+	}
+
+	fileSources := maps.Clone(store.fileSources)
+	md5Sources := maps.Clone(store.md5Sources)
+	if _, ok := store.ResolveFileName("00000000000000000000000000000000.png"); ok {
+		t.Fatal("ResolveFileName matched an unknown MD5 filename")
+	}
+	if !reflect.DeepEqual(store.fileSources, fileSources) || !reflect.DeepEqual(store.md5Sources, md5Sources) {
+		t.Fatal("ResolveFileName changed source indexes on a miss")
+	}
+}
 
 func blockIndexSave(t *testing.T, store *Store) func() {
 	t.Helper()

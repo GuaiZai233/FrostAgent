@@ -162,6 +162,11 @@ func (s *Store) ImageHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok && s.disk != nil {
 		image, ok = s.disk.image(hash)
 	}
+	if !ok {
+		if session, found := s.sessionImages.get(hash); found {
+			image, ok = &cachedImage{contentType: session.contentType, data: session.data}, true
+		}
+	}
 	if ok {
 		image = &cachedImage{
 			contentType: image.contentType,

@@ -31,6 +31,9 @@ type Msg struct {
 	Transfer      string         `json:"transfer,omitempty"`
 	Data          *QQMessageData `json:"data,omitempty"`
 	StickerIndex  int            `json:"sticker_index,omitempty"`
+	// ImageKey is the console preview key for an image the adapter delivered.
+	// Set by the adapter only; never part of the tool schema.
+	ImageKey string `json:"-"`
 }
 
 // OneBotSegment 定义 OneBot v11 协议的标准消息段结构
@@ -58,6 +61,11 @@ func SendMsgTool() Tool {
 					"type":        "boolean",
 					"default":     true,
 					"description": "Whether to apply configured automatic sender mentions and reply quotes. Omit or set true to keep existing decoration rules. Set false to send only the explicit messages in their supplied order, without automatic mentions or quotes.",
+				},
+				"forcefully_avoid_separation": map[string]any{
+					"type":        "boolean",
+					"default":     false,
+					"description": "Set true to keep <FROSTAGENT_SEGMENT_MARK> in plain text as ordinary literal text instead of letting the backend treat it as a segment marker. Omit or set false for the default behavior.",
 				},
 				"messages": map[string]any{
 					"type":        "array",
@@ -110,10 +118,11 @@ func SendMsgTool() Tool {
 				return textResult(""), fmt.Errorf("主动感知仅允许当前会话的文本和艾特")
 			}
 			var payload struct {
-				Messages                []Msg  `json:"messages"`
-				Session                 string `json:"session,omitempty"`
-				SuppressAutoMention     bool   `json:"suppress_auto_mention,omitempty"`
-				UseFrostAgentDecoration *bool  `json:"use_frostagent_decoration,omitempty"`
+				Messages                  []Msg  `json:"messages"`
+				Session                   string `json:"session,omitempty"`
+				SuppressAutoMention       bool   `json:"suppress_auto_mention,omitempty"`
+				UseFrostAgentDecoration   *bool  `json:"use_frostagent_decoration,omitempty"`
+				ForcefullyAvoidSeparation bool   `json:"forcefully_avoid_separation,omitempty"`
 			}
 
 			if err := json.Unmarshal([]byte(args), &payload); err != nil {
@@ -124,6 +133,9 @@ func SendMsgTool() Tool {
 			}
 			if payload.Session != "" {
 				return textResult(""), fmt.Errorf("send_message 仅发送到当前会话；发送到白名单群请使用 qq_extend_messages 的 target_group_id")
+			}
+			if payload.ForcefullyAvoidSeparation && (run.Proactive || run.Awareness) {
+				return textResult(""), fmt.Errorf("主动回复和主动感知不支持 forcefully_avoid_separation")
 			}
 			if err := validateBasicMessageFields(args); err != nil {
 				return textResult(""), err
@@ -137,8 +149,10 @@ func SendMsgTool() Tool {
 				}
 				switch msg.Type {
 				case "plain":
-					msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
-					payload.Messages[i].Text = msg.Text
+					if !payload.ForcefullyAvoidSeparation {
+						msg.Text = strings.Join(replyformat.Split(msg.Text, false), "")
+						payload.Messages[i].Text = msg.Text
+					}
 					if strings.TrimSpace(msg.Text) == "" {
 						return textResult(""), fmt.Errorf("messages[%d].text 不能为空", i)
 					}
@@ -218,12 +232,16 @@ func validateBasicMessageFields(raw string) error {
 func BuildOneBotMessage(toolMessages []Msg) ([]OneBotSegment, error) {
 	var oneBotChain []OneBotSegment
 
-	for _, Msg := range toolMessages {
+	for i, Msg := range toolMessages {
 		switch Msg.Type {
 		case "plain":
+			text := Msg.Text
+			if i > 0 && (toolMessages[i-1].Type == "mention_user" || toolMessages[i-1].Type == "mention_all") {
+				text = SeparateMentionText(text)
+			}
 			oneBotChain = append(oneBotChain, OneBotSegment{
 				Type: "text",
-				Data: map[string]interface{}{"text": Msg.Text},
+				Data: map[string]interface{}{"text": text},
 			})
 
 		case "mention_user":

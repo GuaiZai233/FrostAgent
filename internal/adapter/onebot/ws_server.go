@@ -404,6 +404,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	if segments == nil {
 		segments = []content.MessageSegment{}
 	}
+	segments = conn.resolveLocalImageSegments(segments)
 
 	userText := extractUserText(segments, event.Message, engine.Scope)
 	memoryText := userText
@@ -877,7 +878,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 						if engine.GroupCompactor != nil {
 							maxBufferSize = engine.GroupCompactor.MaxBufferSize()
 						}
-						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: time.Now().Format("15:04:05")}, maxBufferSize)
+						seq, _ := session.StageGroupCompactSlot(llm.GroupCompactMessage{Role: "assistant", Sender: botName, Content: deliveredReply, Time: llm.FormatMessageTime(time.Now()), ImageKeys: qqDeliveredImageKeys(messages)}, maxBufferSize)
 						if live && !wakeSignals.Proactive && turn != nil && turn.StagedGuard() != nil {
 							turn.StagedGuard().AddSequence(seq)
 						} else {
@@ -989,7 +990,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 								Role:    "assistant",
 								Sender:  botName,
 								Content: strings.TrimSpace(botReply),
-								Time:    time.Now().Format("15:04:05"),
+								Time:    llm.FormatMessageTime(time.Now()),
 							},
 							maxBufferSize,
 						)
@@ -1371,7 +1372,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return
 			}
 			if len(acknowledged) > 0 {
-				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged))
+				recordPartialReply(session, engine, startEpoch, event.MessageType == "group", qqDeliveredText(acknowledged), qqDeliveredImageKeys(acknowledged)...)
 			}
 			if session != nil {
 				reason := result.Content
@@ -1617,7 +1618,8 @@ func captureGroupCompactText(event model.OneBotEvent, text string, engine *llm.E
 			SenderID:  strconv.FormatInt(event.UserID, 10),
 			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
-			Time:      time.Now().Format("15:04:05"),
+			Time:      llm.FormatMessageTime(time.Now()),
+			ImageKeys: retainEventImages(event, engine),
 		},
 		maxBufferSize,
 	)
@@ -1663,7 +1665,8 @@ func stageGroupCompactText(event model.OneBotEvent, text string, engine *llm.Eng
 			SenderID:  strconv.FormatInt(event.UserID, 10),
 			Content:   strings.TrimSpace(text),
 			MessageID: msgID,
-			Time:      time.Now().Format("15:04:05"),
+			Time:      llm.FormatMessageTime(time.Now()),
+			ImageKeys: retainEventImages(event, engine),
 		},
 		maxBufferSize,
 		strconv.FormatInt(event.UserID, 10),

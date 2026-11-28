@@ -1,3 +1,4 @@
+import { formatMessageTime } from '../src/utils/formatters';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
@@ -7,8 +8,10 @@ import groupToolContextFixture from './fixtures/group-tool-context.json';
 import privateTimedContextFixture from './fixtures/private-timed-context.json';
 import {
   buildInspectorDataFromSessionContext,
+  mergeSessionToolActivity,
   parsePrompt,
   renderPromptInspector,
+  sessionToolActivitySourceIds,
 } from '../src/components/prompt-inspector';
 import {
   extractToolActivityBlock,
@@ -633,11 +636,11 @@ renderPromptInspector(
 );
 assert.equal(
   container.querySelector('.group-msg-row.is-user .msg-time')!.textContent,
-  '20:34:34',
+  formatMessageTime('2026-11-17 20:34:34'),
 );
 assert.equal(
   container.querySelector('.group-msg-row.is-assistant .msg-time')!.textContent,
-  '20:34:40',
+  formatMessageTime('2026-11-17 20:34:40'),
 );
 assert.equal(
   container.querySelector('.group-msg-row.is-user .msg-content')!.textContent,
@@ -893,7 +896,104 @@ assert.equal(
 );
 assert.equal(extractToolActivityBlock(finalTurn), undefined);
 
+// Session timeline: archived calls are listed by source message and merged next to it.
+{
+  const callA = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440010';
+  const callB = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440011';
+  const callC = 'fa_toolcall_550e8400-e29b-41d4-a716-446655440012';
+  const structured = (messageId: string, role: string, content: string) => ({
+    role, sender: '', senderId: '', content, messageId, time: '',
+  });
+  const groupPrompt = buildInspectorDataFromSessionContext({
+    sessionId: 'fixture:group:test_group',
+    platform: 'fixture',
+    summaryGroups: [{ summary: 's', structuredMessages: [structured('src-old', 'user', 'older question')] }],
+    recentStructuredMessages: [
+      structured('src-1', 'user', 'question'),
+      structured('', 'assistant', 'reply'),
+      structured('src-2', 'user', 'follow-up'),
+    ],
+  });
+  assert.deepEqual(sessionToolActivitySourceIds(groupPrompt), ['src-old', 'src-1', 'src-2']);
+
+  const merged = mergeSessionToolActivity(groupPrompt, [
+    { sourceMessageId: 'src-1', entries: [{ refId: callA, tool: 'memory' }, { refId: callB, tool: 'send_message' }] },
+    { sourceMessageId: 'src-old', entries: [{ refId: callC, tool: 'stay_silent' }], total: 14 },
+    { sourceMessageId: 'src-not-shown', entries: [{ refId: 'fa_toolcall_550e8400-e29b-41d4-a716-446655440013', tool: 'ghost' }] },
+  ]);
+  const recent = merged.recentMessages;
+  assert.equal(recent.length, 4, 'one card for src-1 only');
+  assert.equal(recent[0].id, 'src-1');
+  assert.deepEqual(
+    recent[1].toolActivity?.entries.map((entry) => [entry.tool, entry.refId]),
+    [['memory', callA], ['send_message', callB]],
+  );
+  assert.equal(recent[1].toolActivity?.sourceMessageId, 'src-1');
+  assert.equal(recent[1].role, 'assistant');
+  assert.equal(recent[2].content, 'reply', 'the delivered reply stays after the card');
+  const older = merged.summaryGroups[0].parsedMessages!;
+  assert.equal(older.length, 2, 'cards are also placed inside compacted batches');
+  assert.match(older[1].toolActivity?.placementHint ?? '', /另有 13 条较早记录未列出/);
+  assert.equal(groupPrompt.recentMessages.length, 3, 'the input prompt must not be mutated');
+  assert.equal(mergeSessionToolActivity(groupPrompt, []), groupPrompt);
+
+  // Calls already shown by pre-upgrade history notes are not repeated.
+  const withLegacy = buildInspectorDataFromSessionContext({
+    sessionId: 'fixture:group:test_group',
+    platform: 'fixture',
+    recentStructuredMessages: [structured('src-1', 'user', 'question'), structured('', 'assistant', current)],
+    history: [],
+  });
+  const deduped = mergeSessionToolActivity(withLegacy, [
+    { sourceMessageId: 'src-1', entries: [{ refId: originalRef, tool: 'send_message' }, { refId: callA, tool: 'memory' }] },
+  ]);
+  const cards = deduped.recentMessages.filter((message) => message.toolActivity);
+  assert.equal(cards.length, 1);
+  assert.deepEqual(
+    cards[0].toolActivity?.entries.map((entry) => entry.refId),
+    [callA],
+    'a call already on the timeline was duplicated',
+  );
+  assert.ok(deduped.recentMessages.some((message) => message.content === current), 'the pre-upgrade note must stay');
+
+  // When every listed call is already shown, nothing is inserted.
+  const allShown = mergeSessionToolActivity(withLegacy, [
+    { sourceMessageId: 'src-1', entries: [{ refId: originalRef, tool: 'send_message' }] },
+  ]);
+  assert.equal(allShown.recentMessages.filter((message) => message.toolActivity).length, 0);
+
+  // Private turns only carry the platform message ID inside their system_context envelope.
+  const envelope = (id: string) =>
+    `User Message: hello\n\n<system_context>\n${JSON.stringify({ message_id: id, user_id: 'fixture-user' })}\n</system_context>`;
+  const privatePrompt = buildInspectorDataFromSessionContext({
+    sessionId: 'fixture:private:test_user',
+    platform: 'fixture',
+    recentStructuredMessages: [structured('', 'user', envelope('private-src')), structured('', 'assistant', 'hi')],
+  });
+  assert.deepEqual(sessionToolActivitySourceIds(privatePrompt), ['private-src']);
+  const privateMerged = mergeSessionToolActivity(privatePrompt, [
+    { sourceMessageId: 'private-src', entries: [{ refId: callA, tool: 'memory' }] },
+  ]);
+  assert.equal(privateMerged.recentMessages.length, 3);
+  assert.equal(privateMerged.recentMessages[1].toolActivity?.entries[0].tool, 'memory');
+  assert.equal(privateMerged.recentMessages[2].content, 'hi');
+
+  // A malformed envelope simply has no source and gets no card.
+  const malformed = buildInspectorDataFromSessionContext({
+    sessionId: 'fixture:private:test_user',
+    platform: 'fixture',
+    recentStructuredMessages: [structured('', 'user', 'User Message: x\n\n<system_context>\n{broken\n</system_context>')],
+  });
+  assert.deepEqual(sessionToolActivitySourceIds(malformed), []);
+
+  container.innerHTML = '';
+  renderPromptInspector(container, merged, {});
+  assert.match(container.innerHTML, /tool-activity/);
+  assert.match(container.innerHTML, new RegExp(callA));
+  assert.match(container.innerHTML, /send_message/);
+}
+
 dom.window.close();
 process.stdout.write(
-  'PASS: distinct tool calls, historical reads, legacy records, native results, folding, escaping and trailing activity blocks\n',
+  'PASS: distinct tool calls, historical reads, legacy records, native results, folding, escaping, trailing activity blocks and session timeline merging\n',
 );

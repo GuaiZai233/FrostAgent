@@ -2,31 +2,47 @@ package sticker
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Store struct {
-	mu         sync.RWMutex
-	dir        string
-	index      map[string]*Entry
-	ordered    []string
-	db         *storage.DB
-	instanceID string
+	mu          sync.RWMutex
+	dir         string
+	index       map[string]*Entry
+	ordered     []string
+	db          *storage.DB
+	instanceID  string
+	fileSources map[string]string
+	md5Sources  map[string]string
+	md5ByID     map[string]string
 }
 
 func NewSQLStore(db *storage.DB, instanceID, dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, instanceID: instanceID, dir: dir, index: make(map[string]*Entry)}
+	s := &Store{
+		db:          db,
+		instanceID:  instanceID,
+		dir:         dir,
+		index:       make(map[string]*Entry),
+		fileSources: make(map[string]string),
+		md5Sources:  make(map[string]string),
+		md5ByID:     make(map[string]string),
+	}
 	if err := s.load(); err != nil {
+		return nil, err
+	}
+	if err := s.buildSourceIndexes(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -37,11 +53,17 @@ func NewStore(dir string) (*Store, error) {
 		return nil, fmt.Errorf("create sticker dir: %w", err)
 	}
 	s := &Store{
-		dir:   dir,
-		index: make(map[string]*Entry),
+		dir:         dir,
+		index:       make(map[string]*Entry),
+		fileSources: make(map[string]string),
+		md5Sources:  make(map[string]string),
+		md5ByID:     make(map[string]string),
 	}
 	if err := s.load(); err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("load index: %w", err)
+	}
+	if err := s.buildSourceIndexes(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -223,6 +245,56 @@ func HashBytes(data []byte) string {
 	return fmt.Sprintf("%x", h)
 }
 
+func (s *Store) buildSourceIndexes() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fileSources = make(map[string]string, len(s.index)*2)
+	s.md5Sources = make(map[string]string, len(s.index))
+	s.md5ByID = make(map[string]string, len(s.index))
+	for id, entry := range s.index {
+		if entry == nil {
+			continue
+		}
+		s.fileSources[entry.FileName] = id
+		s.fileSources[id] = id
+		data, err := os.ReadFile(filepath.Join(s.dir, entry.FileName))
+		if err != nil {
+			continue
+		}
+		s.indexSourceDigestLocked(id, data)
+	}
+	return nil
+}
+
+func (s *Store) indexSourceDigestLocked(id string, data []byte) {
+	digest := fmt.Sprintf("%x", md5.Sum(data))
+	s.md5ByID[id] = digest
+	if _, exists := s.md5Sources[digest]; !exists {
+		s.md5Sources[digest] = id
+	}
+}
+
+func (s *Store) removeSourceIndexLocked(id string, fileName string) {
+	if s.fileSources[fileName] == id {
+		delete(s.fileSources, fileName)
+	}
+	if s.fileSources[id] == id {
+		delete(s.fileSources, id)
+	}
+	if digest := s.md5ByID[id]; digest != "" {
+		if s.md5Sources[digest] == id {
+			delete(s.md5Sources, digest)
+			for otherID, otherDigest := range s.md5ByID {
+				if otherDigest == digest && otherID != id {
+					s.md5Sources[digest] = otherID
+					break
+				}
+			}
+		}
+		delete(s.md5ByID, id)
+	}
+}
+
 func (s *Store) Exists(id string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -255,6 +327,9 @@ func (s *Store) Add(id, fileName string, fileData []byte) error {
 	}
 	s.index = nextIndex
 	s.ordered = nextOrdered
+	s.fileSources[fileName] = id
+	s.fileSources[id] = id
+	s.indexSourceDigestLocked(id, fileData)
 	return nil
 }
 
@@ -333,6 +408,7 @@ func (s *Store) Delete(id string) error {
 
 	s.index = nextIndex
 	s.ordered = nextOrdered
+	s.removeSourceIndexLocked(id, e.FileName)
 	return nil
 }
 
@@ -464,6 +540,36 @@ func (s *Store) FilePath(id string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(s.dir, e.FileName), true
+}
+
+// ResolveFileName loads a locally stored sticker referenced by a platform file
+// name. The source indexes are built once at startup and updated with the
+// collection, so a miss does not scan or read the sticker directory.
+func (s *Store) ResolveFileName(fileName string) ([]byte, bool) {
+	if s == nil {
+		return nil, false
+	}
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" || fileName != filepath.Base(fileName) || strings.ContainsAny(fileName, `/\\`) {
+		return nil, false
+	}
+	s.mu.RLock()
+	id, ok := s.fileSources[fileName]
+	if !ok {
+		baseName := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+		id, ok = s.md5Sources[strings.ToLower(baseName)]
+	}
+	entry := s.index[id]
+	dir := s.dir
+	s.mu.RUnlock()
+	if !ok || entry == nil {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(dir, entry.FileName))
+	if err != nil {
+		return nil, false
+	}
+	return data, true
 }
 
 func (s *Store) Unsummarized() []Entry {

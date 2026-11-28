@@ -19,7 +19,6 @@ import { lazyMount } from './lazy-page';
 import { mountOverviewPage } from './pages/overview';
 import { mountConnectionsPage } from './pages/connections';
 import { mountDialoguePage } from './pages/dialogue';
-import { mountPromptPage } from './pages/prompt';
 import { mountStickersPage } from './pages/stickers';
 import { mountChatPage } from './pages/chat';
 import { mountLogsPage } from './pages/logs';
@@ -43,6 +42,9 @@ const mountFrontendSettingsPage = lazyMount(() =>
   import('./pages/frontend-settings').then(
     ({ mountFrontendSettingsPage }) => mountFrontendSettingsPage,
   ),
+);
+const mountPromptPage = lazyMount(() =>
+  import('./pages/prompt').then(({ mountPromptPage }) => mountPromptPage),
 );
 const mountMemoryPage = lazyMount(() =>
   import('./pages/memory').then(({ mountMemoryPage }) => mountMemoryPage),
@@ -70,7 +72,7 @@ const navItems = [
   { path: '/model-router', label: '模型路由器', iconName: 'sliders' },
   { path: '/memory', label: '记忆管理', iconName: 'psychology' },
   { path: '/dialogue', label: '人格设定', iconName: 'chat' },
-  { path: '/prompt', label: '会话与 Prompt', iconName: 'sparkles' },
+  { path: '/prompt', label: '会话', iconName: 'message_square' },
   { path: '/stickers', label: '表情包摘取', iconName: 'sticker' },
   { path: '/mcp', label: 'MCP服务器', iconName: 'server' },
   { path: '/skills', label: 'Skills', iconName: 'sparkles' },
@@ -290,10 +292,10 @@ function initAppShell(): void {
   // Register Routes
   router.register('/overview', '概览', mountOverviewPage);
   router.register('/connections', '连接', mountConnectionsPage);
-  router.register('/sessions', '会话与 Prompt', mountPromptPage);
+  router.register('/sessions', '会话', mountPromptPage);
   router.register('/memory', '记忆管理', mountMemoryPage);
   router.register('/dialogue', '人格设定', mountDialoguePage);
-  router.register('/prompt', '会话与 Prompt', mountPromptPage);
+  router.register('/prompt', '会话', mountPromptPage);
   router.register('/stickers', '表情包摘取', mountStickersPage);
   router.register('/chat', '直接对话', mountChatPage);
   router.register('/skills', 'Skills', mountSkillsPage);
@@ -367,6 +369,7 @@ function initAppShell(): void {
 // Start application
 document.addEventListener('DOMContentLoaded', () => {
   mountAuthenticatedResources();
+  void import('./components/image-hover-preview').then(({ mountImageHoverPreview }) => mountImageHoverPreview());
   initAppShell();
   void instanceState.restoreSelection().catch((error) => {
     console.warn('Failed to restore the selected instance:', error);

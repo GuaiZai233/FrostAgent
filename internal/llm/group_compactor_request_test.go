@@ -94,6 +94,19 @@ func TestGroupCompactor_RequestSeparatesInstructionsFromConversation(t *testing.
 					!strings.Contains(instructions, "只输出新的群聊总结正文") {
 					t.Fatalf("missing compaction instructions: %s", instructions)
 				}
+				for _, rule := range []string{
+					`role 为 "user" 时表示真实群友发言`,
+					`role 为 "assistant" 时表示真实机器人历史回复`,
+					`role 为 "assistant" 的发言仅作为对话背景`,
+					"严禁将 assistant 单方面的",
+					"升级为群友事实或群内共识，除非后续有群友明确确认",
+					"针对 assistant 的回复提出质疑、纠正、反驳或追问",
+					"应准确提炼群友的最终态度、修正意见",
+				} {
+					if !strings.Contains(instructions, rule) {
+						t.Errorf("system message missing fact attribution rule %q", rule)
+					}
+				}
 				for _, marker := range []string{"旧摘要数据标记", "消息数据标记", "图片数据标记", "{conversation}"} {
 					if strings.Contains(instructions, marker) {
 						t.Errorf("conversation data or placeholder leaked into system instructions: %q", marker)

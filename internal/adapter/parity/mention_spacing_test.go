@@ -16,9 +16,10 @@ func TestAutomaticMentionSpacing(t *testing.T) {
 	}{
 		{name: "plain", text: "正文", want: " 正文"},
 		{name: "space", text: " 正文", want: " 正文"},
-		{name: "tab", text: "\t正文", want: "\t正文"},
+		{name: "tab", text: "\t正文", want: " 正文"},
+		{name: "multiple spaces", text: "   正文", want: " 正文"},
 		{name: "newline", text: "\n正文", want: "\n正文"},
-		{name: "unicode space", text: "\u3000正文", want: "\u3000正文"},
+		{name: "unicode space", text: "\u3000正文", want: " 正文"},
 		{name: "trailing whitespace", text: "正文 \n", want: " 正文 \n"},
 	} {
 		for _, quote := range []bool{false, true} {
@@ -78,5 +79,45 @@ func TestAutomaticMentionSpacingWithExistingComponents(t *testing.T) {
 				t.Fatalf("decorated message = %+v, want last text %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestExplicitMentionSpacing(t *testing.T) {
+	for _, tc := range []struct{ name, text, want string }{
+		{"none", "正文", " 正文"},
+		{"one", " 正文", " 正文"},
+		{"many", "   正文", " 正文"},
+		{"newline", "\n正文", "\n正文"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tools.BuildOneBotMessage([]tools.Msg{
+				{Type: "mention_user", MentionUserID: "12"},
+				{Type: "plain", Text: tc.text},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got[1].Data["text"] != tc.want {
+				t.Fatalf("text = %q, want %q", got[1].Data["text"], tc.want)
+			}
+		})
+	}
+	got, err := tools.BuildOneBotMessage([]tools.Msg{{Type: "plain", Text: "  正文"}})
+	if err != nil || got[0].Data["text"] != "  正文" {
+		t.Fatalf("plain text without a preceding mention must be untouched: %+v %v", got, err)
+	}
+}
+
+func TestSeparateMentionTextEdgeCases(t *testing.T) {
+	for text, want := range map[string]string{
+		"":       "",
+		"   ":    "   ",
+		"  \n正文": "\n正文",
+		" 正文":    " 正文",
+		" 正文":    " 正文",
+	} {
+		if got := tools.SeparateMentionText(text); got != want {
+			t.Errorf("SeparateMentionText(%q) = %q, want %q", text, got, want)
+		}
 	}
 }

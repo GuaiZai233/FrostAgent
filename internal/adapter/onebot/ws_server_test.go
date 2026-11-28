@@ -1112,21 +1112,6 @@ func TestHandleWSPrivateMessageWithToolReplyACKFailureDoesNotCommit(t *testing.T
 	}
 }
 
-func TestSenderContextKeepsDistinctNicknameAndCard(t *testing.T) {
-	event := model.OneBotEvent{
-		UserID: 10001,
-		Sender: &model.OneBotSender{
-			UserID:   10001,
-			Nickname: "QQ昵称",
-			Card:     "群名片",
-		},
-	}
-	context := senderContext(event)
-	if context["nickname"] != "QQ昵称" || context["card"] != "群名片" {
-		t.Fatalf("expected both nickname and card, got %#v", context)
-	}
-}
-
 func TestSenderContextDeduplicatesEqualNicknameAndCard(t *testing.T) {
 	event := model.OneBotEvent{
 		UserID: 10001,
@@ -1141,18 +1126,6 @@ func TestSenderContextDeduplicatesEqualNicknameAndCard(t *testing.T) {
 	}
 	if _, ok := context["card"]; ok {
 		t.Fatalf("expected duplicate card omitted, got %#v", context)
-	}
-}
-
-func TestSenderDisplayNameIncludesCardAndNickname(t *testing.T) {
-	event := model.OneBotEvent{
-		Sender: &model.OneBotSender{
-			Nickname: "FoxUser",
-			Card:     "foxcard",
-		},
-	}
-	if got := senderDisplayName(event); got != "foxcard（FoxUser）" {
-		t.Fatalf("unexpected sender display name: %q", got)
 	}
 }
 

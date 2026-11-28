@@ -12,7 +12,6 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/model"
-	"github.com/GuaiZai233/FrostAgent/internal/proactive"
 	"github.com/GuaiZai233/FrostAgent/internal/tools"
 	"github.com/gorilla/websocket"
 )
@@ -42,8 +41,21 @@ func testOneBotProactiveSpecificReply(t *testing.T, maxIterations int, parts []s
 			close(firstCalled)
 		case 2:
 			prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
-			if !strings.Contains(prompt, proactive.PromptPrefix) || !strings.Contains(prompt, `"message_id":"101"`) || !strings.Contains(prompt, "earlier central topic") {
-				t.Errorf("missing searchable earlier message or proactive guidance: %s", prompt)
+			guidance, conversation, hasGuidance := strings.Cut(prompt, "</frostagent_runtime_guidance>")
+			if !hasGuidance || !strings.HasPrefix(guidance, "<frostagent_runtime_guidance>") {
+				t.Errorf("missing proactive runtime guidance: %s", prompt)
+			}
+			for _, instruction := range []string{
+				"可能不与中心事件直接相关",
+				"send_message工具的mention_specific",
+				"对应的message id并引用",
+			} {
+				if !strings.Contains(guidance, instruction) {
+					t.Errorf("proactive guidance missing specific reply instruction %q", instruction)
+				}
+			}
+			if !strings.Contains(conversation, `"message_id":"101"`) || !strings.Contains(conversation, "earlier central topic") {
+				t.Errorf("missing searchable earlier message: %s", conversation)
 			}
 			messages := []tools.Msg{{Type: "mention_specific", MessageID: "101"}}
 			for _, text := range parts {

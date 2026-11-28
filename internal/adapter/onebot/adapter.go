@@ -2,6 +2,7 @@ package onebot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -71,14 +72,48 @@ func (c *wsConnection) observeStickers(event model.OneBotEvent) {
 		return
 	}
 	messageID := strconv.FormatInt(int64(event.MessageID), 10)
-	observeStickerSources(
+	observeStickerSegments(
 		c.stealer,
 		c.generation,
 		historyKey(event),
 		messageID,
-		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
+		ParseMessageSegments(event.Message),
 		event.MessageType == "group",
 	)
+}
+
+func (c *wsConnection) resolveLocalImageSegments(segments []content.MessageSegment) []content.MessageSegment {
+	if c == nil || c.stealer == nil {
+		return segments
+	}
+	resolved := segments
+	copied := false
+	for index, segment := range segments {
+		if segment.Type != "image" && segment.Type != "mface" {
+			continue
+		}
+		if content.SegmentImageSource(segment) != "" {
+			continue
+		}
+		fileName, ok := segment.Data["file"].(string)
+		if !ok {
+			continue
+		}
+		data, found := c.stealer.ResolveLocalImage(fileName)
+		if !found {
+			continue
+		}
+		if !copied {
+			resolved = append([]content.MessageSegment(nil), segments...)
+			copied = true
+		}
+		resolved[index].Data = make(map[string]any)
+		for key, value := range segment.Data {
+			resolved[index].Data[key] = value
+		}
+		resolved[index].Data["base64"] = base64.StdEncoding.EncodeToString(data)
+	}
+	return resolved
 }
 
 func (a *Adapter) observeStickers(event model.OneBotEvent) {
@@ -98,12 +133,12 @@ func (a *Adapter) observeStickers(event model.OneBotEvent) {
 		scope = firstConn.generation
 	}
 	messageID := strconv.FormatInt(int64(event.MessageID), 10)
-	observeStickerSources(
+	observeStickerSegments(
 		a.stealer,
 		scope,
 		historyKey(event),
 		messageID,
-		stickerSourcesFromSegments(ParseMessageSegments(event.Message)),
+		ParseMessageSegments(event.Message),
 		event.MessageType == "group",
 	)
 }
@@ -702,27 +737,56 @@ func stickerSourcesFromSegments(segments []content.MessageSegment) []string {
 			(seg.Type != "image" || (!isStickerSubType(content.ImageSubType(seg.Data)) && !content.IsMarketFaceSegment(seg))) {
 			continue
 		}
-		if source := content.SegmentImageSource(seg); source != "" {
-			sources = append(sources, source)
-		}
+		sources = append(sources, content.SegmentImageSource(seg))
 	}
 	return sources
 }
 
-func observeStickerSources(
+type stickerAttachment struct {
+	source   string
+	fileName string
+}
+
+func stickerAttachmentsFromSegments(segments []content.MessageSegment) []stickerAttachment {
+	attachments := make([]stickerAttachment, 0)
+	for _, seg := range segments {
+		if seg.Type != "mface" &&
+			(seg.Type != "image" || (!isStickerSubType(content.ImageSubType(seg.Data)) && !content.IsMarketFaceSegment(seg))) {
+			continue
+		}
+		attachment := stickerAttachment{source: content.SegmentImageSource(seg)}
+		if attachment.source == "" {
+			attachment.fileName, _ = seg.Data["file"].(string)
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments
+}
+
+func observeStickerSegments(
 	stealer *sticker.Stealer,
 	scope string,
 	sessionID string,
 	messageID string,
-	sources []string,
+	segments []content.MessageSegment,
 	autoCollect bool,
 ) {
-	for index, source := range sources {
+	for index, attachment := range stickerAttachmentsFromSegments(segments) {
 		var loader sticker.ImageLoader
 		if autoCollect {
-			source := source
+			attachment := attachment
 			loader = func(ctx context.Context) ([]byte, error) {
-				return sticker.LoadImageSource(ctx, source)
+				if attachment.source != "" {
+					return sticker.LoadImageSource(ctx, attachment.source)
+				}
+				if attachment.fileName == "" {
+					return nil, fmt.Errorf("表情包没有可读取的数据")
+				}
+				data, ok := stealer.ResolveLocalImage(attachment.fileName)
+				if !ok {
+					return nil, fmt.Errorf("本地表情库中不存在 %s", attachment.fileName)
+				}
+				return data, nil
 			}
 		}
 		stealer.ObserveScoped(

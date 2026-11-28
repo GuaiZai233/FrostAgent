@@ -18,6 +18,7 @@ service BotStatusService {
   rpc GetSessionHistory(GetSessionHistoryRequest) returns (GetSessionHistoryResponse);
   rpc ListSessionTools(ListSessionToolsRequest) returns (ListSessionToolsResponse);
   rpc GetToolHistoryEntry(GetToolHistoryEntryRequest) returns (GetToolHistoryEntryResponse);
+  rpc GetSessionToolActivity(GetSessionToolActivityRequest) returns (GetSessionToolActivityResponse);
   rpc DeleteGroupSummary(DeleteGroupSummaryRequest) returns (DeleteGroupSummaryResponse);
 }
 
@@ -169,6 +170,32 @@ message GetSessionHistoryResponse {
   ArchiveCoverage coverage = 3;
 }
 
+// Lists archived tool calls for messages shown in one session timeline. Only
+// call metadata is returned; arguments and results load through
+// GetToolHistoryEntry when a card is expanded.
+message GetSessionToolActivityRequest {
+  string session_id = 1;
+  // Source message IDs of the timeline items currently displayed (at most 200).
+  repeated string source_message_ids = 2;
+}
+
+message SessionToolActivityEntry {
+  string ref_id = 1;
+  string tool = 2;
+}
+
+message SessionToolActivity {
+  string source_message_id = 1;
+  // Newest calls of the source message, oldest first (at most 10).
+  repeated SessionToolActivityEntry entries = 2;
+  // Exact number of archived calls of the source message.
+  int32 total = 3;
+}
+
+message GetSessionToolActivityResponse {
+  repeated SessionToolActivity activities = 1;
+}
+
 message GetToolHistoryEntryRequest {
   string ref_id = 1;
   string session_id = 4;
@@ -218,6 +245,8 @@ message GroupMessageInfoProto {
   string time = 6;
   // Internal tool timeline annotation, distinct from a delivered assistant reply.
   string tool_history_run_id = 7;
+  // Per image placeholder in content, a log-image key for hover previews (empty when unavailable).
+  repeated string image_hashes = 8;
 }
 
 message SessionHistoryMessageProto {
