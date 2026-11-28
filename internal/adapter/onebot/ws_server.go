@@ -88,18 +88,15 @@ var nextConnGeneration uint64
 // wsConnection is a thread-safe wrapper around a websocket.Conn
 type wsConnection struct {
 	*runtimescope.Scope
-	engine          *llm.Engine
-	llmErrorReplies *llmErrorReplyLimiter
-	conn            *websocket.Conn
-	generation      string
-	stealer         *sticker.Stealer
-	mock            bool
-	mockSessions    sync.Map
-	inFlight        sync.WaitGroup
-	closed          atomic.Bool
-	// peerMentionSpace is set once the peer identifies itself as an
-	// implementation that appends its own space after @ elements.
-	peerMentionSpace    atomic.Bool
+	engine              *llm.Engine
+	llmErrorReplies     *llmErrorReplyLimiter
+	conn                *websocket.Conn
+	generation          string
+	stealer             *sticker.Stealer
+	mock                bool
+	mockSessions        sync.Map
+	inFlight            sync.WaitGroup
+	closed              atomic.Bool
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	writeMu             sync.Mutex
@@ -123,6 +120,7 @@ type wsConnection struct {
 	inboundFileMu       sync.Mutex
 	inboundFiles        []*inboundFile
 	fileHTTPClient      *http.Client
+	peerMentionSpace    atomic.Bool // Peer appends its own space after @ elements.
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
