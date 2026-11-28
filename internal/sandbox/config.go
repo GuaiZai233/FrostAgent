@@ -24,7 +24,10 @@ type Config struct {
 	BaseURL          string
 	AuthToken        string
 	SessionNamespace string
-	ClientTimeout    time.Duration
+	// AllowNetwork lets sandbox workers reach the public internet. Private,
+	// loopback and metadata ranges stay blocked by the gateway.
+	AllowNetwork  bool
+	ClientTimeout time.Duration
 }
 
 // LoadConfig reads sandbox configuration through the supplied lookup function.
@@ -57,6 +60,7 @@ func LoadConfig(getenv func(string) string) Config {
 		BaseURL:          baseURL,
 		AuthToken:        authToken,
 		SessionNamespace: sessionNamespace,
+		AllowNetwork:     ParseBool(getenv("SANDBOX_ALLOW_NETWORK"), false),
 		ClientTimeout:    135 * time.Second, // Max execution timeout (120s) + 15s envelope
 	}
 }

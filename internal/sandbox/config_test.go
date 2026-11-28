@@ -130,3 +130,13 @@ func TestLoadConfigFromEnv(t *testing.T) {
 		t.Errorf("expected client timeout to cover max execution timeout, got %v", customCfg.ClientTimeout)
 	}
 }
+
+func TestLoadConfigAllowNetwork(t *testing.T) {
+	cases := map[string]bool{"": false, "false": false, "garbage": false, "true": true, "1": true, " ON ": true}
+	for raw, want := range cases {
+		cfg := sandbox.LoadConfigFromMap(map[string]string{"SANDBOX_ALLOW_NETWORK": raw})
+		if cfg.AllowNetwork != want {
+			t.Fatalf("SANDBOX_ALLOW_NETWORK=%q: AllowNetwork=%v, want %v", raw, cfg.AllowNetwork, want)
+		}
+	}
+}

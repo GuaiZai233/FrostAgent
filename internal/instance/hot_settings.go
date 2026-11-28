@@ -52,7 +52,7 @@ func onlyHotInstanceChanges(before, after map[string]string) bool {
 // an atomic manager. Other global keys may have constructor-time consumers.
 var hotGlobalSettings = map[string]bool{
 	"LISTEN_ADDR": true, "HTTP_ALLOWED_ORIGINS": true,
-	"WS_ALLOWED_ORIGINS": true, "SANDBOX_ENABLED": true,
+	"WS_ALLOWED_ORIGINS": true, "SANDBOX_ENABLED": true, "SANDBOX_ALLOW_NETWORK": true,
 	"SANDBOX_BASE_URL": true, "SANDBOX_AUTH_TOKEN": true,
 	"SANDBOX_SESSION_NAMESPACE": true, "SECURITY_CONTROL_MODE": true,
 	"MCP_CONTROL_TOKEN": true, "ADMIN_TOKEN": true,

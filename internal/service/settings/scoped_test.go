@@ -68,6 +68,16 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().Enabled {
 		t.Fatalf("shared sandbox disable failed: response=%v error=%v", deleteResponse, err)
 	}
+	if !update("SANDBOX_ALLOW_NETWORK", "true") || !sandboxManager.Get().AllowNetwork || g.Get("SANDBOX_ALLOW_NETWORK") != "true" {
+		t.Fatal("sandbox network switch did not apply immediately")
+	}
+	if sandboxManager.Get().Enabled {
+		t.Fatal("sandbox network switch must not enable the sandbox")
+	}
+	deleteResponse, err = svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{Key: "SANDBOX_ALLOW_NETWORK"}))
+	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().AllowNetwork {
+		t.Fatalf("sandbox network revoke failed: response=%v error=%v", deleteResponse, err)
+	}
 	if !update("ACTIONSCAT_MANAGEMENT_TOKEN", `C:\synthetic\`) || c.Get("ACTIONSCAT_MANAGEMENT_TOKEN") != `C:\synthetic\` {
 		t.Fatal("trailing backslash did not roundtrip")
 	}

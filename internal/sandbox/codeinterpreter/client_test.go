@@ -682,6 +682,10 @@ func TestExec_Gateway422_RedactsSentinelSecretInInputField(t *testing.T) {
 	secretCommand := "curl -H 'Authorization: Bearer " + sentinelSecret + "' https://api.internal/data"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sessions" {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{

@@ -57,6 +57,21 @@ func (m *ConfigManager) RefreshEnabled(load func() bool) {
 	m.current.Enabled = load()
 }
 
+// RefreshAllowNetwork updates AllowNetwork from an authoritative source while
+// holding the manager lock.
+func (m *ConfigManager) RefreshAllowNetwork(load func() bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current.AllowNetwork = load()
+}
+
+// SetAllowNetwork updates only the AllowNetwork flag.
+func (m *ConfigManager) SetAllowNetwork(allow bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current.AllowNetwork = allow
+}
+
 // DynamicBackend implements Backend with runtime-configurable sandbox support.
 // Configuration is re-read on each operation, allowing the sandbox to be
 // enabled or disabled via environment variables without restarting the process.

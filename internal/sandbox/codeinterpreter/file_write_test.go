@@ -43,6 +43,10 @@ func TestWriteFileMaximumWithRemoteLatency(t *testing.T) {
 	committed := false
 	var active, peak atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sessions" {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
 		n := active.Add(1)
 		defer active.Add(-1)
 		for old := peak.Load(); n > old && !peak.CompareAndSwap(old, n); old = peak.Load() {

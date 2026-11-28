@@ -377,3 +377,32 @@ func TestLoadConfigFromMap(t *testing.T) {
 		t.Errorf("got SessionNamespace %s, want corp-ns", cfg.SessionNamespace)
 	}
 }
+
+func TestConfigManagerAllowNetworkIsIndependentOfEnabled(t *testing.T) {
+	m := NewConfigManager(Config{Enabled: true})
+	m.SetAllowNetwork(true)
+	if cfg := m.Get(); !cfg.AllowNetwork || !cfg.Enabled {
+		t.Fatalf("SetAllowNetwork must only change AllowNetwork: %+v", cfg)
+	}
+	m.RefreshAllowNetwork(func() bool { return false })
+	m.SetEnabled(false)
+	if cfg := m.Get(); cfg.AllowNetwork || cfg.Enabled {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestDynamicBackendRebuildsClientWhenAllowNetworkChanges(t *testing.T) {
+	m := NewConfigManager(Config{Enabled: true, BaseURL: "http://127.0.0.1:1", AuthToken: "t", SessionNamespace: "ns"})
+	var built []bool
+	d := NewDynamicBackend(m.Get, func(c Config) Backend {
+		built = append(built, c.AllowNetwork)
+		return &stubBackend{}
+	})
+	_ = d.Health(context.Background())
+	m.SetAllowNetwork(true)
+	_ = d.Health(context.Background())
+	_ = d.Health(context.Background())
+	if len(built) != 2 || built[0] || !built[1] {
+		t.Fatalf("backend must be rebuilt exactly once per AllowNetwork change, got %v", built)
+	}
+}

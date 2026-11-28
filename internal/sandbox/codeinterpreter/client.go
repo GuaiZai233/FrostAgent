@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,9 +45,15 @@ type Client struct {
 	baseURL          string
 	authToken        string
 	sessionNamespace string
+	allowNetwork     bool
 	httpClient       *http.Client
 	projectNamespace [16]byte
 	logger           *logs.Store
+
+	// ensured records the network mode each session was last provisioned with
+	// by this client, so the gateway is only asked once per session and mode.
+	ensuredMu sync.Mutex
+	ensured   map[string]string
 }
 
 // Option configures a Client.
@@ -81,6 +88,8 @@ func New(cfg sandbox.Config, opts ...Option) *Client {
 		baseURL:          baseURL,
 		authToken:        cfg.AuthToken,
 		sessionNamespace: cfg.SessionNamespace,
+		allowNetwork:     cfg.AllowNetwork,
+		ensured:          make(map[string]string),
 		httpClient: &http.Client{
 			Timeout: cfg.ClientTimeout,
 		},
@@ -154,6 +163,7 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 
 	userUUID := c.SessionIDToUUID(sessionID)
+	c.forgetEnsured(userUUID)
 	releaseURL, err := url.Parse(c.baseURL + "/api/v1/release")
 	if err != nil {
 		return fmt.Errorf("invalid release URL: %w", err)
@@ -191,6 +201,78 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 
 	return fmt.Errorf("sandbox gateway release returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
+}
+
+const (
+	networkModePublic   = "public"
+	networkModeIsolated = "isolated"
+)
+
+type gatewaySessionRequest struct {
+	UserUUID string `json:"user_uuid"`
+	Profile  string `json:"profile"`
+	Network  string `json:"network"`
+}
+
+func (c *Client) desiredNetworkMode() string {
+	if c.allowNetwork {
+		return networkModePublic
+	}
+	return networkModeIsolated
+}
+
+func (c *Client) forgetEnsured(userUUID string) {
+	c.ensuredMu.Lock()
+	delete(c.ensured, userUUID)
+	c.ensuredMu.Unlock()
+}
+
+// ensureSession binds the session to a worker with the configured network mode.
+// The gateway chooses the worker firewall from the mode given when the session is
+// created, so the mode must be requested explicitly: an implicit session created
+// by the first exec is always isolated, and a worker created while networking was
+// allowed would otherwise keep its access after the setting is turned off. The
+// gateway reuses a worker whose policy already matches and recreates it otherwise.
+func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
+	mode := c.desiredNetworkMode()
+	c.ensuredMu.Lock()
+	done := c.ensured[userUUID] == mode
+	c.ensuredMu.Unlock()
+	if done {
+		return nil
+	}
+
+	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: "minimal", Network: mode})
+	if err != nil {
+		return fmt.Errorf("failed to marshal session payload: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/sessions", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to build session request: %w", err)
+	}
+	httpReq.Header.Set("X-Auth-Token", c.authToken)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("sandbox session request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		// Gateways without the sessions endpoint can only run isolated workers, which
+		// is exactly what an implicit session provides.
+		if mode == networkModeIsolated && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+			return nil
+		}
+		return fmt.Errorf("sandbox gateway session setup (network=%s) returned HTTP %d: %s", mode, resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+
+	c.ensuredMu.Lock()
+	c.ensured[userUUID] = mode
+	c.ensuredMu.Unlock()
+	return nil
 }
 
 type gatewayExecRequest struct {
@@ -240,6 +322,9 @@ func (c *Client) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.Exe
 	}
 
 	userUUID := c.SessionIDToUUID(req.SessionID)
+	if err := c.ensureSession(ctx, userUUID); err != nil {
+		return sandbox.ExecResult{}, err
+	}
 	execURL, err := url.Parse(c.baseURL + "/api/v1/shell/exec")
 	if err != nil {
 		return sandbox.ExecResult{}, fmt.Errorf("invalid exec URL: %w", err)
