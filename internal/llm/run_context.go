@@ -54,7 +54,11 @@ type RunContext struct {
 	// LoadObservedImage resolves a trusted image attachment from a message that
 	// the adapter observed in the current session. The adapter enforces message
 	// ownership; the model only supplies an opaque message ID and image index.
-	LoadObservedImage    func(context.Context, string, int) ([]byte, error)
+	LoadObservedImage func(context.Context, string, int) ([]byte, error)
+	// ImportReceivedFile imports one attachment listed in the current prompt
+	// into the session sandbox. The adapter re-checks authorization and owns the
+	// per-turn import budget; the model only supplies the opaque file reference.
+	ImportReceivedFile   func(context.Context, string) ReceivedFileImport
 	ImageInspectionQuota *atomic.Int32 // Per-request image inspection budget shared by tool calls.
 	ObservationScope     string        // Connection-scoped generation/identity to prevent cross-connection stale message handle lookups
 	Billing              *BillingRunState
@@ -111,6 +115,18 @@ func TempChatQuotedGuidance(m logs.TempChatMark) string {
 		text += "此次临时对话(" + strings.Join(disabled, "、") + ")"
 	}
 	return text
+}
+
+// ReceivedFileImport reports the outcome of one on-demand attachment import.
+// It never carries file bytes or platform download credentials.
+type ReceivedFileImport struct {
+	Ref       string `json:"ref"`
+	MessageID string `json:"message_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Size      int64  `json:"size,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
 }
 
 type PromptRefresh struct {

@@ -234,6 +234,10 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		commandTool := tools.ExecuteCommandTool(dynamicSandbox)
 		registry[commandTool.Name()] = commandTool
 	}
+	// Always registered: the adapter reports a disabled or unhealthy sandbox
+	// for each import instead of the model seeing an unknown tool.
+	importFileTool := tools.ImportReceivedFileTool()
+	registry[importFileTool.Name()] = importFileTool
 
 	// Initialize ActionsCat client & tools
 	actionsCatClient := actionscat.New(scope.Getenv)

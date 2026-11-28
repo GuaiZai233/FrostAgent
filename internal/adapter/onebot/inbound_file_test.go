@@ -42,12 +42,17 @@ type inboundMemoryBackend struct {
 	files  map[string][]byte
 	stages map[string][]byte
 	calls  int
+	health error
 }
 
 func newInboundBackend() *inboundMemoryBackend {
 	return &inboundMemoryBackend{files: map[string][]byte{}, stages: map[string][]byte{}}
 }
-func (*inboundMemoryBackend) Health(context.Context) error          { return nil }
+func (b *inboundMemoryBackend) Health(context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.health
+}
 func (*inboundMemoryBackend) Release(context.Context, string) error { return nil }
 func (b *inboundMemoryBackend) Exec(ctx context.Context, req sandbox.ExecRequest) (sandbox.ExecResult, error) {
 	if err := ctx.Err(); err != nil {
@@ -167,7 +172,41 @@ func parseReceivedFiles(t *testing.T, prompt string) []inboundFileInfo {
 	if strings.Contains(prompt, "fixture-private-token") || strings.Contains(prompt, "fixture-file-id") || strings.Contains(prompt, "base64://") {
 		t.Fatal("credentials leaked into attachment prompt")
 	}
+	for _, info := range infos {
+		if info.Status != "available" || info.Path != "" || !strings.HasPrefix(info.Ref, "file_") {
+			t.Fatalf("listing must be metadata only: %+v", info)
+		}
+	}
 	return infos
+}
+
+// listTurn builds the per-turn attachment state and returns its listing.
+func listTurn(t *testing.T, c *wsConnection, event model.OneBotEvent, session *llm.SessionContext, quotes ...*resolvedReplyContext) (*inboundFileTurn, []inboundFileInfo) {
+	t.Helper()
+	turn := c.inboundFileTurn(event, session, quotes)
+	prompt := turn.prompt()
+	if prompt == "" {
+		return turn, nil
+	}
+	return turn, parseReceivedFiles(t, prompt)
+}
+
+func TestInboundFilesListedWithoutDownload(t *testing.T) {
+	c, b, count := fileTestConnection(t, []byte("fixture"))
+	event := fileEvent(101, 11, "notes.docx", 7)
+	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
+	c.rememberInboundFiles(event)
+	_, infos := listTurn(t, c, event, session)
+	if len(infos) != 1 || infos[0].Name != "notes.docx" || infos[0].MessageID != "101" || infos[0].Size != 7 {
+		t.Fatalf("listing: %+v", infos)
+	}
+	_, again := listTurn(t, c, event, session)
+	if again[0].Ref != infos[0].Ref {
+		t.Fatal("attachment reference is not stable across turns")
+	}
+	if count.Load() != 0 || b.calls != 0 {
+		t.Fatalf("listing downloaded=%d sandbox calls=%d", count.Load(), b.calls)
+	}
 }
 
 func TestInboundFilesReuseIsolationAndExpiry(t *testing.T) {
@@ -175,16 +214,22 @@ func TestInboundFilesReuseIsolationAndExpiry(t *testing.T) {
 	c, b, count := fileTestConnection(t, data)
 	event := fileEvent(101, 11, "../复习题.docx", int64(len(data)))
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
-	turn := session.ReserveSequenceTurn("sender:11", true, false)
-	turn.Done()
+	seq := session.ReserveSequenceTurn("sender:11", true, false)
+	seq.Done()
 	c.rememberInboundFiles(event)
+	var ref string
 	for pass := 0; pass < 2; pass++ {
-		infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), event, session, nil))
-		if len(infos) != 1 || infos[0].Status != "ready" || infos[0].Name != "复习题.docx" || !strings.HasPrefix(infos[0].Path, "/sandbox/received/") {
-			t.Fatalf("import: %+v", infos)
+		turn, infos := listTurn(t, c, event, session)
+		if len(infos) != 1 || infos[0].Name != "复习题.docx" {
+			t.Fatalf("listing: %+v", infos)
+		}
+		ref = infos[0].Ref
+		result := turn.importFile(context.Background(), ref)
+		if result.Status != "ready" || result.Ref != ref || result.Size != int64(len(data)) || !strings.HasPrefix(result.Path, "/sandbox/received/") {
+			t.Fatalf("import: %+v", result)
 		}
 		b.mu.Lock()
-		got := b.files[c.historyKey(event)+":"+infos[0].Path]
+		got := b.files[c.historyKey(event)+":"+result.Path]
 		b.mu.Unlock()
 		if !bytes.Equal(got, data) {
 			t.Fatal("attachment bytes were not preserved")
@@ -196,31 +241,60 @@ func TestInboundFilesReuseIsolationAndExpiry(t *testing.T) {
 	b.mu.Lock()
 	b.files = map[string][]byte{}
 	b.mu.Unlock()
-	infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), event, session, nil))
-	if infos[0].Status != "ready" || count.Load() != 2 {
+	turn, _ := listTurn(t, c, event, session)
+	if result := turn.importFile(context.Background(), ref); result.Status != "ready" || count.Load() != 2 {
 		t.Fatal("sandbox expiry did not reimport attachment")
 	}
 	other := event
 	other.UserID = 12
 	otherSession := c.engine.SessionManager.GetOrCreate(c.historyKey(other))
-	if got := c.prepareInboundFiles(context.Background(), other, otherSession, nil); got != "" {
+	if otherTurn, infos := listTurn(t, c, other, otherSession); infos != nil || otherTurn.importFile(context.Background(), ref).Status == "ready" {
 		t.Fatal("file crossed private sessions")
 	}
 	foreign := &resolvedReplyContext{MessageID: "101", SessionID: c.historyKey(event), Segments: ParseMessageSegments(event.Message)}
-	if got := c.prepareInboundFiles(context.Background(), other, otherSession, []*resolvedReplyContext{foreign}); got != "" {
+	if foreignTurn, infos := listTurn(t, c, other, otherSession, foreign); infos != nil || foreignTurn.importFile(context.Background(), ref).Status == "ready" {
 		t.Fatal("foreign quote imported")
 	}
 	if err := session.ResetSession(nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.prepareInboundFiles(context.Background(), event, session, nil); got != "" {
+	if result := turn.importFile(context.Background(), ref); result.Status == "ready" || result.Path != "" {
+		t.Fatal("file imported after session reset within the same turn")
+	}
+	if _, infos := listTurn(t, c, event, session); infos != nil {
 		t.Fatal("file survived session reset")
 	}
 	fresh := newWSConnection(nil)
 	fresh.engine = c.engine
 	defer fresh.cancel()
-	if got := fresh.prepareInboundFiles(context.Background(), event, session, nil); got != "" {
+	if freshTurn, infos := listTurn(t, fresh, event, session); infos != nil || freshTurn.importFile(context.Background(), ref).Status == "ready" {
 		t.Fatal("file crossed connections")
+	}
+	if count.Load() != 2 {
+		t.Fatalf("rejected imports downloaded: %d", count.Load())
+	}
+}
+
+func TestInboundFileImportRejectsExpiredAndUnknownRefs(t *testing.T) {
+	c, _, count := fileTestConnection(t, []byte("fixture"))
+	event := fileEvent(101, 11, "old.docx", 7)
+	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
+	c.rememberInboundFiles(event)
+	turn, infos := listTurn(t, c, event, session)
+	if result := turn.importFile(context.Background(), "file_000000000000"); result.Status != "unavailable" || result.Error == "" {
+		t.Fatalf("unknown ref: %+v", result)
+	}
+	c.inboundFileMu.Lock()
+	c.inboundFiles[0].seen = time.Now().Add(-2 * inboundFileLifetime)
+	c.inboundFileMu.Unlock()
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "unavailable" || result.Path != "" {
+		t.Fatalf("expired attachment imported: %+v", result)
+	}
+	if _, listed := listTurn(t, c, event, session); listed != nil {
+		t.Fatal("expired attachment listed")
+	}
+	if count.Load() != 0 {
+		t.Fatal("rejected import downloaded a file")
 	}
 }
 
@@ -231,15 +305,52 @@ func TestInboundFilesQuoteAndSameName(t *testing.T) {
 	c.rememberInboundFiles(event)
 	second := fileEvent(102, 11, "same.docx", 7)
 	c.rememberInboundFiles(second)
-	infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), second, session, nil))
-	if len(infos) != 2 || infos[0].Path == infos[1].Path {
+	turn, infos := listTurn(t, c, second, session)
+	if len(infos) != 2 || infos[0].Ref == infos[1].Ref {
+		t.Fatalf("same filenames share a reference: %+v", infos)
+	}
+	first, next := turn.importFile(context.Background(), infos[0].Ref), turn.importFile(context.Background(), infos[1].Ref)
+	if first.Status != "ready" || next.Status != "ready" || first.Path == next.Path {
 		t.Fatal("same filenames overwrote each other")
 	}
 	quoted := fileEvent(103, 11, "quoted.docx", 7)
 	quote := &resolvedReplyContext{MessageID: "103", SessionID: historyKey(event), Segments: ParseMessageSegments(quoted.Message)}
-	infos = parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), event, session, []*resolvedReplyContext{quote}))
-	if infos[0].Name != "quoted.docx" || infos[0].Status != "ready" || count.Load() != 3 {
-		t.Fatalf("quote import: %+v count=%d", infos, count.Load())
+	turn, infos = listTurn(t, c, event, session, quote)
+	if infos[0].Name != "quoted.docx" || count.Load() != 2 {
+		t.Fatalf("quote listing: %+v count=%d", infos, count.Load())
+	}
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "ready" || count.Load() != 3 {
+		t.Fatalf("quote import: %+v count=%d", result, count.Load())
+	}
+}
+
+func TestInboundFileImportBudgetAcrossCalls(t *testing.T) {
+	c, _, count := fileTestConnection(t, []byte("fixture"))
+	event := fileEvent(101, 11, "a.docx", 7)
+	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
+	c.rememberInboundFiles(event)
+	c.rememberInboundFiles(fileEvent(102, 11, "b.docx", 7))
+	turn, infos := listTurn(t, c, event, session)
+	if len(infos) != 2 {
+		t.Fatalf("listing: %+v", infos)
+	}
+	turn.remaining = 10
+	a, b := infos[0], infos[1]
+	if result := turn.importFile(context.Background(), a.Ref); result.Status != "ready" {
+		t.Fatalf("first import: %+v", result)
+	}
+	if result := turn.importFile(context.Background(), a.Ref); result.Status != "ready" || turn.remaining != 3 {
+		t.Fatalf("repeated import charged twice: %+v remaining=%d", result, turn.remaining)
+	}
+	if result := turn.importFile(context.Background(), b.Ref); result.Status != "unavailable" || !strings.Contains(result.Error, "额度") {
+		t.Fatalf("budget not shared across calls: %+v", result)
+	}
+	if count.Load() != 1 {
+		t.Fatalf("downloads=%d", count.Load())
+	}
+	nextTurn, _ := listTurn(t, c, event, session)
+	if result := nextTurn.importFile(context.Background(), b.Ref); result.Status != "ready" {
+		t.Fatalf("budget leaked into the next turn: %+v", result)
 	}
 }
 
@@ -248,28 +359,46 @@ func TestInboundFileLimitsCancellationAndDisabled(t *testing.T) {
 	event := fileEvent(101, 11, "file.docx", sandbox.MaxFileBytes+1)
 	c.rememberInboundFiles(event)
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
-	info := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), event, session, nil))[0]
-	if info.Status != "unavailable" || count.Load() != 0 || b.calls != 0 {
+	turn, infos := listTurn(t, c, event, session)
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "unavailable" || count.Load() != 0 || b.calls != 0 {
 		t.Fatal("oversize file was downloaded or imported")
 	}
 	event = fileEvent(102, 11, "file.docx", 7)
 	c.rememberInboundFiles(event)
+	turn, infos = listTurn(t, c, event, session)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	info = parseReceivedFiles(t, c.prepareInboundFiles(ctx, event, session, nil))[0]
-	if info.Status != "unavailable" || count.Load() != 0 {
+	if result := turn.importFile(ctx, infos[0].Ref); result.Status != "unavailable" || count.Load() != 0 {
 		t.Fatal("canceled import performed a download")
 	}
+	b.mu.Lock()
+	b.health = errors.New("synthetic sandbox outage")
+	b.mu.Unlock()
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "unavailable" || !strings.Contains(result.Error, "暂不可用") || count.Load() != 0 {
+		t.Fatalf("unhealthy sandbox: %+v", result)
+	}
+	b.mu.Lock()
+	b.health = sandbox.ErrSandboxDisabled
+	b.mu.Unlock()
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "unavailable" || !strings.Contains(result.Error, "禁用") || count.Load() != 0 {
+		t.Fatalf("disabled sandbox: %+v", result)
+	}
 	c.engine.SandboxBackend = nil
-	info = parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), event, session, nil))[0]
-	if info.Status != "unavailable" || !strings.Contains(info.Error, "禁用") || count.Load() != 0 {
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "unavailable" || !strings.Contains(result.Error, "禁用") || count.Load() != 0 {
 		t.Fatal("disabled sandbox downloaded a file")
+	}
+	c.engine.SandboxBackend = (*sandbox.DynamicBackend)(nil)
+	if result := turn.importFile(context.Background(), infos[0].Ref); !strings.Contains(result.Error, "禁用") {
+		t.Fatalf("typed nil sandbox: %+v", result)
 	}
 	for i := 0; i < maxInboundFileRecords+5; i++ {
 		c.rememberInboundFiles(fileEvent(int32(1000+i), 11, "file.docx", 7))
 	}
 	if len(c.inboundFiles) > maxInboundFileRecords {
 		t.Fatal("attachment cache is unbounded")
+	}
+	if _, infos := listTurn(t, c, event, session); len(infos) != maxInboundTurnFiles {
+		t.Fatalf("listing not bounded: %d", len(infos))
 	}
 	c.inboundFiles[0].seen = time.Now().Add(-2 * inboundFileLifetime)
 	c.rememberInboundFiles(fileEvent(9999, 11, "new.docx", 7))
@@ -287,17 +416,24 @@ func TestInboundGroupQuoteCanReuseAnotherSendersObservedFile(t *testing.T) {
 	event.GroupID = 22
 	c.rememberInboundFiles(event)
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
-	_ = c.prepareInboundFiles(context.Background(), event, session, nil)
+	turn, infos := listTurn(t, c, event, session)
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "ready" {
+		t.Fatalf("sender import: %+v", result)
+	}
 	question := event
 	question.UserID = 12
 	question.MessageID = 102
-	if got := c.prepareInboundFiles(context.Background(), question, session, nil); got != "" {
+	otherTurn, listed := listTurn(t, c, question, session)
+	if listed != nil || otherTurn.importFile(context.Background(), infos[0].Ref).Status == "ready" {
 		t.Fatal("unquoted file selected for another sender")
 	}
 	quote := &resolvedReplyContext{MessageID: "101", SessionID: historyKey(event), Segments: ParseMessageSegments(event.Message)}
-	infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), question, session, []*resolvedReplyContext{quote}))
-	if len(infos) != 1 || infos[0].Status != "ready" || count.Load() != 1 {
-		t.Fatalf("same-group quote did not reuse file: %+v", infos)
+	quotedTurn, listed := listTurn(t, c, question, session, quote)
+	if len(listed) != 1 || listed[0].Ref != infos[0].Ref {
+		t.Fatalf("quoted listing: %+v", listed)
+	}
+	if result := quotedTurn.importFile(context.Background(), infos[0].Ref); result.Status != "ready" || count.Load() != 1 {
+		t.Fatalf("same-group quote did not reuse file: %+v", result)
 	}
 }
 
@@ -348,17 +484,64 @@ func TestInboundUploadNoticesStayInSourceConversation(t *testing.T) {
 				question.GroupID = 22
 			}
 			session := c.engine.SessionManager.GetOrCreate(c.historyKey(question))
-			infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), question, session, nil))
-			if len(infos) != 1 || infos[0].Status != "ready" || infos[0].MessageID != "" {
+			turn, infos := listTurn(t, c, question, session)
+			if len(infos) != 1 || infos[0].MessageID != "" || count.Load() != 0 {
 				t.Fatalf("notice attachment: %+v", infos)
+			}
+			if result := turn.importFile(context.Background(), infos[0].Ref); result.Status != "ready" || result.MessageID != "" {
+				t.Fatalf("notice import: %+v", result)
 			}
 			other := question
 			other.UserID = 12
-			if got := c.prepareInboundFiles(context.Background(), other, session, nil); got != "" {
+			if otherTurn, listed := listTurn(t, c, other, session); listed != nil || otherTurn.importFile(context.Background(), infos[0].Ref).Status == "ready" {
 				t.Fatal("unquoted notice leaked to a different sender")
 			}
 		})
 	}
+}
+
+// fileToolProvider imports the first listed attachment through the registered
+// tool. next may choose the follow-up response for the import result; otherwise
+// the model answers once the tool returns.
+func fileToolProvider(t *testing.T, onList func([]inboundFileInfo), next func(llm.ReceivedFileImport) *core.ChatResponse) *mockLLMProvider {
+	reply := func(text string) *core.ChatResponse {
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: text}}
+	}
+	return &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		last := req.Messages[len(req.Messages)-1]
+		text, _ := last.Content.(string)
+		if last.Role != core.RoleTool {
+			var infos []inboundFileInfo
+			if strings.Contains(text, "<received_files>") {
+				infos = parseReceivedFiles(t, text)
+			}
+			if onList != nil {
+				onList(infos)
+			}
+			if len(infos) == 0 {
+				return reply("没有可用附件。"), nil
+			}
+			arguments, _ := json.Marshal(map[string]string{"ref": infos[0].Ref})
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "import", Type: "function", Function: core.ToolCallFunction{Name: tools.ImportReceivedFileToolName, Arguments: string(arguments)}}}}}, nil
+		}
+		if i := strings.Index(text, `{"ref"`); i >= 0 && next != nil {
+			var result llm.ReceivedFileImport
+			if err := json.NewDecoder(strings.NewReader(text[i:])).Decode(&result); err == nil {
+				if response := next(result); response != nil {
+					return response, nil
+				}
+			}
+		}
+		return reply("文件已读取。"), nil
+	}}
+}
+
+func newFileToolEngine(provider core.LLMProvider, backend sandbox.Backend) *llm.Engine {
+	engine := newTestEngine(provider)
+	engine.MaxIterations = 5
+	engine.SandboxBackend = backend
+	engine.ToolRegistry[tools.ImportReceivedFileToolName] = tools.ImportReceivedFileTool()
+	return engine
 }
 
 func TestInboundMissingURLResolvesGateway(t *testing.T) {
@@ -366,16 +549,13 @@ func TestInboundMissingURLResolvesGateway(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			backend := newInboundBackend()
 			var count atomic.Int32
-			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-				prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
-				infos := parseReceivedFiles(t, prompt)
-				if len(infos) != 1 || infos[0].Status != "ready" {
-					t.Errorf("file URL resolution failed: %+v", infos)
+			provider := fileToolProvider(t, nil, func(result llm.ReceivedFileImport) *core.ChatResponse {
+				if result.Status != "ready" {
+					t.Errorf("file URL resolution failed: %+v", result)
 				}
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "文件已读取。"}}, nil
-			}}
-			engine := newTestEngine(provider)
-			engine.SandboxBackend = backend
+				return nil
+			})
+			engine := newFileToolEngine(provider, backend)
 			server, address := startInboundServer(t, engine, inboundFixtureClient([]byte("fixture"), &count))
 			defer server.Close()
 			ws, _, err := websocket.DefaultDialer.Dial(address, nil)
@@ -458,23 +638,22 @@ func TestInboundFilePassiveGroupThenMention(t *testing.T) {
 			t.Setenv("PROACTIVE_REPLY_PROBABILITY", "0")
 			data := fixtureDOCX(t)
 			var downloads, calls, inspected atomic.Int32
-			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+			provider := fileToolProvider(t, func(infos []inboundFileInfo) {
 				calls.Add(1)
-				prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
 				if blocked {
-					if strings.Contains(prompt, "<received_files>") {
+					if infos != nil {
 						t.Error("security-rejected file was registered")
 					}
-				} else {
-					infos := parseReceivedFiles(t, prompt)
-					if len(infos) != 1 || infos[0].Status != "ready" || infos[0].MessageID != "101" {
-						t.Errorf("passive group file unavailable: %+v", infos)
-					}
+				} else if len(infos) != 1 || infos[0].MessageID != "101" {
+					t.Errorf("passive group file unavailable: %+v", infos)
 				}
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "fixture reply"}}, nil
-			}}
-			engine := newTestEngine(provider)
-			engine.SandboxBackend = newInboundBackend()
+			}, func(result llm.ReceivedFileImport) *core.ChatResponse {
+				if result.Status != "ready" || result.MessageID != "101" {
+					t.Errorf("passive group file import failed: %+v", result)
+				}
+				return nil
+			})
+			engine := newFileToolEngine(provider, newInboundBackend())
 			engine.Security = security.NewController(t.TempDir())
 			engine.Security.SetMode(security.ControlModeAggressive)
 			engine.Security.SetClassifier(&mockClassifier{fn: func(_ context.Context, input security.ClassificationInput) (security.ClassificationResult, error) {
@@ -543,26 +722,29 @@ func TestInboundFileThenImmediateQuestionThroughTools(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, ContentLength: int64(len(data)), Body: io.NopCloser(bytes.NewReader(data)), Header: make(http.Header), Request: r}, nil
 	})}
-	calls := 0
-	provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-		calls++
-		if calls == 1 {
-			prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
-			infos := parseReceivedFiles(t, prompt)
-			if len(infos) != 1 || infos[0].Status != "ready" {
-				t.Fatalf("file missing after injection: %+v", infos)
-			}
-			arguments, _ := json.Marshal(map[string]string{"command": "read-docx " + infos[0].Path})
-			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "read", Type: "function", Function: core.ToolCallFunction{Name: "execute_command", Arguments: string(arguments)}}}}}, nil
+	var lists, reads atomic.Int32
+	provider := fileToolProvider(t, func(infos []inboundFileInfo) {
+		lists.Add(1)
+		if len(infos) != 1 || infos[0].Name != "复习题1.docx" {
+			t.Errorf("file missing after cancellation: %+v", infos)
 		}
-		result, _ := req.Messages[len(req.Messages)-1].Content.(string)
-		if !strings.Contains(result, "第一题") {
-			t.Errorf("document contents unavailable: %s", result)
+	}, func(result llm.ReceivedFileImport) *core.ChatResponse {
+		if result.Status != "ready" {
+			return nil
 		}
-		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "第一题答案为 5。"}}, nil
-	}}
-	engine := newTestEngine(provider)
-	engine.SandboxBackend = backend
+		arguments, _ := json.Marshal(map[string]string{"command": "read-docx " + result.Path})
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "read", Type: "function", Function: core.ToolCallFunction{Name: "execute_command", Arguments: string(arguments)}}}}}
+	})
+	listAndImport := provider.customChat
+	provider.customChat = func(ctx context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		last := req.Messages[len(req.Messages)-1]
+		if text, _ := last.Content.(string); last.Role == core.RoleTool && strings.Contains(text, "第一题") {
+			reads.Add(1)
+			return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "第一题答案为 5。"}}, nil
+		}
+		return listAndImport(ctx, req)
+	}
+	engine := newFileToolEngine(provider, backend)
 	engine.ToolRegistry["execute_command"] = tools.ExecuteCommandTool(backend)
 	server, address := startInboundServer(t, engine, client)
 	defer server.Close()
@@ -595,8 +777,8 @@ func TestInboundFileThenImmediateQuestionThroughTools(t *testing.T) {
 		t.Fatalf("unexpected response: %s %s", action.Action, serialized)
 	}
 	_ = ws.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 103}})
-	if calls != 2 || count.Load() != 2 {
-		t.Fatalf("model calls=%d downloads=%d", calls, count.Load())
+	if lists.Load() != 2 || reads.Load() != 1 || count.Load() != 2 {
+		t.Fatalf("listings=%d reads=%d downloads=%d", lists.Load(), reads.Load(), count.Load())
 	}
 }
 
@@ -606,16 +788,17 @@ func TestInboundQuotedFileViaGetMsg(t *testing.T) {
 			data := fixtureDOCX(t)
 			backend := newInboundBackend()
 			var count atomic.Int32
-			provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
-				prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
-				infos := parseReceivedFiles(t, prompt)
-				if len(infos) != 1 || infos[0].Status != "ready" || infos[0].MessageID != "101" {
-					t.Errorf("quoted file not imported: %+v", infos)
+			provider := fileToolProvider(t, func(infos []inboundFileInfo) {
+				if len(infos) != 1 || infos[0].MessageID != "101" {
+					t.Errorf("quoted file not listed: %+v", infos)
 				}
-				return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "附件可读取。"}}, nil
-			}}
-			engine := newTestEngine(provider)
-			engine.SandboxBackend = backend
+			}, func(result llm.ReceivedFileImport) *core.ChatResponse {
+				if result.Status != "ready" || result.MessageID != "101" || result.Name != "quoted.docx" {
+					t.Errorf("quoted file not imported: %+v", result)
+				}
+				return nil
+			})
+			engine := newFileToolEngine(provider, backend)
 			server, address := startInboundServer(t, engine, inboundFixtureClient(data, &count))
 			defer server.Close()
 			ws, _, err := websocket.DefaultDialer.Dial(address, nil)
@@ -664,4 +847,127 @@ func TestInboundQuotedFileViaGetMsg(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInboundFileNotDownloadedWithoutToolCall(t *testing.T) {
+	var downloads, listed atomic.Int32
+	provider := &mockLLMProvider{customChat: func(_ context.Context, req core.ChatRequest) (*core.ChatResponse, error) {
+		prompt, _ := req.Messages[len(req.Messages)-1].Content.(string)
+		if infos := parseReceivedFiles(t, prompt); len(infos) == 1 {
+			listed.Add(1)
+		}
+		return &core.ChatResponse{Message: core.ChatMessage{Role: core.RoleAssistant, Content: "收到文件。"}}, nil
+	}}
+	backend := newInboundBackend()
+	engine := newFileToolEngine(provider, backend)
+	server, address := startInboundServer(t, engine, inboundFixtureClient([]byte("fixture"), &downloads))
+	defer server.Close()
+	ws, _, err := websocket.DefaultDialer.Dial(address, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	if err := ws.WriteJSON(fileEvent(101, 11, "unread.docx", 7)); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var action model.OneBotAction
+	if err := ws.ReadJSON(&action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Action != "send_private_msg" {
+		t.Fatalf("unexpected action before reply: %s", action.Action)
+	}
+	_ = ws.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 102}})
+	backend.mu.Lock()
+	calls := backend.calls
+	backend.mu.Unlock()
+	if listed.Load() != 1 || downloads.Load() != 0 || calls != 0 {
+		t.Fatalf("listed=%d downloads=%d sandbox calls=%d", listed.Load(), downloads.Load(), calls)
+	}
+}
+
+// A quoted attachment that is not cached yet must be registered under the
+// quoted message's sender, never under the user who quoted it.
+func TestInboundQuotedUncachedFileKeepsRealSender(t *testing.T) {
+	groupEvent := func(mid int32, sender int64) model.OneBotEvent {
+		event := fileEvent(mid, sender, "a.docx", 7)
+		event.MessageType, event.GroupID = "group", 22
+		return event
+	}
+	t.Run("known sender", func(t *testing.T) {
+		c, _, count := fileTestConnection(t, []byte("fixture"))
+		original := groupEvent(101, 11)
+		question := groupEvent(102, 12)
+		question.Message = json.RawMessage(`[{"type":"text","data":{"text":"read the quoted file"}}]`)
+		session := c.engine.SessionManager.GetOrCreate(c.historyKey(question))
+		quote := &resolvedReplyContext{MessageID: "101", SessionID: historyKey(question), SenderID: 11, Segments: ParseMessageSegments(original.Message)}
+		turn, infos := listTurn(t, c, question, session, quote)
+		if len(infos) != 1 || infos[0].MessageID != "101" {
+			t.Fatalf("quoted listing: %+v", infos)
+		}
+		ref := infos[0].Ref
+		if result := turn.importFile(context.Background(), ref); result.Status != "ready" {
+			t.Fatalf("quoted import: %+v", result)
+		}
+		later := question
+		later.MessageID = 103
+		laterTurn, listed := listTurn(t, c, later, session)
+		if listed != nil || laterTurn.importFile(context.Background(), ref).Status == "ready" {
+			t.Fatal("quoting user gained sender access to another user's file")
+		}
+		owner := groupEvent(104, 11)
+		owner.Message = json.RawMessage(`[{"type":"text","data":{"text":"my file"}}]`)
+		ownerTurn, listed := listTurn(t, c, owner, session)
+		if len(listed) != 1 || listed[0].Ref != ref || ownerTurn.importFile(context.Background(), ref).Status != "ready" {
+			t.Fatalf("real sender lost access: %+v", listed)
+		}
+		if count.Load() != 1 {
+			t.Fatalf("downloads=%d", count.Load())
+		}
+	})
+	t.Run("unknown sender", func(t *testing.T) {
+		c, _, _ := fileTestConnection(t, []byte("fixture"))
+		original := groupEvent(101, 11)
+		question := groupEvent(102, 12)
+		question.Message = json.RawMessage(`[{"type":"text","data":{"text":"read the quoted file"}}]`)
+		session := c.engine.SessionManager.GetOrCreate(c.historyKey(question))
+		quote := &resolvedReplyContext{MessageID: "101", SessionID: historyKey(question), Segments: ParseMessageSegments(original.Message)}
+		turn, infos := listTurn(t, c, question, session, quote)
+		if len(infos) != 1 || turn.importFile(context.Background(), infos[0].Ref).Status != "ready" {
+			t.Fatalf("quote-only import: %+v", infos)
+		}
+		ref := infos[0].Ref
+		for _, user := range []int64{11, 12} {
+			later := groupEvent(103, user)
+			later.Message = json.RawMessage(`[{"type":"text","data":{"text":"again"}}]`)
+			laterTurn, listed := listTurn(t, c, later, session)
+			if listed != nil || laterTurn.importFile(context.Background(), ref).Status == "ready" {
+				t.Fatalf("unknown-sender record reachable without a quote by %d", user)
+			}
+		}
+		// Seeing the original message directly completes the unknown owner,
+		// without granting the quoting user anything.
+		c.rememberInboundFiles(original)
+		ownerTurn, listed := listTurn(t, c, groupEvent(104, 11), session)
+		if len(listed) < 1 || ownerTurn.importFile(context.Background(), ref).Status != "ready" {
+			t.Fatalf("real sender not recorded after direct observation: %+v", listed)
+		}
+		later := groupEvent(105, 12)
+		later.Message = json.RawMessage(`[{"type":"text","data":{"text":"again"}}]`)
+		if laterTurn, listed := listTurn(t, c, later, session); listed != nil || laterTurn.importFile(context.Background(), ref).Status == "ready" {
+			t.Fatal("quoting user gained access after owner completion")
+		}
+		c.inboundFileMu.Lock()
+		c.inboundFiles[0].senderID = 11
+		c.inboundFileMu.Unlock()
+		quote.SenderID = 12
+		c.inboundFileTurn(question, session, []*resolvedReplyContext{quote})
+		c.inboundFileMu.Lock()
+		owner := c.inboundFiles[0].senderID
+		c.inboundFileMu.Unlock()
+		if owner != 11 {
+			t.Fatalf("known owner replaced by a later quote: %d", owner)
+		}
+	})
 }

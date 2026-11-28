@@ -829,7 +829,11 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 		}
 	}
-	requestPrompt += conn.prepareInboundFiles(turn.Context(), event, session, fileQuotes)
+	receivedFiles := conn.inboundFileTurn(event, session, fileQuotes)
+	// Proactive turns cannot call the import tool, so attachments are not offered.
+	if !wakeSignals.Proactive {
+		requestPrompt += receivedFiles.prompt()
+	}
 
 	if wakeSignals.Proactive {
 		if engine != nil {
@@ -1146,6 +1150,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			LoadObservedImage: func(ctx context.Context, messageID string, imageIndex int) ([]byte, error) {
 				return conn.loadObservedImage(ctx, event, replyContext, segments, messageID, imageIndex)
 			},
+			ImportReceivedFile:    receivedFiles.importFile,
 			Billing:               billingState,
 			RouteScope:            routeScope,
 			RouteSnapshot:         routeSnapshot,
