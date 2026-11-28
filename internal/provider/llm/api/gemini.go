@@ -11,12 +11,18 @@ import (
 )
 
 func dataImage(value string) (string, string, error) {
+	return dataMedia(value, "image/")
+}
+
+// dataMedia splits a Base64 data URL whose MIME type starts with prefix.
+func dataMedia(value, prefix string) (string, string, error) {
+	kind := strings.TrimSuffix(prefix, "/")
 	header, data, ok := strings.Cut(value, ",")
-	if !ok || !strings.HasPrefix(header, "data:image/") || !strings.HasSuffix(header, ";base64") {
-		return "", "", fmt.Errorf("image must be a base64 data URL")
+	if !ok || !strings.HasPrefix(header, "data:"+prefix) || !strings.HasSuffix(header, ";base64") {
+		return "", "", fmt.Errorf("%s must be a base64 data URL", kind)
 	}
 	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
-		return "", "", fmt.Errorf("invalid base64 image")
+		return "", "", fmt.Errorf("invalid base64 %s", kind)
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64"), data, nil
 }
@@ -30,6 +36,21 @@ func geminiContent(content any) ([]any, error) {
 	for _, part := range parts {
 		if part.Type == "text" {
 			result = append(result, map[string]any{"text": part.Text})
+			continue
+		}
+		if part.InputAudio != nil {
+			if _, err := base64.StdEncoding.DecodeString(part.InputAudio.Data); err != nil || part.InputAudio.Data == "" {
+				return nil, fmt.Errorf("invalid base64 audio")
+			}
+			result = append(result, map[string]any{"inlineData": map[string]any{"mimeType": core.AudioMIMEType(part.InputAudio.Format), "data": part.InputAudio.Data}})
+			continue
+		}
+		if part.VideoURL != nil {
+			media, data, err := dataMedia(part.VideoURL.URL, "video/")
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, map[string]any{"inlineData": map[string]any{"mimeType": media, "data": data}})
 			continue
 		}
 		value := part.ImageURL.URL

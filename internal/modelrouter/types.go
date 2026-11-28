@@ -11,6 +11,7 @@ const (
 	WorkloadDialogue      Workload = "dialogue"
 	WorkloadSubagent      Workload = "subagent"
 	WorkloadVision        Workload = "vision"
+	WorkloadMedia         Workload = "media"
 	WorkloadReflection    Workload = "reflection"
 	WorkloadMemoryExtract Workload = "memory_extract"
 	WorkloadGroupCompact  Workload = "group_compact"
@@ -21,6 +22,7 @@ var Workloads = []Workload{
 	WorkloadDialogue,
 	WorkloadSubagent,
 	WorkloadVision,
+	WorkloadMedia,
 	WorkloadReflection,
 	WorkloadMemoryExtract,
 	WorkloadGroupCompact,

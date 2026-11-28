@@ -20,7 +20,7 @@ import (
 
 const Scope = "token_usage"
 
-var Modules = []string{"dialogue", "subagent", "vision", "group_compact", "sticker_summary", "memory_extract", "reflection", "embedding", "security"}
+var Modules = []string{"dialogue", "subagent", "vision", "media", "group_compact", "sticker_summary", "memory_extract", "reflection", "embedding", "security"}
 
 // Counter retains known quantities alongside the number of unreported calls.
 type Counter struct {

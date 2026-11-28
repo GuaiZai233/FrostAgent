@@ -17,6 +17,8 @@ func responsesContent(content any) ([]any, error) {
 	for _, part := range parts {
 		if part.Type == "text" {
 			result = append(result, map[string]any{"type": "input_text", "text": part.Text})
+		} else if core.IsInlineMediaPart(part) {
+			return nil, fmt.Errorf("OpenAI Responses API 格式暂不支持音频/视频输入，请改用 Chat Completions 或 Gemini 格式")
 		} else {
 			result = append(result, map[string]any{"type": "input_image", "image_url": part.ImageURL.URL})
 		}

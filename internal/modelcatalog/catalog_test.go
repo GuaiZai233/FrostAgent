@@ -134,3 +134,20 @@ func TestNoCacheAndFailedFetchInfersNothing(t *testing.T) {
 		t.Fatalf("Infer without data = %v, %v", caps, found)
 	}
 }
+
+func TestLookupInfersAudioAndVideo(t *testing.T) {
+	idx := mustParse(t, `{
+  "google/omni-model": {"id":"google/omni-model","tool_call":true,"modalities":{"input":["text","image","audio","video","pdf"],"output":["text"]}},
+  "vendor-a/voice": {"id":"vendor-a/voice","tool_call":false,"modalities":{"input":["text","audio"],"output":["text"]}},
+  "vendor-b/voice": {"id":"vendor-b/voice","tool_call":false,"modalities":{"input":["text"],"output":["text"]}}
+}`)
+	caps, found := idx.lookup("google/omni-model")
+	if !found || !reflect.DeepEqual(caps, []string{"text", "tools", "vision", "audio", "video"}) {
+		t.Fatalf("omni lookup = %v, %v", caps, found)
+	}
+	// Disagreeing providers do not claim audio for the bare name.
+	caps, found = idx.lookup("voice")
+	if !found || !reflect.DeepEqual(caps, []string{"text"}) {
+		t.Fatalf("disagreeing audio lookup = %v, %v", caps, found)
+	}
+}

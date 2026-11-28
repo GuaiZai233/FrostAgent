@@ -35,6 +35,8 @@ const (
 	CapabilityText   = "text"
 	CapabilityTools  = "tools"
 	CapabilityVision = "vision"
+	CapabilityAudio  = "audio"
+	CapabilityVideo  = "video"
 )
 
 type record struct {
@@ -46,7 +48,7 @@ type record struct {
 
 // capabilitySet is the capability tuple of one models.dev entry.
 type capabilitySet struct {
-	text, tools, vision bool
+	text, tools, vision, audio, video bool
 }
 
 // index maps a lowercased models.dev id ("provider/model") to its capabilities.
@@ -129,11 +131,13 @@ func (idx *index) lookup(name string) ([]string, bool) {
 	if len(matches) == 0 {
 		return nil, false
 	}
-	all := capabilitySet{text: true, tools: true, vision: true}
+	all := capabilitySet{text: true, tools: true, vision: true, audio: true, video: true}
 	for _, m := range matches {
 		all.text = all.text && m.text
 		all.tools = all.tools && m.tools
 		all.vision = all.vision && m.vision
+		all.audio = all.audio && m.audio
+		all.video = all.video && m.video
 	}
 	var caps []string
 	if all.text {
@@ -144,6 +148,12 @@ func (idx *index) lookup(name string) ([]string, bool) {
 	}
 	if all.vision {
 		caps = append(caps, CapabilityVision)
+	}
+	if all.audio {
+		caps = append(caps, CapabilityAudio)
+	}
+	if all.video {
+		caps = append(caps, CapabilityVideo)
 	}
 	return caps, true
 }
@@ -211,6 +221,10 @@ func parse(raw []byte) (*index, error) {
 				set.text = true
 			case "image":
 				set.vision = true
+			case "audio":
+				set.audio = true
+			case "video":
+				set.video = true
 			}
 		}
 		idx.full[key] = set

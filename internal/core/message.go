@@ -21,12 +21,14 @@ const (
 	RoleTool      MessageRole = "tool"
 )
 
-// ContentPartType 多模态内容类型枚举，描述送给 LLM 的最终结构(目前只有 text/image_url)
+// ContentPartType 多模态内容类型枚举，描述送给 LLM 的最终结构
 type ContentPartType string
 
 const (
 	ContentPartTypeText  ContentPartType = "text"
 	ContentPartTypeImage ContentPartType = "image_url"
+	ContentPartTypeAudio ContentPartType = "input_audio"
+	ContentPartTypeVideo ContentPartType = "video_url"
 )
 
 // AttachmentType 消息附件类型枚举（描述平台侧的原始物，可能是文件、语音等更宽泛的类型）

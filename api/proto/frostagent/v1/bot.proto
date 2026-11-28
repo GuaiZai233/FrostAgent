@@ -242,6 +242,10 @@ message GroupMessageInfoProto {
   string tool_history_run_id = 7;
   // Per image placeholder in content, a log-image key for hover previews (empty when unavailable).
   repeated string image_hashes = 8;
+  // Vision model transcription of the images in this message (empty when not transcribed).
+  string image_description = 9;
+  // Media model transcription of audio/video in this message (empty when not transcribed).
+  string media_description = 10;
 }
 
 message SessionHistoryMessageProto {

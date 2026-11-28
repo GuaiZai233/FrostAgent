@@ -40,15 +40,7 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	// Bind opaque state to the same configured endpoint and effective URL.
 	// URL resolution also makes versioned and unversioned bases equivalent.
 	origin := stateOrigin{EndpointID: c.EndpointID, URL: endpoint}
-	var payload any
-	switch c.Format {
-	case Responses:
-		payload, err = responsesRequest(req, origin)
-	case Anthropic:
-		payload, err = anthropicRequest(req, origin)
-	case Gemini:
-		payload, err = geminiRequest(req, origin)
-	}
+	payload, err := c.payload(req, origin)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +48,19 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	if err != nil {
 		return nil, fmt.Errorf("encode API request: %w", err)
 	}
-	c.log().LLMRequest(string(body), req.TraceID)
+	logBody := string(body)
+	if core.HasInlineMedia(req.Messages) {
+		// Audio and video are request-local: log placeholders, never the bytes.
+		redacted := req
+		redacted.Messages = core.WithoutInlineMedia(req.Messages)
+		logBody = "[inline media omitted]"
+		if logPayload, logErr := c.payload(redacted, origin); logErr == nil {
+			if encoded, encodeErr := json.Marshal(logPayload); encodeErr == nil {
+				logBody = string(encoded)
+			}
+		}
+	}
+	c.log().LLMRequest(logBody, req.TraceID)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -95,6 +99,18 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 	return result, nil
 }
 
+func (c *Client) payload(req core.ChatRequest, origin stateOrigin) (any, error) {
+	switch c.Format {
+	case Responses:
+		return responsesRequest(req, origin)
+	case Anthropic:
+		return anthropicRequest(req, origin)
+	case Gemini:
+		return geminiRequest(req, origin)
+	}
+	return nil, fmt.Errorf("unsupported API format %q", c.Format)
+}
+
 func (c *Client) Embed(ctx context.Context, req core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	endpoint, err := c.Format.URL(c.BaseURL, "embeddings", req.Model)
 	if err != nil {
@@ -131,7 +147,12 @@ func contentParts(content any) ([]core.ContentPart, error) {
 		return nil, fmt.Errorf("unsupported message content: %w", err)
 	}
 	for _, part := range parts {
-		if part.Type != "text" && (part.Type != "image_url" || part.ImageURL == nil) {
+		switch {
+		case part.Type == "text":
+		case part.Type == string(core.ContentPartTypeImage) && part.ImageURL != nil:
+		case part.Type == string(core.ContentPartTypeAudio) && part.InputAudio != nil:
+		case part.Type == string(core.ContentPartTypeVideo) && part.VideoURL != nil:
+		default:
 			return nil, fmt.Errorf("unsupported content part %q", part.Type)
 		}
 	}

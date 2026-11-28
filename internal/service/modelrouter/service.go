@@ -325,6 +325,8 @@ func workloadToProto(workload router.Workload) v1.ModelWorkload {
 		return v1.ModelWorkload_MODEL_WORKLOAD_SUBAGENT
 	case router.WorkloadVision:
 		return v1.ModelWorkload_MODEL_WORKLOAD_VISION
+	case router.WorkloadMedia:
+		return v1.ModelWorkload_MODEL_WORKLOAD_MEDIA
 	case router.WorkloadReflection:
 		return v1.ModelWorkload_MODEL_WORKLOAD_REFLECTION
 	case router.WorkloadMemoryExtract:
@@ -346,6 +348,8 @@ func workloadFromProto(workload v1.ModelWorkload) router.Workload {
 		return router.WorkloadSubagent
 	case v1.ModelWorkload_MODEL_WORKLOAD_VISION:
 		return router.WorkloadVision
+	case v1.ModelWorkload_MODEL_WORKLOAD_MEDIA:
+		return router.WorkloadMedia
 	case v1.ModelWorkload_MODEL_WORKLOAD_REFLECTION:
 		return router.WorkloadReflection
 	case v1.ModelWorkload_MODEL_WORKLOAD_MEMORY_EXTRACT:
