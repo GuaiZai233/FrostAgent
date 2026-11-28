@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 )
 
@@ -93,15 +94,29 @@ type Configuration struct {
 	GroupOverrides []GroupOverride      `json:"group_overrides"`
 }
 
-// MarshalJSON omits the default global media binding so configurations that
-// never opted into media stay readable by older binaries. Explicit bindings,
-// including group overrides, must survive cloning, storage and backup exports.
+// MarshalJSON omits default bindings that older binaries cannot read, so file
+// stores and backup exports stay loadable after a rollback. Reading normalizes
+// a missing global binding back to its default.
 func (c Configuration) MarshalJSON() ([]byte, error) {
 	type plain Configuration
 	out := plain(c)
 	if binding, ok := c.GlobalBindings[WorkloadMedia]; ok && omitDefaultBinding(WorkloadMedia, binding) {
 		out.GlobalBindings = maps.Clone(c.GlobalBindings)
 		delete(out.GlobalBindings, WorkloadMedia)
+	}
+	// Group overrides of post-v1 workloads are never stored, because older
+	// binaries reject the unknown workload in every override.
+	cloned := false
+	for i, override := range c.GroupOverrides {
+		if _, ok := override.Bindings[WorkloadMedia]; !ok {
+			continue
+		}
+		if !cloned {
+			out.GroupOverrides = slices.Clone(c.GroupOverrides)
+			cloned = true
+		}
+		out.GroupOverrides[i].Bindings = maps.Clone(override.Bindings)
+		delete(out.GroupOverrides[i].Bindings, WorkloadMedia)
 	}
 	return json.Marshal(out)
 }

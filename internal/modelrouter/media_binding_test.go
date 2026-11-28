@@ -1,6 +1,7 @@
 package modelrouter
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -82,63 +83,52 @@ func TestConfigurationJSONOmitsDefaultMediaBinding(t *testing.T) {
 	}
 }
 
-// Explicit group bindings must survive both the JSON clone used by the draft
-// manager and SQL publication/reload. In particular, Disabled must not silently
-// become the configured global media route.
-func TestGroupMediaOverridesRoundTrip(t *testing.T) {
-	db := catalogTestDB(t, storage.SQLite)
-	seedCatalog(t, db, "https://synthetic.invalid/v1")
-	routes := NewSQL(db, "instance-a")
-	config := routes.Active()
-	config.GlobalBindings[WorkloadMedia] = Binding{Mode: BindingModel, ModelID: "model-b"}
-	config.GroupOverrides = []GroupOverride{
-		{Platform: "onebot", GroupID: "g1", Bindings: map[Workload]Binding{
-			WorkloadMedia:    {Mode: BindingModel, ModelID: "model-a"},
-			WorkloadDialogue: {Mode: BindingModel, ModelID: "model-b"},
-		}},
-		{Platform: "onebot", GroupID: "g2", Bindings: map[Workload]Binding{
-			WorkloadMedia: {Mode: BindingDisabled},
-		}},
-	}
-	check := func(cfg Configuration) {
-		t.Helper()
-		for _, tc := range []struct {
-			group string
-			want  Binding
-		}{
-			{"g1", Binding{Mode: BindingModel, ModelID: "model-a"}},
-			{"g2", Binding{Mode: BindingDisabled}},
-		} {
-			got, inherited := effectiveBinding(cfg, WorkloadMedia, Scope{Platform: "onebot", GroupID: tc.group})
-			if got != tc.want || inherited {
-				t.Fatalf("group %s media = %+v, inherited=%v; want %+v", tc.group, got, inherited, tc.want)
-			}
-		}
-		got, inherited := effectiveBinding(cfg, WorkloadDialogue, Scope{Platform: "onebot", GroupID: "g1"})
-		if got.ModelID != "model-b" || inherited {
-			t.Fatalf("group dialogue binding lost: %+v, inherited=%v", got, inherited)
-		}
-	}
+// Group overrides of the media workload are never stored either: older
+// binaries reject unknown workloads in every override.
+func TestGroupMediaOverrideIsNotStored(t *testing.T) {
+	config := defaultConfiguration()
+	config.GroupOverrides = []GroupOverride{{Platform: "onebot", GroupID: "g1", Bindings: map[Workload]Binding{
+		WorkloadMedia:    {Mode: BindingModel, ModelID: "model-a"},
+		WorkloadDialogue: {Mode: BindingModel, ModelID: "model-b"},
+	}}}
 	data, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded Configuration
+	var decoded struct {
+		GroupOverrides []struct {
+			Bindings map[string]Binding `json:"bindings"`
+		} `json:"group_overrides"`
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	normalizeConfiguration(&decoded)
-	check(decoded)
-	check(cloneConfiguration(config))
-	check(config)
-	if err := routes.SaveDraft(config); err != nil {
-		t.Fatal(err)
+	if _, ok := decoded.GroupOverrides[0].Bindings["media"]; ok || decoded.GroupOverrides[0].Bindings["dialogue"].ModelID != "model-b" {
+		t.Fatalf("group bindings serialized wrongly: %s", data)
 	}
-	check(routes.Draft())
-	published, err := routes.PublishExpectedRoutes(config)
+	if _, ok := config.GroupOverrides[0].Bindings[WorkloadMedia]; !ok {
+		t.Fatal("marshaling mutated the group override")
+	}
+
+	db := catalogTestDB(t, storage.SQLite)
+	seedCatalog(t, db, "https://synthetic.invalid/v1")
+	tx, err := db.SQL.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	check(published)
-	check(NewSQL(db, "instance-a").Active())
+	if err := writeConfigurationTx(context.Background(), db, tx, "instance-a", config); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var media, dialogue int
+	row := db.SQL.QueryRow(db.Bind(`SELECT COALESCE(SUM(CASE WHEN workload = 'media' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN workload = 'dialogue' AND group_id = 'g1' THEN 1 ELSE 0 END), 0) FROM model_bindings WHERE instance_id = ?`), "instance-a")
+	if err := row.Scan(&media, &dialogue); err != nil {
+		t.Fatal(err)
+	}
+	if media != 0 || dialogue != 1 {
+		t.Fatalf("stored media rows=%d group dialogue rows=%d", media, dialogue)
+	}
 }
