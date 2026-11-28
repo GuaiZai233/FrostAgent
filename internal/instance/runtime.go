@@ -289,7 +289,7 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,
 		TokenUsage:     tokenUsage,
-		StorageUsage:   storageusage.New(db, instanceID, filepath.Join(dir, "sticker"), filepath.Join(dir, "logs")),
+		StorageUsage:   storageusage.New(db, instanceID, filepath.Join(dir, "sticker"), filepath.Join(dir, "logs"), filepath.Join(dir, "session-checkpoints")),
 		ModelRouter:    routerManager,
 		ModelName:      "model-router",
 		SessionManager: sessionManager,

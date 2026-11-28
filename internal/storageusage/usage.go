@@ -48,6 +48,9 @@ type table struct {
 	name     string
 	category string
 	columns  []string
+	// sizeColumn is a column that already stores a payload size in bytes, so the
+	// large payload column itself is never scanned.
+	sizeColumn string
 	// vector names a blob or vector column that needs a backend-specific size
 	// function.
 	vector string
@@ -58,7 +61,9 @@ type table struct {
 var tables = []table{
 	{name: "chat_history", category: CategoryChat, columns: []string{"id", "platform", "message_type", "target_id", "message_id", "sender_id", "sender_name", "role", "content", "search_text", "reply_to", "delivery_status"}},
 	{name: "session_states", category: CategoryChat, columns: []string{"session_id", "payload"}},
-	{name: "session_images", category: CategoryImages, columns: []string{"key", "content_type"}, vector: "data", optional: true},
+	// size is the decoded image length written by the image store; data is
+	// Base64 text and is deliberately not scanned.
+	{name: "session_images", category: CategoryImages, columns: []string{"key", "content_type"}, sizeColumn: "size", optional: true},
 	{name: "sticker_entries", category: CategorySticker, columns: []string{"id", "file_name", "description", "status"}},
 	{name: "sticker_keywords", category: CategorySticker, columns: []string{"sticker_id", "keyword"}},
 	{name: "memory_entries", category: CategoryMemory, columns: []string{"scope_type", "platform", "group_id", "id", "owner", "owner_type", "content", "summary", "evidence", "source_message_id", "source_sender_id", "source", "visibility", "created_at", "updated_at", "merged_from_json", "source_media"}},
@@ -74,56 +79,143 @@ var tables = []table{
 	{name: "dialogues", category: CategoryOther, columns: []string{"id", "scene", "relation", "user_text", "preferred"}},
 }
 
-// Collector measures one instance. Results are cached briefly so a polling
-// overview page does not rescan tables and directories on every refresh.
+const (
+	// firstWait bounds how long the first request waits for an initial result.
+	firstWait = 1500 * time.Millisecond
+	// measureTimeout bounds one background measurement.
+	measureTimeout = 60 * time.Second
+	// failureBackoff is the minimum gap before retrying after a failed measurement.
+	failureBackoff = 60 * time.Second
+)
+
+// Collector measures one instance. Measuring runs in one background goroutine
+// at a time, never inside the overview request: table scans use the database's
+// shared connection, so a polling page must not trigger them directly. Requests
+// get the last good result (possibly stale) immediately.
 type Collector struct {
 	db         *storage.DB
 	instanceID string
-	// stickerDir holds sticker image files; logDir holds per-entry log files.
-	stickerDir string
-	logDir     string
+	// stickerDir holds sticker image files, logDir per-entry log files and
+	// checkpointDir the local session snapshots written before the SQL copy.
+	stickerDir    string
+	logDir        string
+	checkpointDir string
 
-	mu       sync.Mutex
-	cached   Snapshot
-	cachedAt time.Time
-	now      func() time.Time
+	mu          sync.Mutex
+	cached      Snapshot
+	cachedAt    time.Time
+	refreshing  chan struct{}
+	retryAfter  time.Time
+	lastErr     error
+	now         func() time.Time
+	measureFunc func(context.Context) (Snapshot, error)
 }
 
 // New returns a collector. db may be nil for legacy file-only runtimes, in
 // which case Snapshot reports an error and the console shows "unavailable".
-func New(db *storage.DB, instanceID, stickerDir, logDir string) *Collector {
-	return &Collector{db: db, instanceID: instanceID, stickerDir: stickerDir, logDir: logDir, now: time.Now}
+func New(db *storage.DB, instanceID, stickerDir, logDir, checkpointDir string) *Collector {
+	c := &Collector{db: db, instanceID: instanceID, stickerDir: stickerDir, logDir: logDir, checkpointDir: checkpointDir, now: time.Now}
+	c.measureFunc = c.measure
+	return c
 }
 
-// Snapshot returns the cached measurement, refreshing it when stale.
+// Snapshot returns the cached measurement and, when it is stale, starts a
+// background refresh. Only the very first call can wait (briefly) for a result.
 func (c *Collector) Snapshot(ctx context.Context) (Snapshot, error) {
 	if c == nil || c.db == nil {
 		return Snapshot{}, errors.New("storage usage requires the SQL storage backend")
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if !c.cachedAt.IsZero() && c.now().Sub(c.cachedAt) < cacheTTL {
+		defer c.mu.Unlock()
 		return c.cached, nil
 	}
-	snapshot, err := c.measure(ctx)
-	if err != nil {
-		return Snapshot{}, err
+	done := c.startRefreshLocked()
+	if !c.cachedAt.IsZero() {
+		defer c.mu.Unlock()
+		return c.cached, nil // stale but real; the refresh updates it
 	}
-	c.cached, c.cachedAt = snapshot, c.now()
-	return snapshot, nil
+	if done == nil {
+		defer c.mu.Unlock()
+		return Snapshot{}, c.pendingErrorLocked()
+	}
+	c.mu.Unlock()
+
+	timer := time.NewTimer(firstWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.cachedAt.IsZero() {
+		return c.cached, nil
+	}
+	return Snapshot{}, c.pendingErrorLocked()
+}
+
+func (c *Collector) pendingErrorLocked() error {
+	if c.lastErr != nil {
+		return c.lastErr
+	}
+	return errors.New("storage usage is still being measured")
+}
+
+// startRefreshLocked returns a channel closed when the running (or newly
+// started) refresh ends, or nil when none runs because of failure backoff.
+func (c *Collector) startRefreshLocked() <-chan struct{} {
+	if c.refreshing != nil {
+		return c.refreshing
+	}
+	if c.now().Before(c.retryAfter) {
+		return nil
+	}
+	done := make(chan struct{})
+	c.refreshing = done
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), measureTimeout)
+		defer cancel()
+		snapshot, err := c.measureFunc(ctx)
+		c.mu.Lock()
+		if err != nil {
+			c.lastErr = err
+			c.retryAfter = c.now().Add(failureBackoff)
+		} else {
+			c.cached, c.cachedAt, c.lastErr, c.retryAfter = snapshot, c.now(), nil, time.Time{}
+		}
+		c.refreshing = nil
+		c.mu.Unlock()
+		close(done)
+	}()
+	return done
 }
 
 func (c *Collector) measure(ctx context.Context) (Snapshot, error) {
 	totals := map[string]int64{}
 	for _, t := range tables {
+		// One short statement per table so the shared connection is released
+		// between tables instead of being held for the whole measurement.
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
 		size, err := c.tableBytes(ctx, t)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("measure %s: %w", t.name, err)
 		}
 		totals[t.category] += size
 	}
-	totals[CategorySticker] += dirBytes(c.stickerDir)
-	totals[CategoryOther] += dirBytes(c.logDir)
+	for _, dir := range []struct {
+		path     string
+		category string
+	}{{c.stickerDir, CategorySticker}, {c.logDir, CategoryOther}, {c.checkpointDir, CategoryChat}} {
+		size, err := dirBytes(ctx, dir.path)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		totals[dir.category] += size
+	}
 
 	snapshot := Snapshot{}
 	for _, category := range Order {
@@ -152,6 +244,9 @@ func (c *Collector) tableBytes(ctx context.Context, t table) (int64, error) {
 	for _, column := range t.columns {
 		parts = append(parts, c.bytesExpr(column))
 	}
+	if t.sizeColumn != "" {
+		parts = append(parts, "COALESCE("+t.sizeColumn+", 0)")
+	}
 	if t.vector != "" {
 		parts = append(parts, c.vectorExpr(t.vector))
 	}
@@ -169,21 +264,41 @@ func isMissingTable(err error) bool {
 	return strings.Contains(message, "no such table") || strings.Contains(message, "does not exist")
 }
 
-// dirBytes totals regular files below dir. A missing directory or unreadable
-// entry counts as zero so a partial scan never fails the overview.
-func dirBytes(dir string) int64 {
+// dirBytes totals regular files below dir. A missing directory (or a file that
+// disappears mid-walk) counts as zero; any other read failure is an error so an
+// incomplete total is never reported as a real one.
+func dirBytes(ctx context.Context, dir string) (int64, error) {
 	if dir == "" {
-		return 0
+		return 0, nil
 	}
 	var total int64
-	_ = filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+	err := filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
+		if cancelled := ctx.Err(); cancelled != nil {
+			return cancelled
+		}
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if entry.IsDir() {
 			return nil
 		}
-		if info, infoErr := entry.Info(); infoErr == nil && info.Mode().IsRegular() {
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			if errors.Is(infoErr, fs.ErrNotExist) {
+				return nil
+			}
+			return infoErr
+		}
+		if info.Mode().IsRegular() {
 			total += info.Size()
 		}
 		return nil
 	})
-	return total
+	if err != nil {
+		return 0, fmt.Errorf("measure %s: %w", filepath.Base(dir), err)
+	}
+	return total, nil
 }
