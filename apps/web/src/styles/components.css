@@ -42,6 +42,13 @@
 .btn-primary:hover {
   opacity: 0.9;
 }
+.btn-primary:disabled,
+.btn-primary:disabled:hover {
+  background-color: var(--muted);
+  color: var(--muted-foreground);
+  border-color: var(--border);
+  opacity: 0.75;
+}
 
 .btn-secondary {
   background-color: var(--secondary);
@@ -189,6 +196,11 @@
 .input:focus, .select:focus, .textarea:focus {
   border-color: var(--ring);
   box-shadow: 0 0 0 1px var(--ring);
+}
+
+.input:disabled, .select:disabled, .textarea:disabled {
+  background-color: var(--muted);
+  color: var(--muted-foreground);
 }
 
 /* Checkbox */
