@@ -4,6 +4,7 @@ import { renderInstanceLabel } from './components/instance-label';
 import { mountInstanceRequired } from './components/instance-required';
 import logoURL from '../../../assets/logo.png';
 import { mountAuthenticatedResources } from './components/authenticated-resources';
+import { mountManagementAuthNotice } from './components/management-auth-notice';
 import './styles/app.css';
 import './styles/variables.css';
 import './styles/base.css';
@@ -26,7 +27,6 @@ import { mountStorageSettingsPage } from './pages/storage-settings';
 import { mountBackupRestorePage } from './pages/backup-restore';
 import { mountAccessCredentialsPage } from './pages/access-credentials';
 import { mountCommandSettingsPage } from './pages/command-settings';
-import { mountSecurityPage } from './pages/security';
 
 const mountBackendSettingsPage = lazyMount(() =>
   import('./pages/backend-settings').then(
@@ -58,6 +58,9 @@ const mountActionsCatPage = lazyMount(() =>
 
 const mountSkillsPage = lazyMount(() =>
   import('./pages/skills').then(({ mountSkillsPage }) => mountSkillsPage),
+);
+const mountSecurityPage = lazyMount(() =>
+  import('./pages/security').then(({ mountSecurityPage }) => mountSecurityPage),
 );
 
 // Initialize Theme
@@ -192,12 +195,14 @@ function initAppShell(): void {
 
       <!-- Main Content Container -->
       <main class="main-content" id="main-content">
+        <div id="management-auth-notice"></div>
         <div id="page-content"></div>
       </main>
     </div>
   `;
 
   const pageContainer = document.getElementById('page-content');
+  mountManagementAuthNotice(document.getElementById('management-auth-notice')!);
   const drawer = document.getElementById('mobile-drawer');
   const backdrop = document.getElementById('drawer-backdrop');
   const menuBtn = document.getElementById('mobile-menu-btn');

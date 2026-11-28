@@ -1,5 +1,9 @@
 const CONTROL_TOKEN_STORAGE_KEY = 'frostagent_control_token';
 
+export function notifyManagementAuthenticationRequired(): void {
+  window.dispatchEvent?.(new Event('management-auth-required'));
+}
+
 export function getControlToken(): string {
   try {
     return localStorage.getItem(CONTROL_TOKEN_STORAGE_KEY) || '';
@@ -16,6 +20,7 @@ export function setControlToken(token: string): void {
   } catch {
     // localStorage may be unavailable in a restricted browser.
   }
+  window.dispatchEvent?.(new Event('control-credentials-changed'));
 }
 
 export function directChatWebSocket(url: string): WebSocket {
@@ -45,7 +50,10 @@ export async function controlPlaneFetch(input: RequestInfo | URL, init: RequestI
   const token = getControlToken();
   if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
   const response = await fetch(input, { ...init, headers });
-  if (response.status === 401) throw new Error('控制令牌无效或未设置，请在「设置 → 访问凭据」填写管理 Token');
+  if (response.status === 401) {
+    notifyManagementAuthenticationRequired();
+    throw new Error('控制令牌无效或未设置，请在「设置 → 访问凭据」填写管理 Token');
+  }
   return response;
 }
 

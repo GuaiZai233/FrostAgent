@@ -17,7 +17,7 @@ FrostAgent 作为对话智能体与自然语言中枢，通过与 ActionsCat 建
 
 1. **最小权限与控制面鉴权对齐 (Control-Plane Auth Alignment)**：
    - ActionsCat HTTP 代理路由严格继承 FrostAgent 控制面统一鉴权标准（`MCP_CONTROL_TOKEN` / `ADMIN_TOKEN`），杜绝因代理暴露造成无认证凭据代持（Credentialed Proxy）。
-   - 本地回环访问与远程访问严格隔离，支持 `MCP_ENFORCE_LOCAL_TOKEN=true` 强制本地鉴权。
+   - 本地回环与远程 HTTP 管理访问均要求管理 Token；`MCP_ENFORCE_LOCAL_TOKEN` 不再影响认证。
 2. **管理写权限严格门禁 (Management Mutation Gate)**：
    - 区分“动作执行（Run）”与“管理面修改（Create/Version/Build/Activate/Deploy）”。
    - 注册 Action、创建版本、触发构建、激活构建以及端到端部署均属于持久化管理面操作，Agent 工具端必须校验 `llm.RunContext` 并通过 `admincmd.IsAdmin` 限制仅配置在 `ADMIN_QQ_IDS` 中的管理员可用；非管理员与无上下文请求严格 Fail-Closed，产生 0 次后端网络调用。
@@ -353,7 +353,7 @@ func (c *Client) Dispatch(ctx context.Context, event any) error
 
 | 维度 | 安全威胁 | FrostAgent 防御机制与不变量 |
 | :--- | :--- | :--- |
-| **控制平面凭据** | 外部未授权调用 FrostAgent 代理，利用代理持有的 token 滥用 ActionsCat | 代理入口强制调用 `CheckControlPlaneAuthScoped`，非本地回环强制 Bearer 校验，支持本地强鉴权配置 |
+| **控制平面凭据** | 外部未授权调用 FrostAgent 代理，利用代理持有的 token 滥用 ActionsCat | 代理入口强制调用 `CheckControlPlaneAuthScoped`，所有 HTTP 请求均校验 Bearer Token，包括回环访问 |
 | **管理面权限滥用** | 普通用户诱导 Agent 频繁调用管理工具（创建 Action/版本/调度/规则、构建、激活或部署）污染控制面 | 9 个状态变更工具（包含 Schedule/Matcher 创建与删除）全量接入 `ADMIN_QQ_IDS` 门禁；非管理员执行时直接返回权限不足，产生 0 次后端网络请求 |
 | **模拟会话副作用** | `?mock=true` 调试会话调用执行、变更或触发器工具触发真实沙箱编译、写入、定时触发或消息发送 | 读取 `RunContext.Mock`，为 true 时一律拦截所有变更、运行与触发器注册操作，严格维持“断电全丢”不变量 |
 | **构建未决结果风险** | 耗时编译超时、服务端 5xx、响应解析异常或传输中断，被客户端误判为“失败”引发重复并发构建 | `defaultBuildTimeout = 180s`，底层禁用 transport 自动重试；任何传输中断、服务端 5xx、响应损坏与超时统一包装为 `ErrBuildUnknownResult`，指导 Agent 先通过 `list_builds` 确认状态后再决定是否激活，防止重复并发编译 |

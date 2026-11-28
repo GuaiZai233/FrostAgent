@@ -77,3 +77,6 @@ classification on save and clear.
   `ListEnvVars`; its dedicated configuration API is outside this matrix.
 - The internal global keys `ALLOW_REMOTE_MCP_MANAGEMENT` and
   `DEFAULT_DIALOGUE_TEMPLATE` remain hidden from the settings catalog/UI.
+- `MCP_ENFORCE_LOCAL_TOKEN` is retained in the catalog for saved-config compatibility
+  but hidden from the UI. Neither it nor `ALLOW_REMOTE_MCP_MANAGEMENT` controls
+  authentication: all HTTP management requests require the management token.

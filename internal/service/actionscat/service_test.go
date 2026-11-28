@@ -18,7 +18,7 @@ func TestService_Status_Unconfigured(t *testing.T) {
 	cl := actclient.New(func(k string) string { return "" })
 	svc := New(cl, "inst_1")
 
-	req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
+	req := authenticatedActionRequest(http.MethodGet, "/api/actionscat/status", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	rec := httptest.NewRecorder()
 
@@ -172,7 +172,7 @@ func TestService_EndToEnd_ProxyEndpoints(t *testing.T) {
 	svc := New(cl, "inst_test")
 
 	newReq := func(method, target string, body io.Reader) *http.Request {
-		r := httptest.NewRequest(method, target, body)
+		r := authenticatedActionRequest(method, target, body)
 		r.RemoteAddr = "127.0.0.1:1234"
 		return r
 	}
@@ -454,7 +454,7 @@ func TestService_ValidationAndHardening(t *testing.T) {
 	svc := New(cl, "inst_test")
 
 	newReq := func(method, target string, body io.Reader) *http.Request {
-		r := httptest.NewRequest(method, target, body)
+		r := authenticatedActionRequest(method, target, body)
 		r.RemoteAddr = "127.0.0.1:1234"
 		return r
 	}
@@ -557,14 +557,14 @@ func TestService_ControlPlaneAuth(t *testing.T) {
 		}
 	}
 
-	// 4. Loopback default without token -> 200 OK
+	// 4. Loopback default without token -> 401 OK
 	{
 		req := httptest.NewRequest(http.MethodGet, "/api/actionscat/status", nil)
 		req.RemoteAddr = "127.0.0.1:54321"
 		rec := httptest.NewRecorder()
 		svc.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("expected 200 for loopback default without token, got %d", rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 for loopback without token without token, got %d", rec.Code)
 		}
 	}
 
@@ -618,7 +618,7 @@ func TestService_BuildUnknownResult_GatewayTimeout(t *testing.T) {
 
 	svc := New(cl, "inst_timeout_test")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/versions/ver_1/builds", nil)
+	req := authenticatedActionRequest(http.MethodPost, "/api/actionscat/actions/act_1/versions/ver_1/builds", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	// Context with tiny timeout to trigger ErrBuildUnknownResult
 	ctx, cancel := context.WithTimeout(req.Context(), 10*time.Millisecond)
@@ -662,7 +662,7 @@ func TestService_BuildServer500_GatewayTimeout(t *testing.T) {
 
 	svc := New(cl, "inst_500_test")
 
-	req := httptest.NewRequest(http.MethodPost, "/api/actionscat/actions/act_1/versions/ver_1/builds", nil)
+	req := authenticatedActionRequest(http.MethodPost, "/api/actionscat/actions/act_1/versions/ver_1/builds", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 
 	rec := httptest.NewRecorder()
@@ -784,7 +784,7 @@ func TestService_SchedulesAndMatchersProxy(t *testing.T) {
 	svc := New(cl, "inst_test")
 
 	newReq := func(method, target string, body io.Reader) *http.Request {
-		r := httptest.NewRequest(method, target, body)
+		r := authenticatedActionRequest(method, target, body)
 		r.RemoteAddr = "127.0.0.1:1234"
 		return r
 	}

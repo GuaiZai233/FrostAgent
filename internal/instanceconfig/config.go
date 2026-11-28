@@ -57,6 +57,7 @@ type Store struct {
 	raw             string
 	loadErr         error
 	accessErr       error
+	unconfirmed     bool
 	db              *storage.DB
 	dbScope         string
 	dbID            string
@@ -163,8 +164,15 @@ func Open(path string, global bool) (*Store, error) {
 	return s, nil
 }
 func (s *Store) AccessError() error { s.mu.RLock(); defer s.mu.RUnlock(); return s.accessErr }
-func (s *Store) Error() error       { s.mu.RLock(); defer s.mu.RUnlock(); return s.loadErr }
-func (s *Store) IsDatabase() bool   { return s != nil && s.db != nil }
+func (s *Store) Error() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.unconfirmed {
+		return ErrStateUnavailable
+	}
+	return s.loadErr
+}
+func (s *Store) IsDatabase() bool { return s != nil && s.db != nil }
 
 // BotLoopRevision changes after each successful Bot loop setting mutation.
 func (s *Store) BotLoopRevision() uint64 {
@@ -195,6 +203,10 @@ func allowed(k string, global bool) bool {
 func (s *Store) Get(k string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	// Never authorize a credential whose persisted replacement is unconfirmed.
+	if s.unconfirmed && (k == "MCP_CONTROL_TOKEN" || k == "ADMIN_TOKEN") {
+		return ""
+	}
 	if value, exists := s.overrides[k]; exists {
 		return value
 	}
@@ -246,6 +258,9 @@ func (s *Store) Transform(ctx context.Context, key string, transform func(string
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.unconfirmed {
+		return ErrStateUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -260,6 +275,9 @@ func (s *Store) Transform(ctx context.Context, key string, transform func(string
 }
 
 func (s *Store) updateLocked(k, v string, remove bool) error {
+	if s.unconfirmed {
+		return ErrStateUnavailable
+	}
 	if s.db != nil {
 		if strings.ContainsRune(v, 0) {
 			return fmt.Errorf("setting %s contains NUL", k)
@@ -338,6 +356,9 @@ func (s *Store) ReplaceDatabaseSubset(keys map[string]bool, values map[string]st
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.unconfirmed {
+		return ErrStateUnavailable
+	}
 	ctx := context.Background()
 	tx, err := s.db.SQL.BeginTx(ctx, nil)
 	if err != nil {
@@ -357,7 +378,7 @@ func (s *Store) ReplaceDatabaseSubset(keys map[string]bool, values map[string]st
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return reconcileCommitError(map[string]*Store{s.dbScope + "\x00" + s.dbID: s}, err)
 	}
 	for key := range keys {
 		delete(s.values, key)

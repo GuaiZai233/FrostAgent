@@ -15,7 +15,7 @@ export PATH := $(TOOLS_BIN):$(CURDIR)/node_modules/.bin:$(PATH)
 
 .DEFAULT_GOAL := build
 
-.PHONY: build build-api build-web build-web-dev check-web
+.PHONY: build build-api build-frostctl build-web build-web-dev check-web
 .PHONY: dev serve-api serve-web
 .PHONY: proto-generate proto-generate-go proto-generate-web proto-tools
 .PHONY: lint test test-api test-web vet clean ci
@@ -25,6 +25,7 @@ build: build-api
 build-api: build-web proto-generate-go
 	mkdir -p ./bin
 	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/app ./cmd/app
+	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/frostctl ./cmd/frostctl
 
 check-web: proto-generate-web
 	$(PNPM) --filter @frostagent/web run check
@@ -87,3 +88,11 @@ clean:
 	rm -rf ./bin ./gen ./dist ./internal/frontend/dist ./.tools ./apps/web/dist
 
 ci: check-web build test lint vet
+
+build-frostctl:
+	mkdir -p ./bin
+	$(GO) build -ldflags="$(BUILD_LDFLAGS)" -o ./bin/frostctl ./cmd/frostctl
+
+.PHONY: package
+package: build-web proto-generate-go
+	python3 scripts/package_backend.py

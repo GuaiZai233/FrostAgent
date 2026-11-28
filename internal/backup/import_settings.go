@@ -101,8 +101,8 @@ func importSettingsWithinCatalogMutation(db *storage.DB, instanceID string, data
 	if err := modelrouter.WriteImportedConfigurationTx(ctx, db, tx, instanceID, data.ModelRouter); err != nil {
 		return err
 	}
-	for i := range data.MCP.Servers {
-		data.MCP.Servers[i].Transport.URL = publicURL(data.MCP.Servers[i].Transport.URL)
+	if err := prepareImportedMCP(&data.MCP); err != nil {
+		return err
 	}
 	if err := mcp.WriteImportedConfigTx(ctx, db, tx, instanceID, &data.MCP); err != nil {
 		return err

@@ -49,6 +49,7 @@ for (const testFile of [
   'storage-settings-page.test.ts',
   'authenticated-resources.test.ts',
   'access-credentials-page.test.ts',
+  'management-auth-notice.test.ts',
 ]) {
   const result = await build({
     entryPoints: [resolve('tests', testFile)],

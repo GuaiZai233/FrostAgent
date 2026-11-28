@@ -36,6 +36,7 @@ COPY buf.yaml buf.gen.yaml ./
 COPY api/proto ./api/proto
 RUN buf generate --template buf.gen.yaml
 COPY cmd/app ./cmd/app
+COPY cmd/frostctl ./cmd/frostctl
 COPY internal ./internal
 COPY subagent ./subagent
 COPY --from=web /src/internal/frontend/dist ./internal/frontend/dist
@@ -47,7 +48,10 @@ ARG FROSTAGENT_COMMIT
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath \
     -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Version=${FROSTAGENT_VERSION} -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Commit=${FROSTAGENT_COMMIT} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultListenAddr=${DOCKER_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.DefaultWSListenAddr=${DOCKER_WS_LISTEN_ADDR} -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ContainerManagement=true -X github.com/GuaiZai233/FrostAgent/internal/instanceconfig.ManagementLoopbackOnly=${DOCKER_MANAGEMENT_LOOPBACK_ONLY}" \
-    -o /out/frostagent ./cmd/app
+    -o /out/frostagent ./cmd/app \
+    && CGO_ENABLED=0 go build -trimpath \
+    -ldflags="-s -w -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Version=${FROSTAGENT_VERSION} -X github.com/GuaiZai233/FrostAgent/internal/buildinfo.Commit=${FROSTAGENT_COMMIT}" \
+    -o /out/frostctl ./cmd/frostctl
 
 # Pinned rich-image fonts (SIL OFL 1.1). Keep the URLs and SHA-256 values in sync with
 # internal/richimage/fontstore.go; TestDockerfileFontPinsMatchGo enforces it.
@@ -68,10 +72,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 frostagent \
     && useradd --uid 10001 --gid frostagent --create-home --shell /usr/sbin/nologin frostagent \
-    && install -d -o frostagent -g frostagent -m 0700 /app/data
+    && install -d -o frostagent -g frostagent -m 0700 /app/data /run/frostagent
 WORKDIR /app
 COPY --from=build /out/frostagent /usr/local/bin/frostagent
+COPY --from=build /out/frostctl /usr/local/bin/frostctl
 COPY --from=fonts /fonts /usr/share/fonts/frostagent
+COPY docs/frostctl.md /usr/share/doc/frostagent/frostctl.md
 COPY THIRD_PARTY_NOTICES.md /usr/share/doc/frostagent/THIRD_PARTY_NOTICES.md
 ENV FROSTAGENT_RICH_IMAGE_FONT_DIR=/usr/share/fonts/frostagent
 USER 10001:10001

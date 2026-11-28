@@ -11,6 +11,9 @@ import (
 )
 
 func ImportSummaries(db *storage.DB, instanceID string, data Summaries) error {
+	if err := ValidateSummaries(data); err != nil {
+		return err
+	}
 	if err := ValidateFormat(data.FormatVersion); err != nil {
 		return err
 	}
@@ -23,12 +26,7 @@ func ImportSummaries(db *storage.DB, instanceID string, data Summaries) error {
 	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM group_summaries WHERE instance_id = ?`), instanceID); err != nil {
 		return err
 	}
-	seen := make(map[string]bool)
 	for _, record := range data.Records {
-		if record.SessionID == "" || record.Summary == "" || seen[record.SessionID] {
-			return fmt.Errorf("empty or duplicate group summary %q", record.SessionID)
-		}
-		seen[record.SessionID] = true
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO group_summaries
 			(instance_id, platform, group_id, summary, generation, created_at, updated_at)
 			VALUES (?, 'qq', ?, ?, 0, ?, ?)`), instanceID, record.SessionID, record.Summary,
@@ -40,24 +38,14 @@ func ImportSummaries(db *storage.DB, instanceID string, data Summaries) error {
 }
 
 func ImportStickers(db *storage.DB, instanceID, imageDir string, data Stickers, images map[string][]byte) (resultErr error) {
+	if err := ValidateStickers(data, images); err != nil {
+		return err
+	}
 	if err := ValidateFormat(data.FormatVersion); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(imageDir, 0700); err != nil {
 		return err
-	}
-	seenIDs, seenFiles := map[string]bool{}, map[string]bool{}
-	for _, entry := range data.Entries {
-		if entry.ID == "" || seenIDs[entry.ID] || !validStickerFilename(entry.FileName) || seenFiles[strings.ToLower(entry.FileName)] {
-			return fmt.Errorf("invalid or duplicate sticker %q", entry.ID)
-		}
-		seenIDs[entry.ID], seenFiles[strings.ToLower(entry.FileName)] = true, true
-		if _, ok := images[entry.FileName]; !ok {
-			return fmt.Errorf("sticker image %q is missing", entry.FileName)
-		}
-	}
-	if len(images) != len(seenFiles) {
-		return fmt.Errorf("sticker ZIP has unexpected images")
 	}
 	written := make([]string, 0, len(data.Entries))
 	defer func() {
@@ -118,4 +106,38 @@ func ImportStickers(db *storage.DB, instanceID, imageDir string, data Stickers, 
 func validStickerFilename(name string) bool {
 	return name != "" && name != "." && name != ".." && filepath.Base(name) == name &&
 		!strings.ContainsAny(name, `/\`)
+}
+
+func ValidateSummaries(data Summaries) error {
+	if err := ValidateFormat(data.FormatVersion); err != nil {
+		return err
+	}
+	seen := make(map[string]bool)
+	for _, record := range data.Records {
+		if record.SessionID == "" || record.Summary == "" || seen[record.SessionID] {
+			return fmt.Errorf("empty or duplicate group summary %q", record.SessionID)
+		}
+		seen[record.SessionID] = true
+	}
+	return nil
+}
+
+func ValidateStickers(data Stickers, images map[string][]byte) error {
+	if err := ValidateFormat(data.FormatVersion); err != nil {
+		return err
+	}
+	seenIDs, seenFiles := map[string]bool{}, map[string]bool{}
+	for _, entry := range data.Entries {
+		if entry.ID == "" || seenIDs[entry.ID] || !validStickerFilename(entry.FileName) || seenFiles[strings.ToLower(entry.FileName)] {
+			return fmt.Errorf("invalid or duplicate sticker %q", entry.ID)
+		}
+		seenIDs[entry.ID], seenFiles[strings.ToLower(entry.FileName)] = true, true
+		if _, ok := images[entry.FileName]; !ok {
+			return fmt.Errorf("sticker image %q is missing", entry.FileName)
+		}
+	}
+	if len(images) != len(seenFiles) {
+		return fmt.Errorf("sticker ZIP has unexpected images")
+	}
+	return nil
 }

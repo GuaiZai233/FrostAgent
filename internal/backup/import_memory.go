@@ -9,11 +9,16 @@ func ImportMemories(db *storage.DB, instanceID string, data Memories, merge bool
 	if err := ValidateFormat(data.FormatVersion); err != nil {
 		return memory.ImportResult{}, err
 	}
+	snapshot := memorySnapshot(data)
+	return memory.ImportSQLSnapshot(db, instanceID, snapshot, merge)
+}
+
+func memorySnapshot(data Memories) memory.Snapshot {
 	snapshot := memory.Snapshot{PrivateEntries: data.PrivateEntries, PrivateArchives: data.PrivateArchives,
 		Groups: make([]memory.GroupSnapshot, 0, len(data.Groups))}
 	for _, group := range data.Groups {
 		snapshot.Groups = append(snapshot.Groups, memory.GroupSnapshot{Platform: group.Platform,
 			GroupID: group.GroupID, Profile: group.Profile, Entries: group.Entries, Archives: group.Archives})
 	}
-	return memory.ImportSQLSnapshot(db, instanceID, snapshot, merge)
+	return snapshot
 }

@@ -23,6 +23,8 @@
 !apps/
 !apps/web/
 !apps/web/**
+!docs/
+!docs/frostctl.md
 !assets/
 assets/**
 !assets/logo.png

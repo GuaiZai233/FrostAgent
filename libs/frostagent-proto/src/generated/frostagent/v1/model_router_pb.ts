@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/model_router.proto.
  */
 export const file_frostagent_v1_model_router: GenFile = /*@__PURE__*/
-  fileDesc("CiBmcm9zdGFnZW50L3YxL21vZGVsX3JvdXRlci5wcm90bxINZnJvc3RhZ2VudC52MSIzCh1JbmZlck1vZGVsQ2FwYWJpbGl0aWVzUmVxdWVzdBISCgptb2RlbF9uYW1lGAEgASgJIkUKHkluZmVyTW9kZWxDYXBhYmlsaXRpZXNSZXNwb25zZRINCgVmb3VuZBgBIAEoCBIUCgxjYXBhYmlsaXRpZXMYAiADKAki4wEKDU1vZGVsRW5kcG9pbnQSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCGJhc2VfdXJsGAMgASgJEg8KB2VuYWJsZWQYBSABKAgSOQoOYXBpX2tleV9zb3VyY2UYBiABKA4yIS5mcm9zdGFnZW50LnYxLk1vZGVsQVBJS2V5U3RvcmFnZRITCgthcGlfa2V5X3JlZhgHIAEoCRIaChJhcGlfa2V5X2NvbmZpZ3VyZWQYCCABKAgSEgoKYXBpX2Zvcm1hdBgJIAEoCUoECAQQBVIHYXBpX2tleSKdAQoLTW9kZWxUYXJnZXQSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhMKC2VuZHBvaW50X2lkGAMgASgJEhYKDnVwc3RyZWFtX21vZGVsGAQgASgJEg8KB2VuYWJsZWQYBSABKAgSFAoMY2FwYWJpbGl0aWVzGAYgAygJEhgKEG1heF9pbnB1dF90b2tlbnMYByABKAUifwoMTW9kZWxCaW5kaW5nEi4KCHdvcmtsb2FkGAEgASgOMhwuZnJvc3RhZ2VudC52MS5Nb2RlbFdvcmtsb2FkEi0KBG1vZGUYAiABKA4yHy5mcm9zdGFnZW50LnYxLk1vZGVsQmluZGluZ01vZGUSEAoIbW9kZWxfaWQYAyABKAkiZwoSR3JvdXBNb2RlbE92ZXJyaWRlEhAKCHBsYXRmb3JtGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJEi0KCGJpbmRpbmdzGAMgAygLMhsuZnJvc3RhZ2VudC52MS5Nb2RlbEJpbmRpbmcijAIKGE1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhIPCgd2ZXJzaW9uGAEgASgFEhAKCHJldmlzaW9uGAIgASgDEi8KCWVuZHBvaW50cxgDIAMoCzIcLmZyb3N0YWdlbnQudjEuTW9kZWxFbmRwb2ludBIqCgZtb2RlbHMYBCADKAsyGi5mcm9zdGFnZW50LnYxLk1vZGVsVGFyZ2V0EjQKD2dsb2JhbF9iaW5kaW5ncxgFIAMoCzIbLmZyb3N0YWdlbnQudjEuTW9kZWxCaW5kaW5nEjoKD2dyb3VwX292ZXJyaWRlcxgGIAMoCzIhLmZyb3N0YWdlbnQudjEuR3JvdXBNb2RlbE92ZXJyaWRlIhEKD0dldFN0YXRlUmVxdWVzdCK5AQoQR2V0U3RhdGVSZXNwb25zZRI3CgZhY3RpdmUYASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhI2CgVkcmFmdBgCIAEoCzInLmZyb3N0YWdlbnQudjEuTW9kZWxSb3V0ZXJDb25maWd1cmF0aW9uEhIKCmxvYWRfZXJyb3IYAyABKAkSIAoYaGFzX2RyYWZ0X3NlY3JldF9jaGFuZ2VzGAQgASgIIlIKEFNhdmVEcmFmdFJlcXVlc3QSPgoNY29uZmlndXJhdGlvbhgBIAEoCzInLmZyb3N0YWdlbnQudjEuTW9kZWxSb3V0ZXJDb25maWd1cmF0aW9uImsKEVNhdmVEcmFmdFJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkSNgoFZHJhZnQYAyABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiJFCh1TZXREcmFmdEVuZHBvaW50U2VjcmV0UmVxdWVzdBITCgtlbmRwb2ludF9pZBgBIAEoCRIPCgdhcGlfa2V5GAIgASgJIlQKHlNldERyYWZ0RW5kcG9pbnRTZWNyZXRSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmNvbmZpZ3VyZWQYAyABKAgiNgofQ2xlYXJEcmFmdEVuZHBvaW50U2VjcmV0UmVxdWVzdBITCgtlbmRwb2ludF9pZBgBIAEoCSJWCiBDbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEhIKCmNvbmZpZ3VyZWQYAyABKAgiFQoTRGlzY2FyZERyYWZ0UmVxdWVzdCJOChREaXNjYXJkRHJhZnRSZXNwb25zZRI2CgVkcmFmdBgBIAEoCzInLmZyb3N0YWdlbnQudjEuTW9kZWxSb3V0ZXJDb25maWd1cmF0aW9uIlkKDlB1Ymxpc2hSZXF1ZXN0EkcKFmV4cGVjdGVkX2NvbmZpZ3VyYXRpb24YASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiJqCg9QdWJsaXNoUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRI3CgZhY3RpdmUYAyABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiIwChlMaXN0VXBzdHJlYW1Nb2RlbHNSZXF1ZXN0EhMKC2VuZHBvaW50X2lkGAEgASgJIjsKGkxpc3RVcHN0cmVhbU1vZGVsc1Jlc3BvbnNlEg4KBm1vZGVscxgBIAMoCRINCgVlcnJvchgCIAEoCSIkChBUZXN0TW9kZWxSZXF1ZXN0EhAKCG1vZGVsX2lkGAEgASgJIlkKEVRlc3RNb2RlbFJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDwoHY29udGVudBgCIAEoCRINCgVlcnJvchgDIAEoCRITCgtkdXJhdGlvbl9tcxgEIAEoAyqGAgoNTW9kZWxXb3JrbG9hZBIeChpNT0RFTF9XT1JLTE9BRF9VTlNQRUNJRklFRBAAEhsKF01PREVMX1dPUktMT0FEX0RJQUxPR1VFEAESGwoXTU9ERUxfV09SS0xPQURfU1VCQUdFTlQQAhIZChVNT0RFTF9XT1JLTE9BRF9WSVNJT04QAxIdChlNT0RFTF9XT1JLTE9BRF9SRUZMRUNUSU9OEAQSIQodTU9ERUxfV09SS0xPQURfTUVNT1JZX0VYVFJBQ1QQBRIgChxNT0RFTF9XT1JLTE9BRF9HUk9VUF9DT01QQUNUEAYSHAoYTU9ERUxfV09SS0xPQURfRU1CRURESU5HEAcqvQEKEE1vZGVsQmluZGluZ01vZGUSIgoeTU9ERUxfQklORElOR19NT0RFX1VOU1BFQ0lGSUVEEAASHgoaTU9ERUxfQklORElOR19NT0RFX0lOSEVSSVQQARIcChhNT0RFTF9CSU5ESU5HX01PREVfTU9ERUwQAhIfChtNT0RFTF9CSU5ESU5HX01PREVfRElTQUJMRUQQAxImCiJNT0RFTF9CSU5ESU5HX01PREVfRk9MTE9XX0RJQUxPR1VFEAQq2QEKEk1vZGVsQVBJS2V5U3RvcmFnZRIlCiFNT0RFTF9BUElfS0VZX1NUT1JBR0VfVU5TUEVDSUZJRUQQABIgChxNT0RFTF9BUElfS0VZX1NUT1JBR0VfTUFOVUFMEAESHQoZTU9ERUxfQVBJX0tFWV9TVE9SQUdFX0VOVhACEiUKIU1PREVMX0FQSV9LRVlfU1RPUkFHRV9TRUNSRVRfRklMRRADEjQKME1PREVMX0FQSV9LRVlfU1RPUkFHRV9XSU5ET1dTX0NSRURFTlRJQUxfTUFOQUdFUhAEMvoGChJNb2RlbFJvdXRlclNlcnZpY2USSwoIR2V0U3RhdGUSHi5mcm9zdGFnZW50LnYxLkdldFN0YXRlUmVxdWVzdBofLmZyb3N0YWdlbnQudjEuR2V0U3RhdGVSZXNwb25zZRJOCglTYXZlRHJhZnQSHy5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlc3BvbnNlEnUKFlNldERyYWZ0RW5kcG9pbnRTZWNyZXQSLC5mcm9zdGFnZW50LnYxLlNldERyYWZ0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0Gi0uZnJvc3RhZ2VudC52MS5TZXREcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USewoYQ2xlYXJEcmFmdEVuZHBvaW50U2VjcmV0Ei4uZnJvc3RhZ2VudC52MS5DbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0Gi8uZnJvc3RhZ2VudC52MS5DbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXNwb25zZRJXCgxEaXNjYXJkRHJhZnQSIi5mcm9zdGFnZW50LnYxLkRpc2NhcmREcmFmdFJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRpc2NhcmREcmFmdFJlc3BvbnNlEkgKB1B1Ymxpc2gSHS5mcm9zdGFnZW50LnYxLlB1Ymxpc2hSZXF1ZXN0Gh4uZnJvc3RhZ2VudC52MS5QdWJsaXNoUmVzcG9uc2USaQoSTGlzdFVwc3RyZWFtTW9kZWxzEiguZnJvc3RhZ2VudC52MS5MaXN0VXBzdHJlYW1Nb2RlbHNSZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5MaXN0VXBzdHJlYW1Nb2RlbHNSZXNwb25zZRJOCglUZXN0TW9kZWwSHy5mcm9zdGFnZW50LnYxLlRlc3RNb2RlbFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlRlc3RNb2RlbFJlc3BvbnNlEnUKFkluZmVyTW9kZWxDYXBhYmlsaXRpZXMSLC5mcm9zdGFnZW50LnYxLkluZmVyTW9kZWxDYXBhYmlsaXRpZXNSZXF1ZXN0Gi0uZnJvc3RhZ2VudC52MS5JbmZlck1vZGVsQ2FwYWJpbGl0aWVzUmVzcG9uc2ViBnByb3RvMw");
+  fileDesc("CiBmcm9zdGFnZW50L3YxL21vZGVsX3JvdXRlci5wcm90bxINZnJvc3RhZ2VudC52MSIzCh1JbmZlck1vZGVsQ2FwYWJpbGl0aWVzUmVxdWVzdBISCgptb2RlbF9uYW1lGAEgASgJIkUKHkluZmVyTW9kZWxDYXBhYmlsaXRpZXNSZXNwb25zZRINCgVmb3VuZBgBIAEoCBIUCgxjYXBhYmlsaXRpZXMYAiADKAki4wEKDU1vZGVsRW5kcG9pbnQSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhAKCGJhc2VfdXJsGAMgASgJEg8KB2VuYWJsZWQYBSABKAgSOQoOYXBpX2tleV9zb3VyY2UYBiABKA4yIS5mcm9zdGFnZW50LnYxLk1vZGVsQVBJS2V5U3RvcmFnZRITCgthcGlfa2V5X3JlZhgHIAEoCRIaChJhcGlfa2V5X2NvbmZpZ3VyZWQYCCABKAgSEgoKYXBpX2Zvcm1hdBgJIAEoCUoECAQQBVIHYXBpX2tleSKdAQoLTW9kZWxUYXJnZXQSCgoCaWQYASABKAkSFAoMZGlzcGxheV9uYW1lGAIgASgJEhMKC2VuZHBvaW50X2lkGAMgASgJEhYKDnVwc3RyZWFtX21vZGVsGAQgASgJEg8KB2VuYWJsZWQYBSABKAgSFAoMY2FwYWJpbGl0aWVzGAYgAygJEhgKEG1heF9pbnB1dF90b2tlbnMYByABKAUifwoMTW9kZWxCaW5kaW5nEi4KCHdvcmtsb2FkGAEgASgOMhwuZnJvc3RhZ2VudC52MS5Nb2RlbFdvcmtsb2FkEi0KBG1vZGUYAiABKA4yHy5mcm9zdGFnZW50LnYxLk1vZGVsQmluZGluZ01vZGUSEAoIbW9kZWxfaWQYAyABKAkiZwoSR3JvdXBNb2RlbE92ZXJyaWRlEhAKCHBsYXRmb3JtGAEgASgJEhAKCGdyb3VwX2lkGAIgASgJEi0KCGJpbmRpbmdzGAMgAygLMhsuZnJvc3RhZ2VudC52MS5Nb2RlbEJpbmRpbmcijAIKGE1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhIPCgd2ZXJzaW9uGAEgASgFEhAKCHJldmlzaW9uGAIgASgDEi8KCWVuZHBvaW50cxgDIAMoCzIcLmZyb3N0YWdlbnQudjEuTW9kZWxFbmRwb2ludBIqCgZtb2RlbHMYBCADKAsyGi5mcm9zdGFnZW50LnYxLk1vZGVsVGFyZ2V0EjQKD2dsb2JhbF9iaW5kaW5ncxgFIAMoCzIbLmZyb3N0YWdlbnQudjEuTW9kZWxCaW5kaW5nEjoKD2dyb3VwX292ZXJyaWRlcxgGIAMoCzIhLmZyb3N0YWdlbnQudjEuR3JvdXBNb2RlbE92ZXJyaWRlIi0KD0dldFN0YXRlUmVxdWVzdBIaChJyZWRhY3RfY3JlZGVudGlhbHMYASABKAgiuQEKEEdldFN0YXRlUmVzcG9uc2USNwoGYWN0aXZlGAEgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24SNgoFZHJhZnQYAiABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhISCgpsb2FkX2Vycm9yGAMgASgJEiAKGGhhc19kcmFmdF9zZWNyZXRfY2hhbmdlcxgEIAEoCCJSChBTYXZlRHJhZnRSZXF1ZXN0Ej4KDWNvbmZpZ3VyYXRpb24YASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiJrChFTYXZlRHJhZnRSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJEjYKBWRyYWZ0GAMgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24iRQodU2V0RHJhZnRFbmRwb2ludFNlY3JldFJlcXVlc3QSEwoLZW5kcG9pbnRfaWQYASABKAkSDwoHYXBpX2tleRgCIAEoCSJUCh5TZXREcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRISCgpjb25maWd1cmVkGAMgASgIIjYKH0NsZWFyRHJhZnRFbmRwb2ludFNlY3JldFJlcXVlc3QSEwoLZW5kcG9pbnRfaWQYASABKAkiVgogQ2xlYXJEcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRISCgpjb25maWd1cmVkGAMgASgIIhUKE0Rpc2NhcmREcmFmdFJlcXVlc3QiTgoURGlzY2FyZERyYWZ0UmVzcG9uc2USNgoFZHJhZnQYASABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbiJZCg5QdWJsaXNoUmVxdWVzdBJHChZleHBlY3RlZF9jb25maWd1cmF0aW9uGAEgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24iagoPUHVibGlzaFJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkSNwoGYWN0aXZlGAMgASgLMicuZnJvc3RhZ2VudC52MS5Nb2RlbFJvdXRlckNvbmZpZ3VyYXRpb24iRQoZTGlzdFVwc3RyZWFtTW9kZWxzUmVxdWVzdBITCgtlbmRwb2ludF9pZBgBIAEoCRITCgthY3RpdmVfb25seRgCIAEoCCI7ChpMaXN0VXBzdHJlYW1Nb2RlbHNSZXNwb25zZRIOCgZtb2RlbHMYASADKAkSDQoFZXJyb3IYAiABKAkiTgoQVGVzdE1vZGVsUmVxdWVzdBIQCghtb2RlbF9pZBgBIAEoCRITCgtlbmRwb2ludF9pZBgCIAEoCRITCgthY3RpdmVfb25seRgDIAEoCCJZChFUZXN0TW9kZWxSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg8KB2NvbnRlbnQYAiABKAkSDQoFZXJyb3IYAyABKAkSEwoLZHVyYXRpb25fbXMYBCABKAMioQEKGUFwcGx5Q29uZmlndXJhdGlvblJlcXVlc3QSEQoJb3BlcmF0aW9uGAEgASgJEhMKC2VuZHBvaW50X2lkGAIgASgJEi4KCGVuZHBvaW50GAMgASgLMhwuZnJvc3RhZ2VudC52MS5Nb2RlbEVuZHBvaW50EiwKB2JpbmRpbmcYBCABKAsyGy5mcm9zdGFnZW50LnYxLk1vZGVsQmluZGluZyKEAQoaQXBwbHlDb25maWd1cmF0aW9uUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRI3CgZhY3RpdmUYAyABKAsyJy5mcm9zdGFnZW50LnYxLk1vZGVsUm91dGVyQ29uZmlndXJhdGlvbhINCgVzdGF0ZRgEIAEoCSJbChhTZXRFbmRwb2ludFNlY3JldFJlcXVlc3QSEwoLZW5kcG9pbnRfaWQYASABKAkSDwoHYXBpX2tleRgCIAEoCRIZChFleHBlY3RlZF9yZXZpc2lvbhgDIAEoAyJMChpDbGVhckVuZHBvaW50U2VjcmV0UmVxdWVzdBITCgtlbmRwb2ludF9pZBgBIAEoCRIZChFleHBlY3RlZF9yZXZpc2lvbhgCIAEoAyqGAgoNTW9kZWxXb3JrbG9hZBIeChpNT0RFTF9XT1JLTE9BRF9VTlNQRUNJRklFRBAAEhsKF01PREVMX1dPUktMT0FEX0RJQUxPR1VFEAESGwoXTU9ERUxfV09SS0xPQURfU1VCQUdFTlQQAhIZChVNT0RFTF9XT1JLTE9BRF9WSVNJT04QAxIdChlNT0RFTF9XT1JLTE9BRF9SRUZMRUNUSU9OEAQSIQodTU9ERUxfV09SS0xPQURfTUVNT1JZX0VYVFJBQ1QQBRIgChxNT0RFTF9XT1JLTE9BRF9HUk9VUF9DT01QQUNUEAYSHAoYTU9ERUxfV09SS0xPQURfRU1CRURESU5HEAcqvQEKEE1vZGVsQmluZGluZ01vZGUSIgoeTU9ERUxfQklORElOR19NT0RFX1VOU1BFQ0lGSUVEEAASHgoaTU9ERUxfQklORElOR19NT0RFX0lOSEVSSVQQARIcChhNT0RFTF9CSU5ESU5HX01PREVfTU9ERUwQAhIfChtNT0RFTF9CSU5ESU5HX01PREVfRElTQUJMRUQQAxImCiJNT0RFTF9CSU5ESU5HX01PREVfRk9MTE9XX0RJQUxPR1VFEAQq2QEKEk1vZGVsQVBJS2V5U3RvcmFnZRIlCiFNT0RFTF9BUElfS0VZX1NUT1JBR0VfVU5TUEVDSUZJRUQQABIgChxNT0RFTF9BUElfS0VZX1NUT1JBR0VfTUFOVUFMEAESHQoZTU9ERUxfQVBJX0tFWV9TVE9SQUdFX0VOVhACEiUKIU1PREVMX0FQSV9LRVlfU1RPUkFHRV9TRUNSRVRfRklMRRADEjQKME1PREVMX0FQSV9LRVlfU1RPUkFHRV9XSU5ET1dTX0NSRURFTlRJQUxfTUFOQUdFUhAEMrsJChJNb2RlbFJvdXRlclNlcnZpY2USSwoIR2V0U3RhdGUSHi5mcm9zdGFnZW50LnYxLkdldFN0YXRlUmVxdWVzdBofLmZyb3N0YWdlbnQudjEuR2V0U3RhdGVSZXNwb25zZRJOCglTYXZlRHJhZnQSHy5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlNhdmVEcmFmdFJlc3BvbnNlEnUKFlNldERyYWZ0RW5kcG9pbnRTZWNyZXQSLC5mcm9zdGFnZW50LnYxLlNldERyYWZ0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0Gi0uZnJvc3RhZ2VudC52MS5TZXREcmFmdEVuZHBvaW50U2VjcmV0UmVzcG9uc2USewoYQ2xlYXJEcmFmdEVuZHBvaW50U2VjcmV0Ei4uZnJvc3RhZ2VudC52MS5DbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0Gi8uZnJvc3RhZ2VudC52MS5DbGVhckRyYWZ0RW5kcG9pbnRTZWNyZXRSZXNwb25zZRJXCgxEaXNjYXJkRHJhZnQSIi5mcm9zdGFnZW50LnYxLkRpc2NhcmREcmFmdFJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRpc2NhcmREcmFmdFJlc3BvbnNlEkgKB1B1Ymxpc2gSHS5mcm9zdGFnZW50LnYxLlB1Ymxpc2hSZXF1ZXN0Gh4uZnJvc3RhZ2VudC52MS5QdWJsaXNoUmVzcG9uc2USaQoSTGlzdFVwc3RyZWFtTW9kZWxzEiguZnJvc3RhZ2VudC52MS5MaXN0VXBzdHJlYW1Nb2RlbHNSZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5MaXN0VXBzdHJlYW1Nb2RlbHNSZXNwb25zZRJOCglUZXN0TW9kZWwSHy5mcm9zdGFnZW50LnYxLlRlc3RNb2RlbFJlcXVlc3QaIC5mcm9zdGFnZW50LnYxLlRlc3RNb2RlbFJlc3BvbnNlEnUKFkluZmVyTW9kZWxDYXBhYmlsaXRpZXMSLC5mcm9zdGFnZW50LnYxLkluZmVyTW9kZWxDYXBhYmlsaXRpZXNSZXF1ZXN0Gi0uZnJvc3RhZ2VudC52MS5JbmZlck1vZGVsQ2FwYWJpbGl0aWVzUmVzcG9uc2USaQoSQXBwbHlDb25maWd1cmF0aW9uEiguZnJvc3RhZ2VudC52MS5BcHBseUNvbmZpZ3VyYXRpb25SZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5BcHBseUNvbmZpZ3VyYXRpb25SZXNwb25zZRJnChFTZXRFbmRwb2ludFNlY3JldBInLmZyb3N0YWdlbnQudjEuU2V0RW5kcG9pbnRTZWNyZXRSZXF1ZXN0GikuZnJvc3RhZ2VudC52MS5BcHBseUNvbmZpZ3VyYXRpb25SZXNwb25zZRJrChNDbGVhckVuZHBvaW50U2VjcmV0EikuZnJvc3RhZ2VudC52MS5DbGVhckVuZHBvaW50U2VjcmV0UmVxdWVzdBopLmZyb3N0YWdlbnQudjEuQXBwbHlDb25maWd1cmF0aW9uUmVzcG9uc2ViBnByb3RvMw");
 
 /**
  * @generated from message frostagent.v1.InferModelCapabilitiesRequest
@@ -255,6 +255,10 @@ export const ModelRouterConfigurationSchema: GenMessage<ModelRouterConfiguration
  * @generated from message frostagent.v1.GetStateRequest
  */
 export type GetStateRequest = Message<"frostagent.v1.GetStateRequest"> & {
+  /**
+   * @generated from field: bool redact_credentials = 1;
+   */
+  redactCredentials: boolean;
 };
 
 /**
@@ -518,6 +522,11 @@ export type ListUpstreamModelsRequest = Message<"frostagent.v1.ListUpstreamModel
    * @generated from field: string endpoint_id = 1;
    */
   endpointId: string;
+
+  /**
+   * @generated from field: bool active_only = 2;
+   */
+  activeOnly: boolean;
 };
 
 /**
@@ -557,6 +566,16 @@ export type TestModelRequest = Message<"frostagent.v1.TestModelRequest"> & {
    * @generated from field: string model_id = 1;
    */
   modelId: string;
+
+  /**
+   * @generated from field: string endpoint_id = 2;
+   */
+  endpointId: string;
+
+  /**
+   * @generated from field: bool active_only = 3;
+   */
+  activeOnly: boolean;
 };
 
 /**
@@ -597,6 +616,119 @@ export type TestModelResponse = Message<"frostagent.v1.TestModelResponse"> & {
  */
 export const TestModelResponseSchema: GenMessage<TestModelResponse> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_model_router, 22);
+
+/**
+ * @generated from message frostagent.v1.ApplyConfigurationRequest
+ */
+export type ApplyConfigurationRequest = Message<"frostagent.v1.ApplyConfigurationRequest"> & {
+  /**
+   * @generated from field: string operation = 1;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: string endpoint_id = 2;
+   */
+  endpointId: string;
+
+  /**
+   * @generated from field: frostagent.v1.ModelEndpoint endpoint = 3;
+   */
+  endpoint?: ModelEndpoint | undefined;
+
+  /**
+   * @generated from field: frostagent.v1.ModelBinding binding = 4;
+   */
+  binding?: ModelBinding | undefined;
+};
+
+/**
+ * Describes the message frostagent.v1.ApplyConfigurationRequest.
+ * Use `create(ApplyConfigurationRequestSchema)` to create a new message.
+ */
+export const ApplyConfigurationRequestSchema: GenMessage<ApplyConfigurationRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 23);
+
+/**
+ * @generated from message frostagent.v1.ApplyConfigurationResponse
+ */
+export type ApplyConfigurationResponse = Message<"frostagent.v1.ApplyConfigurationResponse"> & {
+  /**
+   * @generated from field: bool success = 1;
+   */
+  success: boolean;
+
+  /**
+   * @generated from field: string error = 2;
+   */
+  error: string;
+
+  /**
+   * @generated from field: frostagent.v1.ModelRouterConfiguration active = 3;
+   */
+  active?: ModelRouterConfiguration | undefined;
+
+  /**
+   * @generated from field: string state = 4;
+   */
+  state: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ApplyConfigurationResponse.
+ * Use `create(ApplyConfigurationResponseSchema)` to create a new message.
+ */
+export const ApplyConfigurationResponseSchema: GenMessage<ApplyConfigurationResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 24);
+
+/**
+ * @generated from message frostagent.v1.SetEndpointSecretRequest
+ */
+export type SetEndpointSecretRequest = Message<"frostagent.v1.SetEndpointSecretRequest"> & {
+  /**
+   * @generated from field: string endpoint_id = 1;
+   */
+  endpointId: string;
+
+  /**
+   * @generated from field: string api_key = 2;
+   */
+  apiKey: string;
+
+  /**
+   * @generated from field: int64 expected_revision = 3;
+   */
+  expectedRevision: bigint;
+};
+
+/**
+ * Describes the message frostagent.v1.SetEndpointSecretRequest.
+ * Use `create(SetEndpointSecretRequestSchema)` to create a new message.
+ */
+export const SetEndpointSecretRequestSchema: GenMessage<SetEndpointSecretRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 25);
+
+/**
+ * @generated from message frostagent.v1.ClearEndpointSecretRequest
+ */
+export type ClearEndpointSecretRequest = Message<"frostagent.v1.ClearEndpointSecretRequest"> & {
+  /**
+   * @generated from field: string endpoint_id = 1;
+   */
+  endpointId: string;
+
+  /**
+   * @generated from field: int64 expected_revision = 2;
+   */
+  expectedRevision: bigint;
+};
+
+/**
+ * Describes the message frostagent.v1.ClearEndpointSecretRequest.
+ * Use `create(ClearEndpointSecretRequestSchema)` to create a new message.
+ */
+export const ClearEndpointSecretRequestSchema: GenMessage<ClearEndpointSecretRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_model_router, 26);
 
 /**
  * @generated from enum frostagent.v1.ModelWorkload
@@ -796,6 +928,33 @@ export const ModelRouterService: GenService<{
     methodKind: "unary";
     input: typeof InferModelCapabilitiesRequestSchema;
     output: typeof InferModelCapabilitiesResponseSchema;
+  },
+  /**
+   * Direct management mutations used by frostctl. The existing draft RPCs
+   * remain for the Web editor and retain their owner/conflict semantics.
+   *
+   * @generated from rpc frostagent.v1.ModelRouterService.ApplyConfiguration
+   */
+  applyConfiguration: {
+    methodKind: "unary";
+    input: typeof ApplyConfigurationRequestSchema;
+    output: typeof ApplyConfigurationResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.ModelRouterService.SetEndpointSecret
+   */
+  setEndpointSecret: {
+    methodKind: "unary";
+    input: typeof SetEndpointSecretRequestSchema;
+    output: typeof ApplyConfigurationResponseSchema;
+  },
+  /**
+   * @generated from rpc frostagent.v1.ModelRouterService.ClearEndpointSecret
+   */
+  clearEndpointSecret: {
+    methodKind: "unary";
+    input: typeof ClearEndpointSecretRequestSchema;
+    output: typeof ApplyConfigurationResponseSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_frostagent_v1_model_router, 0);

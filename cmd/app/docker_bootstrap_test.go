@@ -29,7 +29,7 @@ func TestDockerStartupRejectsUnsafeConfiguration(t *testing.T) {
 		name, token, management, adapter, wantError string
 	}{
 		{
-			name: "missing credential", management: "127.0.0.1:0", adapter: "127.0.0.1:1",
+			name: "invalid credential", token: "short", management: "127.0.0.1:0", adapter: "127.0.0.1:1",
 			wantError: dockerBootstrapTokenKey,
 		},
 		{
@@ -60,7 +60,7 @@ func TestDockerControlTokenBootstrap(t *testing.T) {
 		container, loopback, wantError   bool
 	}{
 		{name: "first startup", container: true, bootstrap: token},
-		{name: "missing credential", container: true, wantError: true},
+		{name: "missing credential allows IPC setup", container: true},
 		{name: "short credential", container: true, bootstrap: "short", wantError: true},
 		{name: "multiline credential", container: true, bootstrap: token + "\ninvalid", wantError: true},
 		{name: "NUL credential", container: true, bootstrap: token + "\x00invalid", wantError: true},
@@ -71,7 +71,7 @@ func TestDockerControlTokenBootstrap(t *testing.T) {
 		{name: "existing token wins", container: true, existing: "synthetic-existing-token", bootstrap: token},
 		{name: "existing admin wins", container: true, admin: "synthetic-admin-token", bootstrap: token},
 		{name: "existing token needs no bootstrap", container: true, existing: "synthetic-existing-token"},
-		{name: "native startup"},
+		{name: "native startup", bootstrap: token},
 		{name: "host namespace startup", container: true, loopback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestDockerControlTokenBootstrap(t *testing.T) {
 				t.Fatal("bootstrap error disclosed credential")
 			}
 			want := tc.existing
-			if !tc.wantError && tc.container && !tc.loopback && tc.existing == "" && tc.admin == "" {
+			if !tc.wantError && tc.existing == "" && tc.admin == "" {
 				want = tc.bootstrap
 			}
 			if global.Get("MCP_CONTROL_TOKEN") != want {
@@ -173,7 +173,7 @@ func TestDockerControlTokenDatabaseSwitch(t *testing.T) {
 		return initializeDockerControlToken(next.GlobalConfig(), func(string) string { return input })
 	}
 	gateway.apply = func(next *instance.Manager) error {
-		if next.GlobalConfig().Get("MCP_CONTROL_TOKEN") == "" {
+		if input != "" && next.GlobalConfig().Get("MCP_CONTROL_TOKEN") == "" {
 			t.Error("listeners were applied before target credential initialization")
 		}
 		return next.ApplyGlobalSettings()
@@ -189,8 +189,9 @@ func TestDockerControlTokenDatabaseSwitch(t *testing.T) {
 			t.Fatalf("published API status=%d, want=%d", response.Code, want)
 		}
 	}
+	input = "synthetic-short"
 	if err := gateway.switchTo(context.Background(), target); err == nil {
-		t.Fatal("unconfigured target database was accepted without bootstrap input")
+		t.Fatal("invalid bootstrap input was accepted for the target database")
 	}
 	manager, config, _ := gateway.snapshot()
 	stored, err := gateway.bootstrap.Load(context.Background())
@@ -199,6 +200,18 @@ func TestDockerControlTokenDatabaseSwitch(t *testing.T) {
 	}
 	assertAccess(original, http.StatusOK)
 	assertAccess(bootstrap, http.StatusUnauthorized)
+	// Without bootstrap input the switch succeeds, but HTTP management stays
+	// locked until the target database has its own credential.
+	input = ""
+	if err := gateway.switchTo(context.Background(), target); err != nil {
+		t.Fatal("uninitialized target database was refused without bootstrap input:", err)
+	}
+	assertAccess(original, http.StatusUnauthorized)
+	assertAccess(bootstrap, http.StatusUnauthorized)
+	if err := gateway.switchTo(context.Background(), storage.Config{Backend: storage.SQLite}); err != nil {
+		t.Fatal(err)
+	}
+	assertAccess(original, http.StatusOK)
 	input = bootstrap
 	if err := gateway.switchTo(context.Background(), target); err != nil {
 		t.Fatal(err)

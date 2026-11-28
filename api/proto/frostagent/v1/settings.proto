@@ -4,6 +4,7 @@ package frostagent.v1;
 
 // SettingsService manages environment variable configuration.
 service SettingsService {
+  rpc GetConfigSchema(GetConfigSchemaRequest) returns (GetConfigSchemaResponse);
   rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
   rpc UpdateEnvVar(UpdateEnvVarRequest) returns (UpdateEnvVarResponse);
   rpc UpdateEnvVars(UpdateEnvVarsRequest) returns (UpdateEnvVarsResponse);
@@ -20,9 +21,14 @@ message EnvVar {
   string reset_hint = 4;
   // Value comes from global inheritance rather than an instance override.
   bool is_inherited = 5;
+  bool secret_configured = 6;
+  string source = 7;
 }
 
-message ListEnvVarsRequest {}
+message ListEnvVarsRequest {
+  bool redact_secrets = 1;
+  string scope = 2;
+}
 
 message ListEnvVarsResponse {
   repeated EnvVar env_vars = 1;
@@ -43,11 +49,17 @@ message UpdateEnvVarResponse {
 message UpdateEnvVarsRequest {
   repeated EnvVar updates = 1;
   repeated string clear_keys = 2;
+  bool dry_run = 3;
+  string scope = 4;
+  bool secret_input = 5;
 }
 
 message UpdateEnvVarsResponse {
   bool success = 1;
   string error = 2;
+  repeated ConfigValidationError errors = 3;
+  string state = 4;
+  repeated ConfigChange changes = 5;
 }
 
 message DeleteEnvVarRequest {
@@ -72,4 +84,30 @@ message UpdateRawEnvFileRequest {
 message UpdateRawEnvFileResponse {
   bool success = 1;
   string error = 2;
+}
+
+
+message GetConfigSchemaRequest { string scope = 1; }
+message GetConfigSchemaResponse { repeated ConfigField fields = 1; }
+message ConfigField {
+ string key = 1;
+ string type = 2;
+ string scope = 3;
+ string default_value = 4;
+ string constraints = 5;
+ bool secret = 6;
+ bool restart_required = 7;
+ string description = 8;
+ string default_hint = 9;
+}
+message ConfigValidationError { string key = 1; string message = 2; }
+
+message ConfigChange {
+ string key = 1;
+ string before = 2;
+ string after = 3;
+ bool removed = 4;
+ bool secret = 5;
+ bool configured_before = 6;
+ bool configured_after = 7;
 }

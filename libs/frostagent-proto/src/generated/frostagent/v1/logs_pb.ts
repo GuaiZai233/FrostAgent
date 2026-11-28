@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/logs.proto.
  */
 export const file_frostagent_v1_logs: GenFile = /*@__PURE__*/
-  fileDesc("Chhmcm9zdGFnZW50L3YxL2xvZ3MucHJvdG8SDWZyb3N0YWdlbnQudjEinQIKCExvZ0VudHJ5EhMKC2luc3RhbmNlX2lkGBQgASgJEhUKDWluc3RhbmNlX25hbWUYFSABKAkSCgoCaWQYASABKAkSEQoJdGltZXN0YW1wGAIgASgJEiYKBWxldmVsGAMgASgOMhcuZnJvc3RhZ2VudC52MS5Mb2dMZXZlbBIOCgZzb3VyY2UYBCABKAkSDwoHc3VtbWFyeRgFIAEoCRISCgpoYXNfZGV0YWlsGAYgASgIEhQKDHJlcXVlc3RfYm9keRgHIAEoCRIVCg1yZXNwb25zZV9ib2R5GAggASgJEhAKCHRyYWNlX2lkGAkgASgJEhIKCmVycm9yX3V1aWQYCiABKAkSFgoObWVzc2FnZV9yZWZfaWQYCyABKAkirwEKD0xpc3RMb2dzUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEioKCW1pbl9sZXZlbBgCIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgDIAEoCRISCgplcnJvcl91dWlkGAQgASgJEhYKDm1lc3NhZ2VfcmVmX2lkGAUgASgJImsKEExpc3RMb2dzUmVzcG9uc2USKAoHZW50cmllcxgBIAMoCzIXLmZyb3N0YWdlbnQudjEuTG9nRW50cnkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbiJWChFTdHJlYW1Mb2dzUmVxdWVzdBIqCgltaW5fbGV2ZWwYASABKA4yFy5mcm9zdGFnZW50LnYxLkxvZ0xldmVsEhUKDXNvdXJjZV9maWx0ZXIYAiABKAkiEgoQQ2xlYXJMb2dzUmVxdWVzdCIkChFDbGVhckxvZ3NSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIKncKCExvZ0xldmVsEhkKFUxPR19MRVZFTF9VTlNQRUNJRklFRBAAEhMKD0xPR19MRVZFTF9ERUJVRxABEhIKDkxPR19MRVZFTF9JTkZPEAISEgoOTE9HX0xFVkVMX1dBUk4QAxITCg9MT0dfTEVWRUxfRVJST1IQBDL0AQoKTG9nU2VydmljZRJLCghMaXN0TG9ncxIeLmZyb3N0YWdlbnQudjEuTGlzdExvZ3NSZXF1ZXN0Gh8uZnJvc3RhZ2VudC52MS5MaXN0TG9nc1Jlc3BvbnNlEkkKClN0cmVhbUxvZ3MSIC5mcm9zdGFnZW50LnYxLlN0cmVhbUxvZ3NSZXF1ZXN0GhcuZnJvc3RhZ2VudC52MS5Mb2dFbnRyeTABEk4KCUNsZWFyTG9ncxIfLmZyb3N0YWdlbnQudjEuQ2xlYXJMb2dzUmVxdWVzdBogLmZyb3N0YWdlbnQudjEuQ2xlYXJMb2dzUmVzcG9uc2ViBnByb3RvMw", [file_frostagent_v1_common]);
+  fileDesc("Chhmcm9zdGFnZW50L3YxL2xvZ3MucHJvdG8SDWZyb3N0YWdlbnQudjEinQIKCExvZ0VudHJ5EhMKC2luc3RhbmNlX2lkGBQgASgJEhUKDWluc3RhbmNlX25hbWUYFSABKAkSCgoCaWQYASABKAkSEQoJdGltZXN0YW1wGAIgASgJEiYKBWxldmVsGAMgASgOMhcuZnJvc3RhZ2VudC52MS5Mb2dMZXZlbBIOCgZzb3VyY2UYBCABKAkSDwoHc3VtbWFyeRgFIAEoCRISCgpoYXNfZGV0YWlsGAYgASgIEhQKDHJlcXVlc3RfYm9keRgHIAEoCRIVCg1yZXNwb25zZV9ib2R5GAggASgJEhAKCHRyYWNlX2lkGAkgASgJEhIKCmVycm9yX3V1aWQYCiABKAkSFgoObWVzc2FnZV9yZWZfaWQYCyABKAkilwIKD0xpc3RMb2dzUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEioKCW1pbl9sZXZlbBgCIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgDIAEoCRISCgplcnJvcl91dWlkGAQgASgJEhYKDm1lc3NhZ2VfcmVmX2lkGAUgASgJEg0KBXNpbmNlGAYgASgJEg0KBXVudGlsGAcgASgJEhAKCHRyYWNlX2lkGAggASgJEg4KBnNlYXJjaBgJIAEoCRINCgVzY29wZRgKIAEoCRIXCg9pbmNsdWRlX3BheWxvYWQYCyABKAgimQEKEExpc3RMb2dzUmVzcG9uc2USKAoHZW50cmllcxgBIAMoCzIXLmZyb3N0YWdlbnQudjEuTG9nRW50cnkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbhIsCghjb3ZlcmFnZRgDIAEoCzIaLmZyb3N0YWdlbnQudjEuTG9nQ292ZXJhZ2UipQEKEVN0cmVhbUxvZ3NSZXF1ZXN0EioKCW1pbl9sZXZlbBgBIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgCIAEoCRINCgVzY29wZRgDIAEoCRINCgVzaW5jZRgEIAEoCRINCgV1bnRpbBgFIAEoCRIQCgh0cmFjZV9pZBgGIAEoCRIOCgZzZWFyY2gYByABKAkiIQoQQ2xlYXJMb2dzUmVxdWVzdBINCgVzY29wZRgBIAEoCSIkChFDbGVhckxvZ3NSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIInsKC0xvZ0NvdmVyYWdlEhAKCGVhcmxpZXN0GAEgASgJEg4KBmxhdGVzdBgCIAEoCRISCgpwZXJzaXN0ZW50GAMgASgIEhEKCXJldGVudGlvbhgEIAEoCRIUCgxidWRnZXRfYnl0ZXMYBSABKAMSDQoFZXJyb3IYBiABKAkiqgIKEExvZ1N0YXRzUmVzcG9uc2USDQoFdG90YWwYASABKAMSOwoGbGV2ZWxzGAIgAygLMisuZnJvc3RhZ2VudC52MS5Mb2dTdGF0c1Jlc3BvbnNlLkxldmVsc0VudHJ5Ej0KB3NvdXJjZXMYAyADKAsyLC5mcm9zdGFnZW50LnYxLkxvZ1N0YXRzUmVzcG9uc2UuU291cmNlc0VudHJ5EiwKCGNvdmVyYWdlGAQgASgLMhouZnJvc3RhZ2VudC52MS5Mb2dDb3ZlcmFnZRotCgtMZXZlbHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAM6AjgBGi4KDFNvdXJjZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAM6AjgBKncKCExvZ0xldmVsEhkKFUxPR19MRVZFTF9VTlNQRUNJRklFRBAAEhMKD0xPR19MRVZFTF9ERUJVRxABEhIKDkxPR19MRVZFTF9JTkZPEAISEgoOTE9HX0xFVkVMX1dBUk4QAxITCg9MT0dfTEVWRUxfRVJST1IQBDLEAgoKTG9nU2VydmljZRJOCgtHZXRMb2dTdGF0cxIeLmZyb3N0YWdlbnQudjEuTGlzdExvZ3NSZXF1ZXN0Gh8uZnJvc3RhZ2VudC52MS5Mb2dTdGF0c1Jlc3BvbnNlEksKCExpc3RMb2dzEh4uZnJvc3RhZ2VudC52MS5MaXN0TG9nc1JlcXVlc3QaHy5mcm9zdGFnZW50LnYxLkxpc3RMb2dzUmVzcG9uc2USSQoKU3RyZWFtTG9ncxIgLmZyb3N0YWdlbnQudjEuU3RyZWFtTG9nc1JlcXVlc3QaFy5mcm9zdGFnZW50LnYxLkxvZ0VudHJ5MAESTgoJQ2xlYXJMb2dzEh8uZnJvc3RhZ2VudC52MS5DbGVhckxvZ3NSZXF1ZXN0GiAuZnJvc3RhZ2VudC52MS5DbGVhckxvZ3NSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.LogEntry
@@ -126,6 +126,36 @@ export type ListLogsRequest = Message<"frostagent.v1.ListLogsRequest"> & {
    * @generated from field: string message_ref_id = 5;
    */
   messageRefId: string;
+
+  /**
+   * @generated from field: string since = 6;
+   */
+  since: string;
+
+  /**
+   * @generated from field: string until = 7;
+   */
+  until: string;
+
+  /**
+   * @generated from field: string trace_id = 8;
+   */
+  traceId: string;
+
+  /**
+   * @generated from field: string search = 9;
+   */
+  search: string;
+
+  /**
+   * @generated from field: string scope = 10;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: bool include_payload = 11;
+   */
+  includePayload: boolean;
 };
 
 /**
@@ -148,6 +178,11 @@ export type ListLogsResponse = Message<"frostagent.v1.ListLogsResponse"> & {
    * @generated from field: frostagent.v1.Pagination pagination = 2;
    */
   pagination?: Pagination | undefined;
+
+  /**
+   * @generated from field: frostagent.v1.LogCoverage coverage = 3;
+   */
+  coverage?: LogCoverage | undefined;
 };
 
 /**
@@ -170,6 +205,31 @@ export type StreamLogsRequest = Message<"frostagent.v1.StreamLogsRequest"> & {
    * @generated from field: string source_filter = 2;
    */
   sourceFilter: string;
+
+  /**
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string since = 4;
+   */
+  since: string;
+
+  /**
+   * @generated from field: string until = 5;
+   */
+  until: string;
+
+  /**
+   * @generated from field: string trace_id = 6;
+   */
+  traceId: string;
+
+  /**
+   * @generated from field: string search = 7;
+   */
+  search: string;
 };
 
 /**
@@ -183,6 +243,10 @@ export const StreamLogsRequestSchema: GenMessage<StreamLogsRequest> = /*@__PURE_
  * @generated from message frostagent.v1.ClearLogsRequest
  */
 export type ClearLogsRequest = Message<"frostagent.v1.ClearLogsRequest"> & {
+  /**
+   * @generated from field: string scope = 1;
+   */
+  scope: string;
 };
 
 /**
@@ -208,6 +272,80 @@ export type ClearLogsResponse = Message<"frostagent.v1.ClearLogsResponse"> & {
  */
 export const ClearLogsResponseSchema: GenMessage<ClearLogsResponse> = /*@__PURE__*/
   messageDesc(file_frostagent_v1_logs, 5);
+
+/**
+ * @generated from message frostagent.v1.LogCoverage
+ */
+export type LogCoverage = Message<"frostagent.v1.LogCoverage"> & {
+  /**
+   * @generated from field: string earliest = 1;
+   */
+  earliest: string;
+
+  /**
+   * @generated from field: string latest = 2;
+   */
+  latest: string;
+
+  /**
+   * @generated from field: bool persistent = 3;
+   */
+  persistent: boolean;
+
+  /**
+   * @generated from field: string retention = 4;
+   */
+  retention: string;
+
+  /**
+   * @generated from field: int64 budget_bytes = 5;
+   */
+  budgetBytes: bigint;
+
+  /**
+   * @generated from field: string error = 6;
+   */
+  error: string;
+};
+
+/**
+ * Describes the message frostagent.v1.LogCoverage.
+ * Use `create(LogCoverageSchema)` to create a new message.
+ */
+export const LogCoverageSchema: GenMessage<LogCoverage> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_logs, 6);
+
+/**
+ * @generated from message frostagent.v1.LogStatsResponse
+ */
+export type LogStatsResponse = Message<"frostagent.v1.LogStatsResponse"> & {
+  /**
+   * @generated from field: int64 total = 1;
+   */
+  total: bigint;
+
+  /**
+   * @generated from field: map<string, int64> levels = 2;
+   */
+  levels: { [key: string]: bigint };
+
+  /**
+   * @generated from field: map<string, int64> sources = 3;
+   */
+  sources: { [key: string]: bigint };
+
+  /**
+   * @generated from field: frostagent.v1.LogCoverage coverage = 4;
+   */
+  coverage?: LogCoverage | undefined;
+};
+
+/**
+ * Describes the message frostagent.v1.LogStatsResponse.
+ * Use `create(LogStatsResponseSchema)` to create a new message.
+ */
+export const LogStatsResponseSchema: GenMessage<LogStatsResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_logs, 7);
 
 /**
  * @generated from enum frostagent.v1.LogLevel
@@ -251,6 +389,14 @@ export const LogLevelSchema: GenEnum<LogLevel> = /*@__PURE__*/
  * @generated from service frostagent.v1.LogService
  */
 export const LogService: GenService<{
+  /**
+   * @generated from rpc frostagent.v1.LogService.GetLogStats
+   */
+  getLogStats: {
+    methodKind: "unary";
+    input: typeof ListLogsRequestSchema;
+    output: typeof LogStatsResponseSchema;
+  },
   /**
    * @generated from rpc frostagent.v1.LogService.ListLogs
    */

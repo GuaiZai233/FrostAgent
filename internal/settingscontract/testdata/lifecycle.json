@@ -54,7 +54,7 @@
   {"key": "LOG_STORAGE_MIB", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": "128"},
   {"key": "MAX_CONTEXT_MESSAGES", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": "20"},
   {"key": "MCP_CONTROL_TOKEN", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hot", "seed": null},
-  {"key": "MCP_ENFORCE_LOCAL_TOKEN", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hot", "seed": null},
+  {"key": "MCP_ENFORCE_LOCAL_TOKEN", "scope": "global", "catalog": "restart", "instanceRestart": false, "controlRestart": true, "sqlHot": true, "frontend": "hidden", "seed": null},
   {"key": "MEMORY_EXTRACT_BATCH_MAX", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": "5"},
   {"key": "MEMORY_EXTRACT_BATCH_MIN", "scope": "instance", "catalog": "live", "instanceRestart": false, "controlRestart": false, "sqlHot": true, "frontend": "hot", "seed": "3"},
   {"key": "MEMORY_REFLECTION_TIMEOUT", "scope": "instance", "catalog": "restart", "instanceRestart": true, "controlRestart": false, "sqlHot": false, "frontend": "reload", "seed": "10m"},

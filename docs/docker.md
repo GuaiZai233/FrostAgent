@@ -6,7 +6,7 @@
 `127.0.0.1:8080:8080`。宿主机使用 http://127.0.0.1:8080；Windows Docker Desktop
 使用 Linux 容器。此默认路径不需要 `compose.local.yaml` 或 socat。
 
-端口映射后的请求通常来自网桥地址，因此管理 API 必须携带控制令牌。
+所有 HTTP 管理 API 均须携带控制令牌，包括端口映射和 IPv4/IPv6 回环访问。
 本地 Host、私有来源 IP、Cloudflare/代理请求头都不能替代令牌认证。
 Host/Origin 检查仍然生效，适配器端口 `11023` 仍不提供管理路由。
 
@@ -24,8 +24,9 @@ Host/Origin 检查仍然生效，适配器端口 `11023` 仍不提供管理路�
 
 如果 SQL 中已有非空 `MCP_CONTROL_TOKEN`，或作为回退的 `ADMIN_TOKEN`，初始化输入
 不会覆盖它，也无需继续提供。网页应填写 SQL 中实际生效的令牌。
-没有现有令牌且初始化输入缺失或不合法时，镜像在绑定端口前退出并提示变量名，
-不会生成默认密码或在日志中输出令牌。
+没有现有令牌且初始化输入缺失时，后端继续运行，HTTP 管理返回 401；
+可通过容器内 UID 0 的 `frostctl config secret set MCP_CONTROL_TOKEN --scope global --stdin`
+初始化。不合法的非空输入仍在绑定端口前报错。不会生成默认密码或在日志中输出令牌。
 
 初始化输入仅在进程启动或切换到无令牌的目标数据库时用于一次 SQL 写入，
 不是应用设置的环境变量覆盖机制，
@@ -33,8 +34,8 @@ Host/Origin 检查仍然生效，适配器端口 `11023` 仍不提供管理路�
 以后在已认证的服务端设置中轮换令牌，并同步更新网页凭据。
 
 切换数据库时，目标库使用它自己的现有令牌；切换后网页凭据也须匹配目标库。
-目标库没有令牌时，需要容器仍提供上述初始化输入，否则切换会失败并恢复原库。
-切换前可重新设置该变量并重建容器，完成初始化后再移除；不会复制或覆盖其他库的令牌。
+目标库没有令牌时，可在切换前提供上述初始化输入；否则切换后 HTTP 管理会被锁定，
+须通过容器内 UID 0 的 frostctl 初始化。完成后移除初始化输入；不会复制或覆盖其他库的令牌。
 
 ## 直接使用镜像
 
@@ -97,9 +98,9 @@ docker compose logs --tail 100 frostagent
 在原入口访问旧库时先设置管理令牌；无 SQL 令牌的旧 Cloudflare/回环部署升级时也需
 提供一次初始化变量。新镜像仍支持保存回环地址，但普通 bridge 端口映射无法访问它。
 
-**旧 socat 入口不会自动获得直连入口的网桥令牌保护。** 它会把请求转换成真实回环连接，
-仍属于此前的可信本机模式。若采用网桥必须认证的直连部署，迁移成功后必须停止并删除
-两个旧 relay，不能只从下一条命令中省略覆盖文件：
+**升级后 socat 的回环连接同样要求管理 Token。** ALLOW_REMOTE_MCP_MANAGEMENT 和
+MCP_ENFORCE_LOCAL_TOKEN 不再提供免 Token 路径。若迁移到直连部署，成功后停止并删除
+两个不再需要的 relay，不能只从下一条命令中省略覆盖文件：
 
 ```bash
 docker compose -f compose.yaml -f compose.local.yaml stop local-panel local-panel-origin
@@ -112,10 +113,10 @@ docker compose -f compose.yaml -f compose.local.yaml rm -f local-panel local-pan
 ## Cloudflare 与 host 网络
 
 容器 `cloudflared` 可继续通过 `compose.cloudflare.yaml` 共享 FrostAgent 网络命名空间，
-回源至 `http://127.0.0.1:8080`。该真实回环连接沿用原 Cloudflare Access 策略；
+回源至 `http://127.0.0.1:8080`。Cloudflare Access 与应用管理 Token 均须通过；
 整个公网主机名仍须由 Access 保护，并在 SQL `HTTP_ALLOWED_ORIGINS` 中允许对应来源。
-其他网桥容器即使伪造 Cloudflare 头也不能获得回环信任。
-已显式开启 `MCP_ENFORCE_LOCAL_TOKEN` 时，回环 connector 也必须提供正确令牌。
+浏览器填写管理 Token 后随请求发送，connector 不替用户注入该凭据。
+本机地址、Cloudflare 头和两个旧兼容开关都不能绕过 Token 验证。
 
 Linux host 网络使用单独的 `compose.host.yaml`，构建时将管理和适配器默认地址都设为
 宿主回环，并保留强制管理回环校验；不要把标准 bridge 镜像直接用于 `--network host`。

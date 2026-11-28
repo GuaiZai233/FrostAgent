@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -60,15 +61,35 @@ func (s *AuditStore) listSQL(limit int) ([]AuditEvent, error) {
 	if limit <= 0 || limit > s.limit {
 		limit = s.limit
 	}
-	rows, err := s.db.SQL.QueryContext(context.Background(), s.db.Bind(`SELECT id, occurred_at,
+	events, err := s.querySQL(context.Background(), AuditQuery{Limit: limit})
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return events, err
+}
+
+func (s *AuditStore) querySQL(ctx context.Context, query AuditQuery) ([]AuditEvent, error) {
+	where := []string{"1 = 1"}
+	args := []any{}
+	if query.Instance != "" {
+		where = append(where, "instance_id = ?")
+		args = append(args, query.Instance)
+	}
+	if query.ID != "" {
+		where = append(where, "id = ?")
+		args = append(args, query.ID)
+	}
+	args = append(args, query.Limit, query.Offset)
+	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT id, occurred_at,
 		platform, user_id, instance_id, session_id, tool, stage, source, action,
 		reason, content_hash, preview, encoded, category, risk_level
-		FROM security_audit ORDER BY occurred_at DESC, id DESC LIMIT ?`), limit)
+		FROM security_audit WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?`), args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var events []AuditEvent
+	events := []AuditEvent{}
 	for rows.Next() {
 		var event AuditEvent
 		var at string
@@ -87,9 +108,6 @@ func (s *AuditStore) listSQL(limit int) ([]AuditEvent, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
-	}
-	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-		events[i], events[j] = events[j], events[i]
 	}
 	return events, nil
 }

@@ -6,6 +6,7 @@ import "frostagent/v1/common.proto";
 
 // LogService provides log retrieval and streaming.
 service LogService {
+  rpc GetLogStats(ListLogsRequest) returns (LogStatsResponse);
   rpc ListLogs(ListLogsRequest) returns (ListLogsResponse);
   rpc StreamLogs(StreamLogsRequest) returns (stream LogEntry);
   rpc ClearLogs(ClearLogsRequest) returns (ClearLogsResponse);
@@ -45,20 +46,48 @@ message ListLogsRequest {
   // Exact fa_msgid_<uuidv4> lookup of a bot-delivered message record within the
   // selected log store, independent of filters/pagination.
   string message_ref_id = 5;
+  string since = 6;
+  string until = 7;
+  string trace_id = 8;
+  string search = 9;
+  string scope = 10;
+  bool include_payload = 11;
 }
 
 message ListLogsResponse {
   repeated LogEntry entries = 1;
   Pagination pagination = 2;
+  LogCoverage coverage = 3;
 }
 
 message StreamLogsRequest {
   LogLevel min_level = 1;
   string source_filter = 2;
+  string scope = 3;
+  string since = 4;
+  string until = 5;
+  string trace_id = 6;
+  string search = 7;
 }
 
-message ClearLogsRequest {}
+message ClearLogsRequest { string scope = 1; }
 
 message ClearLogsResponse {
   bool success = 1;
+}
+
+
+message LogCoverage {
+ string earliest = 1;
+ string latest = 2;
+ bool persistent = 3;
+ string retention = 4;
+ int64 budget_bytes = 5;
+ string error = 6;
+}
+message LogStatsResponse {
+ int64 total = 1;
+ map<string, int64> levels = 2;
+ map<string, int64> sources = 3;
+ LogCoverage coverage = 4;
 }

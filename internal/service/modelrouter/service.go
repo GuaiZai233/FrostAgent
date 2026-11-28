@@ -3,7 +3,9 @@ package modelrouter
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
+	"time"
 
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/modelcatalog"
@@ -41,8 +43,8 @@ func (s *Service) GetState(
 		loadError = err.Error()
 	}
 	return connect.NewResponse(&v1.GetStateResponse{
-		Active:                configurationToProto(active),
-		Draft:                 configurationToProto(draft),
+		Active:                configurationForRead(active, req.Msg.RedactCredentials),
+		Draft:                 configurationForRead(draft, req.Msg.RedactCredentials),
 		LoadError:             loadError,
 		HasDraftSecretChanges: owner != "" && s.manager.HasDraftSecretChangesForOwner(owner),
 	}), nil
@@ -166,10 +168,17 @@ func (s *Service) ListUpstreamModels(
 	_ context.Context,
 	req *connect.Request[v1.ListUpstreamModelsRequest],
 ) (*connect.Response[v1.ListUpstreamModelsResponse], error) {
-	models, err := s.manager.ListUpstreamModelsForOwner(strings.TrimSpace(req.Msg.GetEndpointId()),
-		strings.TrimSpace(req.Header().Get(draftOwnerHeader)))
+	owner := strings.TrimSpace(req.Header().Get(draftOwnerHeader))
+	if req.Msg.ActiveOnly {
+		owner = router.ActiveConfigurationOwner
+	}
+	models, err := s.manager.ListUpstreamModelsForOwner(strings.TrimSpace(req.Msg.GetEndpointId()), owner)
 	if err != nil {
-		return connect.NewResponse(&v1.ListUpstreamModelsResponse{Error: err.Error()}), nil
+		message := err.Error()
+		if req.Msg.ActiveOnly {
+			message = "upstream model discovery failed; inspect endpoint and credentials"
+		}
+		return connect.NewResponse(&v1.ListUpstreamModelsResponse{Error: message}), nil
 	}
 	return connect.NewResponse(&v1.ListUpstreamModelsResponse{Models: models}), nil
 }
@@ -187,23 +196,71 @@ func (s *Service) InferModelCapabilities(
 	}), nil
 }
 
-func (s *Service) TestModel(
-	_ context.Context,
-	req *connect.Request[v1.TestModelRequest],
-) (*connect.Response[v1.TestModelResponse], error) {
-	content, duration, err := s.manager.TestModelForOwner(strings.TrimSpace(req.Msg.GetModelId()),
-		strings.TrimSpace(req.Header().Get(draftOwnerHeader)))
-	if err != nil {
-		return connect.NewResponse(&v1.TestModelResponse{
-			Error:      err.Error(),
-			DurationMs: duration.Milliseconds(),
-		}), nil
+func (s *Service) TestModel(ctx context.Context, req *connect.Request[v1.TestModelRequest]) (*connect.Response[v1.TestModelResponse], error) {
+	var content string
+	var duration time.Duration
+	var err error
+	if req.Msg.ActiveOnly {
+		content, duration, err = s.manager.TestActiveModel(ctx, strings.TrimSpace(req.Msg.ModelId), strings.TrimSpace(req.Msg.EndpointId))
+	} else {
+		content, duration, err = s.manager.TestModelForOwner(strings.TrimSpace(req.Msg.ModelId), strings.TrimSpace(req.Header().Get(draftOwnerHeader)))
 	}
-	return connect.NewResponse(&v1.TestModelResponse{
-		Success:    true,
-		Content:    content,
-		DurationMs: duration.Milliseconds(),
-	}), nil
+	if err != nil {
+		message := err.Error()
+		if req.Msg.ActiveOnly {
+			message = "active model test failed; inspect model, endpoint, credentials, and upstream availability"
+		}
+		return connect.NewResponse(&v1.TestModelResponse{Error: message, DurationMs: duration.Milliseconds()}), nil
+	}
+	return connect.NewResponse(&v1.TestModelResponse{Success: true, Content: content, DurationMs: duration.Milliseconds()}), nil
+}
+
+func directResponse(active router.Configuration, err error) (*connect.Response[v1.ApplyConfigurationResponse], error) {
+	if err != nil {
+		state := "failed"
+		if errors.Is(err, router.ErrOutcomeUnknown) {
+			state = "unknown"
+		}
+		return connect.NewResponse(&v1.ApplyConfigurationResponse{Error: err.Error(), State: state}), nil
+	}
+	return connect.NewResponse(&v1.ApplyConfigurationResponse{Success: true, State: "success", Active: configurationForRead(active, true)}), nil
+}
+func (s *Service) ApplyConfiguration(_ context.Context, req *connect.Request[v1.ApplyConfigurationRequest]) (*connect.Response[v1.ApplyConfigurationResponse], error) {
+	change := router.Mutation{Operation: req.Msg.Operation, EndpointID: req.Msg.EndpointId}
+	if endpoint := req.Msg.Endpoint; endpoint != nil {
+		cfg := configurationFromProto(&v1.ModelRouterConfiguration{Endpoints: []*v1.ModelEndpoint{endpoint}})
+		change.Endpoint = cfg.Endpoints[0]
+	}
+	if binding := req.Msg.Binding; binding != nil {
+		change.Workload = workloadFromProto(binding.Workload)
+		change.Binding = bindingFromProto(binding)
+	}
+	return directResponse(s.manager.ApplyDirect(change))
+}
+func (s *Service) SetEndpointSecret(_ context.Context, req *connect.Request[v1.SetEndpointSecretRequest]) (*connect.Response[v1.ApplyConfigurationResponse], error) {
+	return directResponse(s.manager.ApplyDirect(router.Mutation{Operation: "secret-set", EndpointID: req.Msg.EndpointId, Secret: req.Msg.ApiKey}))
+}
+func (s *Service) ClearEndpointSecret(_ context.Context, req *connect.Request[v1.ClearEndpointSecretRequest]) (*connect.Response[v1.ApplyConfigurationResponse], error) {
+	return directResponse(s.manager.ApplyDirect(router.Mutation{Operation: "secret-unset", EndpointID: req.Msg.EndpointId}))
+}
+
+func configurationForRead(cfg router.Configuration, redact bool) *v1.ModelRouterConfiguration {
+	result := configurationToProto(cfg)
+	if redact {
+		for _, endpoint := range result.Endpoints {
+			u, err := url.Parse(endpoint.BaseUrl)
+			if err != nil {
+				endpoint.BaseUrl = ""
+			} else {
+				u.User = nil
+				u.RawQuery = ""
+				u.Fragment = ""
+				endpoint.BaseUrl = u.String()
+			}
+			endpoint.ApiKeyRef = ""
+		}
+	}
+	return result
 }
 
 func configurationToProto(cfg router.Configuration) *v1.ModelRouterConfiguration {

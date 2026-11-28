@@ -87,3 +87,18 @@ func (d *DB) EnsureEmbeddingStorage(ctx context.Context) (string, error) {
 	d.EmbeddingStorageReady.Store(true)
 	return vectorType, nil
 }
+
+// CheckEmbeddingPrerequisites is a read-only preflight; it never creates tables.
+func (d *DB) CheckEmbeddingPrerequisites(ctx context.Context) error {
+	if d == nil || d.Backend != Postgres {
+		return nil
+	}
+	var available bool
+	if err := d.SQL.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname='vector')").Scan(&available); err != nil {
+		return err
+	}
+	if !available {
+		return fmt.Errorf("Embedding requires an installed pgvector extension")
+	}
+	return nil
+}

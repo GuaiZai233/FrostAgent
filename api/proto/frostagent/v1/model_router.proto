@@ -12,6 +12,11 @@ service ModelRouterService {
   rpc ListUpstreamModels(ListUpstreamModelsRequest) returns (ListUpstreamModelsResponse);
   rpc TestModel(TestModelRequest) returns (TestModelResponse);
   rpc InferModelCapabilities(InferModelCapabilitiesRequest) returns (InferModelCapabilitiesResponse);
+  // Direct management mutations used by frostctl. The existing draft RPCs
+  // remain for the Web editor and retain their owner/conflict semantics.
+  rpc ApplyConfiguration(ApplyConfigurationRequest) returns (ApplyConfigurationResponse);
+  rpc SetEndpointSecret(SetEndpointSecretRequest) returns (ApplyConfigurationResponse);
+  rpc ClearEndpointSecret(ClearEndpointSecretRequest) returns (ApplyConfigurationResponse);
 }
 
 message InferModelCapabilitiesRequest {
@@ -97,7 +102,7 @@ message ModelRouterConfiguration {
   repeated GroupModelOverride group_overrides = 6;
 }
 
-message GetStateRequest {}
+message GetStateRequest { bool redact_credentials = 1; }
 
 message GetStateResponse {
   ModelRouterConfiguration active = 1;
@@ -157,6 +162,7 @@ message PublishResponse {
 
 message ListUpstreamModelsRequest {
   string endpoint_id = 1;
+  bool active_only = 2;
 }
 
 message ListUpstreamModelsResponse {
@@ -166,6 +172,8 @@ message ListUpstreamModelsResponse {
 
 message TestModelRequest {
   string model_id = 1;
+  string endpoint_id = 2;
+  bool active_only = 3;
 }
 
 message TestModelResponse {
@@ -173,4 +181,29 @@ message TestModelResponse {
   string content = 2;
   string error = 3;
   int64 duration_ms = 4;
+}
+
+message ApplyConfigurationRequest {
+  string operation = 1;
+  string endpoint_id = 2;
+  ModelEndpoint endpoint = 3;
+  ModelBinding binding = 4;
+}
+
+message ApplyConfigurationResponse {
+  bool success = 1;
+  string error = 2;
+  ModelRouterConfiguration active = 3;
+  string state = 4;
+}
+
+message SetEndpointSecretRequest {
+  string endpoint_id = 1;
+  string api_key = 2;
+  int64 expected_revision = 3;
+}
+
+message ClearEndpointSecretRequest {
+  string endpoint_id = 1;
+  int64 expected_revision = 2;
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GuaiZai233/FrostAgent/internal/buildinfo"
 	"github.com/GuaiZai233/FrostAgent/internal/sessionstate"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
 	"github.com/GuaiZai233/FrostAgent/internal/sticker"
@@ -80,7 +81,11 @@ func BuildInstanceZIP(db *storage.DB, instanceID, imageDir string, checkpoints .
 		return nil, err
 	}
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
-	manifest := Manifest{FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
+	var schema, minimum int
+	if err := db.SQL.QueryRow(`SELECT version, min_compatible_version FROM schema_meta WHERE id=1`).Scan(&schema, &minimum); err != nil {
+		return nil, err
+	}
+	manifest := Manifest{DatabaseSchemaVersion: schema, DatabaseMinimumCompatibleVersion: minimum, ApplicationVersion: buildinfo.DisplayVersion(), FormatVersion: FormatVersion, Kind: "instance", InstanceName: instanceName, ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
 	for _, file := range []struct {
 		name string
 		data any
@@ -123,7 +128,11 @@ func BuildStickerZIP(db *storage.DB, instanceID, imageDir string) ([]byte, error
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	budget := zipBudget{limit: MaxInstanceZIPBytes}
-	manifest := Manifest{FormatVersion: FormatVersion, Kind: "stickers", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
+	var schema, minimum int
+	if err := db.SQL.QueryRow(`SELECT version, min_compatible_version FROM schema_meta WHERE id=1`).Scan(&schema, &minimum); err != nil {
+		return nil, err
+	}
+	manifest := Manifest{DatabaseSchemaVersion: schema, DatabaseMinimumCompatibleVersion: minimum, ApplicationVersion: buildinfo.DisplayVersion(), FormatVersion: FormatVersion, Kind: "stickers", ExportedAt: time.Now().UTC(), SecretNotice: SecretNotice}
 	if err := addJSON(writer, &budget, "manifest.json", manifest); err != nil {
 		writer.Close()
 		return nil, err

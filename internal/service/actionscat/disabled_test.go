@@ -36,7 +36,7 @@ func TestDisabledServiceReportsStatusAndRejectsProxy(t *testing.T) {
 			{http.MethodPost, "/actions/test-action/runs"},
 			{http.MethodDelete, "/schedules/test-schedule"},
 		} {
-			req := httptest.NewRequest(call.method, prefix+call.path, strings.NewReader("invalid-json"))
+			req := authenticatedActionRequest(call.method, prefix+call.path, strings.NewReader("invalid-json"))
 			req.RemoteAddr = "127.0.0.1:1234"
 			recorder := httptest.NewRecorder()
 			svc.ServeHTTP(recorder, req)
@@ -95,7 +95,7 @@ func TestServiceDisabledAfterPreflightRejectsWithoutBackendRequest(t *testing.T)
 					return ""
 				})
 				svc := NewScoped(client, "test-instance", func(string) string { return "" })
-				req := httptest.NewRequest(call.method, prefix+call.path, strings.NewReader(call.body))
+				req := authenticatedActionRequest(call.method, prefix+call.path, strings.NewReader(call.body))
 				req.RemoteAddr = "127.0.0.1:1234"
 				recorder := httptest.NewRecorder()
 				svc.ServeHTTP(recorder, req)

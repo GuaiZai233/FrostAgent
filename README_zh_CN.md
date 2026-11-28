@@ -47,11 +47,17 @@ make build
 
 ### 3. 启动服务
 
+首次启动前，在进程环境中设置 `FROSTAGENT_BOOTSTRAP_CONTROL_TOKEN` 为
+32–4096 个不含空格的随机可打印 ASCII 字符。它只初始化空的 SQL 管理凭据，已有 Token 优先。
+
 ```bash
 go run ./cmd/app
 ```
 
-打开 `http://localhost:8080`。首次启动不创建实例，需手动创建。
+打开 `http://localhost:8080/#/settings/credentials`，保存同一 Token 后再创建实例。
+所有 HTTP 管理请求（包括本机浏览器）都需要 Token；初始化成功后移除 bootstrap 输入。
+当前账号无法启动本机 IPC 时，后端会警告并继续运行，可通过 Web/HTTPS 管理。
+升级步骤和 IPC 权限要求见 [frostctl 管理指南](docs/frostctl.md)。
 
 ## Docker 部署
 

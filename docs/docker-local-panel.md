@@ -2,27 +2,27 @@
 
 > **Legacy socat deployment.** New deployments use the direct, token-authenticated
 > localhost port 8080 described in [Docker deployment and updates](docker.md).
-> This optional relay still converts connections to trusted loopback; it does
-> not inherit bridge-token protection. Stop and remove both relays when migrating
-> to the direct entry point. Existing SQL tokens win; a deployment without one
-> must supply the one-time bootstrap input before using the new bridge image.
+> This optional relay forwards to loopback, but all HTTP management now requires
+> a management token. Stop and remove both relays when migrating to the direct
+> entry point. Existing SQL tokens win; initialize an empty credential with the
+> one-time bootstrap input or container-local root frostctl before using the panel.
 
 Use `compose.local.yaml` explicitly to open the management panel on a trusted
 single-user Docker host. It uses the normal bridge-network FA image; socat
 is **not** installed in that image. Windows Docker Desktop must use **Linux
 containers**. No Desktop host-networking option, Windows bind mount, Cloudflare
-Tunnel, administrator account, or application authentication change is required.
+Tunnel or host administrator account is required. The browser needs a management
+token, including when using this relay.
 
-> **Trust every container on this Docker host.** This opt-in mode trusts local
-> users, processes, Docker administrators and **all local containers**, including
-> ordinary containers on other bridges. It provides convenient, unauthenticated
-> local management unless an existing explicit token policy requires a token;
-> it does **not** isolate management from other containers. On 2026-11-03, the
+> **Loopback publication does not isolate containers.** Local users and ordinary
+> containers on other bridges may reach the relay. Management API requests still
+> need the application token. On 2026-11-03, an older version's
 > live smoke on Docker Desktop 4.55.0, Engine 29.1.3 and WSL 2 observed HTTP 200
 > from an adapter-network container via both the panel container IP and
 > `host.docker.internal` at the published port, despite `enable_icc=false`.
 > Host loopback publication is not a container-isolation guarantee. Do not use
-> this mode on a host running untrusted containers.
+> this relay as an isolation boundary for untrusted containers. Docker
+> administrators retain control of application containers and data.
 
 ## Prerequisites
 
@@ -60,6 +60,7 @@ Open **http://127.0.0.1:8088** on the Docker host. Use HTTP, not HTTPS. The adap
 host mapping and container port remain those in your base Compose file;
 same-default-network OneBot clients use `frostagent:<adapter target port>`.
 The panel port is not the adapter port.
+Open Settings → Access credentials and save the server's management token.
 
 The commands build the existing local FA image when needed and pull the pinned
 socat image. They reuse `frostagent-data:/app/data`; there is no data migration.
@@ -96,9 +97,9 @@ Keep this target aligned with saved SQL settings when retaining the legacy
 relay. The current standard image also supports `0.0.0.0`; direct publication
 uses that default and does not require this overlay.
 
-Existing `MCP_ENFORCE_LOCAL_TOKEN` settings remain enforced. If explicitly enabled
-with a control token, management API calls without the appropriate Bearer token
-still return `401`; this deployment does not inject, disclose or disable tokens.
+All management API requests without a valid Bearer token return `401`.
+`MCP_ENFORCE_LOCAL_TOKEN` and `ALLOW_REMOTE_MCP_MANAGEMENT` no longer alter
+authentication. This deployment does not inject, disclose or disable tokens.
 Host/Origin validation also stays enabled. Do not expand `HTTP_ALLOWED_ORIGINS`
 merely to open the local `127.0.0.1` URL.
 
@@ -126,13 +127,12 @@ application configuration in place.
 This is **local access, not a public authentication gateway**. Do not remove the
 host `127.0.0.1` binding, publish the panel through a reverse proxy/tunnel, enable
 direct routing, or reuse these networks with a different firewall policy. Use
-the existing Cloudflare Access deployment for remote access. Local users,
-processes, Docker administrators and all containers on this host are trusted.
+the existing Cloudflare Access deployment with application tokens for remote access.
 Ordinary bridge-network containers may reach the management API through the
 relay or Docker Desktop's host forwarding without administrative privileges.
 Someone who can control Docker can additionally join namespaces or mount the
 socket volume. An unreachable peer route on one engine/version does not narrow
-this trust boundary. The loopback host binding must still be retained.
+the network exposure. The loopback host binding must still be retained.
 
 The shared volume uses the local driver's tmpfs mount options supported by Linux
 and Docker Desktop; it is not a Windows-host bind mount or a per-container
@@ -191,7 +191,7 @@ docker compose -f compose.yaml -f compose.local.yaml logs --tail 50 local-panel 
 An empty response/connection reset usually means the Unix socket or target
 listener is unavailable: check that all three containers are running, that the
 target port matches SQL, and that both relays were recreated with FA. `401` is an
-existing token requirement, not a reason to disable authentication. `403` is a
+management token requirement, not a reason to disable authentication. `403` is a
 Host/Origin rejection; first use the exact local URL above.
 
 Repository verification uses a separate random Compose project and synthetic
@@ -210,15 +210,13 @@ The full smoke requires a running Linux-container engine and a built
 `frostagent:local` image. Linux CI exercises real networking, APIs, adapter
 handshakes, topology and lifecycle. Peer routes through the ingress container,
 bridge gateway and host forwarding are recorded as reachable or unreachable;
-both outcomes are allowed for these trusted peers. Once explicit local token
-enforcement is enabled, every reachable peer route must reject missing/wrong
+both outcomes are allowed for peer reachability. Every reachable route must reject missing/wrong
 tokens and accept the correct token. The probe first sends no token: `401`
 establishes reachability and protection, `200` fails as a token bypass, and only
 transport status `0` is classified as unreachable. After `401`, a correct-token
 request must return `200` and a wrong-token request must return `401`; transport
 failure on either request fails the smoke instead of skipping the route.
 Unreachable routes are reported as not exercised for authentication, not as
-proof of isolation. Run the same smoke on
-Windows Docker Desktop to validate that version's host forwarding, token policy
-and lifecycle; Linux CI cannot replace that check. No public Tunnel or real IM
+proof of isolation. Linux CI does not establish Windows Docker Desktop runtime
+verification; Windows Smoke is not part of this repository's validation. No public Tunnel or real IM
 account is used.

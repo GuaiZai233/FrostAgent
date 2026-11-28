@@ -16,6 +16,25 @@ var (
 	ManagementLoopbackOnly = "false"
 )
 
+// ValidateListeners checks the final management and adapter listener syntax
+// and, in container builds, the listener isolation policy. It performs no I/O,
+// so settings validation and listener application share one result.
+func ValidateListeners(listenAddr, wsListenAddr string) error {
+	for _, listener := range []struct{ name, address string }{{"management", listenAddr}, {"adapter", wsListenAddr}} {
+		_, port, err := net.SplitHostPort(listener.address)
+		if err != nil {
+			return fmt.Errorf("invalid %s listener %q: %w", listener.name, listener.address, err)
+		}
+		if _, err := net.LookupPort("tcp", port); err != nil {
+			return fmt.Errorf("invalid %s port: %w", listener.name, err)
+		}
+	}
+	if ContainerManagement == "true" || ManagementLoopbackOnly == "true" {
+		return ValidateContainerListeners(listenAddr, wsListenAddr)
+	}
+	return nil
+}
+
 // ValidateContainerListeners keeps management separate from adapter ingress.
 // Bridge builds allow wildcard or loopback listeners; host builds require loopback.
 func ValidateContainerListeners(listenAddr, wsListenAddr string) error {

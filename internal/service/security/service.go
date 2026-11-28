@@ -3,9 +3,10 @@ package security
 import (
 	"encoding/json"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
+	"github.com/GuaiZai233/FrostAgent/internal/managementauth"
 	securityctl "github.com/GuaiZai233/FrostAgent/internal/security"
-	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -39,7 +40,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s != nil {
 		getenv = s.getenv
 	}
-	if err := mcpsvc.CheckControlPlaneAuthScoped(remoteAddr(r), r.Header, getenv); err != nil {
+	if err := managementauth.Authorize(r.Context(), r.Header, getenv); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -77,6 +78,38 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"unlocked": principal})
 	case path == "/api/security/mode" && r.Method == http.MethodGet:
 		writeJSON(w, http.StatusOK, map[string]any{"mode": s.controller.Mode()})
+	case path == "/api/security/audit" && r.Method == http.MethodGet:
+		limit := 100
+		if r.URL.Query().Has("limit") {
+			n, err := strconv.Atoi(r.URL.Query().Get("limit"))
+			if err != nil || n < 1 || n > 1000 {
+				http.Error(w, "limit must be between 1 and 1000", http.StatusBadRequest)
+				return
+			}
+			limit = n
+		}
+		offset := 0
+		if r.URL.Query().Has("offset") {
+			n, err := strconv.Atoi(r.URL.Query().Get("offset"))
+			if err != nil || n < 0 || n > 10000 {
+				http.Error(w, "offset must be between 0 and 10000", http.StatusBadRequest)
+				return
+			}
+			offset = n
+		}
+		id := strings.TrimSpace(r.URL.Query().Get("id"))
+		events, err := s.controller.Audit.Query(r.Context(), securityctl.AuditQuery{
+			Instance: strings.TrimSpace(r.URL.Query().Get("instance")), ID: id, Limit: limit, Offset: offset,
+		})
+		if err != nil {
+			http.Error(w, "security audit unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if id != "" && len(events) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": events})
 	case path == "/api/security/mode" && r.Method == http.MethodPost:
 		var body struct {
 			Mode string `json:"mode"`

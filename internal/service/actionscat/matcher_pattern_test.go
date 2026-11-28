@@ -33,7 +33,7 @@ func TestMatcherProxyPreservesPatternWhitespace(t *testing.T) {
 			const pattern = " cat \n"
 			for _, prefix := range []string{"/api/actionscat", "/api/v1/actionscat"} {
 				body, _ := json.Marshal(actclient.CreateMatcherReq{Name: "fixture matcher", MatchType: matchType, Pattern: pattern})
-				req := httptest.NewRequest(http.MethodPost, prefix+"/actions/fixture-action/matchers", bytes.NewReader(body))
+				req := authenticatedActionRequest(http.MethodPost, prefix+"/actions/fixture-action/matchers", bytes.NewReader(body))
 				req.RemoteAddr = "127.0.0.1:1234"
 				rec := httptest.NewRecorder()
 				service.ServeHTTP(rec, req)

@@ -31,99 +31,95 @@ func (s *Service) ListLogs(
 	ctx context.Context,
 	req *connect.Request[v1.ListLogsRequest],
 ) (*connect.Response[v1.ListLogsResponse], error) {
-	store := s.selectedStore(req.Header())
-	if value := strings.TrimSpace(req.Msg.GetErrorUuid()); value != "" {
-		id, ok := logspkg.NormalizeErrorUUID(value)
-		if !ok {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("错误 UUID 必须为 UUIDv4"))
-		}
-		entry, found := store.FindError(id)
-		if !found {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到错误日志，可能已清理、超出预算或属于临时日志来源；请确认实例和日志来源"))
-		}
-		return connect.NewResponse(&v1.ListLogsResponse{
-			Entries:    []*v1.LogEntry{convertEntry(entry)},
-			Pagination: &v1.Pagination{PageSize: 1, Total: 1},
-		}), nil
+	query := req.Msg
+	if req.Msg.ErrorUuid != "" || strings.TrimSpace(req.Msg.MessageRefId) != "" {
+		query = &v1.ListLogsRequest{Scope: req.Msg.Scope}
 	}
-	if value := strings.TrimSpace(req.Msg.GetMessageRefId()); value != "" {
-		if _, ok := logspkg.NormalizeMessageRefID(value); !ok {
+	entries, coverage, err := s.query(query, req.Header())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if req.Msg.ErrorUuid != "" {
+		id, ok := logspkg.NormalizeErrorUUID(req.Msg.ErrorUuid)
+		if !ok {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid Error UUID"))
+		}
+		for _, e := range entries {
+			if e.ErrorUUID == id {
+				return connect.NewResponse(&v1.ListLogsResponse{Entries: []*v1.LogEntry{presentEntry(e, req.Msg.Scope != "", req.Msg.IncludePayload)}, Coverage: coverage, Pagination: &v1.Pagination{Total: 1}}), nil
+			}
+		}
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("error is outside retained log coverage"))
+	}
+	if value := strings.TrimSpace(req.Msg.MessageRefId); value != "" {
+		id, ok := logspkg.NormalizeMessageRefID(value)
+		if !ok {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("消息 RefID 必须为 fa_msgid_<UUIDv4>"))
 		}
-		entry, found := store.FindMessageRef(value)
-		if !found {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到消息记录，可能已清理、超出预算或属于其他实例；请确认实例和日志来源"))
+		for _, e := range entries {
+			if e.MessageRefID == id {
+				return connect.NewResponse(&v1.ListLogsResponse{Entries: []*v1.LogEntry{presentEntry(e, req.Msg.Scope != "", req.Msg.IncludePayload)}, Coverage: coverage, Pagination: &v1.Pagination{PageSize: 1, Total: 1}}), nil
+			}
 		}
-		return connect.NewResponse(&v1.ListLogsResponse{
-			Entries:    []*v1.LogEntry{convertEntry(entry)},
-			Pagination: &v1.Pagination{PageSize: 1, Total: 1},
-		}), nil
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到消息记录，可能已清理、超出预算或属于其他实例；请确认实例和日志来源"))
 	}
-	var entries []logspkg.LogEntry
-	if store != nil {
-		entries = store.Snapshot()
-	}
-
-	// Filter
-	minLevel := req.Msg.GetMinLevel()
-	sourceFilter := req.Msg.GetSourceFilter()
-	filtered := make([]logspkg.LogEntry, 0, len(entries))
-	for _, e := range entries {
-		if !matchesFilter(e, minLevel, sourceFilter) {
-			continue
-		}
-		filtered = append(filtered, e)
-	}
+	filtered := entries
 
 	// Sort by timestamp descending
 	sort.Slice(filtered, func(i, j int) bool {
+		if req.Msg.Scope != "" {
+			return filtered[i].ID > filtered[j].ID
+		}
 		if filtered[i].Timestamp.Equal(filtered[j].Timestamp) {
 			return filtered[i].ID > filtered[j].ID
 		}
 		return filtered[i].Timestamp.After(filtered[j].Timestamp)
 	})
 
-	// Pagination
 	pageSize := int(req.Msg.GetPagination().GetPageSize())
-	pageToken := req.Msg.GetPagination().GetPageToken()
-	offset := 0
-	if pageToken != "" {
-		fmt.Sscanf(pageToken, "%d", &offset)
-	}
 	if pageSize <= 0 {
 		pageSize = 50
 	}
-
+	if pageSize > 10000 {
+		pageSize = 10000
+	}
+	pageToken := req.Msg.GetPagination().GetPageToken()
+	offset := 0
 	total := len(filtered)
-	if offset < 0 {
-		offset = 0
+	if req.Msg.Scope != "" && pageToken != "" {
+		before, err := parseCursor(pageToken)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		remaining := filtered[:0]
+		for _, e := range filtered {
+			if e.ID < before {
+				remaining = append(remaining, e)
+			}
+		}
+		filtered = remaining
+	} else if pageToken != "" {
+		var err error
+		offset, err = strconv.Atoi(pageToken)
+		if err != nil || offset < 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid page token"))
+		}
 	}
-	if offset >= total {
-		return connect.NewResponse(&v1.ListLogsResponse{
-			Pagination: &v1.Pagination{PageSize: int32(pageSize), Total: int32(total)},
-		}), nil
+	offset = min(offset, len(filtered))
+	end := min(offset+pageSize, len(filtered))
+	pbEntries := []*v1.LogEntry{}
+	for _, e := range filtered[offset:end] {
+		pbEntries = append(pbEntries, presentEntry(e, req.Msg.Scope != "", req.Msg.IncludePayload))
 	}
-
-	end := min(offset+pageSize, total)
-
-	var pbEntries []*v1.LogEntry
-	for i := offset; i < end; i++ {
-		pbEntries = append(pbEntries, convertEntry(filtered[i]))
+	next := ""
+	if end < len(filtered) {
+		if req.Msg.Scope != "" {
+			next = fmt.Sprintf("id:%d", filtered[end-1].ID)
+		} else {
+			next = strconv.Itoa(end)
+		}
 	}
-
-	nextToken := ""
-	if end < total {
-		nextToken = fmt.Sprintf("%d", end)
-	}
-
-	resp := &v1.ListLogsResponse{
-		Entries: pbEntries,
-		Pagination: &v1.Pagination{
-			PageSize:  int32(pageSize),
-			PageToken: nextToken,
-			Total:     int32(total),
-		},
-	}
+	resp := &v1.ListLogsResponse{Entries: pbEntries, Coverage: coverage, Pagination: &v1.Pagination{PageSize: int32(pageSize), PageToken: next, Total: int32(total)}}
 	return connect.NewResponse(resp), nil
 }
 
@@ -135,14 +131,24 @@ func (s *Service) StreamLogs(
 ) error {
 	minLevel := req.Msg.GetMinLevel()
 	sourceFilter := req.Msg.GetSourceFilter()
+	since, until, err := timeFilters(req.Msg.Since, req.Msg.Until)
+	if err != nil {
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	store := s.selectedStore(req.Header())
+	if req.Msg.Scope != "" {
+		if _, _, err := s.query(&v1.ListLogsRequest{Scope: req.Msg.Scope}, req.Header()); err != nil {
+			return connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		store = s.store
+	}
 	if store == nil {
 		<-ctx.Done()
 		return nil
 	}
 
 	subID, ch := store.Subscribe(func(e logspkg.LogEntry) bool {
-		return matchesFilter(e, minLevel, sourceFilter)
+		return matchesFilter(e, minLevel, sourceFilter) && extendedFilter(e, since, until, req.Msg.TraceId, req.Msg.Search)
 	})
 	defer store.Unsubscribe(subID)
 
@@ -154,7 +160,7 @@ func (s *Service) StreamLogs(
 			if !ok {
 				return nil
 			}
-			if err := stream.Send(convertEntry(entry)); err != nil {
+			if err := stream.Send(presentEntry(entry, req.Msg.Scope != "", false)); err != nil {
 				return err
 			}
 		}
@@ -166,8 +172,18 @@ func (s *Service) ClearLogs(
 	ctx context.Context,
 	req *connect.Request[v1.ClearLogsRequest],
 ) (*connect.Response[v1.ClearLogsResponse], error) {
-	if store := s.selectedStore(req.Header()); store != nil {
+	store := s.selectedStore(req.Header())
+	if req.Msg.Scope != "" {
+		if _, _, err := s.query(&v1.ListLogsRequest{Scope: req.Msg.Scope}, req.Header()); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		store = s.store
+	}
+	if store != nil {
 		store.Clear()
+		if status := store.PersistenceStatus(); status.Error != "" {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("%s", status.Error))
+		}
 	}
 	return connect.NewResponse(&v1.ClearLogsResponse{Success: true}), nil
 }

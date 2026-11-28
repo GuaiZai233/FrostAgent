@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/settings.proto.
  */
 export const file_frostagent_v1_settings: GenFile = /*@__PURE__*/
-  fileDesc("Chxmcm9zdGFnZW50L3YxL3NldHRpbmdzLnByb3RvEg1mcm9zdGFnZW50LnYxImEKBkVudlZhchILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSEQoJaXNfc2VjcmV0GAMgASgIEhIKCnJlc2V0X2hpbnQYBCABKAkSFAoMaXNfaW5oZXJpdGVkGAUgASgIIhQKEkxpc3RFbnZWYXJzUmVxdWVzdCJXChNMaXN0RW52VmFyc1Jlc3BvbnNlEicKCGVudl92YXJzGAEgAygLMhUuZnJvc3RhZ2VudC52MS5FbnZWYXISFwoPc3RvcmFnZV9iYWNrZW5kGAIgASgJIkQKE1VwZGF0ZUVudlZhclJlcXVlc3QSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEhEKCWlzX3NlY3JldBgDIAEoCCI2ChRVcGRhdGVFbnZWYXJSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIlIKFFVwZGF0ZUVudlZhcnNSZXF1ZXN0EiYKB3VwZGF0ZXMYASADKAsyFS5mcm9zdGFnZW50LnYxLkVudlZhchISCgpjbGVhcl9rZXlzGAIgAygJIjcKFVVwZGF0ZUVudlZhcnNSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIiIKE0RlbGV0ZUVudlZhclJlcXVlc3QSCwoDa2V5GAEgASgJIjYKFERlbGV0ZUVudlZhclJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiFgoUR2V0UmF3RW52RmlsZVJlcXVlc3QiKAoVR2V0UmF3RW52RmlsZVJlc3BvbnNlEg8KB2NvbnRlbnQYASABKAkiKgoXVXBkYXRlUmF3RW52RmlsZVJlcXVlc3QSDwoHY29udGVudBgBIAEoCSI6ChhVcGRhdGVSYXdFbnZGaWxlUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCTK2BAoPU2V0dGluZ3NTZXJ2aWNlElQKC0xpc3RFbnZWYXJzEiEuZnJvc3RhZ2VudC52MS5MaXN0RW52VmFyc1JlcXVlc3QaIi5mcm9zdGFnZW50LnYxLkxpc3RFbnZWYXJzUmVzcG9uc2USVwoMVXBkYXRlRW52VmFyEiIuZnJvc3RhZ2VudC52MS5VcGRhdGVFbnZWYXJSZXF1ZXN0GiMuZnJvc3RhZ2VudC52MS5VcGRhdGVFbnZWYXJSZXNwb25zZRJaCg1VcGRhdGVFbnZWYXJzEiMuZnJvc3RhZ2VudC52MS5VcGRhdGVFbnZWYXJzUmVxdWVzdBokLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyc1Jlc3BvbnNlElcKDERlbGV0ZUVudlZhchIiLmZyb3N0YWdlbnQudjEuRGVsZXRlRW52VmFyUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuRGVsZXRlRW52VmFyUmVzcG9uc2USWgoNR2V0UmF3RW52RmlsZRIjLmZyb3N0YWdlbnQudjEuR2V0UmF3RW52RmlsZVJlcXVlc3QaJC5mcm9zdGFnZW50LnYxLkdldFJhd0VudkZpbGVSZXNwb25zZRJjChBVcGRhdGVSYXdFbnZGaWxlEiYuZnJvc3RhZ2VudC52MS5VcGRhdGVSYXdFbnZGaWxlUmVxdWVzdBonLmZyb3N0YWdlbnQudjEuVXBkYXRlUmF3RW52RmlsZVJlc3BvbnNlYgZwcm90bzM");
+  fileDesc("Chxmcm9zdGFnZW50L3YxL3NldHRpbmdzLnByb3RvEg1mcm9zdGFnZW50LnYxIowBCgZFbnZWYXISCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEhEKCWlzX3NlY3JldBgDIAEoCBISCgpyZXNldF9oaW50GAQgASgJEhQKDGlzX2luaGVyaXRlZBgFIAEoCBIZChFzZWNyZXRfY29uZmlndXJlZBgGIAEoCBIOCgZzb3VyY2UYByABKAkiOwoSTGlzdEVudlZhcnNSZXF1ZXN0EhYKDnJlZGFjdF9zZWNyZXRzGAEgASgIEg0KBXNjb3BlGAIgASgJIlcKE0xpc3RFbnZWYXJzUmVzcG9uc2USJwoIZW52X3ZhcnMYASADKAsyFS5mcm9zdGFnZW50LnYxLkVudlZhchIXCg9zdG9yYWdlX2JhY2tlbmQYAiABKAkiRAoTVXBkYXRlRW52VmFyUmVxdWVzdBILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSEQoJaXNfc2VjcmV0GAMgASgIIjYKFFVwZGF0ZUVudlZhclJlc3BvbnNlEg8KB3N1Y2Nlc3MYASABKAgSDQoFZXJyb3IYAiABKAkiiAEKFFVwZGF0ZUVudlZhcnNSZXF1ZXN0EiYKB3VwZGF0ZXMYASADKAsyFS5mcm9zdGFnZW50LnYxLkVudlZhchISCgpjbGVhcl9rZXlzGAIgAygJEg8KB2RyeV9ydW4YAyABKAgSDQoFc2NvcGUYBCABKAkSFAoMc2VjcmV0X2lucHV0GAUgASgIIqoBChVVcGRhdGVFbnZWYXJzUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCRI0CgZlcnJvcnMYAyADKAsyJC5mcm9zdGFnZW50LnYxLkNvbmZpZ1ZhbGlkYXRpb25FcnJvchINCgVzdGF0ZRgEIAEoCRIsCgdjaGFuZ2VzGAUgAygLMhsuZnJvc3RhZ2VudC52MS5Db25maWdDaGFuZ2UiIgoTRGVsZXRlRW52VmFyUmVxdWVzdBILCgNrZXkYASABKAkiNgoURGVsZXRlRW52VmFyUmVzcG9uc2USDwoHc3VjY2VzcxgBIAEoCBINCgVlcnJvchgCIAEoCSIWChRHZXRSYXdFbnZGaWxlUmVxdWVzdCIoChVHZXRSYXdFbnZGaWxlUmVzcG9uc2USDwoHY29udGVudBgBIAEoCSIqChdVcGRhdGVSYXdFbnZGaWxlUmVxdWVzdBIPCgdjb250ZW50GAEgASgJIjoKGFVwZGF0ZVJhd0VudkZpbGVSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIEg0KBWVycm9yGAIgASgJIicKFkdldENvbmZpZ1NjaGVtYVJlcXVlc3QSDQoFc2NvcGUYASABKAkiRQoXR2V0Q29uZmlnU2NoZW1hUmVzcG9uc2USKgoGZmllbGRzGAEgAygLMhouZnJvc3RhZ2VudC52MS5Db25maWdGaWVsZCK4AQoLQ29uZmlnRmllbGQSCwoDa2V5GAEgASgJEgwKBHR5cGUYAiABKAkSDQoFc2NvcGUYAyABKAkSFQoNZGVmYXVsdF92YWx1ZRgEIAEoCRITCgtjb25zdHJhaW50cxgFIAEoCRIOCgZzZWNyZXQYBiABKAgSGAoQcmVzdGFydF9yZXF1aXJlZBgHIAEoCBITCgtkZXNjcmlwdGlvbhgIIAEoCRIUCgxkZWZhdWx0X2hpbnQYCSABKAkiNQoVQ29uZmlnVmFsaWRhdGlvbkVycm9yEgsKA2tleRgBIAEoCRIPCgdtZXNzYWdlGAIgASgJIpABCgxDb25maWdDaGFuZ2USCwoDa2V5GAEgASgJEg4KBmJlZm9yZRgCIAEoCRINCgVhZnRlchgDIAEoCRIPCgdyZW1vdmVkGAQgASgIEg4KBnNlY3JldBgFIAEoCBIZChFjb25maWd1cmVkX2JlZm9yZRgGIAEoCBIYChBjb25maWd1cmVkX2FmdGVyGAcgASgIMpgFCg9TZXR0aW5nc1NlcnZpY2USYAoPR2V0Q29uZmlnU2NoZW1hEiUuZnJvc3RhZ2VudC52MS5HZXRDb25maWdTY2hlbWFSZXF1ZXN0GiYuZnJvc3RhZ2VudC52MS5HZXRDb25maWdTY2hlbWFSZXNwb25zZRJUCgtMaXN0RW52VmFycxIhLmZyb3N0YWdlbnQudjEuTGlzdEVudlZhcnNSZXF1ZXN0GiIuZnJvc3RhZ2VudC52MS5MaXN0RW52VmFyc1Jlc3BvbnNlElcKDFVwZGF0ZUVudlZhchIiLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyUmVxdWVzdBojLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyUmVzcG9uc2USWgoNVXBkYXRlRW52VmFycxIjLmZyb3N0YWdlbnQudjEuVXBkYXRlRW52VmFyc1JlcXVlc3QaJC5mcm9zdGFnZW50LnYxLlVwZGF0ZUVudlZhcnNSZXNwb25zZRJXCgxEZWxldGVFbnZWYXISIi5mcm9zdGFnZW50LnYxLkRlbGV0ZUVudlZhclJlcXVlc3QaIy5mcm9zdGFnZW50LnYxLkRlbGV0ZUVudlZhclJlc3BvbnNlEloKDUdldFJhd0VudkZpbGUSIy5mcm9zdGFnZW50LnYxLkdldFJhd0VudkZpbGVSZXF1ZXN0GiQuZnJvc3RhZ2VudC52MS5HZXRSYXdFbnZGaWxlUmVzcG9uc2USYwoQVXBkYXRlUmF3RW52RmlsZRImLmZyb3N0YWdlbnQudjEuVXBkYXRlUmF3RW52RmlsZVJlcXVlc3QaJy5mcm9zdGFnZW50LnYxLlVwZGF0ZVJhd0VudkZpbGVSZXNwb25zZWIGcHJvdG8z");
 
 /**
  * @generated from message frostagent.v1.EnvVar
@@ -44,6 +44,16 @@ export type EnvVar = Message<"frostagent.v1.EnvVar"> & {
    * @generated from field: bool is_inherited = 5;
    */
   isInherited: boolean;
+
+  /**
+   * @generated from field: bool secret_configured = 6;
+   */
+  secretConfigured: boolean;
+
+  /**
+   * @generated from field: string source = 7;
+   */
+  source: string;
 };
 
 /**
@@ -57,6 +67,15 @@ export const EnvVarSchema: GenMessage<EnvVar> = /*@__PURE__*/
  * @generated from message frostagent.v1.ListEnvVarsRequest
  */
 export type ListEnvVarsRequest = Message<"frostagent.v1.ListEnvVarsRequest"> & {
+  /**
+   * @generated from field: bool redact_secrets = 1;
+   */
+  redactSecrets: boolean;
+
+  /**
+   * @generated from field: string scope = 2;
+   */
+  scope: string;
 };
 
 /**
@@ -150,6 +169,21 @@ export type UpdateEnvVarsRequest = Message<"frostagent.v1.UpdateEnvVarsRequest">
    * @generated from field: repeated string clear_keys = 2;
    */
   clearKeys: string[];
+
+  /**
+   * @generated from field: bool dry_run = 3;
+   */
+  dryRun: boolean;
+
+  /**
+   * @generated from field: string scope = 4;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: bool secret_input = 5;
+   */
+  secretInput: boolean;
 };
 
 /**
@@ -172,6 +206,21 @@ export type UpdateEnvVarsResponse = Message<"frostagent.v1.UpdateEnvVarsResponse
    * @generated from field: string error = 2;
    */
   error: string;
+
+  /**
+   * @generated from field: repeated frostagent.v1.ConfigValidationError errors = 3;
+   */
+  errors: ConfigValidationError[];
+
+  /**
+   * @generated from field: string state = 4;
+   */
+  state: string;
+
+  /**
+   * @generated from field: repeated frostagent.v1.ConfigChange changes = 5;
+   */
+  changes: ConfigChange[];
 };
 
 /**
@@ -290,11 +339,179 @@ export const UpdateRawEnvFileResponseSchema: GenMessage<UpdateRawEnvFileResponse
   messageDesc(file_frostagent_v1_settings, 12);
 
 /**
+ * @generated from message frostagent.v1.GetConfigSchemaRequest
+ */
+export type GetConfigSchemaRequest = Message<"frostagent.v1.GetConfigSchemaRequest"> & {
+  /**
+   * @generated from field: string scope = 1;
+   */
+  scope: string;
+};
+
+/**
+ * Describes the message frostagent.v1.GetConfigSchemaRequest.
+ * Use `create(GetConfigSchemaRequestSchema)` to create a new message.
+ */
+export const GetConfigSchemaRequestSchema: GenMessage<GetConfigSchemaRequest> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 13);
+
+/**
+ * @generated from message frostagent.v1.GetConfigSchemaResponse
+ */
+export type GetConfigSchemaResponse = Message<"frostagent.v1.GetConfigSchemaResponse"> & {
+  /**
+   * @generated from field: repeated frostagent.v1.ConfigField fields = 1;
+   */
+  fields: ConfigField[];
+};
+
+/**
+ * Describes the message frostagent.v1.GetConfigSchemaResponse.
+ * Use `create(GetConfigSchemaResponseSchema)` to create a new message.
+ */
+export const GetConfigSchemaResponseSchema: GenMessage<GetConfigSchemaResponse> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 14);
+
+/**
+ * @generated from message frostagent.v1.ConfigField
+ */
+export type ConfigField = Message<"frostagent.v1.ConfigField"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: string type = 2;
+   */
+  type: string;
+
+  /**
+   * @generated from field: string scope = 3;
+   */
+  scope: string;
+
+  /**
+   * @generated from field: string default_value = 4;
+   */
+  defaultValue: string;
+
+  /**
+   * @generated from field: string constraints = 5;
+   */
+  constraints: string;
+
+  /**
+   * @generated from field: bool secret = 6;
+   */
+  secret: boolean;
+
+  /**
+   * @generated from field: bool restart_required = 7;
+   */
+  restartRequired: boolean;
+
+  /**
+   * @generated from field: string description = 8;
+   */
+  description: string;
+
+  /**
+   * @generated from field: string default_hint = 9;
+   */
+  defaultHint: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ConfigField.
+ * Use `create(ConfigFieldSchema)` to create a new message.
+ */
+export const ConfigFieldSchema: GenMessage<ConfigField> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 15);
+
+/**
+ * @generated from message frostagent.v1.ConfigValidationError
+ */
+export type ConfigValidationError = Message<"frostagent.v1.ConfigValidationError"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: string message = 2;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message frostagent.v1.ConfigValidationError.
+ * Use `create(ConfigValidationErrorSchema)` to create a new message.
+ */
+export const ConfigValidationErrorSchema: GenMessage<ConfigValidationError> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 16);
+
+/**
+ * @generated from message frostagent.v1.ConfigChange
+ */
+export type ConfigChange = Message<"frostagent.v1.ConfigChange"> & {
+  /**
+   * @generated from field: string key = 1;
+   */
+  key: string;
+
+  /**
+   * @generated from field: string before = 2;
+   */
+  before: string;
+
+  /**
+   * @generated from field: string after = 3;
+   */
+  after: string;
+
+  /**
+   * @generated from field: bool removed = 4;
+   */
+  removed: boolean;
+
+  /**
+   * @generated from field: bool secret = 5;
+   */
+  secret: boolean;
+
+  /**
+   * @generated from field: bool configured_before = 6;
+   */
+  configuredBefore: boolean;
+
+  /**
+   * @generated from field: bool configured_after = 7;
+   */
+  configuredAfter: boolean;
+};
+
+/**
+ * Describes the message frostagent.v1.ConfigChange.
+ * Use `create(ConfigChangeSchema)` to create a new message.
+ */
+export const ConfigChangeSchema: GenMessage<ConfigChange> = /*@__PURE__*/
+  messageDesc(file_frostagent_v1_settings, 17);
+
+/**
  * SettingsService manages environment variable configuration.
  *
  * @generated from service frostagent.v1.SettingsService
  */
 export const SettingsService: GenService<{
+  /**
+   * @generated from rpc frostagent.v1.SettingsService.GetConfigSchema
+   */
+  getConfigSchema: {
+    methodKind: "unary";
+    input: typeof GetConfigSchemaRequestSchema;
+    output: typeof GetConfigSchemaResponseSchema;
+  },
   /**
    * @generated from rpc frostagent.v1.SettingsService.ListEnvVars
    */

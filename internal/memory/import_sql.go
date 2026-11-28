@@ -38,6 +38,11 @@ type preparedGroup struct {
 // ImportSQLSnapshot restores all memory scopes in one transaction. Merge
 // skips matching IDs and keeps existing profile fields on conflict.
 func ImportSQLSnapshot(db *storage.DB, instanceID string, snapshot Snapshot, merge bool) (ImportResult, error) {
+	if !merge {
+		if err := ValidateSnapshot(snapshot); err != nil {
+			return ImportResult{}, err
+		}
+	}
 	result := ImportResult{}
 	private := NewSQLStore(db, instanceID)
 	privateBrain := &BrainData{Entries: snapshot.PrivateEntries, MergeArchives: snapshot.PrivateArchives}
@@ -244,6 +249,33 @@ func rebuildCatalogTx(ctx context.Context, db *storage.DB, tx *sql.Tx, scope sql
 			(instance_id, scope_type, platform, group_id, owner, catalog_json)
 			VALUES (?, ?, ?, ?, ?, ?)`), scope.instanceID, scope.scope, scope.platform, scope.groupID,
 			owner, string(raw)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidateSnapshot is the side-effect-free validation for a complete import.
+func ValidateSnapshot(snapshot Snapshot) error {
+	if err := validateBrain(&BrainData{Entries: snapshot.PrivateEntries, MergeArchives: snapshot.PrivateArchives}); err != nil {
+		return err
+	}
+	seen := map[string]bool{}
+	for _, group := range snapshot.Groups {
+		platform := CanonicalPlatform(group.Platform)
+		id := canonicalPlatformGroupID(platform, group.GroupID)
+		if id == "" {
+			return fmt.Errorf("canonical group_id cannot be empty")
+		}
+		key := platform + "\x00" + id
+		if seen[key] {
+			return fmt.Errorf("duplicate group %s/%s", platform, id)
+		}
+		seen[key] = true
+		if group.Profile != nil && group.Profile.GroupID != "" && CanonicalGroupID(group.Profile.GroupID) != id {
+			return fmt.Errorf("group profile identity mismatch")
+		}
+		if err := validateBrain(&BrainData{Entries: group.Entries, MergeArchives: group.Archives}); err != nil {
 			return err
 		}
 	}

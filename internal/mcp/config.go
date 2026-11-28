@@ -222,6 +222,14 @@ func (s *ConfigStore) saveSQL(cfg *Config) error {
 // WriteImportedConfigTx saves a redacted MCP configuration as one part of a
 // caller-owned settings transaction.
 func WriteImportedConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg *Config) error {
+	if err := PrepareImportedConfig(cfg); err != nil {
+		return err
+	}
+	return writeConfigTx(ctx, db, tx, instanceID, cfg)
+}
+
+// PrepareImportedConfig validates and strips credentials without performing I/O.
+func PrepareImportedConfig(cfg *Config) error {
 	seen := make(map[string]bool)
 	for i := range cfg.Servers {
 		server := &cfg.Servers[i]
@@ -248,7 +256,7 @@ func WriteImportedConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, inst
 		server.Transport.Headers = nil
 		server.Transport.Args = nil
 	}
-	return writeConfigTx(ctx, db, tx, instanceID, cfg)
+	return nil
 }
 
 func writeConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg *Config) error {

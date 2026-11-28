@@ -1,7 +1,7 @@
 import { instanceState } from '../instance-state';
-import { getControlToken } from './control-auth';
+import { getControlToken, notifyManagementAuthenticationRequired } from './control-auth';
 export { getControlToken, setControlToken } from './control-auth';
-import { createClient } from '@connectrpc/connect';
+import { createClient, Code, ConnectError } from '@connectrpc/connect';
 import type { Client, Interceptor } from '@connectrpc/connect';
 import { createConnectTransport } from '@connectrpc/connect-web';
 import {
@@ -581,7 +581,12 @@ const authInterceptor: Interceptor = (next) => async (req) => {
   if (token && !req.header.has('Authorization')) {
     req.header.set('Authorization', `Bearer ${token}`);
   }
-  return await next(req);
+  try {
+    return await next(req);
+  } catch (error) {
+    if (ConnectError.from(error).code === Code.Unauthenticated) notifyManagementAuthenticationRequired();
+    throw error;
+  }
 };
 
 export interface PersistenceHealth {

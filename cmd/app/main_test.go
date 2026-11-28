@@ -20,7 +20,7 @@ func TestManagementMuxSharedModelCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer gateway.Close()
-	server := httptest.NewServer(managementMux(gateway))
+	server := httptest.NewServer(localAdminTestHandler(managementMux(gateway)))
 	defer server.Close()
 	catalog := frostagentv1connect.NewModelRouterServiceClient(server.Client(), server.URL)
 	state, err := catalog.GetState(ctx, connect.NewRequest(&v1.GetStateRequest{}))

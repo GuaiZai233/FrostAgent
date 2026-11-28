@@ -78,9 +78,6 @@ func TestDockerBridgeCannotClaimLoopbackConnector(t *testing.T) {
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			want := http.StatusUnauthorized
-			if isLoopbackHost(peer) && !enforce {
-				want = http.StatusNoContent
-			}
 			if response.Code != want {
 				t.Fatalf("peer=%s enforce=%t: %d, want=%d", peer, enforce, response.Code, want)
 			}

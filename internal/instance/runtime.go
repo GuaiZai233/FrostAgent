@@ -373,6 +373,11 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		}
 		_, err := db.EnsureEmbeddingStorage(ctx)
 		return err
+	}, func(ctx context.Context) error {
+		if _, err := routerManager.Snapshot().Resolve(modelrouter.WorkloadEmbedding, modelrouter.Scope{}); err != nil {
+			return fmt.Errorf("embedding route is unavailable: %w", err)
+		}
+		return db.CheckEmbeddingPrerequisites(ctx)
 	})
 	mux.HandleFunc("/api/persistence", func(w http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
