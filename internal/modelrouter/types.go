@@ -1,7 +1,9 @@
 package modelrouter
 
 import (
+	"encoding/json"
 	"errors"
+	"maps"
 	"strings"
 )
 
@@ -89,6 +91,19 @@ type Configuration struct {
 	Models         []Model              `json:"models"`
 	GlobalBindings map[Workload]Binding `json:"global_bindings"`
 	GroupOverrides []GroupOverride      `json:"group_overrides"`
+}
+
+// MarshalJSON omits default bindings that older binaries cannot read, so file
+// stores and backup exports stay loadable after a rollback. Reading normalizes
+// a missing global binding back to its default.
+func (c Configuration) MarshalJSON() ([]byte, error) {
+	type plain Configuration
+	out := plain(c)
+	if binding, ok := c.GlobalBindings[WorkloadMedia]; ok && omitDefaultBinding(WorkloadMedia, binding) {
+		out.GlobalBindings = maps.Clone(c.GlobalBindings)
+		delete(out.GlobalBindings, WorkloadMedia)
+	}
+	return json.Marshal(out)
 }
 
 type Scope struct {

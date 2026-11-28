@@ -127,6 +127,9 @@ func TestOneBotMediaRouting(t *testing.T) {
 			wantMediaCalls := 0
 			if tc.mediaRoute && tc.wantFormat != "" {
 				wantMediaCalls = 1
+				if media.requests[0].UsageModule != "vision" {
+					t.Fatalf("media usage module=%q, want the rollback-safe vision module", media.requests[0].UsageModule)
+				}
 				request := media.requests[0].Messages[len(media.requests[0].Messages)-1].Content.([]core.ContentPart)
 				if len(request) != 2 || request[1].InputAudio == nil || request[1].InputAudio.Format != tc.wantFormat || request[1].InputAudio.Data != tc.wantData {
 					t.Fatalf("media model got wrong payload: %+v", request)

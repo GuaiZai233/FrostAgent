@@ -530,9 +530,9 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 			}
 			var decision security.WatchdogDecision
 			if wsConn.mock {
-				decision = a.engine.Security.GateIngressDryRun(principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+				decision = a.engine.Security.GateIngressDryRun(principal, redactInlineMediaForLog(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
 			} else {
-				decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, string(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
+				decision = a.engine.Security.GateIngressWithContext(a.engine.Context(), principal, redactInlineMediaForLog(event.Message), security.AuditEvent{Instance: a.engine.InstanceID, Session: wsConn.historyKey(event)})
 			}
 			if security.Blocks(decision.Action) {
 				directReply := shouldSendSecurityDirectReply(event, a.engine, routing)

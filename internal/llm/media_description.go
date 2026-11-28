@@ -49,6 +49,9 @@ func CallMediaModelWithError(ctx context.Context, provider core.LLMProvider, rou
 			{Role: core.RoleUser, Content: parts},
 		},
 		Route: route,
+		// Older binaries reject unknown usage modules, so media transcription
+		// shares the multimodal "vision" module instead of adding one.
+		UsageModule: "vision",
 	})
 	if err != nil {
 		return "", err

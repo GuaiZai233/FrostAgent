@@ -29,6 +29,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/api"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 
 	"github.com/gorilla/websocket"
@@ -309,7 +310,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				event.GroupID,
 				event.UserID,
 				senderDisplayName(event),
-				string(event.Message),
+				redactInlineMediaForLog(event.Message),
 			),
 		)
 		// 群聊被真实 @ 或名称/别名提及时触发对话（总开关；未设置视为启用）。
@@ -348,7 +349,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				"收到用户 [%d/%s] 的私聊消息: %s",
 				event.UserID,
 				senderDisplayName(event),
-				string(event.Message),
+				redactInlineMediaForLog(event.Message),
 			),
 		)
 		replyContext := conn.lookupReplyContext(event)
@@ -903,7 +904,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					directImageParts = append(directImageParts, content.ImageContentParts(routeCtx, quote.Segments)...)
 				}
 			}
-			if directMediaKinds.any() {
+			// Raw quoted media bypasses the text vetting above, so it is only
+			// forwarded when the quote passed unchanged.
+			if directMediaKinds.any() && vettedReply == originalReply {
 				for _, quote := range quoteNodes {
 					if !content.ContainsMedia(quote.Segments) {
 						continue
@@ -1675,6 +1678,11 @@ func dialogueModelMediaKinds(engine *llm.Engine, snapshot *modelrouter.Snapshot,
 	}
 	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
 	if err != nil {
+		return inboundMediaKinds{}
+	}
+	// Capability tags are metadata; formats that cannot serialize audio/video
+	// must not be offered media they would reject.
+	if !api.Format(target.APIFormat).SupportsInlineMedia() {
 		return inboundMediaKinds{}
 	}
 	return inboundMediaKinds{audio: target.HasCapability("audio"), video: target.HasCapability("video")}

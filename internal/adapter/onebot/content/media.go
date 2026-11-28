@@ -3,6 +3,7 @@ package content
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -73,8 +74,12 @@ func SegmentsText(segments []MessageSegment) string {
 	return strings.Join(texts, "")
 }
 
-// SegmentInlineMedia returns bytes carried inline by the segment itself.
-func SegmentInlineMedia(seg MessageSegment) ([]byte, bool, error) {
+// ErrMediaTooLarge reports inline media whose encoded form already exceeds the limit.
+var ErrMediaTooLarge = errors.New("音视频超出本轮读取上限")
+
+// SegmentInlineMedia returns bytes carried inline by the segment itself. The
+// encoded size is checked against limit before anything is decoded.
+func SegmentInlineMedia(seg MessageSegment, limit int64) ([]byte, bool, error) {
 	source := dataString(seg.Data, "base64")
 	if source != "" && !strings.HasPrefix(source, "base64://") && !strings.HasPrefix(source, "data:") {
 		source = "base64://" + source
@@ -91,12 +96,13 @@ func SegmentInlineMedia(seg MessageSegment) ([]byte, bool, error) {
 	if source == "" {
 		return nil, false, nil
 	}
-	data, err := DecodeInlineMedia(source)
+	data, err := DecodeInlineMedia(source, limit)
 	return data, true, err
 }
 
-// DecodeInlineMedia decodes a base64:// source, a Base64 data URL or bare Base64.
-func DecodeInlineMedia(source string) ([]byte, error) {
+// DecodeInlineMedia decodes a base64:// source, a Base64 data URL or bare
+// Base64 of at most limit bytes, rejecting oversized input before decoding.
+func DecodeInlineMedia(source string, limit int64) ([]byte, error) {
 	source = strings.TrimSpace(source)
 	switch {
 	case strings.HasPrefix(source, "base64://"):
@@ -108,12 +114,18 @@ func DecodeInlineMedia(source string) ([]byte, error) {
 		}
 		source = encoded
 	}
+	if limit < 0 || int64(len(source)) > int64(base64.StdEncoding.EncodedLen(int(min(limit, int64(1<<40))))) {
+		return nil, ErrMediaTooLarge
+	}
 	data, err := base64.StdEncoding.DecodeString(source)
 	if err != nil {
 		return nil, fmt.Errorf("媒体 Base64 无效")
 	}
 	if len(data) == 0 {
 		return nil, fmt.Errorf("媒体内容为空")
+	}
+	if int64(len(data)) > limit {
+		return nil, ErrMediaTooLarge
 	}
 	return data, nil
 }

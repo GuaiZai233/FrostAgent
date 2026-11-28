@@ -29,6 +29,16 @@ func (f Format) Valid() bool {
 
 // URL preserves proxy prefixes and accepts an already versioned base URL.
 // Custom endpoints are complete URLs, including any query string.
+// SupportsInlineMedia reports whether requests in this format can carry
+// audio and video content parts.
+func (f Format) SupportsInlineMedia() bool {
+	switch f {
+	case Legacy, ChatCompletions, Custom, Gemini:
+		return true
+	}
+	return false
+}
+
 func (f Format) URL(base, operation, model string) (string, error) {
 	if !f.Valid() {
 		return "", fmt.Errorf("unknown API format %q", f)

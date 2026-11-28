@@ -1,6 +1,8 @@
 package modelrouter
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
@@ -51,5 +53,31 @@ func TestMediaBindingStoredOnlyWhenConfigured(t *testing.T) {
 	reloaded := NewSQL(db, "instance-a").Active()
 	if got := reloaded.GlobalBindings[WorkloadMedia]; got.Mode != BindingModel || got.ModelID != "model-b" {
 		t.Fatalf("configured media binding lost on reload: %+v", got)
+	}
+}
+
+func TestConfigurationJSONOmitsDefaultMediaBinding(t *testing.T) {
+	config := defaultConfiguration()
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"media"`) {
+		t.Fatalf("default media binding serialized: %s", data)
+	}
+	if _, ok := config.GlobalBindings[WorkloadMedia]; !ok {
+		t.Fatal("marshaling mutated the configuration")
+	}
+	var decoded Configuration
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	normalizeConfiguration(&decoded)
+	if got := decoded.GlobalBindings[WorkloadMedia]; got.Mode != BindingDisabled {
+		t.Fatalf("default media binding not restored on read: %+v", got)
+	}
+	config.GlobalBindings[WorkloadMedia] = Binding{Mode: BindingModel, ModelID: "model-a"}
+	if data, _ = json.Marshal(config); !strings.Contains(string(data), `"media":{"mode":"model","model_id":"model-a"}`) {
+		t.Fatalf("configured media binding dropped: %s", data)
 	}
 }

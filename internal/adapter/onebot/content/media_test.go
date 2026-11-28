@@ -2,6 +2,8 @@ package content
 
 import (
 	"encoding/base64"
+	"errors"
+	"strings"
 	"testing"
 )
 
@@ -74,12 +76,28 @@ func TestSegmentInlineMedia(t *testing.T) {
 		{"base64": encoded},
 		{"url": "data:audio/mpeg;base64," + encoded},
 	} {
-		got, ok, err := SegmentInlineMedia(MessageSegment{Type: "record", Data: data})
+		got, ok, err := SegmentInlineMedia(MessageSegment{Type: "record", Data: data}, 1024)
 		if !ok || err != nil || string(got) != "audio" {
 			t.Errorf("%v: got %q ok=%v err=%v", data, got, ok, err)
 		}
 	}
-	if _, ok, _ := SegmentInlineMedia(MessageSegment{Type: "record", Data: map[string]any{"file": "voice.amr", "url": "https://multimedia.nt.qq.com.cn/x"}}); ok {
+	if _, ok, _ := SegmentInlineMedia(MessageSegment{Type: "record", Data: map[string]any{"file": "voice.amr", "url": "https://multimedia.nt.qq.com.cn/x"}}, 1024); ok {
 		t.Fatal("remote sources are not inline media")
+	}
+}
+
+func TestInlineMediaRejectsOversizedInputBeforeDecoding(t *testing.T) {
+	// Invalid Base64 proves the size check runs first: decoding would fail
+	// with a different error.
+	oversized := "base64://" + strings.Repeat("!", 64)
+	if _, ok, err := SegmentInlineMedia(MessageSegment{Type: "record", Data: map[string]any{"file": oversized}}, 16); !ok || !errors.Is(err, ErrMediaTooLarge) {
+		t.Fatalf("oversized inline media: ok=%v err=%v", ok, err)
+	}
+	exact := base64.StdEncoding.EncodeToString(make([]byte, 16))
+	if data, err := DecodeInlineMedia(exact, 16); err != nil || len(data) != 16 {
+		t.Fatalf("media at the limit: %d bytes, %v", len(data), err)
+	}
+	if _, err := DecodeInlineMedia(exact, 15); !errors.Is(err, ErrMediaTooLarge) {
+		t.Fatalf("media over the limit: %v", err)
 	}
 }

@@ -24,7 +24,7 @@ const (
 	recordOutputFormat = "mp3"
 )
 
-var errInboundMediaBudget = errors.New("音视频超出本轮 20 MiB 的读取上限")
+var errInboundMediaBudget = content.ErrMediaTooLarge
 
 // inboundMediaBudget tracks the per-turn byte and item allowance shared by the
 // current message and its quotes. Media bytes only live in request memory and
@@ -101,11 +101,8 @@ func (c *wsConnection) fetchInboundMedia(ctx context.Context, event model.OneBot
 	if declared := fileDataInt(seg.Data, "file_size", "size"); declared > limit {
 		return nil, errInboundMediaBudget
 	}
-	if data, ok, err := content.SegmentInlineMedia(seg); ok {
-		if err != nil {
-			return nil, err
-		}
-		return limitInboundMedia(data, limit)
+	if data, ok, err := content.SegmentInlineMedia(seg, limit); ok {
+		return data, err
 	}
 	if c == nil || c.mock {
 		return nil, errors.New("消息段没有可读取的音视频数据")
@@ -118,13 +115,6 @@ func (c *wsConnection) fetchInboundMedia(ctx context.Context, event model.OneBot
 	default:
 		return c.fetchInboundVideo(ctx, seg, limit)
 	}
-}
-
-func limitInboundMedia(data []byte, limit int64) ([]byte, error) {
-	if int64(len(data)) > limit {
-		return nil, errInboundMediaBudget
-	}
-	return data, nil
 }
 
 // fetchInboundRecord asks the OneBot implementation to transcode the voice
@@ -222,26 +212,58 @@ func (c *wsConnection) fetchMediaAction(ctx context.Context, action string, para
 		return nil, fmt.Errorf("OneBot %s 返回格式无效", action)
 	}
 	if encoded := strings.TrimSpace(data.Base64); encoded != "" {
-		if int64(len(encoded))/4*3 > limit+3 {
-			return nil, errInboundMediaBudget
-		}
-		decoded, err := content.DecodeInlineMedia(encoded)
-		if err != nil {
-			return nil, err
-		}
-		return limitInboundMedia(decoded, limit)
+		return content.DecodeInlineMedia(encoded, limit)
 	}
 	for _, source := range []string{data.URL, data.File} {
 		if strings.HasPrefix(source, "base64://") || strings.HasPrefix(source, "data:") {
-			decoded, err := content.DecodeInlineMedia(source)
-			if err != nil {
-				return nil, err
-			}
-			return limitInboundMedia(decoded, limit)
+			return content.DecodeInlineMedia(source, limit)
 		}
 		if allowedInboundFileURL(source) {
 			return c.downloadInboundFile(ctx, source, limit)
 		}
 	}
 	return nil, fmt.Errorf("OneBot %s 未返回 Base64 或受信任的下载地址", action)
+}
+
+// redactInlineMediaForLog renders a raw OneBot message for transport logs and
+// ingress review with inline audio/video payloads replaced by size
+// placeholders. Messages without inline media are returned unchanged.
+func redactInlineMediaForLog(raw json.RawMessage) string {
+	var segments []content.MessageSegment
+	if json.Unmarshal(raw, &segments) != nil {
+		return string(raw)
+	}
+	changed := false
+	for i, seg := range segments {
+		kind := content.SegmentMediaKind(seg)
+		if kind == content.MediaNone {
+			continue
+		}
+		var data map[string]any
+		for key, value := range seg.Data {
+			text, ok := value.(string)
+			if !ok || !(key == "base64" || strings.HasPrefix(text, "base64://") || strings.HasPrefix(text, "data:")) {
+				continue
+			}
+			if data == nil {
+				data = make(map[string]any, len(seg.Data))
+				for k, v := range seg.Data {
+					data[k] = v
+				}
+			}
+			data[key] = fmt.Sprintf("[%s omitted: encoded_size=%d chars]", kind, len(text))
+		}
+		if data != nil {
+			segments[i].Data = data
+			changed = true
+		}
+	}
+	if !changed {
+		return string(raw)
+	}
+	redacted, err := json.Marshal(segments)
+	if err != nil {
+		return "[message with inline media omitted]"
+	}
+	return string(redacted)
 }

@@ -2,7 +2,7 @@ import type { TokenUsageCounter, TokenUsageModule, TokenUsageOverview } from '@f
 import { escapeHtml, formatCount } from '../utils/formatters';
 
 const moduleLabels: Record<string, string> = {
-  dialogue: '对话', subagent: '子智能体', vision: '多模态理解', media: '音视频转述',
+  dialogue: '对话', subagent: '子智能体', vision: '多模态理解',
   group_compact: '群聊摘要', sticker_summary: '表情包摘要',
   memory_extract: '记忆提取', reflection: '记忆整理', embedding: '向量化',
   security: '安全分类',
@@ -37,7 +37,7 @@ export function renderTokenUsage(usage: TokenUsageOverview | undefined): string 
   const cards: Array<{ label: string; rows: TokenUsageModule[]; key: CounterKey }> = [
     { label: '累计 Token', rows, key: 'total' },
     { label: '对话', rows: rows.filter((row) => ['dialogue', 'subagent'].includes(row.module)), key: 'total' },
-    { label: '多模态', rows: rows.filter((row) => row.module === 'vision' || row.module === 'media'), key: 'total' },
+    { label: '多模态', rows: rows.filter((row) => row.module === 'vision'), key: 'total' },
     { label: '摘要（含表情包）', rows: summaryRows, key: 'total' },
     { label: '缓存命中 Token', rows, key: 'cached' },
     { label: '缓存命中次数', rows, key: 'cacheHits' },
