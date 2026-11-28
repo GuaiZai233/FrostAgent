@@ -173,7 +173,7 @@ func TestDockerControlTokenDatabaseSwitch(t *testing.T) {
 		return initializeDockerControlToken(next.GlobalConfig(), func(string) string { return input })
 	}
 	gateway.apply = func(next *instance.Manager) error {
-		if next.GlobalConfig().Get("MCP_CONTROL_TOKEN") == "" {
+		if input != "" && next.GlobalConfig().Get("MCP_CONTROL_TOKEN") == "" {
 			t.Error("listeners were applied before target credential initialization")
 		}
 		return next.ApplyGlobalSettings()
@@ -189,8 +189,9 @@ func TestDockerControlTokenDatabaseSwitch(t *testing.T) {
 			t.Fatalf("published API status=%d, want=%d", response.Code, want)
 		}
 	}
+	input = "synthetic-short"
 	if err := gateway.switchTo(context.Background(), target); err == nil {
-		t.Fatal("unconfigured target database was accepted without bootstrap input")
+		t.Fatal("invalid bootstrap input was accepted for the target database")
 	}
 	manager, config, _ := gateway.snapshot()
 	stored, err := gateway.bootstrap.Load(context.Background())
@@ -199,6 +200,18 @@ func TestDockerControlTokenDatabaseSwitch(t *testing.T) {
 	}
 	assertAccess(original, http.StatusOK)
 	assertAccess(bootstrap, http.StatusUnauthorized)
+	// Without bootstrap input the switch succeeds, but HTTP management stays
+	// locked until the target database has its own credential.
+	input = ""
+	if err := gateway.switchTo(context.Background(), target); err != nil {
+		t.Fatal("uninitialized target database was refused without bootstrap input:", err)
+	}
+	assertAccess(original, http.StatusUnauthorized)
+	assertAccess(bootstrap, http.StatusUnauthorized)
+	if err := gateway.switchTo(context.Background(), storage.Config{Backend: storage.SQLite}); err != nil {
+		t.Fatal(err)
+	}
+	assertAccess(original, http.StatusOK)
 	input = bootstrap
 	if err := gateway.switchTo(context.Background(), target); err != nil {
 		t.Fatal(err)

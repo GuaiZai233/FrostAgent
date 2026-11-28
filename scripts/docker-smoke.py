@@ -287,7 +287,7 @@ def exercise(root, temporary, host_mode=False):
         assert len(api('/api/instances')['instances']) == 1
         for adapter in ('onebot',):
             ws = f'/instances/{instance_id}/ws/{adapter}'
-            check_management_websocket(read, ws)
+            check_management_websocket(read, ws, token=management_token)
             check_management_websocket(lambda path, headers: read(path, headers={**FORWARDED, **headers}), ws, token=management_token)
             if not host_mode:
                 check_management_websocket(published_read, ws, token='synthetic-control-token')
@@ -317,7 +317,7 @@ def exercise(root, temporary, host_mode=False):
             ws = f'/instances/{instance_id}/ws/{adapter}'
             token = 'synthetic-inbound-' + adapter
             check_real_websocket_auth(read, ws, token)
-            check_management_websocket(read, ws)
+            check_management_websocket(read, ws, token=management_token)
             check_real_websocket_auth(lambda path, headers: client(origin, '127.0.0.1', 11023, path, headers=headers), ws, token)
             if not host_mode:
                 check_real_websocket_auth(published_read, ws, token)
@@ -351,7 +351,9 @@ def exercise(root, temporary, host_mode=False):
         for address in ('127.0.0.1:1235', '0.0.0.0:1235', '[::]:1235'):
             unsafe = json.loads(json.dumps(settings))
             unsafe['settings']['LISTEN_ADDR'] = address
-            assert read('/api/instances/global/import/settings', unsafe)['status'] == 400, address
+            unsafe_result = read('/api/instances/global/import/settings', unsafe,
+                                 {'Authorization': 'Bearer ' + management_token})
+            assert unsafe_result['status'] == 400, (address, unsafe_result)
             assert 'LISTEN_ADDR' not in api('/api/instances/global/backup/settings')['settings']
         for address in ('127.0.0.1:8080', '0.0.0.0:8080'):
             settings['settings']['LISTEN_ADDR'] = address
