@@ -96,7 +96,6 @@ function createChatPage(container: HTMLElement): () => void {
   const api = createInstanceAPI();
   const instanceId = instanceState.selected?.id;
   let isUnmounted = false;
-  let connectionManaged = false;
   let ws: WebSocket | null = null;
   let msgSeq = 0;
 
@@ -135,19 +134,19 @@ function createChatPage(container: HTMLElement): () => void {
           <p class="text-xs text-muted mt-1">同一实例切页保留对话；切换实例、刷新或关闭页面后清除，不写入历史记录。</p>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
-          <button class="btn btn-outline btn-sm" id="btn-reconnect" title="重新连接会重置模型上下文，保留屏幕记录">
+          <button class="btn btn-outline btn-sm" id="btn-reconnect" type="button" title="重新连接会重置模型上下文，保留屏幕记录">
             ${icon('refresh', 'w-3.5 h-3.5')}
             <span>重新连接</span>
           </button>
-          <button class="btn btn-outline btn-sm" id="btn-disconnect">
+          <button class="btn btn-outline btn-sm" id="btn-disconnect" type="button" disabled>
             ${icon('circle_stop', 'w-3.5 h-3.5')}
             <span>断开连接</span>
           </button>
-          <button class="btn btn-outline btn-sm" id="btn-clear-chat" title="仅清除屏幕记录，保留模型上下文">
+          <button class="btn btn-outline btn-sm" id="btn-clear-chat" type="button" title="仅清除屏幕记录，保留模型上下文">
             ${icon('trash', 'w-3.5 h-3.5')}
             <span>清屏</span>
           </button>
-          <button class="btn btn-outline btn-sm" id="btn-reset-session" title="清除屏幕记录并重新连接，开始新的模型上下文">
+          <button class="btn btn-outline btn-sm" id="btn-reset-session" type="button" title="清除屏幕记录并重新连接，开始新的模型上下文">
             ${icon('refresh', 'w-3.5 h-3.5')}
             <span>重置会话</span>
           </button>
@@ -218,8 +217,12 @@ function createChatPage(container: HTMLElement): () => void {
         <div id="chat-messages-container" class="flex-1 p-4 overflow-y-auto flex flex-col gap-3.5">
           <div class="card p-8 text-center text-muted text-xs flex flex-col items-center justify-center gap-2 m-auto" id="chat-empty-state">
             <span class="text-primary flex items-center">${icon('bot', 'w-8 h-8')}</span>
-            <span class="font-medium text-foreground">直接对话模拟器已就绪</span>
-            <span>选择上方会话场景后，在下方输入框发送消息即可与当前实例对话。</span>
+            <span class="font-medium text-foreground" id="chat-empty-title">直接对话尚未连接</span>
+            <span id="chat-empty-desc">选择上方会话场景后，点击下方按钮连接 WebSocket 即可开始对话。</span>
+            <button class="btn btn-primary btn-sm mt-2" id="btn-connect-ws" type="button">
+              ${icon('radio', 'w-3.5 h-3.5')}
+              <span>点击连接 WebSocket</span>
+            </button>
           </div>
         </div>
 
@@ -230,9 +233,10 @@ function createChatPage(container: HTMLElement): () => void {
               id="chat-input-textarea"
               class="textarea text-xs flex-1 font-sans resize-none"
               rows="3"
-              placeholder="输入消息内容... (按 Enter 发送，Shift + Enter 换行)"
+              placeholder="请先连接 WebSocket 后输入消息..."
+              disabled
             ></textarea>
-            <button class="btn btn-primary btn-sm flex-shrink-0" id="btn-send-message" style="height: 3rem; padding: 0 1.25rem;">
+            <button class="btn btn-primary btn-sm flex-shrink-0" id="btn-send-message" type="button" style="height: 3rem; padding: 0 1.25rem;" disabled>
               ${icon('play', 'w-4 h-4')}
               <span>发送</span>
             </button>
@@ -272,6 +276,9 @@ function createChatPage(container: HTMLElement): () => void {
 
   const messagesContainer = container.querySelector<HTMLElement>('#chat-messages-container')!;
   const emptyState = container.querySelector<HTMLElement>('#chat-empty-state')!;
+  const emptyTitle = container.querySelector<HTMLElement>('#chat-empty-title')!;
+  const emptyDesc = container.querySelector<HTMLElement>('#chat-empty-desc')!;
+  const btnConnectWs = container.querySelector<HTMLButtonElement>('#btn-connect-ws')!;
   const inputTextarea = container.querySelector<HTMLTextAreaElement>('#chat-input-textarea')!;
   const btnSend = container.querySelector<HTMLButtonElement>('#btn-send-message')!;
   const wsEndpointText = container.querySelector<HTMLElement>('#chat-ws-endpoint-text')!;
@@ -304,12 +311,41 @@ function createChatPage(container: HTMLElement): () => void {
     }
   }
 
+  function syncConnectionUI() {
+    const isConnected = connectionStatus === 'connected';
+    const hasActiveSocket = connectionStatus === 'connected' || connectionStatus === 'connecting';
+
+    inputTextarea.disabled = !isConnected;
+    btnSend.disabled = !isConnected;
+    inputTextarea.placeholder = isConnected
+      ? '输入消息内容... (按 Enter 发送，Shift + Enter 换行)'
+      : connectionStatus === 'connecting'
+        ? '正在连接 WebSocket...'
+        : '请先连接 WebSocket 后输入消息...';
+
+    btnDisconnect.disabled = !hasActiveSocket;
+    btnConnectWs.hidden = hasActiveSocket;
+    btnConnectWs.disabled = hasActiveSocket;
+
+    if (isConnected) {
+      emptyTitle.textContent = '直接对话模拟器已就绪';
+      emptyDesc.textContent = '选择上方会话场景后，在下方输入框发送消息即可与当前实例对话。';
+    } else if (connectionStatus === 'connecting') {
+      emptyTitle.textContent = '正在连接 WebSocket...';
+      emptyDesc.textContent = '请稍候，连接建立后即可开始对话。';
+    } else {
+      emptyTitle.textContent = '直接对话尚未连接';
+      emptyDesc.textContent = '选择上方会话场景后，点击下方按钮连接 WebSocket 即可开始对话。';
+    }
+  }
+
   function updateStatus(st: typeof connectionStatus) {
     connectionStatus = st;
     if (statusBadge && statusText) {
       statusBadge.className = `badge ${getStatusBadgeClass(st)}`;
       statusText.textContent = getStatusText(st);
     }
+    syncConnectionUI();
   }
 
   function appendMessage(msg: ChatMessage) {
@@ -430,6 +466,7 @@ function createChatPage(container: HTMLElement): () => void {
 
     socket.onclose = (ev) => {
       if (isUnmounted || ws !== socket) return;
+      ws = null;
       updateStatus('disconnected');
       appendMessage({
         id: `sys_${Date.now()}`,
@@ -459,7 +496,6 @@ function createChatPage(container: HTMLElement): () => void {
   }
 
   function disconnect() {
-    connectionManaged = true;
     if (ws) {
       ws.onopen = null;
       ws.onclose = null;
@@ -554,7 +590,7 @@ function createChatPage(container: HTMLElement): () => void {
     if (!text) return;
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.warning('WebSocket 尚未连接，请先点击重新连接');
+      toast.warning('WebSocket 尚未连接，请先点击连接 WebSocket');
       return;
     }
 
@@ -633,11 +669,16 @@ function createChatPage(container: HTMLElement): () => void {
   }
 
   // Event Listeners
+  btnConnectWs.addEventListener('click', () => {
+    connect();
+  });
+
   btnReconnect.addEventListener('click', () => {
     connect();
   });
 
   btnDisconnect.addEventListener('click', () => {
+    if (!ws) return;
     disconnect();
     appendMessage({
       id: `sys_${Date.now()}`,
@@ -699,6 +740,9 @@ function createChatPage(container: HTMLElement): () => void {
     }
   });
 
+  updateEndpointDisplay();
+  syncConnectionUI();
+
   // Load initial bot overview to obtain botName
   async function initOverview() {
     try {
@@ -706,12 +750,10 @@ function createChatPage(container: HTMLElement): () => void {
       if (isUnmounted) return;
       botName = overview.botName || '助手';
       updateEndpointDisplay();
-      if (!connectionManaged) connect();
     } catch (err) {
       if (isUnmounted) return;
       console.error('DirectChat: Failed to load overview:', err);
       updateEndpointDisplay();
-      if (!connectionManaged) connect();
     }
   }
 
