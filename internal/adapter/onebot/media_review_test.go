@@ -1,6 +1,7 @@
 package onebot
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
@@ -139,5 +140,34 @@ func TestRedactInlineMediaForLog(t *testing.T) {
 	plain := json.RawMessage(`[{"type":"record","data":{"file":"voice.amr","url":"https://multimedia.nt.qq.com.cn/x"}}]`)
 	if got := redactInlineMediaForLog(plain); got != string(plain) {
 		t.Fatalf("message without inline media must be logged verbatim: %s", got)
+	}
+}
+
+// Audio and video files reach models through transcription or native input
+// only; the attachment path must not download them into the sandbox.
+func TestInboundMediaFilesAreNotImportedIntoSandbox(t *testing.T) {
+	data := []byte("ID3\x04\x00synthetic-song")
+	c, backend, count := fileTestConnection(t, data)
+	media := fileEvent(101, 11, "song.MP3", int64(len(data)))
+	session := c.engine.SessionManager.GetOrCreate(c.historyKey(media))
+	c.rememberInboundFiles(media)
+	if prompt := c.prepareInboundFiles(context.Background(), media, session, nil); prompt != "" {
+		t.Fatalf("media file was offered as a sandbox attachment: %s", prompt)
+	}
+	document := fileEvent(102, 11, "notes.docx", int64(len(data)))
+	c.rememberInboundFiles(document)
+	infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), document, session, nil))
+	if len(infos) != 1 || infos[0].Name != "notes.docx" || infos[0].Status != "ready" {
+		t.Fatalf("ordinary attachment changed: %+v", infos)
+	}
+	if count.Load() != 1 {
+		t.Fatalf("downloads=%d, want only the document", count.Load())
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	for name := range backend.files {
+		if strings.Contains(name, "song") {
+			t.Fatalf("media file written to sandbox: %s", name)
+		}
 	}
 }

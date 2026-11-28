@@ -480,6 +480,11 @@ func (c *wsConnection) prepareInboundFiles(ctx context.Context, event model.OneB
 			if explicit != (priority == 0) {
 				continue
 			}
+			// Audio and video are request-local: they reach models through
+			// transcription or native input, never the persistent sandbox.
+			if isInboundMediaFile(f) {
+				continue
+			}
 			if f.sessionID == sessionID && f.session == session && f.epoch == epoch && time.Since(f.seen) < inboundFileLifetime && (f.senderID == event.UserID || quotedIDs[f.messageID]) {
 				files = append(files, f)
 			}

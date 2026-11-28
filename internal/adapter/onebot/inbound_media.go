@@ -267,3 +267,8 @@ func redactInlineMediaForLog(raw json.RawMessage) string {
 	}
 	return string(redacted)
 }
+
+// isInboundMediaFile reports whether a registered attachment is audio or video.
+func isInboundMediaFile(f *inboundFile) bool {
+	return content.SegmentMediaKind(content.MessageSegment{Type: "file", Data: map[string]any{"name": f.name}}) != content.MediaNone
+}
