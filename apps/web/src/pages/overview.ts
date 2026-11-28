@@ -8,6 +8,7 @@ import { formatCount, formatStatus, formatUptime, escapeHtml } from '../utils/fo
 import { balanceQueryOrigin, parseBalanceQueryTarget, type BalanceQueryTarget } from '../utils/balance-query-request';
 import { icon } from '../components/icons';
 import { renderOverviewTools, renderOverviewToolsAction, type ToolCapability } from './overview-tools';
+import { renderStorageUsage } from '../components/storage-usage';
 import { renderTokenUsage } from '../components/token-usage';
 import { mountVersionControl } from '../components/version-panel';
 import { mountInstanceRequired } from '../components/instance-required';
@@ -193,6 +194,8 @@ export function mountOverviewPage(container: HTMLElement): () => void {
             ${renderOverviewTools(data.tools)}
           </div>
         </section>
+
+        ${renderStorageUsage(data.storageUsage)}
 
         ${renderTokenUsage(data.tokenUsage)}
 

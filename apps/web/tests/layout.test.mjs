@@ -131,6 +131,21 @@ assert.equal(
   false,
   'direct chat must not render the redundant ephemeral-mode info card',
 );
+assert.match(
+  chat,
+  /id="chat-empty-state"[\s\S]*?id="btn-connect-ws"[\s\S]*?点击连接 WebSocket/,
+  'direct chat must render the centered connect WebSocket button inside the empty chat area',
+);
+assert.match(
+  components,
+  /\.btn-primary:disabled,\s*\.btn-primary:disabled:hover\s*{[^}]*background-color:\s*var\(--muted\);/,
+  'disabled primary buttons must render in muted gray without hover override',
+);
+assert.match(
+  components,
+  /\.input:disabled,\s*\.select:disabled,\s*\.textarea:disabled\s*{[^}]*background-color:\s*var\(--muted\);/,
+  'disabled textareas must render in muted gray',
+);
 
 for (const removedSampleToken of [
   'SAMPLE_GROUP_PROMPT',

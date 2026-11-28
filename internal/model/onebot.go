@@ -43,4 +43,14 @@ type OneBotAction struct {
 	Action string      `json:"action"`
 	Params interface{} `json:"params,omitempty"`
 	Echo   string      `json:"echo,omitempty"`
+	// TempChat is local metadata, never sent to the platform. It marks an action
+	// produced by a /tempchat run, whose messages stay out of the chat archive and
+	// are recorded with the context that run disabled.
+	TempChat *TempChatOrigin `json:"-"`
+}
+
+// TempChatOrigin describes which context a /tempchat run disabled.
+type TempChatOrigin struct {
+	NoPersonality bool
+	NoMemory      bool
 }

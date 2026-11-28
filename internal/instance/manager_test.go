@@ -752,6 +752,17 @@ func TestWebsocketSourceIsolationAndStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c2.Close()
+	// Every real connection is probed once for the OneBot implementation name.
+	for _, c := range []*websocket.Conn{c1, c2} {
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var probe map[string]any
+		if err = c.ReadJSON(&probe); err != nil || probe["action"] != "get_version_info" {
+			t.Fatal("expected implementation probe", probe, err)
+		}
+		if err = c.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": probe["echo"], "data": map[string]any{"app_name": "synthetic"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err = c1.WriteJSON(map[string]any{"post_type": "message", "message_type": "private", "self_id": 2, "user_id": 1, "message_id": 1, "message": []map[string]any{{"type": "text", "data": map[string]string{"text": "unique-instance-source"}}}, "sender": map[string]any{"user_id": 1, "nickname": "mock"}}); err != nil {
 		t.Fatal(err)
 	}

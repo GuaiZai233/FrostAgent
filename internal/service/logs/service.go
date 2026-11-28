@@ -32,7 +32,7 @@ func (s *Service) ListLogs(
 	req *connect.Request[v1.ListLogsRequest],
 ) (*connect.Response[v1.ListLogsResponse], error) {
 	query := req.Msg
-	if req.Msg.ErrorUuid != "" {
+	if req.Msg.ErrorUuid != "" || strings.TrimSpace(req.Msg.MessageRefId) != "" {
 		query = &v1.ListLogsRequest{Scope: req.Msg.Scope}
 	}
 	entries, coverage, err := s.query(query, req.Header())
@@ -50,6 +50,18 @@ func (s *Service) ListLogs(
 			}
 		}
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("error is outside retained log coverage"))
+	}
+	if value := strings.TrimSpace(req.Msg.MessageRefId); value != "" {
+		id, ok := logspkg.NormalizeMessageRefID(value)
+		if !ok {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("消息 RefID 必须为 fa_msgid_<UUIDv4>"))
+		}
+		for _, e := range entries {
+			if e.MessageRefID == id {
+				return connect.NewResponse(&v1.ListLogsResponse{Entries: []*v1.LogEntry{presentEntry(e, req.Msg.Scope != "", req.Msg.IncludePayload)}, Coverage: coverage, Pagination: &v1.Pagination{PageSize: 1, Total: 1}}), nil
+			}
+		}
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到消息记录，可能已清理、超出预算或属于其他实例；请确认实例和日志来源"))
 	}
 	filtered := entries
 
@@ -205,6 +217,7 @@ func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 		HasDetail:    strings.TrimSpace(e.Content) != "",
 		TraceId:      e.TraceID,
 		ErrorUuid:    e.ErrorUUID,
+		MessageRefId: e.MessageRefID,
 	}
 	switch e.Category {
 	case logspkg.LLM_REQUEST:

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -300,7 +301,9 @@ func (s *Service) ListEnvVars(
 		return nil, connect.NewError(connect.CodeUnavailable, err)
 	}
 	var vars []*v1.EnvVar
-	for key, meta := range knownEnvVars {
+	// Go map iteration order is random; sort so the settings UI stays stable.
+	for _, key := range slices.Sorted(maps.Keys(knownEnvVars)) {
+		meta := knownEnvVars[key]
 		if !configScopeAllows(req.Msg.Scope, key) || key == balancequery.ConfigKey && !req.Msg.RedactSecrets && req.Msg.Scope == "" {
 			continue
 		}

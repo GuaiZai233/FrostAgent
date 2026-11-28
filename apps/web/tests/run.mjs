@@ -15,6 +15,7 @@ for (const testFile of [
   'chat-navigation.test.ts',
   'overview-enhancements.test.ts',
   'token-usage.test.ts',
+  'storage-usage.test.ts',
   'overview-page.test.ts',
   'balance-query-page.test.ts',
   'qq-extend-config.test.ts',

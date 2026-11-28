@@ -122,6 +122,7 @@ func (s *Service) GetOverview(
 		Tools:                  toolInfos,
 		WsListenAddr:           s.wsListenAddr,
 		TokenUsage:             s.tokenUsage(ctx),
+		StorageUsage:           s.storageUsage(ctx),
 	}
 
 	return connect.NewResponse(resp), nil
@@ -624,6 +625,23 @@ func derivePlatform(sessionID string) string {
 		}
 	}
 	return "unknown"
+}
+
+// storageUsage never fails the overview: any measurement problem is reported as
+// an unavailable section so the rest of the page still renders.
+func (s *Service) storageUsage(ctx context.Context) *v1.StorageUsageOverview {
+	if s.engine.StorageUsage == nil {
+		return nil
+	}
+	snapshot, err := s.engine.StorageUsage.Snapshot(ctx)
+	if err != nil {
+		return &v1.StorageUsageOverview{}
+	}
+	result := &v1.StorageUsageOverview{Available: true, TotalBytes: snapshot.Total}
+	for _, item := range snapshot.Items {
+		result.Items = append(result.Items, &v1.StorageUsageItem{Category: item.Category, Bytes: item.Bytes})
+	}
+	return result
 }
 
 func (s *Service) tokenUsage(ctx context.Context) *v1.TokenUsageOverview {

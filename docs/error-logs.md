@@ -37,3 +37,31 @@ Bot 输出需收到平台成功回执后才会更新相邻消息状态；发送�
 - 群聊执行时，详细错误私聊给执行指令的管理员，群内只提示发送结果。
 - 私聊失败或无法确认送达时，群内提示改用私聊查询，不会在群内发送错误详情。
 - 非管理员无法查询；UUID 只能定位当前实例的错误日志。
+
+## Bot 发言的 RefID（`/msgid`）
+
+用于从一条 Bot 已发出的消息反查它的原文与产生它的日志，只覆盖 Bot 说过的话，不包含整轮对话循环。
+
+在群聊或私聊中引用（回复）Bot 发出的那条消息并发送 `/msgid`，是否 @ Bot 均可，Bot 回复：
+
+```text
+[ FrostAgent Debug ]
+当前消息 RefID: fa_msgid_<uuidv4>
+```
+
+- 指令在建立会话、路由和任何模型调用之前被消费，不进入对话历史；回复为纯文本，不带自动 @ 或引用。
+- 与 `#fa` 一致，需要通过当前实例的访问控制；没有引用消息、或被引用的消息没有记录时，会给出对应提示。
+- 目前仅 OneBot 适配器支持。覆盖 `send_message`/QQ 扩展发送、表情包、最终纯文本回复和主动感知消息；管理员指令输出、报错提示和 `/msgid` 自己的回复不会生成 RefID。
+
+每次平台返回发送成功回执后，后端会写入一条带 `message_ref_id` 的日志（来源 `WEBSOCKET`，方向 `OUTBOUND`，`trace_id` 为会话 ID），内容为 JSON：
+
+| 字段 | 含义 |
+| --- | --- |
+| `ref_id` | `fa_msgid_<uuidv4>` |
+| `platform` / `session_id` / `message_id` / `action` | 平台、会话（如 `group:123`）、平台消息 ID、发送动作 |
+| `llm_response_log_id` | 发送时该会话最新的 `LLM_RESPONSE` 日志 ID（0 表示未知） |
+| `tool_log_id` | 由工具调用发出时，该会话最新的 `TOOL` 日志 ID；纯文本回复为 0 |
+| `message` | 交给平台的原始消息段 |
+| `tempchat` | 仅 [`/tempchat`](tempchat.md) 临时对话发出的消息才有：`no_personality`、`no_memory` 表示该次禁用了什么 |
+
+Agent 通过 SSH 进入后端后，可调用 `LogService.ListLogs`，设置 `message_ref_id` 即可精确取回该记录，忽略分页和过滤；跨实例或日志来源不同会返回 NotFound。该记录沿用日志存储的保留与落盘策略：日志被清理、超出预算或覆盖后，RefID 随之失效。

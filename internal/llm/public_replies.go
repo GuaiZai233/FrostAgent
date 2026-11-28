@@ -48,10 +48,20 @@ type PublicReplyLog struct {
 	// speakable text (image, file, audio). It is separate from texts so media-only
 	// deliveries are not mistaken for silence.
 	confirmed bool
+	// imageKeys holds one console preview key per image placeholder across the
+	// recorded texts, in order, so the final history entry can be paired.
+	imageKeys []string
 }
 
 func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
 	return &PublicReplyLog{session: session, epoch: epoch}
+}
+
+// NewTransientReplyLog tracks what a turn delivered without ever publishing it
+// to a session. Temporary conversations use it: the delivery facts still drive
+// the turn's own decisions (silence, placeholders), but history stays untouched.
+func NewTransientReplyLog() *PublicReplyLog {
+	return &PublicReplyLog{}
 }
 
 // SetFinalMessage retains the original provider response without publishing it.
@@ -125,15 +135,31 @@ func (p *PublicReplyLog) updateFinalLocked(text string) core.ChatMessage {
 		if p.finalID != 0 && id == p.finalID {
 			p.session.History[i].Content = text
 			p.session.History[i].ProviderState = message.ProviderState
+			p.applyImageKeysLocked(text)
 			return message
 		}
 	}
 	p.finalID = p.session.addMessageLocked(message)
+	p.applyImageKeysLocked(text)
 	return message
 }
 
 func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
+	p.RecordWithImages(text, nil, compact)
+}
+
+// RecordWithImages is Record with one console preview key per image placeholder
+// in text ("" when unavailable).
+func (p *PublicReplyLog) RecordWithImages(text string, imageKeys []string, compact func(live bool)) {
 	if strings.TrimSpace(text) == "" {
+		return
+	}
+	if p.session == nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if !p.closed {
+			p.texts = append(p.texts, text)
+		}
 		return
 	}
 	p.session.WithEpochCommit(p.epoch, func() {
@@ -143,9 +169,11 @@ func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
 		if id == 0 {
 			return
 		}
+		p.session.SetHistoryImageKeys(id, imageKeys)
 		if !p.closed {
 			p.ids = append(p.ids, id)
 			p.texts = append(p.texts, text)
+			p.imageKeys = append(p.imageKeys, alignImageKeys(text, imageKeys)...)
 		}
 		if compact != nil {
 			compact(!p.closed)
@@ -179,6 +207,9 @@ func (p *PublicReplyLog) Text() string {
 func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.session == nil {
+		return false
+	}
 	if p.finalAccepted || !p.commitFinalLocked(text, interrupted) {
 		return false
 	}
@@ -190,6 +221,9 @@ func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) bool {
 // including silence and errors. A previously committed final answer wins; an
 // old epoch must never restore history after a session reset.
 func (p *PublicReplyLog) CommitDelivered() {
+	if p.session == nil {
+		return
+	}
 	p.session.WithEpochCommit(p.epoch, func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -227,9 +261,29 @@ func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 	if p.finalID != 0 {
 		p.updateFinalLocked(text)
 	} else {
-		p.session.addMessageLocked(p.finalMessageForText(text))
+		id := p.session.addMessageLocked(p.finalMessageForText(text))
+		if p.imageKeysMatch(text) {
+			p.session.setHistoryImageKeysLocked(id, p.imageKeys)
+		}
 	}
 	return true
+}
+
+// imageKeysMatch reports whether the recorded keys pair with text's placeholders.
+// Beyond the placeholder count, the final text must be exactly the recorded
+// replies joined, so keys are never borrowed by a different text.
+func (p *PublicReplyLog) imageKeysMatch(text string) bool {
+	if len(p.imageKeys) == 0 || !anyImageKey(p.imageKeys) || CountImagePlaceholders(text) != len(p.imageKeys) {
+		return false
+	}
+	return text == strings.Join(p.texts, "\n") || text == strings.Join(p.texts, "\n\n")
+}
+
+// The caller holds both the reply-log and session mutexes.
+func (p *PublicReplyLog) applyImageKeysLocked(text string) {
+	if p.finalID != 0 && p.imageKeysMatch(text) {
+		p.session.setHistoryImageKeysLocked(p.finalID, p.imageKeys)
+	}
 }
 
 // Completed attempts preserve the existing final-answer history policy.
@@ -241,7 +295,7 @@ func (p *PublicReplyLog) Finish(interrupted bool) {
 		return
 	}
 	p.closed = true
-	if !interrupted {
+	if !interrupted && p.session != nil {
 		for _, id := range p.ids {
 			p.session.DropMessage(id)
 		}

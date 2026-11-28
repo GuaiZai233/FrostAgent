@@ -27,6 +27,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/service/botstatus"
 	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
 	logsvc "github.com/GuaiZai233/FrostAgent/internal/service/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/storageusage"
 	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	memsvc "github.com/GuaiZai233/FrostAgent/internal/service/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/service/messages"
@@ -81,6 +82,9 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		}
 	}
 	scope := runtimescope.New(config, global, logger)
+	if db != nil {
+		logger.SetSessionImageBackend(sqlSessionImages{db: db, instanceID: instanceID, quota: SessionImageQuotaBytes})
+	}
 	scope.SetInstanceID(instanceID)
 	if !enabled {
 		scope.Cancel()
@@ -288,6 +292,7 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,
 		TokenUsage:     tokenUsage,
+		StorageUsage:   storageusage.New(db, instanceID, filepath.Join(dir, "sticker"), filepath.Join(dir, "logs"), filepath.Join(dir, "session-checkpoints")),
 		ModelRouter:    routerManager,
 		ModelName:      "model-router",
 		SessionManager: sessionManager,
@@ -518,6 +523,9 @@ func (r *Runtime) StartEmbeddings() {
 
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
+	if r.Engine != nil {
+		r.Engine.StorageUsage.Close()
+	}
 	r.Onebot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()

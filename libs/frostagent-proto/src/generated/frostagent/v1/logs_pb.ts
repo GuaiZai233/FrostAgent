@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file frostagent/v1/logs.proto.
  */
 export const file_frostagent_v1_logs: GenFile = /*@__PURE__*/
-  fileDesc("Chhmcm9zdGFnZW50L3YxL2xvZ3MucHJvdG8SDWZyb3N0YWdlbnQudjEihQIKCExvZ0VudHJ5EhMKC2luc3RhbmNlX2lkGBQgASgJEhUKDWluc3RhbmNlX25hbWUYFSABKAkSCgoCaWQYASABKAkSEQoJdGltZXN0YW1wGAIgASgJEiYKBWxldmVsGAMgASgOMhcuZnJvc3RhZ2VudC52MS5Mb2dMZXZlbBIOCgZzb3VyY2UYBCABKAkSDwoHc3VtbWFyeRgFIAEoCRISCgpoYXNfZGV0YWlsGAYgASgIEhQKDHJlcXVlc3RfYm9keRgHIAEoCRIVCg1yZXNwb25zZV9ib2R5GAggASgJEhAKCHRyYWNlX2lkGAkgASgJEhIKCmVycm9yX3V1aWQYCiABKAki/wEKD0xpc3RMb2dzUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEioKCW1pbl9sZXZlbBgCIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgDIAEoCRISCgplcnJvcl91dWlkGAQgASgJEg0KBXNpbmNlGAUgASgJEg0KBXVudGlsGAYgASgJEhAKCHRyYWNlX2lkGAcgASgJEg4KBnNlYXJjaBgIIAEoCRINCgVzY29wZRgJIAEoCRIXCg9pbmNsdWRlX3BheWxvYWQYCiABKAgimQEKEExpc3RMb2dzUmVzcG9uc2USKAoHZW50cmllcxgBIAMoCzIXLmZyb3N0YWdlbnQudjEuTG9nRW50cnkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbhIsCghjb3ZlcmFnZRgDIAEoCzIaLmZyb3N0YWdlbnQudjEuTG9nQ292ZXJhZ2UipQEKEVN0cmVhbUxvZ3NSZXF1ZXN0EioKCW1pbl9sZXZlbBgBIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgCIAEoCRINCgVzY29wZRgDIAEoCRINCgVzaW5jZRgEIAEoCRINCgV1bnRpbBgFIAEoCRIQCgh0cmFjZV9pZBgGIAEoCRIOCgZzZWFyY2gYByABKAkiIQoQQ2xlYXJMb2dzUmVxdWVzdBINCgVzY29wZRgBIAEoCSIkChFDbGVhckxvZ3NSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIInsKC0xvZ0NvdmVyYWdlEhAKCGVhcmxpZXN0GAEgASgJEg4KBmxhdGVzdBgCIAEoCRISCgpwZXJzaXN0ZW50GAMgASgIEhEKCXJldGVudGlvbhgEIAEoCRIUCgxidWRnZXRfYnl0ZXMYBSABKAMSDQoFZXJyb3IYBiABKAkiqgIKEExvZ1N0YXRzUmVzcG9uc2USDQoFdG90YWwYASABKAMSOwoGbGV2ZWxzGAIgAygLMisuZnJvc3RhZ2VudC52MS5Mb2dTdGF0c1Jlc3BvbnNlLkxldmVsc0VudHJ5Ej0KB3NvdXJjZXMYAyADKAsyLC5mcm9zdGFnZW50LnYxLkxvZ1N0YXRzUmVzcG9uc2UuU291cmNlc0VudHJ5EiwKCGNvdmVyYWdlGAQgASgLMhouZnJvc3RhZ2VudC52MS5Mb2dDb3ZlcmFnZRotCgtMZXZlbHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAM6AjgBGi4KDFNvdXJjZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAM6AjgBKncKCExvZ0xldmVsEhkKFUxPR19MRVZFTF9VTlNQRUNJRklFRBAAEhMKD0xPR19MRVZFTF9ERUJVRxABEhIKDkxPR19MRVZFTF9JTkZPEAISEgoOTE9HX0xFVkVMX1dBUk4QAxITCg9MT0dfTEVWRUxfRVJST1IQBDLEAgoKTG9nU2VydmljZRJOCgtHZXRMb2dTdGF0cxIeLmZyb3N0YWdlbnQudjEuTGlzdExvZ3NSZXF1ZXN0Gh8uZnJvc3RhZ2VudC52MS5Mb2dTdGF0c1Jlc3BvbnNlEksKCExpc3RMb2dzEh4uZnJvc3RhZ2VudC52MS5MaXN0TG9nc1JlcXVlc3QaHy5mcm9zdGFnZW50LnYxLkxpc3RMb2dzUmVzcG9uc2USSQoKU3RyZWFtTG9ncxIgLmZyb3N0YWdlbnQudjEuU3RyZWFtTG9nc1JlcXVlc3QaFy5mcm9zdGFnZW50LnYxLkxvZ0VudHJ5MAESTgoJQ2xlYXJMb2dzEh8uZnJvc3RhZ2VudC52MS5DbGVhckxvZ3NSZXF1ZXN0GiAuZnJvc3RhZ2VudC52MS5DbGVhckxvZ3NSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
+  fileDesc("Chhmcm9zdGFnZW50L3YxL2xvZ3MucHJvdG8SDWZyb3N0YWdlbnQudjEinQIKCExvZ0VudHJ5EhMKC2luc3RhbmNlX2lkGBQgASgJEhUKDWluc3RhbmNlX25hbWUYFSABKAkSCgoCaWQYASABKAkSEQoJdGltZXN0YW1wGAIgASgJEiYKBWxldmVsGAMgASgOMhcuZnJvc3RhZ2VudC52MS5Mb2dMZXZlbBIOCgZzb3VyY2UYBCABKAkSDwoHc3VtbWFyeRgFIAEoCRISCgpoYXNfZGV0YWlsGAYgASgIEhQKDHJlcXVlc3RfYm9keRgHIAEoCRIVCg1yZXNwb25zZV9ib2R5GAggASgJEhAKCHRyYWNlX2lkGAkgASgJEhIKCmVycm9yX3V1aWQYCiABKAkSFgoObWVzc2FnZV9yZWZfaWQYCyABKAkilwIKD0xpc3RMb2dzUmVxdWVzdBItCgpwYWdpbmF0aW9uGAEgASgLMhkuZnJvc3RhZ2VudC52MS5QYWdpbmF0aW9uEioKCW1pbl9sZXZlbBgCIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgDIAEoCRISCgplcnJvcl91dWlkGAQgASgJEhYKDm1lc3NhZ2VfcmVmX2lkGAUgASgJEg0KBXNpbmNlGAYgASgJEg0KBXVudGlsGAcgASgJEhAKCHRyYWNlX2lkGAggASgJEg4KBnNlYXJjaBgJIAEoCRINCgVzY29wZRgKIAEoCRIXCg9pbmNsdWRlX3BheWxvYWQYCyABKAgimQEKEExpc3RMb2dzUmVzcG9uc2USKAoHZW50cmllcxgBIAMoCzIXLmZyb3N0YWdlbnQudjEuTG9nRW50cnkSLQoKcGFnaW5hdGlvbhgCIAEoCzIZLmZyb3N0YWdlbnQudjEuUGFnaW5hdGlvbhIsCghjb3ZlcmFnZRgDIAEoCzIaLmZyb3N0YWdlbnQudjEuTG9nQ292ZXJhZ2UipQEKEVN0cmVhbUxvZ3NSZXF1ZXN0EioKCW1pbl9sZXZlbBgBIAEoDjIXLmZyb3N0YWdlbnQudjEuTG9nTGV2ZWwSFQoNc291cmNlX2ZpbHRlchgCIAEoCRINCgVzY29wZRgDIAEoCRINCgVzaW5jZRgEIAEoCRINCgV1bnRpbBgFIAEoCRIQCgh0cmFjZV9pZBgGIAEoCRIOCgZzZWFyY2gYByABKAkiIQoQQ2xlYXJMb2dzUmVxdWVzdBINCgVzY29wZRgBIAEoCSIkChFDbGVhckxvZ3NSZXNwb25zZRIPCgdzdWNjZXNzGAEgASgIInsKC0xvZ0NvdmVyYWdlEhAKCGVhcmxpZXN0GAEgASgJEg4KBmxhdGVzdBgCIAEoCRISCgpwZXJzaXN0ZW50GAMgASgIEhEKCXJldGVudGlvbhgEIAEoCRIUCgxidWRnZXRfYnl0ZXMYBSABKAMSDQoFZXJyb3IYBiABKAkiqgIKEExvZ1N0YXRzUmVzcG9uc2USDQoFdG90YWwYASABKAMSOwoGbGV2ZWxzGAIgAygLMisuZnJvc3RhZ2VudC52MS5Mb2dTdGF0c1Jlc3BvbnNlLkxldmVsc0VudHJ5Ej0KB3NvdXJjZXMYAyADKAsyLC5mcm9zdGFnZW50LnYxLkxvZ1N0YXRzUmVzcG9uc2UuU291cmNlc0VudHJ5EiwKCGNvdmVyYWdlGAQgASgLMhouZnJvc3RhZ2VudC52MS5Mb2dDb3ZlcmFnZRotCgtMZXZlbHNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAM6AjgBGi4KDFNvdXJjZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAM6AjgBKncKCExvZ0xldmVsEhkKFUxPR19MRVZFTF9VTlNQRUNJRklFRBAAEhMKD0xPR19MRVZFTF9ERUJVRxABEhIKDkxPR19MRVZFTF9JTkZPEAISEgoOTE9HX0xFVkVMX1dBUk4QAxITCg9MT0dfTEVWRUxfRVJST1IQBDLEAgoKTG9nU2VydmljZRJOCgtHZXRMb2dTdGF0cxIeLmZyb3N0YWdlbnQudjEuTGlzdExvZ3NSZXF1ZXN0Gh8uZnJvc3RhZ2VudC52MS5Mb2dTdGF0c1Jlc3BvbnNlEksKCExpc3RMb2dzEh4uZnJvc3RhZ2VudC52MS5MaXN0TG9nc1JlcXVlc3QaHy5mcm9zdGFnZW50LnYxLkxpc3RMb2dzUmVzcG9uc2USSQoKU3RyZWFtTG9ncxIgLmZyb3N0YWdlbnQudjEuU3RyZWFtTG9nc1JlcXVlc3QaFy5mcm9zdGFnZW50LnYxLkxvZ0VudHJ5MAESTgoJQ2xlYXJMb2dzEh8uZnJvc3RhZ2VudC52MS5DbGVhckxvZ3NSZXF1ZXN0GiAuZnJvc3RhZ2VudC52MS5DbGVhckxvZ3NSZXNwb25zZWIGcHJvdG8z", [file_frostagent_v1_common]);
 
 /**
  * @generated from message frostagent.v1.LogEntry
@@ -77,6 +77,13 @@ export type LogEntry = Message<"frostagent.v1.LogEntry"> & {
    * @generated from field: string error_uuid = 10;
    */
   errorUuid: string;
+
+  /**
+   * fa_msgid_<uuidv4> of a bot-delivered message record; empty for other entries.
+   *
+   * @generated from field: string message_ref_id = 11;
+   */
+  messageRefId: string;
 };
 
 /**
@@ -113,32 +120,40 @@ export type ListLogsRequest = Message<"frostagent.v1.ListLogsRequest"> & {
   errorUuid: string;
 
   /**
-   * @generated from field: string since = 5;
+   * Exact fa_msgid_<uuidv4> lookup of a bot-delivered message record within the
+   * selected log store, independent of filters/pagination.
+   *
+   * @generated from field: string message_ref_id = 5;
+   */
+  messageRefId: string;
+
+  /**
+   * @generated from field: string since = 6;
    */
   since: string;
 
   /**
-   * @generated from field: string until = 6;
+   * @generated from field: string until = 7;
    */
   until: string;
 
   /**
-   * @generated from field: string trace_id = 7;
+   * @generated from field: string trace_id = 8;
    */
   traceId: string;
 
   /**
-   * @generated from field: string search = 8;
+   * @generated from field: string search = 9;
    */
   search: string;
 
   /**
-   * @generated from field: string scope = 9;
+   * @generated from field: string scope = 10;
    */
   scope: string;
 
   /**
-   * @generated from field: bool include_payload = 10;
+   * @generated from field: bool include_payload = 11;
    */
   includePayload: boolean;
 };

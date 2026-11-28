@@ -5,6 +5,7 @@ import (
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,6 +23,30 @@ func TestSettingsCatalogExcludesRetiredEntries(t *testing.T) {
 		}
 		if err := validateUpdate(key, "synthetic"); err == nil {
 			t.Fatalf("retired field remains writable: %s", key)
+		}
+	}
+}
+
+func TestListEnvVarsOrderIsStable(t *testing.T) {
+	svc := &Service{}
+	keys := func() []string {
+		response, err := svc.ListEnvVars(context.Background(), connect.NewRequest(&v1.ListEnvVarsRequest{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]string, 0, len(response.Msg.EnvVars))
+		for _, value := range response.Msg.EnvVars {
+			out = append(out, value.Key)
+		}
+		return out
+	}
+	first := keys()
+	if !slices.IsSorted(first) {
+		t.Fatal("env vars are not returned in sorted key order")
+	}
+	for range 20 {
+		if !slices.Equal(first, keys()) {
+			t.Fatal("env var order changed between calls")
 		}
 	}
 }
