@@ -120,6 +120,7 @@ type wsConnection struct {
 	inboundFileMu       sync.Mutex
 	inboundFiles        []*inboundFile
 	fileHTTPClient      *http.Client
+	peerMentionSpace    atomic.Bool // Peer appends its own space after @ elements.
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
@@ -372,6 +373,9 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 func reply(action string, type1 string, id string, echo string, event model.OneBotEvent, engine *llm.Engine, conn *wsConnection, replyContext resolvedReplyContext, responseContext string, routeSnapshot *modelrouter.Snapshot, startEpoch uint64, turn *llm.SessionTurn, wakeSignals GroupWakeSignals, botLoopSoft bool, tempChat *llm.TempChat, warningNotice ...string) {
 	var billingReported atomic.Bool
 	origin := tempChatOrigin(tempChat)
+	// A temporary run reserves no SessionTurn, so it keeps its own billing ledger
+	// for the early-exit receipt fallback.
+	var tempBilling *llm.BillingRunState
 	// Error and notice replies of a temporary conversation stay out of the archive too.
 	sendDirectReply := func(action, type1, id, echo string, event model.OneBotEvent, conn *wsConnection, text string, turns ...*llm.SessionTurn) {
 		sendDirectReplyFor(origin, action, type1, id, echo, event, conn, text, turns...)
@@ -380,8 +384,17 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if engine == nil || conn == nil || billingReported.Load() {
 			return
 		}
-		if receipt := turn.UnreportedReceipt(engine); receipt != "" {
-			_, _ = conn.sendActionAndWaitTurn(model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": receipt}, Echo: echo, TempChat: origin}, actionACKTimeout(conn.Scope), turn)
+		receipt := turn.UnreportedReceipt(engine)
+		if receipt == "" && tempBilling != nil {
+			receipt = engine.UnreportedBillingReceipt(engine.Context(), tempBilling)
+		}
+		if receipt != "" {
+			receiptAction := model.OneBotAction{Action: action, Params: map[string]any{type1: id, "message": receipt}, Echo: echo, TempChat: origin}
+			response, err := conn.sendActionAndWaitTurn(receiptAction, actionACKTimeout(conn.Scope), turn)
+			if err == nil && origin != nil {
+				// Temporary messages are all marked, so a quote of this one is recognised.
+				conn.recordBotMessageRef(conn.historyKey(event), receiptAction, response, false)
+			}
 		}
 	}()
 	if conn != nil && conn.mock && conn.isClosed() {
@@ -869,6 +882,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		var messages []llm.ChatMessage
 		var inputID uint64
 		if tempChat != nil {
+			tempBilling = billingState
 			// Read-only snapshot: neither this prompt nor its reply reaches the session.
 			messages = session.EphemeralMessages(!tempChat.NoMemory, requestPrompt)
 		} else {
@@ -1626,6 +1640,7 @@ func sendDirectReplyFor(origin *model.TempChatOrigin, action, type1, id, echo st
 		TempChat: origin,
 	}
 
+	botAction = conn.adaptMentionSpacing(botAction)
 	if origin != nil {
 		// Temporary replies must stay findable by /msgid and by quote guidance, so
 		// the ACK carrying the message ID is awaited. Callers may be the read loop

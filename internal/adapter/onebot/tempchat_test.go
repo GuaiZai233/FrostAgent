@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GuaiZai233/FrostAgent/internal/billing"
 	"github.com/GuaiZai233/FrostAgent/internal/core"
 	"github.com/GuaiZai233/FrostAgent/internal/llm"
 	"github.com/GuaiZai233/FrostAgent/internal/logs"
@@ -565,5 +566,68 @@ func TestTempChatNeverTrimsSharedHistory(t *testing.T) {
 	trimSessionHistory(nil, engine, session)
 	if got := len(session.Snapshot()); got >= 8 {
 		t.Fatalf("control: ordinary turns must still trim (got %d)", got)
+	}
+}
+
+// A billed temporary run that ends in stay_silent still owes its receipt, sent
+// exactly once, without touching the session.
+func TestWSTempChatSilentBilledRunStillSendsReceiptOnce(t *testing.T) {
+	alcyoneSrv, _ := mockAlcyoneBillingServer(t)
+	defer alcyoneSrv.Close()
+	provider := &mockLLMProvider{responses: []*core.ChatResponse{{
+		Message: core.ChatMessage{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
+			ID: "call_silent", Type: "function", Function: core.ToolCallFunction{Name: llm.StaySilentToolName, Arguments: `{}`},
+		}}},
+		Usage: &core.Usage{PromptTokens: 200, CompletionTokens: 50, TotalTokens: 250},
+	}}}
+	engine := newTestEngine(provider)
+	engine.ToolRegistry[llm.StaySilentToolName] = tools.StaySilentTool()
+	engine.BillingClient = billing.NewClient(alcyoneSrv.URL, "test-token", 2*time.Second)
+	engine.BillingConfig = billing.Config{Enabled: true, BaseURL: alcyoneSrv.URL, Timeout: 2 * time.Second,
+		MaxOutputTokens: 2048, SafetyMultiplier: 1.2, ModelName: "deepseek-chat"}
+	engine.Security = security.NewController(t.TempDir())
+	defer engine.Cancel()
+	session := engine.SessionManager.GetOrCreate("private:202")
+	session.AddMessageAtEpoch(core.ChatMessage{Role: core.RoleUser, Content: "SYNTH-EARLIER"}, 0)
+
+	srv, wsURL := startReplyWSTestServer(t, engine)
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.WriteJSON(tempChatEvent("private", `[{"type":"text","data":{"text":"/tempchat 悄悄问一下"}}]`)); err != nil {
+		t.Fatal(err)
+	}
+
+	var receipts int
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(700 * time.Millisecond))
+		var action model.OneBotAction
+		if err := conn.ReadJSON(&action); err != nil {
+			if receipts > 0 {
+				break
+			}
+			continue
+		}
+		if action.Action != "send_private_msg" {
+			continue
+		}
+		body, _ := json.Marshal(action.Params)
+		if strings.Contains(string(body), "本次消耗") || strings.Contains(string(body), "雪花") {
+			receipts++
+		}
+		_ = conn.WriteJSON(map[string]any{"status": "ok", "retcode": 0, "echo": action.Echo, "data": map[string]any{"message_id": 9400 + receipts}})
+	}
+	if receipts != 1 {
+		t.Fatalf("receipts sent = %d, want exactly 1", receipts)
+	}
+	if _, ok := engine.Log().FindTempChatMark("private:202", "9401"); !ok {
+		t.Fatal("receipt lost its temporary marker")
+	}
+	if history := session.Snapshot(); len(history) != 1 || history[0].Content != "SYNTH-EARLIER" {
+		t.Fatalf("history changed: %+v", history)
 	}
 }

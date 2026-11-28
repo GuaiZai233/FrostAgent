@@ -395,6 +395,13 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 
 	reader := heartbeat.Start(wsConn.Context(), conn, wsConn.Close)
 	defer reader.Close()
+	if !wsConn.mock {
+		wsConn.inFlight.Add(1)
+		go func() {
+			defer wsConn.inFlight.Done()
+			wsConn.detectImplementation()
+		}()
+	}
 	for {
 		_, message, err := reader.ReadMessage()
 		if err != nil {
