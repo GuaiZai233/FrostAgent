@@ -52,6 +52,14 @@ func (a *Adapter) SendAwareness(ctx context.Context, target llm.AwarenessTarget,
 	if target.Kind == "group" {
 		action, key = "send_group_msg", "group_id"
 	}
-	_, err = conn.sendActionAndWaitTurn(model.OneBotAction{Action: action, Params: map[string]any{key: id, "message": segments}}, actionACKTimeout(conn.Scope), turn)
+	botAction := model.OneBotAction{Action: action, Params: map[string]any{key: id, "message": segments}}
+	response, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+	if err == nil {
+		sessionID := fmt.Sprintf("private:%d", id)
+		if target.Kind == "group" {
+			sessionID = fmt.Sprintf("group:%d", id)
+		}
+		conn.recordBotMessageRef(sessionID, botAction, response, false)
+	}
 	return err
 }

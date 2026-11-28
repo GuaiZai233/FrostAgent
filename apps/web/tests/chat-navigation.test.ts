@@ -50,6 +50,8 @@ const root = document.querySelector<HTMLElement>('main')!;
 const flush = async () => { for (let i = 0; i < 8; i++) await setImmediate(); };
 const navigate = (path: string) => { dom.window.history.replaceState(null, '', `#${path}`); router.refresh(); };
 const click = (id: string) => root.querySelector<HTMLButtonElement>(`#${id}`)!.click();
+const control = <T extends HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>(id: string) =>
+  root.querySelector<T>(`#${id}`)!;
 function field(id: string, value: string, event = 'input') {
   const input = root.querySelector<HTMLInputElement>(`#${id}`)!;
   input.value = value;
@@ -65,14 +67,42 @@ router.init(root);
 
 try {
   for (const adapter of ['onebot']) {
+    const initialCount = Socket.all.length;
     instanceState.select(instance);
     navigate('/chat');
     await flush();
     assert.equal(root.querySelector('#chat-adapter-select'), null);
     assert.equal(root.querySelector('#astrbot-config-row'), null);
+    assert.equal(Socket.all.length, initialCount, 'entering direct chat must not auto-connect WebSocket');
+
+    const emptyState = root.querySelector<HTMLElement>('#chat-messages-container #chat-empty-state')!;
+    const connectBtn = emptyState.querySelector<HTMLButtonElement>('#btn-connect-ws')!;
+    assert.ok(connectBtn, 'centered connect WebSocket button must be rendered inside chat empty state');
+    assert.equal(connectBtn.hidden, false);
+    assert.equal(connectBtn.disabled, false);
+    assert.match(connectBtn.textContent || '', /点击连接\s*WebSocket/);
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true, 'input must be disabled before WS connection');
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true, 'send button must be disabled before WS connection');
+    assert.equal(control<HTMLButtonElement>('btn-disconnect').disabled, true, 'disconnect button must be disabled while disconnected');
+
+    click('btn-send-message');
+    control<HTMLTextAreaElement>('chat-input-textarea').dispatchEvent(
+      new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    assert.equal(Socket.all.length, initialCount, 'send attempts while disconnected must not open a WebSocket');
+
+    click('btn-connect-ws');
+    assert.equal(Socket.all.length, initialCount + 1, 'clicking connect button must open one WebSocket');
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true, 'input must stay disabled while connecting');
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true, 'send button must stay disabled while connecting');
+    assert.equal(control<HTMLButtonElement>('btn-disconnect').disabled, false, 'disconnect button must allow cancelling a pending connection');
+    assert.equal(connectBtn.hidden, true);
+
     const live = socket();
     live.open();
     assert.ok(live.url.includes(`/instances/${instance.id}/ws/${adapter}?mock=true`));
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, false, 'input must be enabled once WS is open');
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, false, 'send button must be enabled once WS is open');
     field('chat-type-select', 'group', 'change');
     field('chat-uid-input', '90001');
     field('chat-nickname-input', 'Synthetic sender');
@@ -100,6 +130,8 @@ try {
     navigate('/chat');
     await flush();
     assert.equal(Socket.all.length, requests, 'returning must reuse the same socket without replaying input');
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, false);
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, false);
     assert.equal(root.querySelector<HTMLInputElement>('#chat-input-textarea')!.value, 'unsent draft');
     for (const [id, value] of [
       ['chat-type-select', 'group'],
@@ -112,23 +144,33 @@ try {
     click('btn-clear-chat');
     assert.equal(live.closes, 0, 'clear screen must retain model context');
     assert.ok(!root.textContent!.includes('background final'));
+    assert.equal(control<HTMLButtonElement>('btn-connect-ws').hidden, true, 'clear screen while connected must not prompt to connect');
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, false);
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, false);
     field('chat-input-textarea', 'followup');
     click('btn-send-message');
     const events = live.sent.filter((frame) => frame.post_type === 'message' || frame.type === 'event');
     assert.equal(events.length, 2, 'route return must not duplicate sends');
 
-      assert.equal(events[1].group_id, 90002);
-      assert.equal(events[1].user_id, 90001);
+    assert.equal(events[1].group_id, 90002);
+    assert.equal(events[1].user_id, 90001);
 
     const staleMessage = live.onmessage!;
     click('btn-disconnect');
     assert.equal(live.closes, 1);
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true, 'input must be disabled after disconnect');
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true, 'send button must be disabled after disconnect');
+    assert.equal(control<HTMLButtonElement>('btn-disconnect').disabled, true);
     navigate('/overview');
     navigate('/chat');
     assert.equal(Socket.all.length, requests, 'manual disconnect must survive navigation');
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true);
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true);
     click('btn-reconnect');
     const reconnected = socket();
     reconnected.open();
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, false);
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, false);
     assert.ok(root.textContent!.includes('followup'), 'reconnect preserves screen records');
     staleMessage({ data: JSON.stringify(reply) });
     assert.ok(!root.textContent!.includes('background final'), 'old callbacks must not write into a new connection');
@@ -139,13 +181,36 @@ try {
     reset.open();
 
     reset.receive(reply);
+    reset.onerror?.();
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true, 'error state must disable input');
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true, 'error state must disable send button');
+
+    reset.close();
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true, 'unexpected close must disable input');
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true, 'unexpected close must disable send button');
+    click('btn-clear-chat');
+    assert.equal(control<HTMLButtonElement>('btn-connect-ws').hidden, false, 'clear screen while disconnected must restore connect button');
+    assert.equal(control<HTMLButtonElement>('btn-connect-ws').disabled, false);
+
+    click('btn-connect-ws');
+    const resumed = socket();
+    resumed.open();
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, false);
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, false);
+
     navigate('/overview');
-    const staleReset = reset.onmessage!;
+    const staleReset = resumed.onmessage!;
+    const beforeInstanceSwitch = Socket.all.length;
     instanceState.select({ ...instance, id: 'fixture-chat-b' });
-    assert.equal(reset.closes, 1, 'changing instances off-route must dispose the old connection');
+    assert.equal(resumed.closes, 1, 'changing instances off-route must dispose the old connection');
     navigate('/chat');
     await flush();
+    assert.equal(Socket.all.length, beforeInstanceSwitch, 'switching instance must not auto-connect WebSocket');
+    assert.equal(control<HTMLButtonElement>('btn-connect-ws').hidden, false);
+    assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, true);
+    assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, true);
     staleReset({ data: JSON.stringify(reply) });
+    click('btn-connect-ws');
     assert.ok(socket().url.includes('/instances/fixture-chat-b/'));
     assert.match(root.querySelector<HTMLInputElement>('#chat-uid-input')!.value, /^[1-9]\d{4}$/);
     assert.ok(!root.textContent!.includes(`first-${adapter}`));
@@ -154,8 +219,9 @@ try {
     navigate('/overview');
   }
 
-  // Navigation while overview is still loading must initialize only one socket.
+  // Navigation while overview is still loading must not auto-open any socket.
   deferOverview = true;
+  pendingOverview = undefined;
   instanceState.select(instance);
   navigate('/chat');
   await flush();
@@ -163,24 +229,27 @@ try {
   navigate('/overview');
   pendingOverview!();
   await flush();
-  assert.equal(Socket.all.length, before + 1);
-  socket().open();
+  assert.equal(Socket.all.length, before, 'late overview must not auto-open a WebSocket');
+
+  // Clicking connect before overview finishes must open one socket and stay connected after overview resolves.
+  pendingOverview = undefined;
+  instanceState.select(instance);
   navigate('/chat');
   await flush();
+  click('btn-connect-ws');
   assert.equal(Socket.all.length, before + 1);
-
-  // An explicit disconnect made before overview returns must stay disconnected.
-  instanceState.select(instance);
-  await flush();
-  click('btn-disconnect');
-  const disconnectedCount = Socket.all.length;
   pendingOverview!();
   await flush();
-  assert.equal(Socket.all.length, disconnectedCount);
+  assert.equal(Socket.all.length, before + 1);
+  socket().open();
+  assert.equal(control<HTMLTextAreaElement>('chat-input-textarea').disabled, false);
+  assert.equal(control<HTMLButtonElement>('btn-send-message').disabled, false);
 
   // A late overview for a disposed instance must never open a socket for its replacement.
+  pendingOverview = undefined;
   instanceState.select(instance);
   await flush();
+  const disconnectedCount = Socket.all.length;
   const lateOverview = pendingOverview!;
   navigate('/overview');
   instanceState.select({ ...instance, id: 'fixture-chat-c' });

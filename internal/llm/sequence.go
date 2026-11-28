@@ -107,7 +107,21 @@ func (t *SessionTurn) UnreportedReceipt(engine *Engine) string {
 	defer cancel()
 	stop := context.AfterFunc(t.Context(), cancel)
 	defer stop()
-	if !engine.waitBilling(ctx, state) || t.Interrupted() {
+	if t.Interrupted() {
+		return ""
+	}
+	receipt := engine.UnreportedBillingReceipt(ctx, state)
+	if t.Interrupted() {
+		return ""
+	}
+	return receipt
+}
+
+// UnreportedBillingReceipt formats the settled usage of state once its pending
+// charges finish, or "" when nothing was billed. Runs that own no SessionTurn,
+// such as temporary conversations, use it as their early-exit fallback.
+func (e *Engine) UnreportedBillingReceipt(ctx context.Context, state *BillingRunState) string {
+	if e == nil || state == nil || !state.BillingActive || !e.waitBilling(ctx, state) {
 		return ""
 	}
 	receipt, usage := state.Receipt(), state.Usage()

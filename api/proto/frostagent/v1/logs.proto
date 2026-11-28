@@ -32,6 +32,8 @@ message LogEntry {
   string response_body = 8;
   string trace_id = 9;
   string error_uuid = 10;
+  // fa_msgid_<uuidv4> of a bot-delivered message record; empty for other entries.
+  string message_ref_id = 11;
 }
 
 message ListLogsRequest {
@@ -40,6 +42,9 @@ message ListLogsRequest {
   string source_filter = 3;
   // Exact UUIDv4 lookup within the selected log store, independent of filters/pagination.
   string error_uuid = 4;
+  // Exact fa_msgid_<uuidv4> lookup of a bot-delivered message record within the
+  // selected log store, independent of filters/pagination.
+  string message_ref_id = 5;
 }
 
 message ListLogsResponse {
