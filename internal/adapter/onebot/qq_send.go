@@ -98,6 +98,12 @@ type qqSender struct {
 }
 
 func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine) func(context.Context, string) (core.PlatformActionResult, error) {
+	return c.qqActionHookFor(nil, event, turn, delivered, engine)
+}
+
+// qqActionHookFor is qqActionHook for a run that may be a temporary
+// conversation: every action it sends carries origin.
+func (c *wsConnection) qqActionHookFor(origin *model.TempChatOrigin, event model.OneBotEvent, turn *llm.SessionTurn, delivered func([]tools.Msg), engine *llm.Engine) func(context.Context, string) (core.PlatformActionResult, error) {
 	return func(ctx context.Context, raw string) (core.PlatformActionResult, error) {
 		var request tools.QQRequest
 		if err := json.Unmarshal([]byte(raw), &request); err != nil {
@@ -197,6 +203,7 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				if external && targetSession.Epoch() != targetEpoch {
 					return oneBotAPIResponse{Status: "failed", RetCode: 403}, fmt.Errorf("目标群会话已重置，未发送")
 				}
+				action.TempChat = origin
 				timeout := actionACKTimeout(c.Scope)
 				if strings.HasPrefix(action.Action, "upload_") && timeout == defaultActionACKTimeout {
 					timeout = 120 * time.Second

@@ -54,6 +54,13 @@ func NewPublicReplyLog(session *SessionContext, epoch uint64) *PublicReplyLog {
 	return &PublicReplyLog{session: session, epoch: epoch}
 }
 
+// NewTransientReplyLog tracks what a turn delivered without ever publishing it
+// to a session. Temporary conversations use it: the delivery facts still drive
+// the turn's own decisions (silence, placeholders), but history stays untouched.
+func NewTransientReplyLog() *PublicReplyLog {
+	return &PublicReplyLog{}
+}
+
 // SetFinalMessage retains the original provider response without publishing it.
 // Only identical confirmed text may inherit its opaque continuation state.
 func (p *PublicReplyLog) SetFinalMessage(message *core.ChatMessage) {
@@ -136,6 +143,14 @@ func (p *PublicReplyLog) Record(text string, compact func(live bool)) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
+	if p.session == nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if !p.closed {
+			p.texts = append(p.texts, text)
+		}
+		return
+	}
 	p.session.WithEpochCommit(p.epoch, func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -179,6 +194,9 @@ func (p *PublicReplyLog) Text() string {
 func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.session == nil {
+		return false
+	}
 	if p.finalAccepted || !p.commitFinalLocked(text, interrupted) {
 		return false
 	}
@@ -190,6 +208,9 @@ func (p *PublicReplyLog) CommitFinal(text string, interrupted bool) bool {
 // including silence and errors. A previously committed final answer wins; an
 // old epoch must never restore history after a session reset.
 func (p *PublicReplyLog) CommitDelivered() {
+	if p.session == nil {
+		return
+	}
 	p.session.WithEpochCommit(p.epoch, func() {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -241,7 +262,7 @@ func (p *PublicReplyLog) Finish(interrupted bool) {
 		return
 	}
 	p.closed = true
-	if !interrupted {
+	if !interrupted && p.session != nil {
 		for _, id := range p.ids {
 			p.session.DropMessage(id)
 		}

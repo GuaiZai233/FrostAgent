@@ -19,7 +19,7 @@ var errToolHistoryStorage = errors.New("工具历史存储失败，已停止执�
 
 // ToolHistoryScope derives archive authority exclusively from trusted adapter state.
 func ToolHistoryScope(run RunContext) (chathistory.Scope, bool) {
-	if run.Mock || run.ActorPlatform == "" || run.ActorUserID == "" {
+	if run.Mock || run.TempChat != nil || run.ActorPlatform == "" || run.ActorUserID == "" {
 		return chathistory.Scope{}, false
 	}
 	scope := chathistory.Scope{Platform: run.ActorPlatform, MessageType: "private", TargetID: run.ActorUserID}.Canonical()

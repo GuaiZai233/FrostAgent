@@ -44,6 +44,9 @@ func (c *wsConnection) recordBotMessageRef(sessionID string, action model.OneBot
 		Action:           action.Action,
 		LLMResponseLogID: store.LatestEntryID(logs.LLM_RESPONSE, sessionID),
 	}
+	if action.TempChat != nil {
+		ref.TempChat = &logs.TempChatMark{NoPersonality: action.TempChat.NoPersonality, NoMemory: action.TempChat.NoMemory}
+	}
 	if viaTool {
 		ref.ToolLogID = store.LatestEntryID(logs.TOOL, sessionID)
 	}

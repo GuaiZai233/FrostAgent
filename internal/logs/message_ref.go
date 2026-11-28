@@ -44,6 +44,15 @@ type MessageRef struct {
 	ToolLogID uint64 `json:"tool_log_id,omitempty"`
 	// Message is the outbound payload exactly as handed to the platform.
 	Message json.RawMessage `json:"message,omitempty"`
+	// TempChat is set when the message was produced by a /tempchat run, which
+	// never enters backend history. nil for ordinary messages.
+	TempChat *TempChatMark `json:"tempchat,omitempty"`
+}
+
+// TempChatMark records which parts of the context a /tempchat run disabled.
+type TempChatMark struct {
+	NoPersonality bool `json:"no_personality,omitempty"`
+	NoMemory      bool `json:"no_memory,omitempty"`
 }
 
 // RecordMessageRef retains ref as an indexed log entry and returns its RefID.
@@ -81,20 +90,43 @@ func (s *Store) FindMessageRef(value string) (LogEntry, bool) {
 // FindMessageRefByMessageID returns the RefID recorded for a platform message
 // in sessionID. The newest record wins.
 func (s *Store) FindMessageRefByMessageID(sessionID, messageID string) (string, bool) {
-	if s == nil || sessionID == "" || messageID == "" {
-		return "", false
+	ref, found := s.findMessageRecord(sessionID, messageID)
+	return ref.RefID, found
+}
+
+// FindTempChatMark reports whether the bot message messageID in sessionID was
+// produced by a /tempchat run, and which context that run disabled.
+func (s *Store) FindTempChatMark(sessionID, messageID string) (TempChatMark, bool) {
+	ref, found := s.findMessageRecord(sessionID, messageID)
+	if !found || ref.TempChat == nil {
+		return TempChatMark{}, false
 	}
-	var found LogEntry
+	return *ref.TempChat, true
+}
+
+// findMessageRecord returns the newest retained record for a platform message.
+func (s *Store) findMessageRecord(sessionID, messageID string) (MessageRef, bool) {
+	if s == nil || sessionID == "" || messageID == "" {
+		return MessageRef{}, false
+	}
+	var (
+		found    LogEntry
+		foundRef MessageRef
+	)
 	for _, entry := range s.Snapshot() {
 		if entry.MessageRefID == "" || entry.TraceID != sessionID || (found.ID != 0 && entry.ID < found.ID) {
 			continue
 		}
 		var ref MessageRef
 		if json.Unmarshal([]byte(entry.Content), &ref) == nil && ref.MessageID == messageID {
-			found = entry
+			found, foundRef = entry, ref
 		}
 	}
-	return found.MessageRefID, found.MessageRefID != ""
+	if found.MessageRefID == "" {
+		return MessageRef{}, false
+	}
+	foundRef.RefID = found.MessageRefID
+	return foundRef, true
 }
 
 // LatestEntryID returns the newest retained in-memory entry of category whose

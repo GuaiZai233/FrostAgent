@@ -86,3 +86,32 @@ func TestMessageRefSurvivesPersistence(t *testing.T) {
 		t.Fatalf("ref lost after restart: %+v %v", entry, ok)
 	}
 }
+
+func TestFindTempChatMark(t *testing.T) {
+	store := New("synthetic-instance", "test", 10)
+	store.RecordMessageRef(MessageRef{Platform: "onebot", SessionID: "group:1", MessageID: "10", Action: "send_group_msg"})
+	store.RecordMessageRef(MessageRef{Platform: "onebot", SessionID: "group:1", MessageID: "11", Action: "send_group_msg",
+		TempChat: &TempChatMark{NoPersonality: true}})
+
+	if _, ok := store.FindTempChatMark("group:1", "10"); ok {
+		t.Fatal("ordinary message reported as temporary")
+	}
+	mark, ok := store.FindTempChatMark("group:1", "11")
+	if !ok || !mark.NoPersonality || mark.NoMemory {
+		t.Fatalf("got %+v, %v", mark, ok)
+	}
+	if _, ok := store.FindTempChatMark("group:2", "11"); ok {
+		t.Fatal("mark leaked across sessions")
+	}
+	if _, ok := store.FindTempChatMark("group:1", "99"); ok {
+		t.Fatal("unknown message reported as temporary")
+	}
+	var nilStore *Store
+	if _, ok := nilStore.FindTempChatMark("group:1", "11"); ok {
+		t.Fatal("nil store reported a mark")
+	}
+	// RefID lookup keeps working through the shared finder.
+	if refID, ok := store.FindMessageRefByMessageID("group:1", "11"); !ok || refID == "" {
+		t.Fatal("RefID lookup broke")
+	}
+}
