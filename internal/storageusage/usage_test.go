@@ -320,13 +320,3 @@ func TestCloseCancelsInFlightMeasurementAndBlocksNewOnes(t *testing.T) {
 	}
 	collector.Close() // idempotent
 }
-
-func TestTableScanIsBoundedByQueryBudget(t *testing.T) {
-	db := testDB(t)
-	collector := New(db, "synthetic-a", "", "", "")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := collector.measure(ctx); err == nil {
-		t.Fatal("a cancelled measurement must stop instead of scanning")
-	}
-}

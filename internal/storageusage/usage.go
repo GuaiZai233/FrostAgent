@@ -107,14 +107,15 @@ type Collector struct {
 	logDir        string
 	checkpointDir string
 
-	mu          sync.Mutex
-	cached      Snapshot
-	cachedAt    time.Time
-	refreshing  chan struct{}
-	retryAfter  time.Time
-	lastErr     error
-	now         func() time.Time
-	measureFunc func(context.Context) (Snapshot, error)
+	mu           sync.Mutex
+	cached       Snapshot
+	cachedAt     time.Time
+	refreshing   chan struct{}
+	retryAfter   time.Time
+	lastErr      error
+	now          func() time.Time
+	measureFunc  func(context.Context) (Snapshot, error)
+	queryTimeout time.Duration
 
 	// life bounds every background refresh to the owning runtime.
 	life   context.Context
@@ -126,7 +127,7 @@ type Collector struct {
 // New returns a collector. db may be nil for legacy file-only runtimes, in
 // which case Snapshot reports an error and the console shows "unavailable".
 func New(db *storage.DB, instanceID, stickerDir, logDir, checkpointDir string) *Collector {
-	c := &Collector{db: db, instanceID: instanceID, stickerDir: stickerDir, logDir: logDir, checkpointDir: checkpointDir, now: time.Now}
+	c := &Collector{db: db, instanceID: instanceID, stickerDir: stickerDir, logDir: logDir, checkpointDir: checkpointDir, now: time.Now, queryTimeout: queryTimeout}
 	c.life, c.stop = context.WithCancel(context.Background())
 	c.measureFunc = c.measure
 	return c
@@ -284,7 +285,7 @@ func (c *Collector) tableBytes(ctx context.Context, t table) (int64, error) {
 	}
 	query := "SELECT COALESCE(SUM(" + strings.Join(parts, " + ") + "), 0) FROM " + t.name + " WHERE instance_id = ?"
 	var size int64
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	ctx, cancel := context.WithTimeout(ctx, c.queryTimeout)
 	defer cancel()
 	err := c.db.SQL.QueryRowContext(ctx, c.db.Bind(query), c.instanceID).Scan(&size)
 	if err != nil && t.optional && isMissingTable(err) {
