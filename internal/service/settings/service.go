@@ -161,7 +161,7 @@ type SandboxManager interface {
 	RefreshEnabled(load func() bool)
 	SetAllowNetwork(allow bool)
 	RefreshAllowNetwork(load func() bool)
-	RevokeNetwork(ctx context.Context) error
+	SyncNetworkPolicy(ctx context.Context) error
 	Get() sandbox.Config
 }
 
@@ -378,8 +378,8 @@ func (s *Service) UpdateEnvVar(
 			s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
 		case "SANDBOX_ALLOW_NETWORK":
 			s.sandboxManager.SetAllowNetwork(sandbox.ParseBool(value, false))
-			if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
-				return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: revokeFailure(err)}), nil
+			if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+				return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: networkSyncFailure(err)}), nil
 			}
 		}
 	}
@@ -447,8 +447,8 @@ func (s *Service) DeleteEnvVar(
 			s.sandboxManager.SetEnabled(false)
 		case "SANDBOX_ALLOW_NETWORK":
 			s.sandboxManager.SetAllowNetwork(false)
-			if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
-				return connect.NewResponse(&v1.DeleteEnvVarResponse{Error: revokeFailure(err)}), nil
+			if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+				return connect.NewResponse(&v1.DeleteEnvVarResponse{Error: networkSyncFailure(err)}), nil
 			}
 		}
 	}
@@ -530,8 +530,8 @@ func (s *Service) UpdateRawEnvFile(
 	}
 	if s.sandboxManager != nil {
 		s.sandboxManager.ApplySnapshot(s.computeEffectiveSandboxConfig(newEnv))
-		if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
-			return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Error: revokeFailure(err)}), nil
+		if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+			return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Error: networkSyncFailure(err)}), nil
 		}
 	}
 
@@ -749,9 +749,10 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 }
 
 // refreshSandboxFlag republishes a live sandbox flag from its authoritative store.
-// Turning network access off also revokes it from sessions that already hold it;
-// the stored value stays off if that fails, so new commands are isolated, but the
-// failure is reported instead of claiming the access was revoked.
+// The gateway is told about every change of the network switch; turning it off
+// makes the gateway destroy all public workers. The stored value is kept if that
+// fails, so new commands are isolated, but the failure is reported instead of
+// claiming the access was revoked.
 func (s *Service) refreshSandboxFlag(ctx context.Context, key string) error {
 	if s.sandboxManager == nil {
 		return nil
@@ -762,15 +763,15 @@ func (s *Service) refreshSandboxFlag(ctx context.Context, key string) error {
 		s.sandboxManager.RefreshEnabled(load)
 	case "SANDBOX_ALLOW_NETWORK":
 		s.sandboxManager.RefreshAllowNetwork(load)
-		if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
-			return errors.New(revokeFailure(err))
+		if err := s.sandboxManager.SyncNetworkPolicy(ctx); err != nil {
+			return errors.New(networkSyncFailure(err))
 		}
 	}
 	return nil
 }
 
-func revokeFailure(err error) string {
-	return fmt.Sprintf("沙箱联网已关闭，新命令不会再联网，但回收已有沙箱的联网权限失败：%v", err)
+func networkSyncFailure(err error) string {
+	return fmt.Sprintf("沙箱联网开关已保存，但同步到沙箱网关失败（关闭联网时已有沙箱的联网权限可能尚未回收）：%v", err)
 }
 
 func validateUpdate(key, value string) error {

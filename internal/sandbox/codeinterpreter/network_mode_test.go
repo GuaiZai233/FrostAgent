@@ -26,8 +26,11 @@ type statefulGateway struct {
 
 	sessionCode int
 	sessionBody string
-	// failIsolated makes isolated session requests fail with 500.
-	failIsolated bool
+	// denied mirrors the gateway's revoked state: public sessions get 403.
+	denied bool
+	// policyCode, when set, makes PUT /network-policy answer with that status.
+	policyCode  int
+	policyCalls []bool
 	// onSession runs inside the session handler before it answers.
 	onSession func(mode string)
 	// inFlight tracks concurrent session/release requests per user.
@@ -85,8 +88,8 @@ func (g *statefulGateway) handler(t *testing.T) http.Handler {
 				_, _ = w.Write([]byte(g.sessionBody))
 				return
 			}
-			if g.failIsolated && body.Network == "isolated" {
-				http.Error(w, "boom", http.StatusInternalServerError)
+			if g.denied && body.Network == "public" {
+				http.Error(w, "revoked", http.StatusForbidden)
 				return
 			}
 			g.workers[body.UserUUID] = body.Network
@@ -103,6 +106,30 @@ func (g *statefulGateway) handler(t *testing.T) http.Handler {
 			g.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"stdout":"` + mode + `","stderr":"","exit_code":0,"timed_out":false}`))
+		case "/api/v1/network-policy":
+			var body struct {
+				Profile       string `json:"profile"`
+				PublicAllowed bool   `json:"public_allowed"`
+			}
+			if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&body) != nil || body.Profile != "minimal" {
+				t.Errorf("invalid network policy request: %s %+v", r.Method, body)
+			}
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			g.policyCalls = append(g.policyCalls, body.PublicAllowed)
+			if g.policyCode != 0 {
+				http.Error(w, "nope", g.policyCode)
+				return
+			}
+			g.denied = !body.PublicAllowed
+			if !body.PublicAllowed {
+				for user, mode := range g.workers {
+					if mode == "public" {
+						delete(g.workers, user)
+					}
+				}
+			}
+			_, _ = w.Write([]byte(`{"profile":"minimal","public_allowed":` + map[bool]string{true: "true", false: "false"}[body.PublicAllowed] + `,"revoked_workers":0}`))
 		case "/api/v1/release":
 			user := r.URL.Query().Get("user_uuid")
 			defer g.enter(user)()
@@ -206,66 +233,76 @@ func TestReleaseForgetsNothingAndNextCommandReprovisions(t *testing.T) {
 	}
 }
 
-func TestRevokeNetworkIsolatesEveryKnownPublicSession(t *testing.T) {
+func TestSetPublicNetworkRevokesWorkersTheProcessNeverTracked(t *testing.T) {
 	gw := newStatefulGateway()
 	srv := httptest.NewServer(gw.handler(t))
 	defer srv.Close()
 	var allow atomic.Bool
 	allow.Store(true)
 	live := codeinterpreter.WithNetworkPolicy(allow.Load)
-	oldClient := newNetworkClient(srv, true, live)
-
-	execMode(t, oldClient, "a")
-	execMode(t, oldClient, "b")
-	execMode(t, oldClient, "idle")
+	staleClient := newNetworkClient(srv, true, live)
+	execMode(t, staleClient, "a")
+	execMode(t, staleClient, "b")
+	execMode(t, staleClient, "idle")
 
 	allow.Store(false)
-	// A client built under the previous configuration still sees the live switch.
-	if err := newNetworkClient(srv, false, live).RevokeNetwork(context.Background()); err != nil {
+	// A fresh client (as after a restart or on another replica) knows no sessions.
+	if err := newNetworkClient(srv, false).SetPublicNetwork(context.Background(), false); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	for _, id := range []string{"a", "b", "idle"} {
-		if got := gw.mode(oldClient.SessionIDToUUID(id)); got != "isolated" {
+		if got := gw.mode(staleClient.SessionIDToUUID(id)); got != "" {
 			t.Fatalf("session %s still holds a %q worker after revocation", id, got)
 		}
 	}
-	// Revocation is idempotent and does not touch sessions again.
-	before := len(gw.sessionModes())
-	if err := newNetworkClient(srv, false, live).RevokeNetwork(context.Background()); err != nil {
-		t.Fatal(err)
+	if got := execMode(t, staleClient, "a"); got != "isolated" {
+		t.Fatalf("command after revocation ran in a %q worker", got)
 	}
-	if after := len(gw.sessionModes()); after != before {
-		t.Fatalf("second revocation sent %d extra session requests", after-before)
-	}
-	if got := execMode(t, oldClient, "a"); got != "isolated" {
-		t.Fatalf("stale client ran a command in a %q worker after revocation", got)
+	if len(gw.sessionModes()) != 4 {
+		t.Fatalf("revocation must not provision sessions for stale uuids: %v", gw.sessionModes())
 	}
 }
 
-func TestRevokeNetworkReportsFailureAndRetries(t *testing.T) {
+func TestSetPublicNetworkNeverReportsSuccessWithoutGatewayAcknowledgement(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusInternalServerError} {
+		gw := newStatefulGateway()
+		gw.policyCode = code
+		srv := httptest.NewServer(gw.handler(t))
+		err := newNetworkClient(srv, false).SetPublicNetwork(context.Background(), false)
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), "network-policy") {
+			t.Fatalf("status %d: revocation must fail, got %v", code, err)
+		}
+	}
+}
+
+// An old-generation command that read the switch before it was turned off must
+// not be able to create a public worker after the gateway revoked access.
+func TestStaleCommandCannotProvisionPublicAfterRevocation(t *testing.T) {
 	gw := newStatefulGateway()
 	srv := httptest.NewServer(gw.handler(t))
 	defer srv.Close()
-	var allow atomic.Bool
-	allow.Store(true)
-	client := newNetworkClient(srv, true, codeinterpreter.WithNetworkPolicy(allow.Load))
-	execMode(t, client, "a")
-
-	allow.Store(false)
-	gw.mu.Lock()
-	gw.failIsolated = true
-	gw.mu.Unlock()
-	if err := client.RevokeNetwork(context.Background()); err == nil {
-		t.Fatal("revocation failure must be reported")
+	revoker := newNetworkClient(srv, false)
+	var once sync.Once
+	stale := newNetworkClient(srv, true, codeinterpreter.WithNetworkPolicy(func() bool {
+		once.Do(func() { // the old request has read "allowed", then the switch is turned off
+			if err := revoker.SetPublicNetwork(context.Background(), false); err != nil {
+				t.Error(err)
+			}
+		})
+		return true
+	}))
+	_, err := stale.Exec(context.Background(), sandbox.ExecRequest{SessionID: "s1", Command: "true", Timeout: time.Second})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("stale public provisioning must be rejected, got %v", err)
 	}
-	gw.mu.Lock()
-	gw.failIsolated = false
-	gw.mu.Unlock()
-	if err := client.RevokeNetwork(context.Background()); err != nil {
-		t.Fatalf("retry: %v", err)
+	for _, step := range gw.requests {
+		if strings.HasPrefix(step, "exec") {
+			t.Fatalf("command ran despite the rejected session: %v", gw.requests)
+		}
 	}
-	if got := gw.mode(client.SessionIDToUUID("a")); got != "isolated" {
-		t.Fatalf("worker is still %q after a successful retry", got)
+	if got := gw.mode(stale.SessionIDToUUID("s1")); got == "public" {
+		t.Fatal("a public worker exists after revocation")
 	}
 }
 
@@ -346,21 +383,22 @@ func TestPublicNetworkFailsClosedWhenSessionSetupFails(t *testing.T) {
 	}
 }
 
-func TestIsolatedModeToleratesGatewayWithoutSessionsEndpoint(t *testing.T) {
-	gw := newStatefulGateway()
-	gw.sessionCode, gw.sessionBody = http.StatusNotFound, "Not Found"
-	srv := httptest.NewServer(gw.handler(t))
-	defer srv.Close()
-	if got := execMode(t, newNetworkClient(srv, false), "s1"); got != "isolated" {
-		t.Fatalf("legacy gateway ran in %q worker", got)
-	}
-
-	gw500 := newStatefulGateway()
-	gw500.sessionCode, gw500.sessionBody = http.StatusInternalServerError, "boom"
-	srv500 := httptest.NewServer(gw500.handler(t))
-	defer srv500.Close()
-	_, err := newNetworkClient(srv500, false).Exec(context.Background(), sandbox.ExecRequest{SessionID: "s1", Command: "true", Timeout: time.Second})
-	if err == nil {
-		t.Fatal("isolated mode must not ignore real gateway failures, a stale public worker could be reused")
+func TestGatewayWithoutSessionsEndpointFailsClosedInBothModes(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		for _, code := range []int{http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusInternalServerError} {
+			gw := newStatefulGateway()
+			gw.sessionCode, gw.sessionBody = code, "Not Found"
+			srv := httptest.NewServer(gw.handler(t))
+			_, err := newNetworkClient(srv, allow).Exec(context.Background(), sandbox.ExecRequest{SessionID: "s1", Command: "true", Timeout: time.Second})
+			srv.Close()
+			if err == nil {
+				t.Fatalf("allow=%v status %d: the mode cannot be enforced, the command must not run", allow, code)
+			}
+			for _, step := range gw.requests {
+				if strings.HasPrefix(step, "exec") {
+					t.Fatalf("allow=%v status %d: command ran: %v", allow, code, gw.requests)
+				}
+			}
+		}
 	}
 }

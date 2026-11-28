@@ -210,9 +210,16 @@ func newManager(root string, global *instanceconfig.Store, db *storage.DB, build
 	m.general = mux
 	sandboxCfg := sandbox.LoadConfig(global.Get)
 	m.sandbox = sandbox.NewConfigManager(sandboxCfg)
-	m.sandbox.SetNetworkRevoker(func(ctx context.Context, cfg sandbox.Config) error {
-		return codeinterpreter.New(cfg).RevokeNetwork(ctx)
+	m.sandbox.SetNetworkPolicyApplier(func(ctx context.Context, cfg sandbox.Config, allow bool) error {
+		return codeinterpreter.New(cfg).SetPublicNetwork(ctx, allow)
 	})
+	// Workers that outlive a FrostAgent restart are only known to the gateway, so
+	// the persisted switch is pushed once at startup.
+	syncCtx, cancelSync := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := m.sandbox.SyncNetworkPolicy(syncCtx); err != nil {
+		logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱联网策略同步失败，将在下次设置变更时重试: %v", err))
+	}
+	cancelSync()
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
 			logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后重新启用）", err))

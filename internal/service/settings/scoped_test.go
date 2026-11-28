@@ -25,7 +25,7 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sandboxManager := sandbox.NewConfigManager(sandbox.Config{})
+	sandboxManager := sandbox.NewConfigManager(sandbox.Config{BaseURL: "http://gateway.invalid", AuthToken: "synthetic-token"})
 	svc := NewScoped(c, g, sandboxManager)
 	if err = c.Replace("# keep-comment\nexport BOT_NAME = 'old'\nBOT_ALIASES=\"alias\" BOT_NAME=\"duplicate\"\n"); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,12 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 	}
 	var revoked int
 	var revokeErr error
-	sandboxManager.SetNetworkRevoker(func(context.Context, sandbox.Config) error { revoked++; return revokeErr })
+	sandboxManager.SetNetworkPolicyApplier(func(_ context.Context, _ sandbox.Config, allow bool) error {
+		if !allow {
+			revoked++
+		}
+		return revokeErr
+	})
 	deleteResponse, err = svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{Key: "SANDBOX_ALLOW_NETWORK"}))
 	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().AllowNetwork || revoked != 1 {
 		t.Fatalf("sandbox network revoke failed: response=%v error=%v revoked=%d", deleteResponse, err, revoked)

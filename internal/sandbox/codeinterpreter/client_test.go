@@ -785,6 +785,10 @@ func TestExec_FallbackToPythonExecuteOn404(t *testing.T) {
 	var capturedToken string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sessions" {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
 		switch r.URL.Path {
 		case "/api/v1/shell/exec":
 			shellExecCalled = true
@@ -861,6 +865,10 @@ func TestExec_FallbackToPythonExecuteOn404(t *testing.T) {
 func TestExec_FallbackToPythonExecute_Semantics(t *testing.T) {
 	t.Run("command exit code 127 returned cleanly", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/sessions" {
+				w.WriteHeader(http.StatusCreated)
+				return
+			}
 			if r.URL.Path == "/api/v1/shell/exec" {
 				w.WriteHeader(http.StatusNotFound)
 				return
@@ -898,6 +906,10 @@ func TestExec_FallbackToPythonExecute_Semantics(t *testing.T) {
 
 	t.Run("timeout returned cleanly", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/sessions" {
+				w.WriteHeader(http.StatusCreated)
+				return
+			}
 			if r.URL.Path == "/api/v1/shell/exec" {
 				w.WriteHeader(http.StatusNotFound)
 				return
@@ -935,6 +947,10 @@ func TestExec_FallbackToPythonExecute_Semantics(t *testing.T) {
 
 	t.Run("python syntax or traceback error handled gracefully", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/sessions" {
+				w.WriteHeader(http.StatusCreated)
+				return
+			}
 			if r.URL.Path == "/api/v1/shell/exec" {
 				w.WriteHeader(http.StatusNotFound)
 				return
@@ -972,6 +988,10 @@ func TestExec_FallbackToPythonExecute_Semantics(t *testing.T) {
 
 	t.Run("both shell/exec and execute return 404 fails closed", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/sessions" {
+				w.WriteHeader(http.StatusCreated)
+				return
+			}
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not Found"}`))
 		}))

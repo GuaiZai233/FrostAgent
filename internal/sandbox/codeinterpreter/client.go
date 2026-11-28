@@ -194,7 +194,6 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	// 404 Not Found specifically for "no active session" -> idempotent success
 	// Generic 404s (e.g. wrong base URL or reverse proxy 404) and HTTP 200 are rejected.
 	if resp.StatusCode == http.StatusNoContent {
-		entry.public = false
 		return nil
 	}
 
@@ -202,7 +201,6 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	if resp.StatusCode == http.StatusNotFound {
 		lowerErr := strings.ToLower(errBody)
 		if strings.Contains(lowerErr, "no active session") || strings.Contains(lowerErr, "session not found") {
-			entry.public = false
 			return nil
 		}
 		return fmt.Errorf("sandbox gateway release returned unexpected 404 (endpoint or route not found): %s", sanitizeError(errBody, c.authToken))
@@ -210,6 +208,10 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 
 	return fmt.Errorf("sandbox gateway release returned HTTP %d: %s", resp.StatusCode, sanitizeError(errBody, c.authToken))
 }
+
+// sessionProfile is the gateway profile FrostAgent sessions use; the network
+// policy is scoped to it so other gateway tenants are never affected.
+const sessionProfile = "minimal"
 
 const (
 	networkModePublic   = "public"
@@ -236,12 +238,10 @@ func (c *Client) currentNetworkMode() string {
 	return networkModeIsolated
 }
 
-// sessionEntry serializes provisioning, release and revocation of one gateway
-// session and remembers whether the session may currently hold a public worker.
+// sessionEntry serializes provisioning and release of one gateway session.
 type sessionEntry struct {
-	mu     sync.Mutex
-	refs   int
-	public bool
+	mu   sync.Mutex
+	refs int
 }
 
 // sessionRegistry is shared by every client in the process so that clients built
@@ -255,8 +255,7 @@ var sessionRegistry = struct {
 func (c *Client) sessionKey(userUUID string) string { return c.baseURL + "|" + userUUID }
 
 // acquireSession returns the shared entry for the session. The returned function
-// must be called once the caller is done; entries that no longer track a public
-// worker are dropped.
+// must be called once the caller is done; unused entries are dropped.
 func (c *Client) acquireSession(userUUID string) (*sessionEntry, func()) {
 	key := c.sessionKey(userUUID)
 	sessionRegistry.mu.Lock()
@@ -271,7 +270,7 @@ func (c *Client) acquireSession(userUUID string) (*sessionEntry, func()) {
 		sessionRegistry.mu.Lock()
 		defer sessionRegistry.mu.Unlock()
 		entry.refs--
-		if entry.refs == 0 && !entry.public && sessionRegistry.entries[key] == entry {
+		if entry.refs == 0 && sessionRegistry.entries[key] == entry {
 			delete(sessionRegistry.entries, key)
 		}
 	}
@@ -309,8 +308,11 @@ func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
 }
 
 // postSession provisions the session in the given mode. entry.mu must be held.
-func (c *Client) postSession(ctx context.Context, userUUID, mode string, entry *sessionEntry) error {
-	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: "minimal", Network: mode})
+// Every failure, including a gateway that has no sessions endpoint, is an error:
+// without the endpoint the requested mode cannot be enforced or verified, so the
+// command is not run.
+func (c *Client) postSession(ctx context.Context, userUUID, mode string, _ *sessionEntry) error {
+	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: sessionProfile, Network: mode})
 	if err != nil {
 		return fmt.Errorf("failed to marshal session payload: %w", err)
 	}
@@ -321,10 +323,6 @@ func (c *Client) postSession(ctx context.Context, userUUID, mode string, entry *
 	httpReq.Header.Set("X-Auth-Token", c.authToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	if mode == networkModePublic {
-		// The worker may become public even if the response is lost.
-		entry.public = true
-	}
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("sandbox session request failed: %w", err)
@@ -333,50 +331,45 @@ func (c *Client) postSession(ctx context.Context, userUUID, mode string, entry *
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
-		// Gateways without the sessions endpoint can only run isolated workers, which
-		// is exactly what an implicit session provides.
-		if mode == networkModeIsolated && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
-			return nil
-		}
 		return fmt.Errorf("sandbox gateway session setup (network=%s) returned HTTP %d: %s", mode, resp.StatusCode, sanitizeError(errBody, c.authToken))
-	}
-	if mode == networkModeIsolated {
-		entry.public = false
 	}
 	return nil
 }
 
-// RevokeNetwork re-provisions every session this process knows to hold a public
-// worker as isolated, which makes the gateway replace the worker (ending its
-// running processes). It is idempotent. Sessions created by another process, or
-// before a FrostAgent restart, are unknown here and are corrected by the policy
-// reassertion that precedes their next command.
-func (c *Client) RevokeNetwork(ctx context.Context) error {
-	prefix := c.baseURL + "|"
-	sessionRegistry.mu.Lock()
-	var pending []string
-	for key, entry := range sessionRegistry.entries {
-		if strings.HasPrefix(key, prefix) && entry.public {
-			pending = append(pending, strings.TrimPrefix(key, prefix))
-		}
-	}
-	sessionRegistry.mu.Unlock()
+type gatewayNetworkPolicyRequest struct {
+	Profile       string `json:"profile"`
+	PublicAllowed bool   `json:"public_allowed"`
+}
 
-	var errs []error
-	for _, userUUID := range pending {
-		entry, done := c.acquireSession(userUUID)
-		entry.mu.Lock()
-		var err error
-		if entry.public {
-			err = c.postSession(ctx, userUUID, networkModeIsolated, entry)
-		}
-		entry.mu.Unlock()
-		done()
-		if err != nil {
-			errs = append(errs, err)
-		}
+// SetPublicNetwork tells the gateway whether FrostAgent sessions may use public
+// networking. Denying is authoritative on the gateway: it destroys every live
+// public worker of the profile, including sessions this process never saw (other
+// replicas, sessions from before a restart), and rejects further public session
+// requests, so a command that was already being prepared cannot create a new one.
+// Unrelated profiles and isolated workers are untouched. A gateway without the
+// endpoint is an error; the caller must not treat it as revoked.
+func (c *Client) SetPublicNetwork(ctx context.Context, allowed bool) error {
+	body, err := json.Marshal(gatewayNetworkPolicyRequest{Profile: sessionProfile, PublicAllowed: allowed})
+	if err != nil {
+		return fmt.Errorf("failed to marshal network policy payload: %w", err)
 	}
-	return errors.Join(errs...)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/api/v1/network-policy", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to build network policy request: %w", err)
+	}
+	req.Header.Set("X-Auth-Token", c.authToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sandbox network policy request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		return fmt.Errorf("sandbox gateway network policy (public_allowed=%t) returned HTTP %d: %s (the gateway must support PUT /api/v1/network-policy)", allowed, resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+	return nil
 }
 
 type gatewayExecRequest struct {

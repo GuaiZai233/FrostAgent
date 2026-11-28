@@ -20,7 +20,10 @@ type BackendFactory func(Config) Backend
 type ConfigManager struct {
 	mu      sync.RWMutex
 	current Config
-	revoker func(context.Context, Config) error
+	applier NetworkPolicyApplier
+
+	syncMu  sync.Mutex // serializes SyncNetworkPolicy and guards applied
+	applied map[string]appliedPolicy
 }
 
 // NewConfigManager creates a new ConfigManager with the initial configuration.
@@ -58,25 +61,64 @@ func (m *ConfigManager) RefreshEnabled(load func() bool) {
 	m.current.Enabled = load()
 }
 
-// SetNetworkRevoker registers the function that ends network access already
-// granted to running sandbox sessions. It is called with the current
-// configuration; it must be idempotent.
-func (m *ConfigManager) SetNetworkRevoker(revoke func(context.Context, Config) error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.revoker = revoke
+// NetworkPolicyApplier pushes the network switch to the gateway described by cfg.
+type NetworkPolicyApplier func(ctx context.Context, cfg Config, allow bool) error
+
+type appliedPolicy struct {
+	authToken string
+	allow     bool
 }
 
-// RevokeNetwork revokes network access of existing sandbox sessions when the
-// switch is off. It does nothing while network access is allowed.
-func (m *ConfigManager) RevokeNetwork(ctx context.Context) error {
+// SetNetworkPolicyApplier registers the function that pushes the network switch
+// to a gateway. It must be idempotent.
+func (m *ConfigManager) SetNetworkPolicyApplier(apply NetworkPolicyApplier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.applier = apply
+}
+
+// SyncNetworkPolicy makes every gateway this manager has talked to match the
+// switch. A gateway that was last told to allow networking and is no longer the
+// configured endpoint is told to deny, so a combined endpoint-and-disable change
+// still revokes the old workers. The state of a gateway is recorded only after a
+// successful push, so a failure is returned and retried by the next call. Nothing
+// happens until a gateway token is configured.
+func (m *ConfigManager) SyncNetworkPolicy(ctx context.Context) error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+
 	m.mu.RLock()
-	cfg, revoke := m.current, m.revoker
+	cfg, apply := m.current, m.applier
 	m.mu.RUnlock()
-	if cfg.AllowNetwork || revoke == nil {
+	if apply == nil || cfg.AuthToken == "" || cfg.BaseURL == "" {
 		return nil
 	}
-	return revoke(ctx, cfg)
+	if m.applied == nil {
+		m.applied = map[string]appliedPolicy{}
+	}
+
+	var errs []error
+	for baseURL, state := range m.applied {
+		if baseURL == cfg.BaseURL || !state.allow {
+			continue
+		}
+		old := cfg
+		old.BaseURL, old.AuthToken = baseURL, state.authToken
+		if err := apply(ctx, old, false); err != nil {
+			errs = append(errs, fmt.Errorf("revoke on previous gateway %s: %w", baseURL, err))
+			continue
+		}
+		m.applied[baseURL] = appliedPolicy{authToken: state.authToken}
+	}
+
+	if state, ok := m.applied[cfg.BaseURL]; !ok || state.allow != cfg.AllowNetwork || state.authToken != cfg.AuthToken {
+		if err := apply(ctx, cfg, cfg.AllowNetwork); err != nil {
+			errs = append(errs, err)
+		} else {
+			m.applied[cfg.BaseURL] = appliedPolicy{authToken: cfg.AuthToken, allow: cfg.AllowNetwork}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // RefreshAllowNetwork updates AllowNetwork from an authoritative source while

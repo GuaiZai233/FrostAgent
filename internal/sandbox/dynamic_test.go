@@ -407,27 +407,57 @@ func TestDynamicBackendRebuildsClientWhenAllowNetworkChanges(t *testing.T) {
 	}
 }
 
-func TestConfigManagerRevokeNetworkOnlyWhileSwitchIsOff(t *testing.T) {
-	m := NewConfigManager(Config{BaseURL: "http://gateway.invalid", AllowNetwork: true})
-	var calls int
-	var seen Config
-	m.SetNetworkRevoker(func(_ context.Context, cfg Config) error {
-		calls++
-		seen = cfg
+type policyCall struct {
+	baseURL string
+	allow   bool
+}
+
+func TestSyncNetworkPolicyPushesChangesAndRevokesPreviousGateway(t *testing.T) {
+	m := NewConfigManager(Config{BaseURL: "http://old", AuthToken: "t1", AllowNetwork: true})
+	var calls []policyCall
+	var failNext error
+	m.SetNetworkPolicyApplier(func(_ context.Context, cfg Config, allow bool) error {
+		if failNext != nil {
+			return failNext
+		}
+		calls = append(calls, policyCall{cfg.BaseURL, allow})
 		return nil
 	})
-	if err := m.RevokeNetwork(context.Background()); err != nil || calls != 0 {
-		t.Fatalf("revoked while network access is allowed: calls=%d err=%v", calls, err)
+	ctx := context.Background()
+
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != 1 || calls[0] != (policyCall{"http://old", true}) {
+		t.Fatalf("initial sync: calls=%v err=%v", calls, err)
 	}
-	m.SetAllowNetwork(false)
-	if err := m.RevokeNetwork(context.Background()); err != nil || calls != 1 || seen.BaseURL != "http://gateway.invalid" {
-		t.Fatalf("revocation not delivered: calls=%d cfg=%+v err=%v", calls, seen, err)
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != 1 {
+		t.Fatalf("unchanged state must not call the gateway again: %v", calls)
 	}
-	m.SetNetworkRevoker(func(context.Context, Config) error { return errors.New("gateway down") })
-	if err := m.RevokeNetwork(context.Background()); err == nil {
-		t.Fatal("revoker failure must be returned")
+
+	// Endpoint change and disable in one update: the old gateway must be revoked.
+	m.ApplySnapshot(Config{BaseURL: "http://new", AuthToken: "t2", AllowNetwork: false})
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if err := NewConfigManager(Config{}).RevokeNetwork(context.Background()); err != nil {
-		t.Fatalf("manager without revoker must be a no-op: %v", err)
+	got := map[policyCall]bool{}
+	for _, c := range calls[1:] {
+		got[c] = true
+	}
+	if len(calls) != 3 || !got[policyCall{"http://old", false}] || !got[policyCall{"http://new", false}] {
+		t.Fatalf("old gateway not revoked: %v", calls)
+	}
+
+	// Failures are returned and retried, never recorded as applied.
+	m.SetAllowNetwork(true)
+	failNext = errors.New("gateway down")
+	if err := m.SyncNetworkPolicy(ctx); err == nil {
+		t.Fatal("failure must be returned")
+	}
+	failNext = nil
+	n := len(calls)
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != n+1 || calls[n] != (policyCall{"http://new", true}) {
+		t.Fatalf("retry after failure: %v err=%v", calls[n:], err)
+	}
+
+	if err := NewConfigManager(Config{AllowNetwork: true}).SyncNetworkPolicy(ctx); err != nil {
+		t.Fatalf("unconfigured manager must be a no-op: %v", err)
 	}
 }
