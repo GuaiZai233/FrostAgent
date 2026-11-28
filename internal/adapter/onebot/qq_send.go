@@ -201,7 +201,11 @@ func (c *wsConnection) qqActionHook(event model.OneBotEvent, turn *llm.SessionTu
 				if strings.HasPrefix(action.Action, "upload_") && timeout == defaultActionACKTimeout {
 					timeout = 120 * time.Second
 				}
-				return c.sendActionAndWaitTurn(action, timeout, turn)
+				response, err := c.sendActionAndWaitTurn(action, timeout, turn)
+				if err == nil {
+					c.recordBotMessageRef(sessionID, action, response, true)
+				}
+				return response, err
 			},
 			reference: func(id string) bool {
 				mid, ok := numericMessageID(id)

@@ -29,9 +29,12 @@ const (
 )
 
 type LogEntry struct {
-	ID           uint64    `json:"id"`
-	TraceID      string    `json:"trace_id"`
-	ErrorUUID    string    `json:"error_uuid,omitempty"`
+	ID        uint64 `json:"id"`
+	TraceID   string `json:"trace_id"`
+	ErrorUUID string `json:"error_uuid,omitempty"`
+	// MessageRefID indexes entries that record a message the bot delivered to a
+	// real platform. See RecordMessageRef.
+	MessageRefID string    `json:"message_ref_id,omitempty"`
 	Timestamp    time.Time `json:"timestamp"`
 	Direction    string    `json:"direction"` // INBOUND / OUTBOUND / INTERNAL
 	Category     Category  `json:"category"`
@@ -105,7 +108,7 @@ func (s *Store) Init(capacity int) {
 }
 
 func entryBytes(e LogEntry) int {
-	return len(e.Content) + len(e.TraceID) + len(e.ErrorUUID) + len(e.InstanceID) + len(e.InstanceName) + 64
+	return len(e.Content) + len(e.TraceID) + len(e.ErrorUUID) + len(e.MessageRefID) + len(e.InstanceID) + len(e.InstanceName) + 64
 }
 
 func (s *Store) evictOverBudgetLocked() {
@@ -136,6 +139,10 @@ func (s *Store) log(level Level, category Category, content string, traceID stri
 }
 
 func (s *Store) logWithImages(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage, consoleContent string) string {
+	return s.logEntry(level, category, content, traceID, direction, retainedImages, consoleContent, "")
+}
+
+func (s *Store) logEntry(level Level, category Category, content string, traceID string, direction string, retainedImages []retainedImage, consoleContent string, messageRefID string) string {
 	s.mu.Lock()
 
 	if s.buffer == nil {
@@ -166,6 +173,7 @@ func (s *Store) logWithImages(level Level, category Category, content string, tr
 	if level == ERROR {
 		entry.ErrorUUID = uuid.NewString()
 	}
+	entry.MessageRefID = messageRefID
 	entry.imageRefs = s.retainImagesLocked(retainedImages)
 	consoleLine := formatConsoleLine(entry, consoleContent)
 
