@@ -982,14 +982,14 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			}
 			session.WithEpochCommit(startEpoch, func() {
 				if strings.TrimSpace(replyText) == "" {
-					engine.TrimSession(session, routeScope)
+					trimSessionHistory(tempChat, engine, session, routeScope)
 					return
 				}
 
 				if !deliveries.CommitFinal(replyText, turn.Interrupted()) {
 					return
 				}
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 
 				if event.MessageType == "group" {
 					var msgID string
@@ -1200,13 +1200,13 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 
 		if wakeSignals.Proactive && (runResult.Error != nil || runResult.OutputBlocked) {
-			engine.TrimSession(session, routeScope)
+			trimSessionHistory(tempChat, engine, session, routeScope)
 			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("OneBot: 主动回复执行异常或输出被拦截，静默丢弃: session=%s, err=%v, blocked=%v", conn.historyKey(event), runResult.Error, runResult.OutputBlocked))
 			return
 		}
 
 		if !conn.allowLLMErrorReply(runResult) {
-			engine.TrimSession(session, routeScope)
+			trimSessionHistory(tempChat, engine, session, routeScope)
 			if receiptText == "" {
 				return
 			}
@@ -1225,7 +1225,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveries.Text() != "" {
 				deliveries.CommitDelivered()
 			}
-			engine.TrimSession(session, routeScope)
+			trimSessionHistory(tempChat, engine, session, routeScope)
 			if event.MessageType == "group" && !runResult.Banned && tempChat == nil {
 				var msgID string
 				if event.MessageID != 0 {
@@ -1321,7 +1321,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if deliveredText := deliveries.Text(); deliveredText != "" {
 				commitAssistantHistory(deliveredText, true)
 			} else {
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 				if event.MessageType == "group" && !runResult.Banned && tempChat == nil {
 					var msgID string
 					if event.MessageID != 0 {
@@ -1407,7 +1407,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					reason = err.Error()
 				}
 				session.SetDeliveryFailure(llm.DeliveryFailure{Platform: "onebot", Action: "qq.send", Wording: reason})
-				engine.TrimSession(session)
+				trimSessionHistory(tempChat, engine, session)
 			}
 		})
 		return
@@ -1419,7 +1419,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if err := validateQuoteMessages(conn, finalMessages, conn.historyKey(event)); err != nil {
 			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "引用消息校验失败", err, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 				return
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
@@ -1429,7 +1429,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		if buildErr != nil {
 			errorReply := engine.Log().ReportError(logs.WEBSOCKET, "组装消息失败", buildErr, conn.historyKey(event))
 			if wakeSignals.Proactive {
-				engine.TrimSession(session, routeScope)
+				trimSessionHistory(tempChat, engine, session, routeScope)
 				return
 			}
 			sendDirectReply(action, type1, id, echo, event, conn, errorReply, turn)
@@ -1559,7 +1559,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					Wording:  reason,
 				})
 				if engine != nil {
-					engine.TrimSession(session, routeScope)
+					trimSessionHistory(tempChat, engine, session, routeScope)
 				}
 			}
 			engine.Log().Error(logs.WEBSOCKET, fmt.Sprintf("OneBot 消息未送达: action=%s retcode=%d reason=%s err=%v", action, ackResp.RetCode, reason, err))
@@ -1626,6 +1626,21 @@ func sendDirectReplyFor(origin *model.TempChatOrigin, action, type1, id, echo st
 		TempChat: origin,
 	}
 
+	if origin != nil {
+		// Temporary replies must stay findable by /msgid and by quote guidance, so
+		// the ACK carrying the message ID is awaited. Callers may be the read loop
+		// that delivers ACKs, so the wait cannot block them. These replies still
+		// skip the chat archive.
+		go func() {
+			response, err := conn.sendActionAndWaitTurn(botAction, actionACKTimeout(conn.Scope), turn)
+			if err != nil {
+				conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
+				return
+			}
+			conn.recordBotMessageRef(conn.historyKey(event), botAction, response, false)
+		}()
+		return
+	}
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))
@@ -1884,4 +1899,13 @@ func validateQuoteMessages(conn *wsConnection, msgs []tools.Msg, sessionID strin
 		}
 	}
 	return nil
+}
+
+// trimSessionHistory trims shared history after a turn. A temporary conversation
+// never ran against it, so it must not trigger trimming or private compaction.
+func trimSessionHistory(tempChat *llm.TempChat, engine *llm.Engine, session *llm.SessionContext, routes ...modelrouter.Scope) {
+	if tempChat != nil {
+		return
+	}
+	engine.TrimSession(session, routes...)
 }

@@ -573,7 +573,7 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 请求因安全审查服务异常被拒绝: user=%d eval_id=%s", event.UserID, decision.EvaluationID))
 				} else {
 					logs.Warn(logs.SYSTEM, fmt.Sprintf("OneBot 消息被安全控制拦截: user=%d action=%s reason=%s eval_id=%s", event.UserID, decision.Action, decision.Reason, decision.EvaluationID))
-					if event.MessageType == "group" && decision.SanitizedContent != "" {
+					if event.MessageType == "group" && decision.SanitizedContent != "" && tempChat == nil {
 						captureGroupCompactText(event, decision.SanitizedContent, a.engine)
 					}
 				}
@@ -693,7 +693,8 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		}
 
 		if event.PostType == "message" && event.MessageType == "group" && !wsConn.mock {
-			if a.engine != nil && a.engine.GroupManager != nil {
+			// Member profiles and memory routes are memory: temporary runs leave them be.
+			if a.engine != nil && a.engine.GroupManager != nil && tempChat == nil {
 				groupIDStr := strconv.FormatInt(event.GroupID, 10)
 				userIDStr := strconv.FormatInt(event.UserID, 10)
 				if groupIDStr != "" && userIDStr != "" {

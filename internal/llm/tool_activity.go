@@ -117,7 +117,7 @@ func formatToolActivityRuns(runs []toolActivityRun) string {
 }
 
 func (e *Engine) toolActivityBlock(ctx context.Context, run RunContext) string {
-	if e.ToolHistory == nil {
+	if e.ToolHistory == nil || (run.TempChat != nil && run.TempChat.NoMemory) {
 		return ""
 	}
 	scope, allowed := ToolHistoryScope(run)

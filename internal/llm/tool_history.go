@@ -19,7 +19,7 @@ var errToolHistoryStorage = errors.New("工具历史存储失败，已停止执�
 
 // ToolHistoryScope derives archive authority exclusively from trusted adapter state.
 func ToolHistoryScope(run RunContext) (chathistory.Scope, bool) {
-	if run.Mock || run.TempChat != nil || run.ActorPlatform == "" || run.ActorUserID == "" {
+	if run.Mock || run.ActorPlatform == "" || run.ActorUserID == "" {
 		return chathistory.Scope{}, false
 	}
 	scope := chathistory.Scope{Platform: run.ActorPlatform, MessageType: "private", TargetID: run.ActorUserID}.Canonical()
@@ -64,7 +64,8 @@ func (e *Engine) saveToolHistory(ctx context.Context, record toolhistory.Record)
 func (e *Engine) executeRecordedTool(ctx context.Context, tool ToolExecutor, call ToolCall) (core.ToolExecutionResult, error) {
 	run, _ := RunContextFromContext(ctx)
 	scope, allowed := ToolHistoryScope(run)
-	if e.ToolHistory == nil || !allowed {
+	// A temporary conversation may read the archive but never adds to it.
+	if e.ToolHistory == nil || !allowed || run.TempChat != nil {
 		return executeInterruptibleTool(ctx, tool, call)
 	}
 	runID := run.ToolHistoryRunID

@@ -261,3 +261,38 @@ func TestTempChatNeverUsesSharedSkillState(t *testing.T) {
 		t.Fatal("temporary conversation reached the shared session skill state")
 	}
 }
+
+func TestTempChatReadsToolHistoryButNeverArchives(t *testing.T) {
+	e, ctx, _ := historyEngine(t)
+	run := mustRun(ctx)
+	saveActivityRun(t, e, ctx, run, "earlier-source", []string{"fixture_tool"}, 0)
+
+	temporary := run
+	temporary.TempChat = &TempChat{}
+	if _, allowed := ToolHistoryScope(temporary); !allowed {
+		t.Fatal("bare /tempchat must keep read access to the tool archive")
+	}
+	if e.toolActivityBlock(ctx, temporary) == "" {
+		t.Fatal("recent tool activity must reach a bare /tempchat")
+	}
+	noMemory := run
+	noMemory.TempChat = &TempChat{NoMemory: true}
+	if e.toolActivityBlock(ctx, noMemory) != "" {
+		t.Fatal("-nm must not see recent tool activity")
+	}
+
+	scope, _ := ToolHistoryScope(temporary)
+	before, err := e.ToolHistory.RecentBySource(ctx, scope, 10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &structuredResultTool{staticTool: staticTool{name: "fixture_tool"}, output: core.ToolExecutionResult{Content: "result"}}
+	output, err := e.executeRecordedTool(WithRunContext(ctx, temporary), tool, ToolCall{Function: ToolCallFunction{Name: tool.Name(), Arguments: `{}`}})
+	if err != nil || output.HistoryRefID != "" {
+		t.Fatalf("temporary execution was archived: %+v %v", output, err)
+	}
+	after, err := e.ToolHistory.RecentBySource(ctx, scope, 10, 10)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("archive changed: before=%d after=%d err=%v", len(before), len(after), err)
+	}
+}

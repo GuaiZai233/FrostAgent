@@ -225,7 +225,10 @@ func (c *wsConnection) qqActionHookFor(origin *model.TempChatOrigin, event model
 			confirmed: func(response oneBotAPIResponse, messages []tools.Msg) {
 				c.rememberActionMessageSession(response, sessionID)
 				if external {
-					recordQQTargetDelivery(engine, targetSession, targetEpoch, messages)
+					// The target group's next normal turn must not see a temporary reply.
+					if origin == nil {
+						recordQQTargetDelivery(engine, targetSession, targetEpoch, messages)
+					}
 				} else if delivered != nil {
 					delivered(messages)
 				}
