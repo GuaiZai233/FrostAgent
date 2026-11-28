@@ -578,7 +578,7 @@ FrostAgent 管理后台采用超轻量、零运行时 UI 框架（Vanilla TypeSc
   - Web 控制台在「MCP 服务器」下方提供独立的「直接对话」页面（`/#chat`）；
   - **会话场景切换**：使用 OneBot v11，支持私聊（Private）与群聊（Group）场景模拟；
   - **全要素发送者身份定制**：用户可自由输入 `user_id`（UID）、`nickname`（昵称）；在群聊模式下进一步支持自定义 `group_id`（群号）、`group_name`（群名称）、`card`（群名片）以及 `is_wake`（模拟唤醒/@机器人）开关；
-  - **实时通信状态机**：界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
+  - **实时通信状态机**：进入页面默认保持未连接并禁用消息输入与发送控件，在聊天区域中央提供「点击连接 WebSocket」按钮按需建立连接；界面提供连接状态徽章（未连接、连接中、已连接、连接错误），支持一键重新连接、手动断开连接与清空聊天记录；
   - **切页与会话生命周期**：同一浏览器页面、同一选中实例内，控制台切页只卸下对话视图，保留配置、输入草稿、屏幕记录与原 WebSocket；离页期间继续接收回复与 OneBot ACK，因此真实模型上下文可连续。清屏只清除屏幕记录；手动断开结束连接上下文；重新连接保留屏幕记录但开始新的模型上下文；重置会话同时清屏并重新连接。切换实例（包括在其他页面操作）销毁旧视图与连接，不保留供切回恢复的会话。刷新、关闭浏览器页面或服务重启后不恢复模型上下文，未新增浏览器存储或服务端持久化；后端仍按原有连接级清理规则取消在途任务并释放临时资源；
   - **控制台同源 WebSocket 路由 (Dashboard Same-Origin WS Routing)**：Direct Chat 采用与控制台页面同源的 WebSocket 端点（`/instances/<id>/ws/<adapter>?mock=true`），经由管理服务内部统一路由（生产环境直接同源响应，开发环境通过 Vite WS 代理并配置 `changeOrigin: false` 保留原始 Host 头部转发至管理端点）。这既天然满足适配器严苛的 `CheckOrigin` 同源安全策略，又与外部独立监听地址（如 NapCat 上游直连端口）解耦，无需放宽任何全局跨域白名单配置；
   - **Mock 管理鉴权**：独立适配器监听拒绝所有 mock 请求；管理监听上的 mock 请求遵循现有敏感管理接口鉴权，Origin 仅作浏览器来源校验，不能替代身份认证。远程访问使用 `MCP_CONTROL_TOKEN`（缺省时回退 `ADMIN_TOKEN`），`ALLOW_REMOTE_MCP_MANAGEMENT` 不免除此校验；可信本地回环、容器 connector 和显式 `MCP_ENFORCE_LOCAL_TOKEN` 保持原有策略。浏览器从「前端设置」的访问凭据读取令牌，在同源 WebSocket 握手中提供 `frostagent.direct-chat` 与 `frostagent.control-token.<令牌 UTF-8 字节的无填充 base64url>` 子协议，服务端仅协商前者，令牌不写入 URL 或响应。反向代理若记录握手头，必须将该凭据协议按 Authorization 同等脱敏；跨不可信网络仍须使用 HTTPS/WSS。
