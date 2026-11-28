@@ -168,10 +168,18 @@ func TestSQLConnectionModesFollowInstanceLifecycle(t *testing.T) {
 				t.Fatalf("disable reverse adapter failed: %s", response.Body.String())
 			}
 			conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-			if _, _, err := conn.ReadMessage(); err == nil {
-				t.Fatal("disabled adapter left the reverse socket open")
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				t.Fatal("timed out waiting for the disabled reverse socket to close")
+			for {
+				_, raw, err := conn.ReadMessage()
+				if err == nil {
+					// The implementation probe may precede the close.
+					if strings.Contains(string(raw), `"get_version_info"`) {
+						continue
+					}
+					t.Fatal("disabled adapter left the reverse socket open")
+				} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					t.Fatal("timed out waiting for the disabled reverse socket to close")
+				}
+				break
 			}
 			conn.Close()
 			local.Close()

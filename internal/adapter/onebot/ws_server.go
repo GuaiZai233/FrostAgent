@@ -120,6 +120,7 @@ type wsConnection struct {
 	inboundFileMu       sync.Mutex
 	inboundFiles        []*inboundFile
 	fileHTTPClient      *http.Client
+	peerMentionSpace    atomic.Bool // Peer appends its own space after @ elements.
 }
 
 func newWSConnection(conn *websocket.Conn, scopes ...*runtimescope.Scope) *wsConnection {
@@ -1592,6 +1593,7 @@ func sendDirectReply(action, type1, id, echo string, event model.OneBotEvent, co
 		Echo: echo,
 	}
 
+	botAction = conn.adaptMentionSpacing(botAction)
 	actionBytes, _ := json.Marshal(botAction)
 	if err := conn.writeTurnMessage(websocket.TextMessage, actionBytes, turn); err != nil {
 		conn.Log().Error(logs.WEBSOCKET, fmt.Sprintf("发送直接回复失败: %v", err))

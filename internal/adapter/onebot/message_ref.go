@@ -23,6 +23,10 @@ func (c *wsConnection) recordBotMessageRef(sessionID string, action model.OneBot
 	if c == nil || c.mock || c.engine == nil {
 		return
 	}
+	// Record what was actually written to the platform, not the pre-adaptation action.
+	if response.sent.Action != "" {
+		action = response.sent
+	}
 	switch action.Action {
 	case "send_msg", "send_group_msg", "send_private_msg", "send_group_forward_msg", "send_private_forward_msg", "send_forward_msg", "forward_group_single_msg", "forward_friend_single_msg":
 	default:
