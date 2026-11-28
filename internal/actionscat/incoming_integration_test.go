@@ -317,8 +317,15 @@ func TestMockAndLockedIngressNeverDispatch(t *testing.T) {
 						t.Fatal(err)
 					}
 					_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
-					if _, _, err := connection.ReadMessage(); err != nil {
-						t.Fatal(err)
+					for {
+						_, raw, err := connection.ReadMessage()
+						if err != nil {
+							t.Fatal(err)
+						}
+						// The implementation probe is not the rejection this barrier waits for.
+						if !strings.Contains(string(raw), `"get_version_info"`) {
+							break
+						}
 					}
 				}
 				if attempts.Load() != 0 {

@@ -67,7 +67,8 @@ func (c *wsConnection) recordIncomingHistory(event model.OneBotEvent) {
 }
 
 func (c *wsConnection) recordHistoryAction(action model.OneBotAction, response oneBotAPIResponse, status string) {
-	if c.mock || c.engine == nil || c.engine.ChatHistory == nil {
+	// A temporary conversation never enters the chat archive.
+	if c.mock || c.engine == nil || c.engine.ChatHistory == nil || action.TempChat != nil {
 		return
 	}
 	switch action.Action {

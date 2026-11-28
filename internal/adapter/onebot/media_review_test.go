@@ -170,14 +170,20 @@ func TestInboundMediaFilesAreNotImportedIntoSandbox(t *testing.T) {
 	media := fileEvent(101, 11, "song.MP3", int64(len(data)))
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(media))
 	c.rememberInboundFiles(media)
-	if prompt := c.prepareInboundFiles(context.Background(), media, session, nil); prompt != "" {
-		t.Fatalf("media file was offered as a sandbox attachment: %s", prompt)
+	if _, infos := listTurn(t, c, media, session); len(infos) != 0 {
+		t.Fatalf("media file was offered as a sandbox attachment: %+v", infos)
 	}
 	document := fileEvent(102, 11, "notes.docx", int64(len(data)))
 	c.rememberInboundFiles(document)
-	infos := parseReceivedFiles(t, c.prepareInboundFiles(context.Background(), document, session, nil))
-	if len(infos) != 1 || infos[0].Name != "notes.docx" || infos[0].Status != "ready" {
+	turn, infos := listTurn(t, c, document, session)
+	if len(infos) != 1 || infos[0].Name != "notes.docx" || infos[0].Status != "available" {
 		t.Fatalf("ordinary attachment changed: %+v", infos)
+	}
+	if count.Load() != 0 {
+		t.Fatalf("listing downloaded %d files", count.Load())
+	}
+	if result := turn.importFile(context.Background(), infos[0].Ref); result.Error != "" {
+		t.Fatalf("document import failed: %+v", result)
 	}
 	if count.Load() != 1 {
 		t.Fatalf("downloads=%d, want only the document", count.Load())

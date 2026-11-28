@@ -113,3 +113,16 @@ func TestQQSenderPrepareRetainsInlineImagesForPreview(t *testing.T) {
 		t.Fatal("remote image URL must not be fetched or keyed")
 	}
 }
+
+func TestQQDeliveredImageKeysIgnoreLiteralPlaceholderText(t *testing.T) {
+	key := strings.Repeat("c", 64)
+	messages := []tools.Msg{
+		{Type: "plain", Text: "I typed [图片] myself"},
+		{Type: "image", Name: "a.png", ImageKey: key},
+	}
+	text := qqDeliveredText(messages)
+	keys := qqDeliveredImageKeys(messages)
+	if llm.CountImagePlaceholders(text) != 2 || len(keys) != 2 || keys[0] != "" || keys[1] != key {
+		t.Fatalf("text %q keys %#v: the real image must own its key, not the typed placeholder", text, keys)
+	}
+}

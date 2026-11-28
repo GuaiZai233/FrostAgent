@@ -1341,7 +1341,7 @@ func (s *SessionContext) SnapshotPrivateContext(limit int) (GroupContextSnapshot
 }
 
 func historyInspectionMessage(msg ChatMessage) GroupCompactMessage {
-	item := GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID}
+	item := GroupCompactMessage{Role: msg.Role, Content: InspectionContent(msg.Content), ToolHistoryRunID: msg.ToolHistoryRunID, ImageKeys: msg.ImageKeys}
 	if !msg.RecordedAt.IsZero() {
 		item.Time = FormatMessageTime(msg.RecordedAt)
 	}

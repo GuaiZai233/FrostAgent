@@ -114,6 +114,7 @@ message GetOverviewResponse {
   repeated ToolInfo tools = 8;
   string ws_listen_addr = 9;
   TokenUsageOverview token_usage = 10;
+  StorageUsageOverview storage_usage = 11;
 }
 
 message GetSessionsRequest {
@@ -207,17 +208,27 @@ message GetToolHistoryEntryResponse {
   string tool = 2;
   string arguments_raw = 3;
   bool arguments_available = 4;
-  // Execution or result review is incomplete; the inspector may retry later.
+  // Execution is still running with no output archived yet; the inspector may retry later.
   bool arguments_pending = 5;
-  // One bounded page of the original execution result, visible under the same
-  // review rules as arguments. Present only when include_result was requested,
-  // and in that mode arguments_raw is omitted.
+  // One bounded page of the original execution result, visible to the
+  // authenticated inspector even when quarantined from the model. Present only
+  // when include_result was requested, and in that mode arguments_raw is omitted.
   string result_raw = 6;
   bool result_available = 7;
   int32 result_offset = 8;
   int32 result_total_chars = 9;
   bool result_has_more = 10;
   int32 result_next_offset = 11;
+  // True when model-side read_tool_history shields the raw call details.
+  bool restricted = 12;
+  // Archive lifecycle state: "running", "executed" (awaiting review/delivery or interrupted), or "complete".
+  string state = 13;
+  // Recorded Go execution error, sent only when include_result=true and offset=0.
+  string error_raw = 14;
+  // Raw MCP envelope when restricted or errored, sent only when include_result=true and offset=0.
+  string mcp_result_raw = 15;
+  // Model-visible summary when restricted, sent only when include_result=true and offset=0.
+  string model_result_raw = 16;
 }
 
 message SummaryGroupInfoProto {
@@ -288,6 +299,18 @@ message TokenUsageModule {
   TokenUsageCounter total = 5;
   TokenUsageCounter cached = 6;
   TokenUsageCounter cache_hits = 7;
+}
+
+message StorageUsageItem {
+  // chat | images | stickers | memory | other
+  string category = 1;
+  int64 bytes = 2;
+}
+
+message StorageUsageOverview {
+  bool available = 1;
+  repeated StorageUsageItem items = 2;
+  int64 total_bytes = 3;
 }
 
 message TokenUsageOverview {

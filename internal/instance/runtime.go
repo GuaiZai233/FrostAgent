@@ -27,6 +27,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/service/botstatus"
 	"github.com/GuaiZai233/FrostAgent/internal/service/dialogue"
 	logsvc "github.com/GuaiZai233/FrostAgent/internal/service/logs"
+	"github.com/GuaiZai233/FrostAgent/internal/storageusage"
 	mcpsvc "github.com/GuaiZai233/FrostAgent/internal/service/mcp"
 	memsvc "github.com/GuaiZai233/FrostAgent/internal/service/memory"
 	"github.com/GuaiZai233/FrostAgent/internal/service/messages"
@@ -81,6 +82,9 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		}
 	}
 	scope := runtimescope.New(config, global, logger)
+	if db != nil {
+		logger.SetSessionImageBackend(sqlSessionImages{db: db, instanceID: instanceID, quota: SessionImageQuotaBytes})
+	}
 	scope.SetInstanceID(instanceID)
 	if !enabled {
 		scope.Cancel()
@@ -231,6 +235,10 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		commandTool := tools.ExecuteCommandTool(dynamicSandbox)
 		registry[commandTool.Name()] = commandTool
 	}
+	// Always registered: the adapter reports a disabled or unhealthy sandbox
+	// for each import instead of the model seeing an unknown tool.
+	importFileTool := tools.ImportReceivedFileTool()
+	registry[importFileTool.Name()] = importFileTool
 
 	// Initialize ActionsCat client & tools
 	actionsCatClient := actionscat.New(scope.Getenv)
@@ -290,6 +298,7 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		VisionProvider: visionProvider,
 		MediaProvider:  mediaProvider,
 		TokenUsage:     tokenUsage,
+		StorageUsage:   storageusage.New(db, instanceID, filepath.Join(dir, "sticker"), filepath.Join(dir, "logs"), filepath.Join(dir, "session-checkpoints")),
 		ModelRouter:    routerManager,
 		ModelName:      "model-router",
 		SessionManager: sessionManager,
@@ -515,6 +524,9 @@ func (r *Runtime) StartEmbeddings() {
 
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
+	if r.Engine != nil {
+		r.Engine.StorageUsage.Close()
+	}
 	r.Onebot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()

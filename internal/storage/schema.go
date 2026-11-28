@@ -201,6 +201,7 @@ var migrations = []migration{
 	{version: 17, statements: chatHistorySchema},
 	{version: 18, statements: toolHistorySchema},
 	{version: 19, statements: sessionStateSchema},
+	{version: 20, statements: sessionImageSchema},
 }
 
 func (d *DB) initSchema(ctx context.Context) error {

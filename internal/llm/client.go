@@ -15,7 +15,10 @@ import (
 
 type ChatMessage struct {
 	// Inspection metadata; checkpointed separately, never sent to a model.
-	RecordedAt       time.Time           `json:"-"`
+	RecordedAt time.Time `json:"-"`
+	// ImageKeys lists console preview keys per image placeholder in Content
+	// ("" when unavailable). Checkpointed separately, never sent to a model.
+	ImageKeys        []string            `json:"-"`
 	ToolHistoryRefID string              `json:"tool_history_ref_id,omitempty"`
 	ToolHistoryRunID string              `json:"tool_history_run_id,omitempty"`
 	Role             string              `json:"role"`

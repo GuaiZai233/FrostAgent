@@ -41,6 +41,10 @@ type oneBotAPIResponse struct {
 	Echo     json.RawMessage `json:"echo"`
 	Message  string          `json:"message"`
 	Wording  string          `json:"wording"`
+
+	// sent is the action exactly as written to the socket, after any
+	// peer-specific adaptation. Set locally by sendActionAndWaitContext.
+	sent model.OneBotAction
 }
 
 // SendActionAndWait sends a OneBot action and waits for the matching ACK response (via echo).
@@ -66,6 +70,7 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 
 	echo, responseChannel := c.registerActionRequest(action.Action, action.Echo)
 	action.Echo = echo
+	action = c.adaptMentionSpacing(action)
 
 	actionBytes, err := json.Marshal(action)
 	if err != nil {
@@ -80,6 +85,7 @@ func (c *wsConnection) sendActionAndWaitContext(action model.OneBotAction, timeo
 		return oneBotAPIResponse{}, fmt.Errorf("websocket write failed: %w", writeErr)
 	}
 	response, err := c.waitActionACK(action.Action, echo, responseChannel, timeout, ctx)
+	response.sent = action
 	if err == nil {
 		c.recordHistoryAction(action, response, "delivered")
 	}

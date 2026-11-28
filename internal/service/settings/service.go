@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,7 +287,9 @@ func (s *Service) ListEnvVars(
 	req *connect.Request[v1.ListEnvVarsRequest],
 ) (*connect.Response[v1.ListEnvVarsResponse], error) {
 	var vars []*v1.EnvVar
-	for key, meta := range knownEnvVars {
+	// Go map iteration order is random; sort so the settings UI stays stable.
+	for _, key := range slices.Sorted(maps.Keys(knownEnvVars)) {
+		meta := knownEnvVars[key]
 		if key == balancequery.ConfigKey {
 			continue
 		}

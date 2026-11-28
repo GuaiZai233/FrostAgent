@@ -17,6 +17,9 @@ type checkpointGroupItem struct {
 	Sequence uint64
 	Message  GroupCompactMessage
 	Raw      string
+	// ImageKeys persists Message.ImageKeys, which is excluded from the message's
+	// own JSON because that encoding feeds the model.
+	ImageKeys []string `json:",omitempty"`
 }
 
 type checkpointPrivateCompact struct {
@@ -60,6 +63,12 @@ type SessionCheckpoint struct {
 	SummaryRaw          [][]string
 	PreviousRaw         [][]string
 	PrivateRaw          [][]string
+	// Console preview keys kept beside the message data they belong to: never
+	// part of messages that are encoded for a model.
+	HistoryImageKeys  [][]string   `json:",omitempty"`
+	SummaryImageKeys  [][][]string `json:",omitempty"`
+	PreviousImageKeys [][][]string `json:",omitempty"`
+	PrivateImageKeys  [][][]string `json:",omitempty"`
 }
 
 func (s *SessionContext) checkpointLocked() SessionCheckpoint {
@@ -91,7 +100,7 @@ func (s *SessionContext) checkpointLocked() SessionCheckpoint {
 		// Staged messages have not passed admission yet and must not become
 		// trusted history merely because the process restarted.
 		if !item.staged {
-			result.GroupBuffer = append(result.GroupBuffer, checkpointGroupItem{item.sequence, item.message, item.message.raw})
+			result.GroupBuffer = append(result.GroupBuffer, checkpointGroupItem{item.sequence, item.message, item.message.raw, item.message.ImageKeys})
 		}
 	}
 	if compact := s.privateCompact; compact != nil {
@@ -100,6 +109,37 @@ func (s *SessionContext) checkpointLocked() SessionCheckpoint {
 	}
 	result.SummaryRaw = summaryRaw(result.SummaryGroups)
 	result.PreviousRaw = summaryRaw(result.PreviousGroups)
+	result.SummaryImageKeys = summaryImageKeys(result.SummaryGroups)
+	result.PreviousImageKeys = summaryImageKeys(result.PreviousGroups)
+	if compact := s.privateCompact; compact != nil {
+		result.PrivateImageKeys = summaryImageKeys([]SummaryGroup{compact.batch})
+	}
+	for i, message := range s.History {
+		if len(message.ImageKeys) > 0 {
+			if result.HistoryImageKeys == nil {
+				result.HistoryImageKeys = make([][]string, len(s.History))
+			}
+			result.HistoryImageKeys[i] = message.ImageKeys
+		}
+	}
+	return result
+}
+
+// summaryImageKeys mirrors summaryRaw for preview keys; nil when no message has any.
+func summaryImageKeys(groups []SummaryGroup) [][][]string {
+	var result [][][]string
+	found := false
+	for _, group := range groups {
+		keys := make([][]string, len(group.StructuredMsgs))
+		for i, message := range group.StructuredMsgs {
+			keys[i] = message.ImageKeys
+			found = found || len(message.ImageKeys) > 0
+		}
+		result = append(result, keys)
+	}
+	if !found {
+		return nil
+	}
 	return result
 }
 
@@ -221,8 +261,25 @@ func (sm *SessionManager) restoreCheckpoint(record sessionstate.Record) (*Sessio
 	}
 	restoreRaw(snapshot.SummaryGroups, snapshot.SummaryRaw)
 	restoreRaw(snapshot.PreviousGroups, snapshot.PreviousRaw)
+	restoreImageKeys := func(groups []SummaryGroup, keys [][][]string) {
+		for i := range groups {
+			for j := range groups[i].StructuredMsgs {
+				if i < len(keys) && j < len(keys[i]) {
+					groups[i].StructuredMsgs[j].ImageKeys = keys[i][j]
+				}
+			}
+		}
+	}
+	restoreImageKeys(snapshot.SummaryGroups, snapshot.SummaryImageKeys)
+	restoreImageKeys(snapshot.PreviousGroups, snapshot.PreviousImageKeys)
+	for i := range snapshot.History {
+		if i < len(snapshot.HistoryImageKeys) {
+			snapshot.History[i].ImageKeys = snapshot.HistoryImageKeys[i]
+		}
+	}
 	if snapshot.PrivateCompact != nil {
 		restoreRaw([]SummaryGroup{snapshot.PrivateCompact.Batch}, snapshot.PrivateRaw)
+		restoreImageKeys([]SummaryGroup{snapshot.PrivateCompact.Batch}, snapshot.PrivateImageKeys)
 	}
 	session := &SessionContext{
 		ConversationID: snapshot.ConversationID, History: snapshot.History,
@@ -240,6 +297,7 @@ func (sm *SessionManager) restoreCheckpoint(record sessionstate.Record) (*Sessio
 	}
 	for _, item := range snapshot.GroupBuffer {
 		item.Message.raw = item.Raw
+		item.Message.ImageKeys = item.ImageKeys
 		session.groupCompactBuffer = append(session.groupCompactBuffer, groupCompactItem{sequence: item.Sequence, message: item.Message})
 	}
 	if compact := snapshot.PrivateCompact; compact != nil {
