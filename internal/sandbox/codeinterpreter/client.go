@@ -46,14 +46,10 @@ type Client struct {
 	authToken        string
 	sessionNamespace string
 	allowNetwork     bool
+	networkPolicy    func() bool
 	httpClient       *http.Client
 	projectNamespace [16]byte
 	logger           *logs.Store
-
-	// ensured records the network mode each session was last provisioned with
-	// by this client, so the gateway is only asked once per session and mode.
-	ensuredMu sync.Mutex
-	ensured   map[string]string
 }
 
 // Option configures a Client.
@@ -80,6 +76,14 @@ func WithLogger(logger *logs.Store) Option {
 	return func(c *Client) { c.logger = logger }
 }
 
+// WithNetworkPolicy makes the client read the network switch live instead of from
+// the configuration snapshot it was built with. Every command re-reads it after
+// provisioning, so a client created before the switch changed cannot keep
+// provisioning public workers once access has been revoked.
+func WithNetworkPolicy(allow func() bool) Option {
+	return func(c *Client) { c.networkPolicy = allow }
+}
+
 // New creates a new code-interpreter sandbox Backend client.
 func New(cfg sandbox.Config, opts ...Option) *Client {
 	baseURL := strings.TrimRight(cfg.BaseURL, "/")
@@ -89,7 +93,6 @@ func New(cfg sandbox.Config, opts ...Option) *Client {
 		authToken:        cfg.AuthToken,
 		sessionNamespace: cfg.SessionNamespace,
 		allowNetwork:     cfg.AllowNetwork,
-		ensured:          make(map[string]string),
 		httpClient: &http.Client{
 			Timeout: cfg.ClientTimeout,
 		},
@@ -163,7 +166,10 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	}
 
 	userUUID := c.SessionIDToUUID(sessionID)
-	c.forgetEnsured(userUUID)
+	entry, done := c.acquireSession(userUUID)
+	defer done()
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	releaseURL, err := url.Parse(c.baseURL + "/api/v1/release")
 	if err != nil {
 		return fmt.Errorf("invalid release URL: %w", err)
@@ -188,6 +194,7 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	// 404 Not Found specifically for "no active session" -> idempotent success
 	// Generic 404s (e.g. wrong base URL or reverse proxy 404) and HTTP 200 are rejected.
 	if resp.StatusCode == http.StatusNoContent {
+		entry.public = false
 		return nil
 	}
 
@@ -195,6 +202,7 @@ func (c *Client) Release(ctx context.Context, sessionID string) error {
 	if resp.StatusCode == http.StatusNotFound {
 		lowerErr := strings.ToLower(errBody)
 		if strings.Contains(lowerErr, "no active session") || strings.Contains(lowerErr, "session not found") {
+			entry.public = false
 			return nil
 		}
 		return fmt.Errorf("sandbox gateway release returned unexpected 404 (endpoint or route not found): %s", sanitizeError(errBody, c.authToken))
@@ -214,34 +222,94 @@ type gatewaySessionRequest struct {
 	Network  string `json:"network"`
 }
 
-func (c *Client) desiredNetworkMode() string {
-	if c.allowNetwork {
+func (c *Client) allowsNetwork() bool {
+	if c.networkPolicy != nil {
+		return c.networkPolicy()
+	}
+	return c.allowNetwork
+}
+
+func (c *Client) currentNetworkMode() string {
+	if c.allowsNetwork() {
 		return networkModePublic
 	}
 	return networkModeIsolated
 }
 
-func (c *Client) forgetEnsured(userUUID string) {
-	c.ensuredMu.Lock()
-	delete(c.ensured, userUUID)
-	c.ensuredMu.Unlock()
+// sessionEntry serializes provisioning, release and revocation of one gateway
+// session and remembers whether the session may currently hold a public worker.
+type sessionEntry struct {
+	mu     sync.Mutex
+	refs   int
+	public bool
 }
 
-// ensureSession binds the session to a worker with the configured network mode.
-// The gateway chooses the worker firewall from the mode given when the session is
-// created, so the mode must be requested explicitly: an implicit session created
-// by the first exec is always isolated, and a worker created while networking was
-// allowed would otherwise keep its access after the setting is turned off. The
-// gateway reuses a worker whose policy already matches and recreates it otherwise.
-func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
-	mode := c.desiredNetworkMode()
-	c.ensuredMu.Lock()
-	done := c.ensured[userUUID] == mode
-	c.ensuredMu.Unlock()
-	if done {
-		return nil
-	}
+// sessionRegistry is shared by every client in the process so that clients built
+// for different instances or configuration generations coordinate on the same
+// gateway session.
+var sessionRegistry = struct {
+	mu      sync.Mutex
+	entries map[string]*sessionEntry
+}{entries: map[string]*sessionEntry{}}
 
+func (c *Client) sessionKey(userUUID string) string { return c.baseURL + "|" + userUUID }
+
+// acquireSession returns the shared entry for the session. The returned function
+// must be called once the caller is done; entries that no longer track a public
+// worker are dropped.
+func (c *Client) acquireSession(userUUID string) (*sessionEntry, func()) {
+	key := c.sessionKey(userUUID)
+	sessionRegistry.mu.Lock()
+	entry := sessionRegistry.entries[key]
+	if entry == nil {
+		entry = &sessionEntry{}
+		sessionRegistry.entries[key] = entry
+	}
+	entry.refs++
+	sessionRegistry.mu.Unlock()
+	return entry, func() {
+		sessionRegistry.mu.Lock()
+		defer sessionRegistry.mu.Unlock()
+		entry.refs--
+		if entry.refs == 0 && !entry.public && sessionRegistry.entries[key] == entry {
+			delete(sessionRegistry.entries, key)
+		}
+	}
+}
+
+// maxPolicyAttempts bounds how often provisioning is repeated when the switch
+// keeps flipping while a command is being prepared.
+const maxPolicyAttempts = 3
+
+// ensureSession binds the session to a worker whose network mode matches the
+// switch and does so before every command. The gateway chooses the worker
+// firewall from the mode given when a session is created, an implicit session is
+// always isolated, and it only replaces a worker whose policy differs when a
+// session is requested. A previous success therefore proves nothing about the
+// current worker (it may have been recycled, or provisioned under an older
+// policy), so the policy is reasserted each time; the gateway reuses a matching
+// worker. The switch is read again after provisioning so that a change racing the
+// request is applied before the command runs.
+func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
+	entry, done := c.acquireSession(userUUID)
+	defer done()
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	for attempt := 0; attempt < maxPolicyAttempts; attempt++ {
+		mode := c.currentNetworkMode()
+		if err := c.postSession(ctx, userUUID, mode, entry); err != nil {
+			return err
+		}
+		if c.currentNetworkMode() == mode {
+			return nil
+		}
+	}
+	return errors.New("sandbox network policy changed repeatedly while preparing the session")
+}
+
+// postSession provisions the session in the given mode. entry.mu must be held.
+func (c *Client) postSession(ctx context.Context, userUUID, mode string, entry *sessionEntry) error {
 	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: "minimal", Network: mode})
 	if err != nil {
 		return fmt.Errorf("failed to marshal session payload: %w", err)
@@ -253,6 +321,10 @@ func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
 	httpReq.Header.Set("X-Auth-Token", c.authToken)
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	if mode == networkModePublic {
+		// The worker may become public even if the response is lost.
+		entry.public = true
+	}
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("sandbox session request failed: %w", err)
@@ -268,11 +340,43 @@ func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
 		}
 		return fmt.Errorf("sandbox gateway session setup (network=%s) returned HTTP %d: %s", mode, resp.StatusCode, sanitizeError(errBody, c.authToken))
 	}
-
-	c.ensuredMu.Lock()
-	c.ensured[userUUID] = mode
-	c.ensuredMu.Unlock()
+	if mode == networkModeIsolated {
+		entry.public = false
+	}
 	return nil
+}
+
+// RevokeNetwork re-provisions every session this process knows to hold a public
+// worker as isolated, which makes the gateway replace the worker (ending its
+// running processes). It is idempotent. Sessions created by another process, or
+// before a FrostAgent restart, are unknown here and are corrected by the policy
+// reassertion that precedes their next command.
+func (c *Client) RevokeNetwork(ctx context.Context) error {
+	prefix := c.baseURL + "|"
+	sessionRegistry.mu.Lock()
+	var pending []string
+	for key, entry := range sessionRegistry.entries {
+		if strings.HasPrefix(key, prefix) && entry.public {
+			pending = append(pending, strings.TrimPrefix(key, prefix))
+		}
+	}
+	sessionRegistry.mu.Unlock()
+
+	var errs []error
+	for _, userUUID := range pending {
+		entry, done := c.acquireSession(userUUID)
+		entry.mu.Lock()
+		var err error
+		if entry.public {
+			err = c.postSession(ctx, userUUID, networkModeIsolated, entry)
+		}
+		entry.mu.Unlock()
+		done()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 type gatewayExecRequest struct {

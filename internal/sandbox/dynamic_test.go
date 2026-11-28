@@ -406,3 +406,28 @@ func TestDynamicBackendRebuildsClientWhenAllowNetworkChanges(t *testing.T) {
 		t.Fatalf("backend must be rebuilt exactly once per AllowNetwork change, got %v", built)
 	}
 }
+
+func TestConfigManagerRevokeNetworkOnlyWhileSwitchIsOff(t *testing.T) {
+	m := NewConfigManager(Config{BaseURL: "http://gateway.invalid", AllowNetwork: true})
+	var calls int
+	var seen Config
+	m.SetNetworkRevoker(func(_ context.Context, cfg Config) error {
+		calls++
+		seen = cfg
+		return nil
+	})
+	if err := m.RevokeNetwork(context.Background()); err != nil || calls != 0 {
+		t.Fatalf("revoked while network access is allowed: calls=%d err=%v", calls, err)
+	}
+	m.SetAllowNetwork(false)
+	if err := m.RevokeNetwork(context.Background()); err != nil || calls != 1 || seen.BaseURL != "http://gateway.invalid" {
+		t.Fatalf("revocation not delivered: calls=%d cfg=%+v err=%v", calls, seen, err)
+	}
+	m.SetNetworkRevoker(func(context.Context, Config) error { return errors.New("gateway down") })
+	if err := m.RevokeNetwork(context.Background()); err == nil {
+		t.Fatal("revoker failure must be returned")
+	}
+	if err := NewConfigManager(Config{}).RevokeNetwork(context.Background()); err != nil {
+		t.Fatalf("manager without revoker must be a no-op: %v", err)
+	}
+}

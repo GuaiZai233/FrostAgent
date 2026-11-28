@@ -161,6 +161,7 @@ type SandboxManager interface {
 	RefreshEnabled(load func() bool)
 	SetAllowNetwork(allow bool)
 	RefreshAllowNetwork(load func() bool)
+	RevokeNetwork(ctx context.Context) error
 	Get() sandbox.Config
 }
 
@@ -346,8 +347,9 @@ func (s *Service) UpdateEnvVar(
 			res := &v1.UpdateEnvVarResponse{Success: err == nil}
 			if err != nil {
 				res.Error = err.Error()
-			} else {
-				s.refreshSandboxFlag(key)
+			} else if err := s.refreshSandboxFlag(ctx, key); err != nil {
+				res.Success = false
+				res.Error = err.Error()
 			}
 			return connect.NewResponse(res), nil
 		}
@@ -376,6 +378,9 @@ func (s *Service) UpdateEnvVar(
 			s.sandboxManager.SetEnabled(sandbox.ParseBool(value, false))
 		case "SANDBOX_ALLOW_NETWORK":
 			s.sandboxManager.SetAllowNetwork(sandbox.ParseBool(value, false))
+			if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
+				return connect.NewResponse(&v1.UpdateEnvVarResponse{Error: revokeFailure(err)}), nil
+			}
 		}
 	}
 
@@ -412,8 +417,9 @@ func (s *Service) DeleteEnvVar(
 			res := &v1.DeleteEnvVarResponse{Success: err == nil}
 			if err != nil {
 				res.Error = err.Error()
-			} else {
-				s.refreshSandboxFlag(key)
+			} else if err := s.refreshSandboxFlag(ctx, key); err != nil {
+				res.Success = false
+				res.Error = err.Error()
 			}
 			return connect.NewResponse(res), nil
 		}
@@ -441,6 +447,9 @@ func (s *Service) DeleteEnvVar(
 			s.sandboxManager.SetEnabled(false)
 		case "SANDBOX_ALLOW_NETWORK":
 			s.sandboxManager.SetAllowNetwork(false)
+			if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
+				return connect.NewResponse(&v1.DeleteEnvVarResponse{Error: revokeFailure(err)}), nil
+			}
 		}
 	}
 
@@ -521,6 +530,9 @@ func (s *Service) UpdateRawEnvFile(
 	}
 	if s.sandboxManager != nil {
 		s.sandboxManager.ApplySnapshot(s.computeEffectiveSandboxConfig(newEnv))
+		if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
+			return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Error: revokeFailure(err)}), nil
+		}
 	}
 
 	return connect.NewResponse(&v1.UpdateRawEnvFileResponse{Success: true}), nil
@@ -728,16 +740,21 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 	}
 	for _, key := range []string{"SANDBOX_ENABLED", "SANDBOX_ALLOW_NETWORK"} {
 		if seen[key] {
-			s.refreshSandboxFlag(key)
+			if err := s.refreshSandboxFlag(ctx, key); err != nil {
+				return failure(err)
+			}
 		}
 	}
 	return connect.NewResponse(&v1.UpdateEnvVarsResponse{Success: true}), nil
 }
 
 // refreshSandboxFlag republishes a live sandbox flag from its authoritative store.
-func (s *Service) refreshSandboxFlag(key string) {
+// Turning network access off also revokes it from sessions that already hold it;
+// the stored value stays off if that fails, so new commands are isolated, but the
+// failure is reported instead of claiming the access was revoked.
+func (s *Service) refreshSandboxFlag(ctx context.Context, key string) error {
 	if s.sandboxManager == nil {
-		return
+		return nil
 	}
 	load := func() bool { return sandbox.ParseBool(s.store(key).Get(key), false) }
 	switch key {
@@ -745,7 +762,15 @@ func (s *Service) refreshSandboxFlag(key string) {
 		s.sandboxManager.RefreshEnabled(load)
 	case "SANDBOX_ALLOW_NETWORK":
 		s.sandboxManager.RefreshAllowNetwork(load)
+		if err := s.sandboxManager.RevokeNetwork(ctx); err != nil {
+			return errors.New(revokeFailure(err))
+		}
 	}
+	return nil
+}
+
+func revokeFailure(err error) string {
+	return fmt.Sprintf("沙箱联网已关闭，新命令不会再联网，但回收已有沙箱的联网权限失败：%v", err)
 }
 
 func validateUpdate(key, value string) error {

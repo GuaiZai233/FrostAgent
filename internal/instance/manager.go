@@ -210,6 +210,9 @@ func newManager(root string, global *instanceconfig.Store, db *storage.DB, build
 	m.general = mux
 	sandboxCfg := sandbox.LoadConfig(global.Get)
 	m.sandbox = sandbox.NewConfigManager(sandboxCfg)
+	m.sandbox.SetNetworkRevoker(func(ctx context.Context, cfg sandbox.Config) error {
+		return codeinterpreter.New(cfg).RevokeNetwork(ctx)
+	})
 	if sandboxCfg.Enabled {
 		if err := sandboxCfg.Validate(); err != nil {
 			logs.General.Warn(logs.SYSTEM, fmt.Sprintf("沙箱配置无效: %v（可在管理面板中修正后重新启用）", err))

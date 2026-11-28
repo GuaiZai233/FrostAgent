@@ -20,6 +20,7 @@ type BackendFactory func(Config) Backend
 type ConfigManager struct {
 	mu      sync.RWMutex
 	current Config
+	revoker func(context.Context, Config) error
 }
 
 // NewConfigManager creates a new ConfigManager with the initial configuration.
@@ -55,6 +56,27 @@ func (m *ConfigManager) RefreshEnabled(load func() bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.current.Enabled = load()
+}
+
+// SetNetworkRevoker registers the function that ends network access already
+// granted to running sandbox sessions. It is called with the current
+// configuration; it must be idempotent.
+func (m *ConfigManager) SetNetworkRevoker(revoke func(context.Context, Config) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.revoker = revoke
+}
+
+// RevokeNetwork revokes network access of existing sandbox sessions when the
+// switch is off. It does nothing while network access is allowed.
+func (m *ConfigManager) RevokeNetwork(ctx context.Context) error {
+	m.mu.RLock()
+	cfg, revoke := m.current, m.revoker
+	m.mu.RUnlock()
+	if cfg.AllowNetwork || revoke == nil {
+		return nil
+	}
+	return revoke(ctx, cfg)
 }
 
 // RefreshAllowNetwork updates AllowNetwork from an authoritative source while

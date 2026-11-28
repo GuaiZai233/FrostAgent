@@ -3,6 +3,7 @@ package settings
 import (
 	"connectrpc.com/connect"
 	"context"
+	"errors"
 	v1 "github.com/GuaiZai233/FrostAgent/gen/proto/frostagent/v1"
 	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 	"github.com/GuaiZai233/FrostAgent/internal/sandbox"
@@ -74,9 +75,22 @@ func TestScopedSettingsRetainTrustBoundaryWithoutProcessEnv(t *testing.T) {
 	if sandboxManager.Get().Enabled {
 		t.Fatal("sandbox network switch must not enable the sandbox")
 	}
+	var revoked int
+	var revokeErr error
+	sandboxManager.SetNetworkRevoker(func(context.Context, sandbox.Config) error { revoked++; return revokeErr })
 	deleteResponse, err = svc.DeleteEnvVar(context.Background(), connect.NewRequest(&v1.DeleteEnvVarRequest{Key: "SANDBOX_ALLOW_NETWORK"}))
-	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().AllowNetwork {
-		t.Fatalf("sandbox network revoke failed: response=%v error=%v", deleteResponse, err)
+	if err != nil || !deleteResponse.Msg.Success || sandboxManager.Get().AllowNetwork || revoked != 1 {
+		t.Fatalf("sandbox network revoke failed: response=%v error=%v revoked=%d", deleteResponse, err, revoked)
+	}
+	if !update("SANDBOX_ALLOW_NETWORK", "true") || revoked != 1 {
+		t.Fatal("enabling network access must not revoke anything")
+	}
+	revokeErr = errors.New("gateway unavailable")
+	if update("SANDBOX_ALLOW_NETWORK", "false") {
+		t.Fatal("a failed revocation must not be reported as success")
+	}
+	if sandboxManager.Get().AllowNetwork || g.Get("SANDBOX_ALLOW_NETWORK") != "false" {
+		t.Fatal("new commands must be isolated even when revoking existing sessions failed")
 	}
 	if !update("ACTIONSCAT_MANAGEMENT_TOKEN", `C:\synthetic\`) || c.Get("ACTIONSCAT_MANAGEMENT_TOKEN") != `C:\synthetic\` {
 		t.Fatal("trailing backslash did not roundtrip")
