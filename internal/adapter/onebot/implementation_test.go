@@ -52,7 +52,7 @@ func messageTexts(t *testing.T, action model.OneBotAction) []string {
 
 func TestAdaptMentionSpacing(t *testing.T) {
 	enabled := &wsConnection{}
-	enabled.platformMentionSpace.Store(true)
+	enabled.peerMentionSpace.Store(true)
 
 	for _, tc := range []struct {
 		name  string
@@ -150,7 +150,7 @@ func TestImplementationProbeControlsMentionSpacingOnTheWire(t *testing.T) {
 			if conn == nil {
 				t.Fatal("connection never registered")
 			}
-			for tc.appName == "SnowLuma" && !conn.platformMentionSpace.Load() && time.Now().Before(deadline) {
+			for tc.appName == "SnowLuma" && !conn.peerMentionSpace.Load() && time.Now().Before(deadline) {
 				time.Sleep(5 * time.Millisecond)
 			}
 			// A synthetic, undeliverable send is enough: only the frame matters.

@@ -43,7 +43,7 @@ func (c *wsConnection) detectImplementation() {
 		return
 	}
 	if platformAppendsMentionSpace(info.AppName) {
-		c.platformMentionSpace.Store(true)
+		c.peerMentionSpace.Store(true)
 		if c.engine != nil {
 			c.engine.Log().Info(logs.WEBSOCKET, "OneBot 实现 SnowLuma 会在 @ 后自带空格，不再额外补分隔空格")
 		}
@@ -54,7 +54,7 @@ func (c *wsConnection) detectImplementation() {
 // of text that follows an @ segment, for implementations that append their own
 // space. The caller's segments are never modified.
 func (c *wsConnection) adaptMentionSpacing(action model.OneBotAction) model.OneBotAction {
-	if c == nil || !c.platformMentionSpace.Load() {
+	if c == nil || !c.peerMentionSpace.Load() {
 		return action
 	}
 	switch action.Action {
