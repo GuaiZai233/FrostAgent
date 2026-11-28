@@ -162,11 +162,6 @@ func (s *Store) ImageHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok && s.disk != nil {
 		image, ok = s.disk.image(hash)
 	}
-	if !ok {
-		if session, found := s.sessionImages.get(hash); found {
-			image, ok = &cachedImage{contentType: session.contentType, data: session.data}, true
-		}
-	}
 	if ok {
 		image = &cachedImage{
 			contentType: image.contentType,
@@ -174,6 +169,12 @@ func (s *Store) ImageHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.RUnlock()
+	if !ok {
+		// Outside s.mu: the durable backend may block on I/O.
+		if session, found := s.loadSessionImage(hash); found {
+			image, ok = &cachedImage{contentType: session.contentType, data: session.data}, true
+		}
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
