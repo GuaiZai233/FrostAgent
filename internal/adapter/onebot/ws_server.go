@@ -911,8 +911,16 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 					if !content.ContainsMedia(quote.Segments) {
 						continue
 					}
-					parts, _ := conn.loadInboundMedia(routeCtx, event, quote.Segments, directMediaKinds, mediaBudget)
+					parts, failed := conn.loadInboundMedia(routeCtx, event, quote.Segments, directMediaKinds, mediaBudget)
 					directImageParts = append(directImageParts, parts...)
+					if failed > 0 && mediaGuidance == "" {
+						// system_context was already rendered; refresh it in place.
+						mediaGuidance = parity.MediaUnavailableGuidance
+						contextMap["media_guidance"] = mediaGuidance
+						refreshed, _ := json.Marshal(contextMap)
+						requestPrompt = strings.Replace(requestPrompt, string(contextBytes), string(refreshed), 1)
+						contextBytes = refreshed
+					}
 				}
 			}
 		}

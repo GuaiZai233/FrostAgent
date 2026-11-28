@@ -1,6 +1,7 @@
 package modelrouter
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -79,5 +80,55 @@ func TestConfigurationJSONOmitsDefaultMediaBinding(t *testing.T) {
 	config.GlobalBindings[WorkloadMedia] = Binding{Mode: BindingModel, ModelID: "model-a"}
 	if data, _ = json.Marshal(config); !strings.Contains(string(data), `"media":{"mode":"model","model_id":"model-a"}`) {
 		t.Fatalf("configured media binding dropped: %s", data)
+	}
+}
+
+// Group overrides of the media workload are never stored either: older
+// binaries reject unknown workloads in every override.
+func TestGroupMediaOverrideIsNotStored(t *testing.T) {
+	config := defaultConfiguration()
+	config.GroupOverrides = []GroupOverride{{Platform: "onebot", GroupID: "g1", Bindings: map[Workload]Binding{
+		WorkloadMedia:    {Mode: BindingModel, ModelID: "model-a"},
+		WorkloadDialogue: {Mode: BindingModel, ModelID: "model-b"},
+	}}}
+	data, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		GroupOverrides []struct {
+			Bindings map[string]Binding `json:"bindings"`
+		} `json:"group_overrides"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded.GroupOverrides[0].Bindings["media"]; ok || decoded.GroupOverrides[0].Bindings["dialogue"].ModelID != "model-b" {
+		t.Fatalf("group bindings serialized wrongly: %s", data)
+	}
+	if _, ok := config.GroupOverrides[0].Bindings[WorkloadMedia]; !ok {
+		t.Fatal("marshaling mutated the group override")
+	}
+
+	db := catalogTestDB(t, storage.SQLite)
+	seedCatalog(t, db, "https://synthetic.invalid/v1")
+	tx, err := db.SQL.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeConfigurationTx(context.Background(), db, tx, "instance-a", config); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var media, dialogue int
+	row := db.SQL.QueryRow(db.Bind(`SELECT COALESCE(SUM(CASE WHEN workload = 'media' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN workload = 'dialogue' AND group_id = 'g1' THEN 1 ELSE 0 END), 0) FROM model_bindings WHERE instance_id = ?`), "instance-a")
+	if err := row.Scan(&media, &dialogue); err != nil {
+		t.Fatal(err)
+	}
+	if media != 0 || dialogue != 1 {
+		t.Fatalf("stored media rows=%d group dialogue rows=%d", media, dialogue)
 	}
 }
