@@ -461,3 +461,60 @@ func TestSyncNetworkPolicyPushesChangesAndRevokesPreviousGateway(t *testing.T) {
 		t.Fatalf("unconfigured manager must be a no-op: %v", err)
 	}
 }
+
+func TestSyncNetworkPolicyKeepsOwnershipUntilDenyIsAcknowledged(t *testing.T) {
+	ctx := context.Background()
+	m := NewConfigManager(Config{BaseURL: "http://old", AuthToken: "t1", SessionNamespace: "ns", AllowNetwork: true})
+	var calls []policyCall
+	lostAck := true
+	m.SetNetworkPolicyApplier(func(_ context.Context, cfg Config, allow bool) error {
+		calls = append(calls, policyCall{cfg.BaseURL, allow})
+		if allow && lostAck {
+			return errors.New("response lost") // the gateway may have applied it anyway
+		}
+		return nil
+	})
+	if err := m.SyncNetworkPolicy(ctx); err == nil {
+		t.Fatal("lost acknowledgement must be reported")
+	}
+
+	// The credentials are removed while the allow was never acknowledged: the old
+	// gateway must still be told to deny.
+	m.ApplySnapshot(Config{SessionNamespace: "ns"})
+	calls = nil
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || calls[0] != (policyCall{"http://old", false}) {
+		t.Fatalf("old gateway not revoked after credentials were removed: %v", calls)
+	}
+	calls = nil
+	if err := m.SyncNetworkPolicy(ctx); err != nil || len(calls) != 0 {
+		t.Fatalf("acknowledged deny must not be repeated: %v err=%v", calls, err)
+	}
+}
+
+func TestSyncNetworkPolicyRevokesPreviousOwnerWhenNamespaceChanges(t *testing.T) {
+	ctx := context.Background()
+	m := NewConfigManager(Config{BaseURL: "http://gw", AuthToken: "t", SessionNamespace: "ns-a", AllowNetwork: true})
+	var owners []string
+	m.SetNetworkPolicyApplier(func(_ context.Context, cfg Config, allow bool) error {
+		owners = append(owners, cfg.Owner()+map[bool]string{true: "+", false: "-"}[allow])
+		return nil
+	})
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m.ApplySnapshot(Config{BaseURL: "http://gw", AuthToken: "t", SessionNamespace: "ns-b", AllowNetwork: true})
+	owners = nil
+	if err := m.SyncNetworkPolicy(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, o := range owners {
+		got[o] = true
+	}
+	if len(owners) != 2 || !got["ns-a-"] || !got["ns-b+"] {
+		t.Fatalf("namespace change must revoke the previous owner: %v", owners)
+	}
+}

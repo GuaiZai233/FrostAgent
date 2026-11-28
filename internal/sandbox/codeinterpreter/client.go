@@ -46,6 +46,7 @@ type Client struct {
 	authToken        string
 	sessionNamespace string
 	allowNetwork     bool
+	owner            string
 	networkPolicy    func() bool
 	httpClient       *http.Client
 	projectNamespace [16]byte
@@ -93,6 +94,7 @@ func New(cfg sandbox.Config, opts ...Option) *Client {
 		authToken:        cfg.AuthToken,
 		sessionNamespace: cfg.SessionNamespace,
 		allowNetwork:     cfg.AllowNetwork,
+		owner:            cfg.Owner(),
 		httpClient: &http.Client{
 			Timeout: cfg.ClientTimeout,
 		},
@@ -222,6 +224,7 @@ type gatewaySessionRequest struct {
 	UserUUID string `json:"user_uuid"`
 	Profile  string `json:"profile"`
 	Network  string `json:"network"`
+	Owner    string `json:"owner"`
 }
 
 func (c *Client) allowsNetwork() bool {
@@ -297,6 +300,11 @@ func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
 
 	for attempt := 0; attempt < maxPolicyAttempts; attempt++ {
 		mode := c.currentNetworkMode()
+		if mode == networkModePublic {
+			if err := c.requirePublicNetworkAllowed(ctx); err != nil {
+				return err
+			}
+		}
 		if err := c.postSession(ctx, userUUID, mode, entry); err != nil {
 			return err
 		}
@@ -312,7 +320,7 @@ func (c *Client) ensureSession(ctx context.Context, userUUID string) error {
 // without the endpoint the requested mode cannot be enforced or verified, so the
 // command is not run.
 func (c *Client) postSession(ctx context.Context, userUUID, mode string, _ *sessionEntry) error {
-	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: sessionProfile, Network: mode})
+	body, err := json.Marshal(gatewaySessionRequest{UserUUID: userUUID, Profile: sessionProfile, Network: mode, Owner: c.owner})
 	if err != nil {
 		return fmt.Errorf("failed to marshal session payload: %w", err)
 	}
@@ -338,7 +346,41 @@ func (c *Client) postSession(ctx context.Context, userUUID, mode string, _ *sess
 
 type gatewayNetworkPolicyRequest struct {
 	Profile       string `json:"profile"`
+	Owner         string `json:"owner"`
 	PublicAllowed bool   `json:"public_allowed"`
+}
+
+// requirePublicNetworkAllowed confirms with the gateway that public networking is
+// currently allowed for this FrostAgent before a public session is requested. A
+// gateway that cannot answer (no policy endpoint, an error, a lost policy) or that
+// has not been told to allow networking refuses the command, so a failed policy
+// sync never leaves public networking silently enabled.
+func (c *Client) requirePublicNetworkAllowed(ctx context.Context) error {
+	q := url.Values{"profile": {sessionProfile}, "owner": {c.owner}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/network-policy?"+q.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to build network policy request: %w", err)
+	}
+	req.Header.Set("X-Auth-Token", c.authToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("sandbox network policy check failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		errBody := readBoundedString(resp.Body, maxErrorBodyBytes)
+		return fmt.Errorf("sandbox gateway network policy check returned HTTP %d: %s (the gateway must support GET /api/v1/network-policy)", resp.StatusCode, sanitizeError(errBody, c.authToken))
+	}
+	var policy struct {
+		PublicAllowed bool `json:"public_allowed"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxErrorBodyBytes)).Decode(&policy); err != nil {
+		return fmt.Errorf("sandbox gateway network policy response is invalid: %w", err)
+	}
+	if !policy.PublicAllowed {
+		return errors.New("sandbox gateway has not acknowledged public network access; the policy is applied when the setting is saved, retry after saving it again")
+	}
+	return nil
 }
 
 // SetPublicNetwork tells the gateway whether FrostAgent sessions may use public
@@ -349,7 +391,7 @@ type gatewayNetworkPolicyRequest struct {
 // Unrelated profiles and isolated workers are untouched. A gateway without the
 // endpoint is an error; the caller must not treat it as revoked.
 func (c *Client) SetPublicNetwork(ctx context.Context, allowed bool) error {
-	body, err := json.Marshal(gatewayNetworkPolicyRequest{Profile: sessionProfile, PublicAllowed: allowed})
+	body, err := json.Marshal(gatewayNetworkPolicyRequest{Profile: sessionProfile, Owner: c.owner, PublicAllowed: allowed})
 	if err != nil {
 		return fmt.Errorf("failed to marshal network policy payload: %w", err)
 	}

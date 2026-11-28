@@ -26,11 +26,15 @@ type statefulGateway struct {
 
 	sessionCode int
 	sessionBody string
-	// denied mirrors the gateway's revoked state: public sessions get 403.
-	denied bool
+	// publicAllowed mirrors the gateway's persisted policy for the owner: public
+	// sessions get 403 unless it is true. Gateways start out allowing it here so
+	// most tests need no setup; policy tests clear it.
+	publicAllowed bool
 	// policyCode, when set, makes PUT /network-policy answer with that status.
-	policyCode  int
-	policyCalls []bool
+	policyCode int
+	// getPolicyCode, when set, makes GET /network-policy answer with that status.
+	getPolicyCode int
+	policyCalls   []bool
 	// onSession runs inside the session handler before it answers.
 	onSession func(mode string)
 	// inFlight tracks concurrent session/release requests per user.
@@ -40,7 +44,7 @@ type statefulGateway struct {
 }
 
 func newStatefulGateway() *statefulGateway {
-	return &statefulGateway{workers: map[string]string{}, inFlight: map[string]int{}}
+	return &statefulGateway{workers: map[string]string{}, inFlight: map[string]int{}, publicAllowed: true}
 }
 
 func (g *statefulGateway) enter(user string) func() {
@@ -88,7 +92,7 @@ func (g *statefulGateway) handler(t *testing.T) http.Handler {
 				_, _ = w.Write([]byte(g.sessionBody))
 				return
 			}
-			if g.denied && body.Network == "public" {
+			if !g.publicAllowed && body.Network == "public" {
 				http.Error(w, "revoked", http.StatusForbidden)
 				return
 			}
@@ -107,8 +111,22 @@ func (g *statefulGateway) handler(t *testing.T) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"stdout":"` + mode + `","stderr":"","exit_code":0,"timed_out":false}`))
 		case "/api/v1/network-policy":
+			if r.Method == http.MethodGet {
+				g.mu.Lock()
+				defer g.mu.Unlock()
+				if g.getPolicyCode != 0 {
+					http.Error(w, "nope", g.getPolicyCode)
+					return
+				}
+				if r.URL.Query().Get("profile") != "minimal" || r.URL.Query().Get("owner") != "ns" {
+					t.Errorf("unexpected policy query %s", r.URL.RawQuery)
+				}
+				_, _ = w.Write([]byte(`{"profile":"minimal","owner":"ns","public_allowed":` + map[bool]string{true: "true", false: "false"}[g.publicAllowed] + `}`))
+				return
+			}
 			var body struct {
 				Profile       string `json:"profile"`
+				Owner         string `json:"owner"`
 				PublicAllowed bool   `json:"public_allowed"`
 			}
 			if r.Method != http.MethodPut || json.NewDecoder(r.Body).Decode(&body) != nil || body.Profile != "minimal" {
@@ -121,7 +139,10 @@ func (g *statefulGateway) handler(t *testing.T) http.Handler {
 				http.Error(w, "nope", g.policyCode)
 				return
 			}
-			g.denied = !body.PublicAllowed
+			if body.Owner != "ns" {
+				t.Errorf("policy owner = %q, want ns", body.Owner)
+			}
+			g.publicAllowed = body.PublicAllowed
 			if !body.PublicAllowed {
 				for user, mode := range g.workers {
 					if mode == "public" {
@@ -276,22 +297,21 @@ func TestSetPublicNetworkNeverReportsSuccessWithoutGatewayAcknowledgement(t *tes
 	}
 }
 
-// An old-generation command that read the switch before it was turned off must
-// not be able to create a public worker after the gateway revoked access.
+// An old-generation command that already passed the policy check must not be able
+// to create a public worker once the gateway revoked access in the meantime.
 func TestStaleCommandCannotProvisionPublicAfterRevocation(t *testing.T) {
 	gw := newStatefulGateway()
 	srv := httptest.NewServer(gw.handler(t))
 	defer srv.Close()
 	revoker := newNetworkClient(srv, false)
-	var once sync.Once
-	stale := newNetworkClient(srv, true, codeinterpreter.WithNetworkPolicy(func() bool {
-		once.Do(func() { // the old request has read "allowed", then the switch is turned off
+	gw.onSession = func(mode string) {
+		if mode == "public" { // the check passed; the switch is turned off before the request is decided
 			if err := revoker.SetPublicNetwork(context.Background(), false); err != nil {
 				t.Error(err)
 			}
-		})
-		return true
-	}))
+		}
+	}
+	stale := newNetworkClient(srv, true)
 	_, err := stale.Exec(context.Background(), sandbox.ExecRequest{SessionID: "s1", Command: "true", Timeout: time.Second})
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Fatalf("stale public provisioning must be rejected, got %v", err)
@@ -400,5 +420,66 @@ func TestGatewayWithoutSessionsEndpointFailsClosedInBothModes(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A gateway that has /sessions but cannot confirm the policy must not run public
+// commands, whatever the reason the policy sync failed.
+func TestPublicCommandsRequireAcknowledgedPolicy(t *testing.T) {
+	cases := map[string]func(*statefulGateway){
+		"policy endpoint missing":        func(g *statefulGateway) { g.getPolicyCode = http.StatusNotFound },
+		"policy endpoint failing":        func(g *statefulGateway) { g.getPolicyCode = http.StatusInternalServerError },
+		"allow never acknowledged":       func(g *statefulGateway) { g.publicAllowed = false },
+		"policy lost or revoked/restart": func(g *statefulGateway) { g.publicAllowed = false },
+	}
+	for name, setup := range cases {
+		gw := newStatefulGateway()
+		setup(gw)
+		srv := httptest.NewServer(gw.handler(t))
+		_, err := newNetworkClient(srv, true).Exec(context.Background(), sandbox.ExecRequest{SessionID: "s1", Command: "true", Timeout: time.Second})
+		srv.Close()
+		if err == nil {
+			t.Fatalf("%s: public command ran", name)
+		}
+		for _, step := range gw.requests {
+			if strings.HasPrefix(step, "session:public") || strings.HasPrefix(step, "exec") {
+				t.Fatalf("%s: requests reached the gateway: %v", name, gw.requests)
+			}
+		}
+	}
+	// Isolated commands do not depend on the policy being acknowledged.
+	gw := newStatefulGateway()
+	gw.publicAllowed = false
+	gw.getPolicyCode = http.StatusNotFound
+	srv := httptest.NewServer(gw.handler(t))
+	defer srv.Close()
+	if got := execMode(t, newNetworkClient(srv, false), "s1"); got != "isolated" {
+		t.Fatalf("isolated command ran in %q worker", got)
+	}
+}
+
+// After another replica revoked access (and the gateway restarted), a client whose
+// switch is stale cannot bring public networking back.
+func TestStaleReplicaCannotRestoreAccessAfterRevokeAndRestart(t *testing.T) {
+	gw := newStatefulGateway()
+	srv := httptest.NewServer(gw.handler(t))
+	defer srv.Close()
+	stale := newNetworkClient(srv, true)
+	if got := execMode(t, stale, "s1"); got != "public" {
+		t.Fatalf("setup: ran in %q worker", got)
+	}
+	if err := newNetworkClient(srv, false).SetPublicNetwork(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	// Gateway restart: workers are gone, the persisted deny remains.
+	gw.mu.Lock()
+	gw.workers = map[string]string{}
+	gw.mu.Unlock()
+	_, err := stale.Exec(context.Background(), sandbox.ExecRequest{SessionID: "s2", Command: "true", Timeout: time.Second})
+	if err == nil {
+		t.Fatal("stale client restored public access")
+	}
+	if got := gw.mode(stale.SessionIDToUUID("s2")); got == "public" {
+		t.Fatal("a public worker exists after revocation")
 	}
 }
