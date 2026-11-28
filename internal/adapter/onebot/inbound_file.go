@@ -155,7 +155,7 @@ func (c *wsConnection) rememberInboundFiles(event model.OneBotEvent) {
 		return
 	}
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
-	c.rememberFileSegments(event, strconv.FormatInt(int64(event.MessageID), 10), ParseMessageSegments(event.Message), session)
+	c.rememberFileSegments(event, event.UserID, strconv.FormatInt(int64(event.MessageID), 10), ParseMessageSegments(event.Message), session)
 }
 
 // Upload notices retain metadata for a later question without starting a turn.
@@ -180,10 +180,14 @@ func (c *wsConnection) rememberInboundFileNotice(event model.OneBotEvent) {
 	}
 	key := sha256.Sum256(append([]byte(fmt.Sprintf("%d/%d/", event.UserID, event.Time)), event.File...))
 	session := c.engine.SessionManager.GetOrCreate(c.historyKey(event))
-	c.rememberFileSegments(event, "notice:"+hex.EncodeToString(key[:16]), []content.MessageSegment{{Type: "file", Data: data}}, session)
+	c.rememberFileSegments(event, event.UserID, "notice:"+hex.EncodeToString(key[:16]), []content.MessageSegment{{Type: "file", Data: data}}, session)
 }
 
-func (c *wsConnection) rememberFileSegments(event model.OneBotEvent, messageID string, segments []content.MessageSegment, session *llm.SessionContext) {
+// rememberFileSegments registers attachments of one message in the event's
+// session. senderID is the platform sender of that message, which may differ
+// from the event sender for quotes; 0 means unknown and the record is then only
+// reachable through a quote, never through sender ownership.
+func (c *wsConnection) rememberFileSegments(event model.OneBotEvent, senderID int64, messageID string, segments []content.MessageSegment, session *llm.SessionContext) {
 	if session == nil || messageID == "" || messageID == "0" {
 		return
 	}
@@ -212,6 +216,11 @@ func (c *wsConnection) rememberFileSegments(event model.OneBotEvent, messageID s
 		duplicate := false
 		for _, f := range c.inboundFiles {
 			if f.sessionID == sessionID && f.sourceID == sourceID && f.index == fileIndex {
+				// A known sender may complete a quote-only record, but never
+				// replaces an owner that is already known.
+				if f.senderID == 0 && senderID > 0 {
+					f.senderID = senderID
+				}
 				duplicate = true
 				break
 			}
@@ -225,7 +234,7 @@ func (c *wsConnection) rememberFileSegments(event model.OneBotEvent, messageID s
 		}
 		f := &inboundFile{
 			sessionID: sessionID, session: session, epoch: epoch, messageID: messageID, sourceID: sourceID,
-			senderID: event.UserID, groupID: event.GroupID, index: fileIndex,
+			senderID: max(senderID, 0), groupID: event.GroupID, index: fileIndex,
 			name: safeInboundFileName(fileDataString(seg.Data, "name", "file")),
 			url:  source, fileID: fileID, size: fileDataInt(seg.Data, "file_size", "size"),
 			busID: fileDataInt(seg.Data, "busid", "bus_id"), seen: now, gate: make(chan struct{}, 1),
@@ -498,7 +507,7 @@ func (c *wsConnection) inboundFileTurn(event model.OneBotEvent, session *llm.Ses
 	for _, quote := range quotes {
 		if quote.SessionID == historyKey(event) {
 			quotedIDs[quote.MessageID] = true
-			c.rememberFileSegments(event, quote.MessageID, quote.Segments, session)
+			c.rememberFileSegments(event, quote.SenderID, quote.MessageID, quote.Segments, session)
 		}
 	}
 	return &inboundFileTurn{
@@ -509,7 +518,7 @@ func (c *wsConnection) inboundFileTurn(event model.OneBotEvent, session *llm.Ses
 
 // authorized returns the attachments this turn may list or import: same session
 // identity and epoch, still within the lifetime, and sent by the current user or
-// quoted in this turn. Files from the current or quoted messages come first,
+// quoted in this turn. Records with an unknown sender are reachable only by quote. Files from the current or quoted messages come first,
 // then newest first. limit <= 0 returns every authorized file.
 func (t *inboundFileTurn) authorized(limit int) []*inboundFile {
 	c := t.conn
@@ -525,7 +534,7 @@ func (t *inboundFileTurn) authorized(limit int) []*inboundFile {
 			if explicit != (priority == 0) {
 				continue
 			}
-			if f.sessionID == sessionID && f.session == t.session && f.epoch == epoch && time.Since(f.seen) < inboundFileLifetime && (f.senderID == t.event.UserID || t.quotedIDs[f.messageID]) {
+			if f.sessionID == sessionID && f.session == t.session && f.epoch == epoch && time.Since(f.seen) < inboundFileLifetime && ((f.senderID > 0 && f.senderID == t.event.UserID) || t.quotedIDs[f.messageID]) {
 				files = append(files, f)
 			}
 		}

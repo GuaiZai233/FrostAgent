@@ -886,3 +886,88 @@ func TestInboundFileNotDownloadedWithoutToolCall(t *testing.T) {
 		t.Fatalf("listed=%d downloads=%d sandbox calls=%d", listed.Load(), downloads.Load(), calls)
 	}
 }
+
+// A quoted attachment that is not cached yet must be registered under the
+// quoted message's sender, never under the user who quoted it.
+func TestInboundQuotedUncachedFileKeepsRealSender(t *testing.T) {
+	groupEvent := func(mid int32, sender int64) model.OneBotEvent {
+		event := fileEvent(mid, sender, "a.docx", 7)
+		event.MessageType, event.GroupID = "group", 22
+		return event
+	}
+	t.Run("known sender", func(t *testing.T) {
+		c, _, count := fileTestConnection(t, []byte("fixture"))
+		original := groupEvent(101, 11)
+		question := groupEvent(102, 12)
+		question.Message = json.RawMessage(`[{"type":"text","data":{"text":"read the quoted file"}}]`)
+		session := c.engine.SessionManager.GetOrCreate(c.historyKey(question))
+		quote := &resolvedReplyContext{MessageID: "101", SessionID: historyKey(question), SenderID: 11, Segments: ParseMessageSegments(original.Message)}
+		turn, infos := listTurn(t, c, question, session, quote)
+		if len(infos) != 1 || infos[0].MessageID != "101" {
+			t.Fatalf("quoted listing: %+v", infos)
+		}
+		ref := infos[0].Ref
+		if result := turn.importFile(context.Background(), ref); result.Status != "ready" {
+			t.Fatalf("quoted import: %+v", result)
+		}
+		later := question
+		later.MessageID = 103
+		laterTurn, listed := listTurn(t, c, later, session)
+		if listed != nil || laterTurn.importFile(context.Background(), ref).Status == "ready" {
+			t.Fatal("quoting user gained sender access to another user's file")
+		}
+		owner := groupEvent(104, 11)
+		owner.Message = json.RawMessage(`[{"type":"text","data":{"text":"my file"}}]`)
+		ownerTurn, listed := listTurn(t, c, owner, session)
+		if len(listed) != 1 || listed[0].Ref != ref || ownerTurn.importFile(context.Background(), ref).Status != "ready" {
+			t.Fatalf("real sender lost access: %+v", listed)
+		}
+		if count.Load() != 1 {
+			t.Fatalf("downloads=%d", count.Load())
+		}
+	})
+	t.Run("unknown sender", func(t *testing.T) {
+		c, _, _ := fileTestConnection(t, []byte("fixture"))
+		original := groupEvent(101, 11)
+		question := groupEvent(102, 12)
+		question.Message = json.RawMessage(`[{"type":"text","data":{"text":"read the quoted file"}}]`)
+		session := c.engine.SessionManager.GetOrCreate(c.historyKey(question))
+		quote := &resolvedReplyContext{MessageID: "101", SessionID: historyKey(question), Segments: ParseMessageSegments(original.Message)}
+		turn, infos := listTurn(t, c, question, session, quote)
+		if len(infos) != 1 || turn.importFile(context.Background(), infos[0].Ref).Status != "ready" {
+			t.Fatalf("quote-only import: %+v", infos)
+		}
+		ref := infos[0].Ref
+		for _, user := range []int64{11, 12} {
+			later := groupEvent(103, user)
+			later.Message = json.RawMessage(`[{"type":"text","data":{"text":"again"}}]`)
+			laterTurn, listed := listTurn(t, c, later, session)
+			if listed != nil || laterTurn.importFile(context.Background(), ref).Status == "ready" {
+				t.Fatalf("unknown-sender record reachable without a quote by %d", user)
+			}
+		}
+		// Seeing the original message directly completes the unknown owner,
+		// without granting the quoting user anything.
+		c.rememberInboundFiles(original)
+		ownerTurn, listed := listTurn(t, c, groupEvent(104, 11), session)
+		if len(listed) < 1 || ownerTurn.importFile(context.Background(), ref).Status != "ready" {
+			t.Fatalf("real sender not recorded after direct observation: %+v", listed)
+		}
+		later := groupEvent(105, 12)
+		later.Message = json.RawMessage(`[{"type":"text","data":{"text":"again"}}]`)
+		if laterTurn, listed := listTurn(t, c, later, session); listed != nil || laterTurn.importFile(context.Background(), ref).Status == "ready" {
+			t.Fatal("quoting user gained access after owner completion")
+		}
+		c.inboundFileMu.Lock()
+		c.inboundFiles[0].senderID = 11
+		c.inboundFileMu.Unlock()
+		quote.SenderID = 12
+		c.inboundFileTurn(question, session, []*resolvedReplyContext{quote})
+		c.inboundFileMu.Lock()
+		owner := c.inboundFiles[0].senderID
+		c.inboundFileMu.Unlock()
+		if owner != 11 {
+			t.Fatalf("known owner replaced by a later quote: %d", owner)
+		}
+	})
+}
