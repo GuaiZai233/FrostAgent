@@ -473,6 +473,9 @@ func (a *Adapter) serveConnection(ctx context.Context, conn *websocket.Conn, moc
 		if handleRuntimeStatusCommand(wsConn, event, a.engine) {
 			continue
 		}
+		if handleMsgIDCommand(wsConn, event, a.engine) {
+			continue
+		}
 
 		var warningNotice string
 		var botLoopSoft bool

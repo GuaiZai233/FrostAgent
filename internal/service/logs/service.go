@@ -46,6 +46,19 @@ func (s *Service) ListLogs(
 			Pagination: &v1.Pagination{PageSize: 1, Total: 1},
 		}), nil
 	}
+	if value := strings.TrimSpace(req.Msg.GetMessageRefId()); value != "" {
+		if _, ok := logspkg.NormalizeMessageRefID(value); !ok {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("消息 RefID 必须为 fa_msgid_<UUIDv4>"))
+		}
+		entry, found := store.FindMessageRef(value)
+		if !found {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("未找到消息记录，可能已清理、超出预算或属于其他实例；请确认实例和日志来源"))
+		}
+		return connect.NewResponse(&v1.ListLogsResponse{
+			Entries:    []*v1.LogEntry{convertEntry(entry)},
+			Pagination: &v1.Pagination{PageSize: 1, Total: 1},
+		}), nil
+	}
 	var entries []logspkg.LogEntry
 	if store != nil {
 		entries = store.Snapshot()
@@ -188,6 +201,7 @@ func convertEntry(e logspkg.LogEntry) *v1.LogEntry {
 		HasDetail:    strings.TrimSpace(e.Content) != "",
 		TraceId:      e.TraceID,
 		ErrorUuid:    e.ErrorUUID,
+		MessageRefId: e.MessageRefID,
 	}
 	switch e.Category {
 	case logspkg.LLM_REQUEST:

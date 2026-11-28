@@ -946,6 +946,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				return fmt.Errorf("%s", reason)
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			conn.recordBotMessageRef(conn.historyKey(event), botAction, ackResp, true)
 			recordDelivery(toolOutput.Messages)
 			return nil
 		}
@@ -1482,6 +1483,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 				break
 			}
 			conn.rememberActionMessageSession(ackResp, conn.historyKey(event))
+			conn.recordBotMessageRef(conn.historyKey(event), partAction, ackResp, false)
 			if index < len(replyParts) {
 				delivered = append(delivered, replyParts[index])
 				deliveries.RecordFinalProgress(strings.Join(delivered, "\n\n"), turn)

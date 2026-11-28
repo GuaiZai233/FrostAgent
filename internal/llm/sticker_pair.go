@@ -78,7 +78,7 @@ func (e *Engine) prepareStickerPairTool(ctx context.Context, run *RunContext, ca
 	if !exists {
 		return core.ToolExecutionResult{}, e.Log().ReportError(logs.TOOL, "工具调用失败：工具未找到", fmt.Errorf("tool=%s", call.Function.Name), run.SessionID), nil
 	}
-	e.Log().InfoWithConsoleSummary(logs.TOOL, formatToolCallLog(call.Function.Name, call.Function.Arguments), "【智能体调用工具】"+call.Function.Name)
+	e.Log().InfoWithConsoleSummary(logs.TOOL, formatToolCallLog(call.Function.Name, call.Function.Arguments), "【智能体调用工具】"+call.Function.Name, run.SessionID)
 	output, err := e.executeRecordedTool(ctx, tool, call)
 	if errors.Is(err, errToolHistoryStorage) {
 		return output, "", err

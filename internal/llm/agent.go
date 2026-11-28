@@ -1490,7 +1490,7 @@ func (e *Engine) runLoopWithResult(ctx context.Context, messages []ChatMessage) 
 				mergeSecurityNotice(&runCtx, decision.WarningNotice)
 			}
 			toolCallLog := formatToolCallLog(tc.Function.Name, tc.Function.Arguments)
-			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name)
+			e.Log().InfoWithConsoleSummary(logs.TOOL, toolCallLog, "【智能体调用工具】"+tc.Function.Name, runCtx.SessionID)
 
 			var toolResult string
 			var execution core.ToolExecutionResult
