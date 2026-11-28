@@ -127,3 +127,44 @@
 .token-usage-table thead { color: var(--muted-foreground); }
 .token-usage-table tbody tr { border-top: 1px solid var(--border); }
 .token-usage-table tbody th { font-weight: 500; }
+
+/* Storage usage bar: distinct hues per category, tuned separately for dark mode. */
+:root {
+  --storage-chat: #3b82f6;
+  --storage-images: #f59e0b;
+  --storage-stickers: #ec4899;
+  --storage-memory: #10b981;
+  --storage-other: #8b8fa3;
+}
+:root.dark {
+  --storage-chat: #60a5fa;
+  --storage-images: #fbbf24;
+  --storage-stickers: #f472b6;
+  --storage-memory: #34d399;
+  --storage-other: #a1a6b8;
+}
+.storage-usage-bar {
+  display: flex;
+  height: 0.85rem;
+  gap: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--muted, rgb(128 128 128 / 0.2));
+}
+.storage-usage-segment { min-width: 3px; flex-basis: 0; background: var(--storage-other); }
+.storage-usage-segment[data-storage-category="chat"], li[data-storage-category="chat"] .storage-usage-swatch { background: var(--storage-chat); }
+.storage-usage-segment[data-storage-category="images"], li[data-storage-category="images"] .storage-usage-swatch { background: var(--storage-images); }
+.storage-usage-segment[data-storage-category="stickers"], li[data-storage-category="stickers"] .storage-usage-swatch { background: var(--storage-stickers); }
+.storage-usage-segment[data-storage-category="memory"], li[data-storage-category="memory"] .storage-usage-swatch { background: var(--storage-memory); }
+.storage-usage-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+}
+.storage-usage-legend li { display: flex; align-items: center; gap: 0.5rem; }
+.storage-usage-swatch { flex: none; width: 0.7rem; height: 0.7rem; border-radius: 3px; background: var(--storage-other); }
+.storage-usage-size { margin-left: auto; color: var(--muted-foreground); white-space: nowrap; }
