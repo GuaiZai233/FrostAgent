@@ -124,26 +124,17 @@ func (s *Service) GetSessionToolActivity(ctx context.Context, req *connect.Reque
 	}
 	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	sources, err := s.engine.ToolHistory.RefsBySources(readCtx, scope, ids, sessionToolActivityPerSource)
+	sources, err := s.engine.ToolHistory.CallsBySources(readCtx, scope, ids, sessionToolActivityPerSource)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("工具记录读取失败"))
 	}
 	response := &v1.GetSessionToolActivityResponse{}
 	for _, source := range sources {
 		activity := &v1.SessionToolActivity{SourceMessageId: source.SourceMessageID, Total: int32(source.Total)}
-		for _, ref := range source.Refs {
-			record, err := s.engine.ToolHistory.Read(readCtx, scope, ref)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, errors.New("工具记录读取失败"))
-			}
-			activity.Entries = append(activity.Entries, &v1.SessionToolActivityEntry{RefId: record.RefID, Tool: record.Tool})
+		for _, call := range source.Calls {
+			activity.Entries = append(activity.Entries, &v1.SessionToolActivityEntry{RefId: call.RefID, Tool: call.Tool})
 		}
-		if len(activity.Entries) > 0 {
-			response.Activities = append(response.Activities, activity)
-		}
+		response.Activities = append(response.Activities, activity)
 	}
 	return connect.NewResponse(response), nil
 }

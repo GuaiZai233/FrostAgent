@@ -382,7 +382,6 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
         if (sourceIds.length) {
           try {
             const activity = await api.getSessionToolActivity(sessionId, sourceIds);
-            if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
             parsed = mergeSessionToolActivity(parsed, activity.activities.map((item) => ({
               sourceMessageId: item.sourceMessageId,
               entries: item.entries.map((entry) => ({ refId: entry.refId, tool: entry.tool })),
@@ -393,6 +392,9 @@ export function mountPromptPage(container: HTMLElement, api = createInstanceAPI(
           }
         }
       }
+      // The archive call may settle (or fail) after the user moved on or left the
+      // page, so every outcome passes this guard before touching the DOM.
+      if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;
       renderInspector(parsed, `会话上下文预览 (${sessionId})`, selectedSession?.sessionId === sessionId ? selectedSession : undefined);
     } catch (err) {
       if (isUnmounted || requestSeq !== sessionContextRequestSeq || sessionId !== selectedSessionId) return;

@@ -4,12 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"net/url"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/GuaiZai233/FrostAgent/internal/chathistory"
 	"github.com/GuaiZai233/FrostAgent/internal/storage"
+	"github.com/google/uuid"
 )
 
 func TestToolHistoryPersistenceIsolationAndCascade(t *testing.T) {
@@ -166,58 +171,109 @@ func TestRecentBySourceSelectsPerSourceWithoutCrowding(t *testing.T) {
 	}
 }
 
-func TestRefsBySourcesIsScopedExactAndChronological(t *testing.T) {
-	ctx := context.Background()
-	db, err := storage.Open(ctx, t.TempDir())
+// callsDB opens an isolated database; the PostgreSQL variant needs the CI service.
+func callsDB(t *testing.T, backend storage.Backend) *storage.DB {
+	t.Helper()
+	ctx, config := context.Background(), storage.Config{Backend: backend}
+	if backend == storage.Postgres {
+		base := os.Getenv("FROSTAGENT_TEST_POSTGRES_DSN")
+		if base == "" {
+			t.Skip("FROSTAGENT_TEST_POSTGRES_DSN is unset")
+		}
+		parsed, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schema := "fa_calls_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+		admin, err := sql.Open("pgx", base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = admin.Exec("CREATE SCHEMA " + schema); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := admin.Exec("DROP SCHEMA " + schema + " CASCADE"); err != nil {
+				t.Error(err)
+			}
+			admin.Close()
+		})
+		query := parsed.Query()
+		query.Set("search_path", schema)
+		parsed.RawQuery = query.Encode()
+		config.DSN = parsed.String()
+	}
+	db, err := storage.OpenWithConfig(ctx, t.TempDir(), config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 	for _, id := range []string{"fixture-instance", "fixture-other"} {
 		if err := db.CreateInstance(ctx, storage.InstanceRecord{ID: id, Name: id, CreatedAt: time.Now()}, 3); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return db
+}
+
+func TestCallsBySourcesIsScopedExactAndChronological(t *testing.T) {
+	for _, backend := range []storage.Backend{storage.SQLite, storage.Postgres} {
+		t.Run(string(backend), func(t *testing.T) { checkCallsBySources(t, callsDB(t, backend)) })
+	}
+}
+
+func checkCallsBySources(t *testing.T, db *storage.DB) {
+	ctx := context.Background()
 	scope := chathistory.Scope{Platform: "qq", MessageType: "group", TargetID: "fixture-group"}
 	otherScope := chathistory.Scope{Platform: "qq", MessageType: "group", TargetID: "fixture-other-group"}
 	base := time.Now().UTC().Truncate(time.Millisecond)
 	offset := 0
-	save := func(s *Store, sc chathistory.Scope, source string) string {
+	save := func(s *Store, sc chathistory.Scope, source, tool, result string) string {
 		offset++
-		r := Record{Scope: sc, RefID: NewRef(), RunID: "fixture-run", ActorID: "fixture-actor", Tool: "fixture-tool", SourceMessageID: source,
-			State: "complete", OccurredAt: base.Add(time.Duration(offset) * time.Second)}
+		r := Record{Scope: sc, RefID: NewRef(), RunID: "fixture-run", ActorID: "fixture-actor", Tool: tool, SourceMessageID: source,
+			ResultRaw: result, State: "complete", OccurredAt: base.Add(time.Duration(offset) * time.Second)}
 		if err := s.Save(ctx, r); err != nil {
 			t.Fatal(err)
 		}
 		return r.RefID
 	}
 	store := NewStore(db, "fixture-instance")
-	var many []string
-	for range 5 {
-		many = append(many, save(store, scope, "source-many"))
+	bigResult := strings.Repeat("原文", 200_000)
+	var many []SourceCall
+	for i := range 5 {
+		tool := fmt.Sprintf("fixture-tool-%d", i)
+		many = append(many, SourceCall{RefID: save(store, scope, "source-many", tool, bigResult), Tool: tool})
 	}
-	single := save(store, scope, "source-single")
-	save(store, scope, "source-unrequested")
-	save(store, otherScope, "source-single")
-	save(NewStore(db, "fixture-other"), scope, "source-single")
+	single := SourceCall{RefID: save(store, scope, "source-single", "fixture-single-tool", ""), Tool: "fixture-single-tool"}
+	save(store, scope, "source-unrequested", "fixture-unrequested", "")
+	save(store, otherScope, "source-single", "other_scope_tool", "")
+	save(NewStore(db, "fixture-other"), scope, "source-single", "other_instance_tool", "")
 
-	got, err := store.RefsBySources(ctx, scope, []string{"source-many", "source-single", "source-single", "source-none", ""}, 3)
+	got, err := store.CallsBySources(ctx, scope, []string{"source-many", "source-single", "source-single", "source-none", ""}, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
+	bySource := map[string]SourceCalls{}
+	for _, source := range got {
+		bySource[source.SourceMessageID] = source
+	}
+	if len(got) != 2 || len(bySource) != 2 {
 		t.Fatalf("want two sources with calls, got %+v", got)
 	}
-	if got[0].SourceMessageID != "source-many" || got[0].Total != 5 || !reflect.DeepEqual(got[0].Refs, many[2:]) {
-		t.Fatalf("heavy source must keep exact total and its newest calls oldest-first: %+v", got[0])
+	heavy := bySource["source-many"]
+	if heavy.Total != 5 || !reflect.DeepEqual(heavy.Calls, many[2:]) {
+		t.Fatalf("heavy source must keep its exact total and newest calls oldest-first with tool names: %+v", heavy)
 	}
-	if got[1].SourceMessageID != "source-single" || got[1].Total != 1 || !reflect.DeepEqual(got[1].Refs, []string{single}) {
-		t.Fatalf("other scope or instance leaked: %+v", got[1])
+	if one := bySource["source-single"]; one.Total != 1 || !reflect.DeepEqual(one.Calls, []SourceCall{single}) {
+		t.Fatalf("other scope or instance leaked: %+v", one)
 	}
-	if none, err := store.RefsBySources(ctx, scope, []string{"source-many"}, 0); err != nil || len(none) != 0 {
+	if none, err := store.CallsBySources(ctx, scope, []string{"source-many"}, 0); err != nil || len(none) != 0 {
 		t.Fatalf("non-positive limit must return nothing: %+v %v", none, err)
 	}
-	if _, err := store.RefsBySources(ctx, chathistory.Scope{}, []string{"source-many"}, 3); err == nil {
+	if none, err := store.CallsBySources(ctx, scope, []string{"", ""}, 3); err != nil || len(none) != 0 {
+		t.Fatalf("no usable source must return nothing: %+v %v", none, err)
+	}
+	if _, err := store.CallsBySources(ctx, chathistory.Scope{}, []string{"source-many"}, 3); err == nil {
 		t.Fatal("invalid scope accepted")
 	}
 }

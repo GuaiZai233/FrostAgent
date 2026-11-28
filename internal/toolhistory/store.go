@@ -272,58 +272,82 @@ func (s *Store) Export(ctx context.Context) ([]Record, error) {
 	return result, rows.Err()
 }
 
-// RefsBySources returns, for each requested source message that has archived
+// SourceCall is the metadata of one archived call.
+type SourceCall struct {
+	RefID string
+	Tool  string
+}
+
+// SourceCalls is the newest part of one source message's calls, oldest first.
+type SourceCalls struct {
+	SourceMessageID string
+	// Total counts every archived call of the source message in the scope.
+	Total int
+	Calls []SourceCall
+}
+
+// toolNameExpr extracts the tool name inside the database, so no archived body
+// is transferred or decoded in Go.
+func (s *Store) toolNameExpr(column string) string {
+	if s.db.Backend == storage.Postgres {
+		return "(" + column + "::jsonb)->>'tool'"
+	}
+	return "json_extract(" + column + ", '$.tool')"
+}
+
+// CallsBySources returns, for each requested source message that has archived
 // calls in one conversation scope, its exact call total and its newest perSource
-// references in chronological order. Sources without calls are omitted. Each
-// source is answered from the scope covering index alone, so no body is read.
-func (s *Store) RefsBySources(ctx context.Context, scope chathistory.Scope, sourceIDs []string, perSource int) ([]RecentSource, error) {
+// calls in chronological order. Sources without calls are omitted and the result
+// order is unspecified. A single statement answers all sources, so each total
+// and its calls come from one snapshot, and only metadata leaves the database.
+func (s *Store) CallsBySources(ctx context.Context, scope chathistory.Scope, sourceIDs []string, perSource int) ([]SourceCalls, error) {
 	scope = scope.Canonical()
 	if err := scope.Validate(); err != nil {
 		return nil, err
 	}
-	sources := []RecentSource{}
-	if perSource <= 0 {
-		return sources, nil
-	}
+	sources := []SourceCalls{}
+	args := []any{s.instanceID, scope.Platform, scope.MessageType, scope.TargetID}
 	seen := make(map[string]bool, len(sourceIDs))
 	for _, id := range sourceIDs {
-		if id == "" || seen[id] {
-			continue
+		if id != "" && !seen[id] {
+			seen[id] = true
+			args = append(args, id)
 		}
-		seen[id] = true
-		source := RecentSource{SourceMessageID: id}
-		if err := s.db.SQL.QueryRowContext(ctx, s.db.Bind(`SELECT COUNT(*) FROM tool_history
-			WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND source_message_id=?`),
-			s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, id).Scan(&source.Total); err != nil {
-			return nil, err
-		}
-		if source.Total == 0 {
-			continue
-		}
-		rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT ref_id FROM tool_history
-			WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND source_message_id=?
-			ORDER BY occurred_at DESC, ref_id DESC LIMIT ?`),
-			s.instanceID, scope.Platform, scope.MessageType, scope.TargetID, id, perSource)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var ref string
-			if err := rows.Scan(&ref); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			source.Refs = append(source.Refs, ref)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, err
-		}
-		for i, j := 0, len(source.Refs)-1; i < j; i, j = i+1, j-1 {
-			source.Refs[i], source.Refs[j] = source.Refs[j], source.Refs[i]
-		}
-		sources = append(sources, source)
 	}
-	return sources, nil
+	if perSource <= 0 || len(args) == 4 {
+		return sources, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)-4), ",")
+	args = append(args, s.instanceID, perSource)
+	rows, err := s.db.SQL.QueryContext(ctx, s.db.Bind(`SELECT t.source_message_id, t.ref_id, t.total, `+s.toolNameExpr("h.record_json")+`
+		FROM (SELECT source_message_id, ref_id,
+				COUNT(*) OVER (PARTITION BY source_message_id) AS total,
+				ROW_NUMBER() OVER (PARTITION BY source_message_id ORDER BY occurred_at DESC, ref_id DESC) AS rn
+			FROM tool_history
+			WHERE instance_id=? AND platform=? AND message_type=? AND target_id=? AND source_message_id IN (`+placeholders+`)) t
+		JOIN tool_history h ON h.instance_id=? AND h.ref_id=t.ref_id
+		WHERE t.rn <= ?
+		ORDER BY t.source_message_id, t.rn DESC`), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source string
+		var call SourceCall
+		var total int
+		var tool sql.NullString
+		if err := rows.Scan(&source, &call.RefID, &total, &tool); err != nil {
+			return nil, err
+		}
+		if !tool.Valid || tool.String == "" {
+			continue
+		}
+		call.Tool = tool.String
+		if n := len(sources); n == 0 || sources[n-1].SourceMessageID != source {
+			sources = append(sources, SourceCalls{SourceMessageID: source, Total: total})
+		}
+		sources[len(sources)-1].Calls = append(sources[len(sources)-1].Calls, call)
+	}
+	return sources, rows.Err()
 }
