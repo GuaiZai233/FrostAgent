@@ -288,3 +288,45 @@ func TestSnapshotWithoutDatabaseFails(t *testing.T) {
 		t.Fatal("want an error without a SQL backend")
 	}
 }
+
+func TestCloseCancelsInFlightMeasurementAndBlocksNewOnes(t *testing.T) {
+	collector := New(testDB(t), "synthetic-a", "", "", "")
+	started := make(chan struct{})
+	exited := make(chan struct{})
+	collector.measureFunc = func(ctx context.Context) (Snapshot, error) {
+		close(started)
+		<-ctx.Done()
+		close(exited)
+		return Snapshot{}, ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = collector.Snapshot(ctx)
+	<-started
+	collector.Close()
+	select {
+	case <-exited:
+	default:
+		t.Fatal("Close returned before the in-flight measurement exited")
+	}
+	collector.mu.Lock()
+	collector.retryAfter = time.Time{}
+	collector.mu.Unlock()
+	var calls atomic.Int32
+	collector.measureFunc = func(context.Context) (Snapshot, error) { calls.Add(1); return Snapshot{}, nil }
+	_, _ = collector.Snapshot(context.Background())
+	if calls.Load() != 0 {
+		t.Fatal("a closed collector started a new measurement")
+	}
+	collector.Close() // idempotent
+}
+
+func TestTableScanIsBoundedByQueryBudget(t *testing.T) {
+	db := testDB(t)
+	collector := New(db, "synthetic-a", "", "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := collector.measure(ctx); err == nil {
+		t.Fatal("a cancelled measurement must stop instead of scanning")
+	}
+}

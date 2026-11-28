@@ -515,6 +515,9 @@ func (r *Runtime) StartEmbeddings() {
 
 func (r *Runtime) Stop() {
 	r.Scope.Cancel()
+	if r.Engine != nil {
+		r.Engine.StorageUsage.Close()
+	}
 	r.Onebot.CloseConnections()
 	r.Engine.GroupCompactor.StopTimers()
 	r.Scope.Wait()

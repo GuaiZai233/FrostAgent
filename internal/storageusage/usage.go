@@ -86,6 +86,12 @@ const (
 	measureTimeout = 60 * time.Second
 	// failureBackoff is the minimum gap before retrying after a failed measurement.
 	failureBackoff = 60 * time.Second
+	// queryTimeout caps one table scan. The database has a single shared
+	// connection, so a scan that runs longer is abandoned (and the measurement
+	// backs off) rather than starving chat and memory queries.
+	queryTimeout = 3 * time.Second
+	// yieldGap is left between tables so queued business statements can run.
+	yieldGap = 25 * time.Millisecond
 )
 
 // Collector measures one instance. Measuring runs in one background goroutine
@@ -109,14 +115,36 @@ type Collector struct {
 	lastErr     error
 	now         func() time.Time
 	measureFunc func(context.Context) (Snapshot, error)
+
+	// life bounds every background refresh to the owning runtime.
+	life   context.Context
+	stop   context.CancelFunc
+	wg     sync.WaitGroup
+	closed bool
 }
 
 // New returns a collector. db may be nil for legacy file-only runtimes, in
 // which case Snapshot reports an error and the console shows "unavailable".
 func New(db *storage.DB, instanceID, stickerDir, logDir, checkpointDir string) *Collector {
 	c := &Collector{db: db, instanceID: instanceID, stickerDir: stickerDir, logDir: logDir, checkpointDir: checkpointDir, now: time.Now}
+	c.life, c.stop = context.WithCancel(context.Background())
 	c.measureFunc = c.measure
 	return c
+}
+
+// Close cancels an in-flight measurement, waits for it to exit and prevents new
+// ones. It is safe to call more than once; Snapshot keeps serving the last result.
+func (c *Collector) Close() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	if c.stop != nil {
+		c.stop()
+	}
+	c.wg.Wait()
 }
 
 // Snapshot returns the cached measurement and, when it is stale, starts a
@@ -169,13 +197,15 @@ func (c *Collector) startRefreshLocked() <-chan struct{} {
 	if c.refreshing != nil {
 		return c.refreshing
 	}
-	if c.now().Before(c.retryAfter) {
+	if c.closed || c.now().Before(c.retryAfter) {
 		return nil
 	}
 	done := make(chan struct{})
 	c.refreshing = done
+	c.wg.Add(1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), measureTimeout)
+		defer c.wg.Done()
+		ctx, cancel := context.WithTimeout(c.life, measureTimeout)
 		defer cancel()
 		snapshot, err := c.measureFunc(ctx)
 		c.mu.Lock()
@@ -197,8 +227,10 @@ func (c *Collector) measure(ctx context.Context) (Snapshot, error) {
 	for _, t := range tables {
 		// One short statement per table so the shared connection is released
 		// between tables instead of being held for the whole measurement.
-		if err := ctx.Err(); err != nil {
-			return Snapshot{}, err
+		select {
+		case <-ctx.Done():
+			return Snapshot{}, ctx.Err()
+		case <-time.After(yieldGap):
 		}
 		size, err := c.tableBytes(ctx, t)
 		if err != nil {
@@ -252,6 +284,8 @@ func (c *Collector) tableBytes(ctx context.Context, t table) (int64, error) {
 	}
 	query := "SELECT COALESCE(SUM(" + strings.Join(parts, " + ") + "), 0) FROM " + t.name + " WHERE instance_id = ?"
 	var size int64
+	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	defer cancel()
 	err := c.db.SQL.QueryRowContext(ctx, c.db.Bind(query), c.instanceID).Scan(&size)
 	if err != nil && t.optional && isMissingTable(err) {
 		return 0, nil
