@@ -66,6 +66,15 @@ func NewStealer(store *Store, summarizer *Summarizer) *Stealer {
 	}
 }
 
+// ResolveLocalImage loads a sticker already stored in this instance's
+// collection from a platform-provided file name.
+func (s *Stealer) ResolveLocalImage(fileName string) ([]byte, bool) {
+	if s == nil || s.store == nil {
+		return nil, false
+	}
+	return s.store.ResolveFileName(fileName)
+}
+
 // Observe registers lightweight metadata for one sticker from a trusted
 // platform event. Automatic collection is admitted before any goroutine or
 // image load is started; explicit collection resolves bytes on demand later.
