@@ -59,3 +59,31 @@ func TestScopedPreflightIsPureAtomicAndRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestListenerPreflightMatchesApply(t *testing.T) {
+	global, err := instanceconfig.Open(filepath.Join(t.TempDir(), "global.env"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewScoped(nil, global, nil)
+	for _, dryRun := range []bool{true, false} {
+		for _, address := range []string{"invalid-listener", "127.0.0.1:not-a-port"} {
+			req := &v1.UpdateEnvVarsRequest{Scope: "global", DryRun: dryRun, Updates: []*v1.EnvVar{{Key: "LISTEN_ADDR", Value: address}}}
+			result, err := svc.UpdateEnvVars(context.Background(), connect.NewRequest(req))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Msg.Success || result.Msg.State == "validated" || !strings.Contains(result.Msg.Error, "management") {
+				t.Fatalf("dryRun=%v %q accepted: %+v", dryRun, address, result.Msg)
+			}
+			if global.Get("LISTEN_ADDR") != "" {
+				t.Fatal("rejected listener was written")
+			}
+		}
+	}
+	req := &v1.UpdateEnvVarsRequest{Scope: "global", DryRun: true, Updates: []*v1.EnvVar{{Key: "LISTEN_ADDR", Value: "127.0.0.1:18080"}}}
+	result, err := svc.UpdateEnvVars(context.Background(), connect.NewRequest(req))
+	if err != nil || !result.Msg.Success || result.Msg.State != "validated" {
+		t.Fatalf("valid listener rejected: %+v %v", result.Msg, err)
+	}
+}

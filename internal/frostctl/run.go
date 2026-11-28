@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +27,9 @@ type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// openClient is replaced in tests to route Run through a local test server.
+var openClient = newClient
 
 func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.Writer) int {
 	inv, err := Parse(args)
@@ -80,7 +86,7 @@ func Run(ctx context.Context, args []string, in io.Reader, out, diagnostics io.W
 			data, err = remoteCommand(ctx, inv, in)
 		} else {
 			var c *client
-			c, err = newClient(ctx, inv)
+			c, err = openClient(ctx, inv)
 			if err == nil {
 				defer c.close()
 				data, err = execute(ctx, c, inv, in, out)
@@ -124,6 +130,15 @@ func render(out, diagnostics io.Writer, format string, result Result) error {
 	}
 	if result.Error != nil {
 		fmt.Fprintf(diagnostics, "%s: %s (%s)\n", result.Status, result.Error.Message, result.Error.Code)
+		if result.Resource != "" {
+			fmt.Fprintf(diagnostics, "resource: %s\n", result.Resource)
+		}
+		if len(result.Verification) > 0 {
+			fmt.Fprintf(diagnostics, "verify: %s\n", shellJoin(result.Verification))
+		}
+		for _, key := range slices.Sorted(maps.Keys(result.Correlation)) {
+			fmt.Fprintf(diagnostics, "correlation %s: %s\n", key, result.Correlation[key])
+		}
 	}
 	encoded, err := json.Marshal(result.Data)
 	if err != nil {
@@ -134,4 +149,17 @@ func render(out, diagnostics io.Writer, format string, result Result) error {
 		return err
 	}
 	return renderTable(out, object)
+}
+
+// shellJoin quotes arguments a POSIX shell would split or expand, so a printed
+// verification command can be pasted as-is.
+func shellJoin(args []string) string {
+	quoted := make([]string, len(args))
+	for n, arg := range args {
+		if arg == "" || strings.ContainsAny(arg, " \t\n'\"\\$`;&|<>()*?[]{}#~!") {
+			arg = strconv.Quote(arg)
+		}
+		quoted[n] = arg
+	}
+	return strings.Join(quoted, " ")
 }

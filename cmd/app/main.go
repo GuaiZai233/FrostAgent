@@ -99,10 +99,8 @@ func runWithContext(ctx context.Context, dataDir string, listenLocal func(string
 		if wsListen == "" {
 			wsListen = instanceconfig.DefaultWSListenAddr
 		}
-		if instanceconfig.ContainerManagement == "true" || instanceconfig.ManagementLoopbackOnly == "true" {
-			if err := instanceconfig.ValidateContainerListeners(listen, wsListen); err != nil {
-				return err
-			}
+		if err := instanceconfig.ValidateListeners(listen, wsListen); err != nil {
+			return err
 		}
 		handlers := map[string]http.Handler{listen: corsMiddleware(mux, global.Get)}
 		if wsListen != listen {

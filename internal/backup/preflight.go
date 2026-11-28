@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
@@ -22,8 +23,11 @@ func PreviewRestore(ctx context.Context, db *storage.DB, decoded DecodedInstance
 		manifest.DatabaseMinimumCompatibleVersion > manifest.DatabaseSchemaVersion {
 		return modelrouter.ImportImpact{}, fmt.Errorf("invalid backup database compatibility metadata")
 	}
-	if manifest.DatabaseSchemaVersion > storage.SupportedSchemaVersion || manifest.DatabaseMinimumCompatibleVersion > storage.SupportedSchemaVersion {
-		return modelrouter.ImportImpact{}, fmt.Errorf("backup requires a newer backend database schema")
+	// ADR-0001: a newer source schema alone never blocks a restore. Only the
+	// declared minimum compatible version names structures this backend lacks.
+	if manifest.DatabaseMinimumCompatibleVersion > storage.SupportedSchemaVersion {
+		return modelrouter.ImportImpact{}, fmt.Errorf("backup requires database schema compatibility %d; this backend supports up to %d",
+			manifest.DatabaseMinimumCompatibleVersion, storage.SupportedSchemaVersion)
 	}
 	for key, value := range decoded.Settings.Values {
 		if strings.ContainsRune(value, 0) {
@@ -38,8 +42,19 @@ func PreviewRestore(ctx context.Context, db *storage.DB, decoded DecodedInstance
 	}, "ONEBOT"); err != nil {
 		return modelrouter.ImportImpact{}, fmt.Errorf("invalid imported connection settings: %w", err)
 	}
-	if err := mcp.PrepareImportedConfig(&decoded.Settings.MCP); err != nil {
+	mcpConfig := decoded.Settings.MCP
+	mcpConfig.Servers = slices.Clone(mcpConfig.Servers)
+	if err := prepareImportedMCP(&mcpConfig); err != nil {
 		return modelrouter.ImportImpact{}, err
 	}
 	return modelrouter.PreviewImportedConfiguration(ctx, db, decoded.Settings.ModelRouter)
+}
+
+// prepareImportedMCP applies the same URL normalization and validation as the
+// settings import transaction, so a preview cannot accept what restore rejects.
+func prepareImportedMCP(cfg *mcp.Config) error {
+	for i := range cfg.Servers {
+		cfg.Servers[i].Transport.URL = publicURL(cfg.Servers[i].Transport.URL)
+	}
+	return mcp.PrepareImportedConfig(cfg)
 }

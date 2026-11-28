@@ -182,7 +182,8 @@ route.json 引用目录中已注册的模型 ID：
 
 Trace 基于已有 TraceID 和审计证据，可能对应整个会话。未记录的阶段、结果或耗时
 明确标为 unavailable，不推测单次处理关系。会话上下文、聊天原文与工具档案分别查询；
-空档案返回覆盖范围。session tool show 的大结果按字符分页，可用 --offset 继续。
+空档案返回覆盖范围。session tool show 默认只显示调用参数；加 --include-result 才读取原始结果。
+大结果按字符分页，按返回的 resultNextOffset 传入 --offset 继续。
 MCP 普通查询隐藏命令参数、环境和 Header 值、原始错误及 URL 中的认证内容；
 不会把脱敏结果自动回灌到 Web 配置。billing status 展示每个实例的开关和共享连接配置，
 没有历史连接健康证据时标为 unobserved。

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/GuaiZai233/FrostAgent/internal/adapter/wsclient"
+	"github.com/GuaiZai233/FrostAgent/internal/instanceconfig"
 )
 
 // Validate the final adapter configuration before any setting is committed.
@@ -69,4 +70,30 @@ func (s *Service) validateScopedCandidate(changes map[string]*string) error {
 	}
 
 	return nil
+}
+
+// validateListenerChanges checks the listener pair that applying changes would
+// produce, so a dry run rejects addresses the listener apply step rejects.
+func (s *Service) validateListenerChanges(changes map[string]*string) error {
+	_, listenChanged := changes["LISTEN_ADDR"]
+	_, wsChanged := changes["WS_LISTEN_ADDR"]
+	if !listenChanged && !wsChanged {
+		return nil
+	}
+	final := func(key, fallback string) string {
+		value := ""
+		if changed, ok := changes[key]; ok {
+			if changed != nil {
+				value = *changed
+			}
+		} else if store := s.store(key); store != nil {
+			value = store.Get(key)
+		}
+		if value == "" {
+			return fallback
+		}
+		return value
+	}
+	return instanceconfig.ValidateListeners(final("LISTEN_ADDR", instanceconfig.DefaultListenAddr),
+		final("WS_LISTEN_ADDR", instanceconfig.DefaultWSListenAddr))
 }

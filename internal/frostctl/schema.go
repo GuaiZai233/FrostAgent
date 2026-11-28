@@ -3,6 +3,7 @@ package frostctl
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -293,11 +294,25 @@ func Parse(args []string) (Invocation, error) {
 		}
 		if f.Type == "int" {
 			n, err := strconv.Atoi(vs[0])
-			if selected.Name == "security audit list" && key == "limit" && (err != nil || n < 1 || n > 1000) {
-				return inv, errors.New("--limit must be between 1 and 1000")
-			}
-			if err != nil || n < 0 || (key != "offset" && n < 1) || n > 10000 {
-				return inv, fmt.Errorf("--%s must be between 1 and 10000", key)
+			switch {
+			case selected.Name == "security audit list" && key == "limit":
+				if err != nil || n < 1 || n > 1000 {
+					return inv, errors.New("--limit must be between 1 and 1000")
+				}
+			case key == "offset":
+				// The audit query caps skipped rows; other offsets follow the
+				// server-returned cursor and only need to fit the int32 RPC field.
+				limit := math.MaxInt32
+				if selected.Name == "security audit list" {
+					limit = 10000
+				}
+				if err != nil || n < 0 || n > limit {
+					return inv, fmt.Errorf("--offset must be between 0 and %d", limit)
+				}
+			default:
+				if err != nil || n < 1 || n > 10000 {
+					return inv, fmt.Errorf("--%s must be between 1 and 10000", key)
+				}
 			}
 		}
 		if f.Type == "duration" {

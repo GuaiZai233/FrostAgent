@@ -259,8 +259,8 @@ func executeSession(ctx context.Context, c *client, inv Invocation) (any, error)
 		return c.call(ctx, "POST", path+"ListSessionTools", map[string]any{"sessionId": inv.Args[0], "limit": json.Number(limit)}, false)
 	case "session tool show":
 		args, err := c.call(ctx, "POST", path+"GetToolHistoryEntry", map[string]any{"refId": inv.Args[1], "sessionId": inv.Args[0]}, false)
-		if err != nil {
-			return nil, err
+		if err != nil || !inv.Bool("include-result") {
+			return map[string]any{"arguments": args}, err
 		}
 		result, err := c.call(ctx, "POST", path+"GetToolHistoryEntry", map[string]any{"refId": inv.Args[1], "sessionId": inv.Args[0], "includeResult": true, "resultOffset": numberOrZero(inv.Value("offset"))}, false)
 		return map[string]any{"arguments": args, "result": result}, err

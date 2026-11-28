@@ -752,6 +752,9 @@ func (s *Service) UpdateEnvVars(ctx context.Context, req *connect.Request[v1.Upd
 			return failure(err)
 		}
 	}
+	if err := s.validateListenerChanges(connectionChanges); err != nil {
+		return failure(err)
+	}
 	diff := []*v1.ConfigChange{}
 	for _, change := range changes {
 		if change.clear && !change.existed || !change.clear && change.existed && change.previous == change.value {
