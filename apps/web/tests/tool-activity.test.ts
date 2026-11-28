@@ -993,6 +993,135 @@ assert.equal(extractToolActivityBlock(finalTurn), undefined);
   assert.match(container.innerHTML, /send_message/);
 }
 
+// Restricted and interrupted records remain inspectable in the admin panel with clear model-shielded notices.
+{
+  const mcpArgs = '{"url":"https://docs.volcengine.com/docs/ark/latest-model?lang=zh"}';
+  const mcpSummary = '[FrostAgent 错误] MCP 工具执行失败 (Ref_ID: 8b94e642-f4ba-4ea2-a58a-3447f4e956c6)';
+  const mcpEnvelope = '{"content":[{"type":"text","text":"extract_failed\\nUnable to extract content from the URL."}],"isError":true}';
+  cleanup = renderPromptInspector(container, data, {
+    loadToolArguments: async (refId, options) => {
+      if (!options?.includeResult) {
+        return { refId, tool: 'send_message', argumentsRaw: mcpArgs, argumentsAvailable: true, restricted: true, state: 'complete' };
+      }
+      return {
+        refId,
+        tool: 'send_message',
+        argumentsRaw: '',
+        argumentsAvailable: false,
+        resultRaw: mcpSummary,
+        resultAvailable: true,
+        restricted: true,
+        state: 'complete',
+        mcpResultRaw: mcpEnvelope,
+        modelResultRaw: `${mcpSummary}\n(ref_id: ${refId})`,
+      };
+    },
+  });
+
+  const restrictedArgs = container.querySelector(
+    `details[data-tool-ref="${originalRef}"]:not([data-tool-field])`,
+  ) as HTMLDetailsElement;
+  restrictedArgs.open = true;
+  await flush();
+  assert.equal(restrictedArgs.querySelector('pre')!.textContent, mcpArgs);
+  assert.match(restrictedArgs.querySelector('.tool-activity-notice')!.textContent!, /已对模型屏蔽/);
+
+  const restrictedRes = container.querySelector(
+    `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+  ) as HTMLDetailsElement;
+  restrictedRes.open = true;
+  await flush();
+  assert.equal(restrictedRes.querySelector('pre')!.textContent, mcpSummary);
+  assert.match(restrictedRes.querySelector('.tool-activity-notice')!.textContent!, /已对模型屏蔽/);
+  assert.match(restrictedRes.querySelector('.tool-activity-diagnostics')!.textContent!, /extract_failed/);
+  assert.doesNotMatch(
+    restrictedRes.querySelector('.tool-activity-diagnostics')!.textContent!,
+    /模型实际接收/,
+    'identical ref-suffixed model summary should not duplicate resultRaw',
+  );
+  cleanup();
+
+  cleanup = renderPromptInspector(container, data, {
+    loadToolArguments: async (refId, options) => ({
+      refId,
+      tool: 'send_message',
+      argumentsRaw: options?.includeResult ? '' : '<script>arg</script>',
+      argumentsAvailable: !options?.includeResult,
+      resultRaw: '',
+      resultAvailable: Boolean(options?.includeResult),
+      restricted: true,
+      state: 'complete',
+      errorRaw: options?.includeResult ? '<img src=x onerror=alert(1)>exec failed' : '',
+      modelResultRaw: options?.includeResult ? '[FrostAgent 错误] 工具执行失败 (Ref_ID: fixture-go-err)' : '',
+    }),
+  });
+  const goRes = container.querySelector(
+    `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+  ) as HTMLDetailsElement;
+  goRes.open = true;
+  await flush();
+  assert.match(goRes.querySelector('pre')!.textContent!, /详见下方原始详情/);
+  assert.match(goRes.querySelector('.tool-activity-diagnostics')!.textContent!, /exec failed/);
+  assert.match(goRes.querySelector('.tool-activity-diagnostics')!.textContent!, /模型实际接收/);
+  assert.equal(goRes.querySelector('img'), null, 'diagnostics must be text-escaped');
+  cleanup();
+
+  cleanup = renderPromptInspector(container, data, {
+    loadToolArguments: async (refId, options) => {
+      if (!options?.includeResult) {
+        return { refId, tool: 'send_message', argumentsRaw: queryArguments, argumentsAvailable: true, restricted: true, state: 'complete' };
+      }
+      const offset = options.resultOffset ?? 0;
+      return {
+        refId,
+        tool: 'send_message',
+        argumentsRaw: '',
+        argumentsAvailable: false,
+        resultRaw: offset === 0 ? '第一页原文 ' : '第二页原文',
+        resultAvailable: true,
+        resultHasMore: offset === 0,
+        resultNextOffset: offset === 0 ? 1 : 0,
+        restricted: true,
+        state: 'complete',
+        modelResultRaw: offset === 0 ? `安全审查拦截：外部工具结果已隔离\n(ref_id: ${refId})` : '',
+      };
+    },
+  });
+  const watchdogRes = container.querySelector(
+    `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+  ) as HTMLDetailsElement;
+  watchdogRes.open = true;
+  await flush();
+  assert.equal(watchdogRes.querySelector('pre')!.textContent, '第一页原文 ');
+  assert.match(watchdogRes.querySelector('.tool-activity-diagnostics')!.textContent!, /安全审查拦截/);
+  (watchdogRes.querySelector('.tool-activity-more') as HTMLButtonElement).click();
+  await flush();
+  assert.equal(watchdogRes.querySelector('pre')!.textContent, '第一页原文 第二页原文');
+  assert.match(watchdogRes.querySelector('.tool-activity-diagnostics')!.textContent!, /安全审查拦截/);
+  cleanup();
+
+  cleanup = renderPromptInspector(container, data, {
+    loadToolArguments: async (refId, options) => ({
+      refId,
+      tool: 'send_message',
+      argumentsRaw: options?.includeResult ? '' : queryArguments,
+      argumentsAvailable: !options?.includeResult,
+      resultRaw: options?.includeResult ? 'late external result' : '',
+      resultAvailable: Boolean(options?.includeResult),
+      restricted: true,
+      state: 'executed',
+    }),
+  });
+  const execRes = container.querySelector(
+    `details[data-tool-field="result"][data-tool-ref="${originalRef}"]`,
+  ) as HTMLDetailsElement;
+  execRes.open = true;
+  await flush();
+  assert.equal(execRes.querySelector('pre')!.textContent, 'late external result');
+  assert.match(execRes.querySelector('.tool-activity-notice')!.textContent!, /调用在完成前被中断/);
+  cleanup();
+}
+
 dom.window.close();
 process.stdout.write(
   'PASS: distinct tool calls, historical reads, legacy records, native results, folding, escaping, trailing activity blocks and session timeline merging\n',

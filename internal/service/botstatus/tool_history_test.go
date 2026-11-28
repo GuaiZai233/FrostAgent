@@ -69,12 +69,15 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 	if err != nil || response.Msg.ArgumentsRaw != record.ArgumentsRaw || response.Msg.Tool != record.Tool || !response.Msg.ArgumentsAvailable || response.Msg.RefId != record.RefID {
 		t.Fatalf("parameter original changed: %v %v", response, err)
 	}
-	if response.Msg.ResultRaw != "" || response.Msg.ResultAvailable {
-		t.Fatal("arguments-only expansion transferred the result")
+	if response.Msg.Restricted || response.Msg.State != "complete" {
+		t.Fatalf("normal completed call must not appear restricted: %+v", response.Msg)
+	}
+	if response.Msg.ResultRaw != "" || response.Msg.ResultAvailable || response.Msg.ErrorRaw != "" || response.Msg.McpResultRaw != "" || response.Msg.ModelResultRaw != "" {
+		t.Fatal("arguments-only expansion transferred result or diagnostics")
 	}
 	result, err := service.GetToolHistoryEntry(ctx, resultRequest)
-	if err != nil || result.Msg.ResultRaw != record.ResultRaw || !result.Msg.ResultAvailable {
-		t.Fatal("completed call result original not returned", err)
+	if err != nil || result.Msg.ResultRaw != record.ResultRaw || !result.Msg.ResultAvailable || result.Msg.Restricted || result.Msg.McpResultRaw != "" || result.Msg.ModelResultRaw != "" {
+		t.Fatalf("completed call result original unexpected: %+v %v", result, err)
 	}
 	other := New(&llm.Engine{ToolHistory: toolhistory.NewStore(db, "fixture-b")}, "test", "")
 	if _, err := other.GetToolHistoryEntry(ctx, request); connect.CodeOf(err) != connect.CodeNotFound {
@@ -83,29 +86,53 @@ func TestToolHistoryParameterInspectionIsInstanceBoundAndQuarantined(t *testing.
 	if _, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: "invalid"})); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatal("invalid reference accepted", err)
 	}
-	for _, state := range []string{"restricted", "running", "executed"} {
-		record.Restricted, record.State = state == "restricted", "complete"
-		if state != "restricted" {
-			record.State, record.Restricted = state, true
+	record.State, record.Restricted = "running", true
+	if err := store.Save(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	runningArgs, err := service.GetToolHistoryEntry(ctx, request)
+	if err != nil || runningArgs.Msg.ArgumentsAvailable || runningArgs.Msg.ArgumentsRaw != "" || !runningArgs.Msg.ArgumentsPending || !runningArgs.Msg.Restricted || runningArgs.Msg.State != "running" {
+		t.Fatalf("running call did not stay pending: %+v %v", runningArgs, err)
+	}
+	runningResult, err := service.GetToolHistoryEntry(ctx, resultRequest)
+	if err != nil || runningResult.Msg.ResultAvailable || runningResult.Msg.ResultRaw != "" || !runningResult.Msg.ArgumentsPending {
+		t.Fatalf("running result did not stay pending: %+v %v", runningResult, err)
+	}
+
+	for _, state := range []string{"restricted", "executed"} {
+		record.Restricted, record.State = true, "complete"
+		if state == "executed" {
+			record.State = "executed"
 		}
+		record.MCPResultRaw = `{"content":[{"type":"text","text":"extract_failed\nUnable to extract content from the URL."}],"isError":true}`
+		record.ModelResultRaw = "[FrostAgent 错误] MCP 工具执行失败 (Ref_ID: fixture-err)"
 		if err := store.Save(ctx, record); err != nil {
 			t.Fatal(err)
 		}
+		// Model quarantine must still clear all original details on the exact same record.
+		quarantined := record.ForModel()
+		if quarantined.ArgumentsRaw != "" || quarantined.ResultRaw != "" || quarantined.MCPResultRaw != "" || quarantined.Error != "" {
+			t.Fatalf("model view leaked restricted details: %+v", quarantined)
+		}
 		response, err := service.GetToolHistoryEntry(ctx, request)
-		if err != nil || response.Msg.ArgumentsAvailable || response.Msg.ArgumentsRaw != "" || response.Msg.ArgumentsPending != (state != "restricted") {
-			t.Fatal("uninspected parameters escaped quarantine", err)
+		if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.ArgumentsRaw != record.ArgumentsRaw || !response.Msg.Restricted || response.Msg.State != record.State {
+			t.Fatalf("inspector failed to expose %s arguments: %+v %v", state, response, err)
+		}
+		if response.Msg.ResultRaw != "" || response.Msg.ErrorRaw != "" || response.Msg.McpResultRaw != "" || response.Msg.ModelResultRaw != "" {
+			t.Fatalf("arguments-only %s expansion leaked result or diagnostics: %+v", state, response.Msg)
 		}
 		result, err := service.GetToolHistoryEntry(ctx, resultRequest)
-		if err != nil || result.Msg.ResultAvailable || result.Msg.ResultRaw != "" {
-			t.Fatal("uninspected result escaped quarantine", err)
+		if err != nil || !result.Msg.ResultAvailable || result.Msg.ArgumentsPending || result.Msg.ResultRaw != record.ResultRaw || !result.Msg.Restricted || result.Msg.State != record.State || result.Msg.ErrorRaw != record.Error || result.Msg.McpResultRaw != record.MCPResultRaw || result.Msg.ModelResultRaw != record.ModelResultRaw {
+			t.Fatalf("inspector failed to expose %s result and diagnostics: %+v %v", state, result, err)
 		}
 	}
-	record.State, record.Restricted = "complete", false
+
+	record.State, record.Restricted, record.Error, record.MCPResultRaw, record.ModelResultRaw = "complete", false, "", "", ""
 	if err := store.Save(ctx, record); err != nil {
 		t.Fatal(err)
 	}
 	response, err = service.GetToolHistoryEntry(ctx, request)
-	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.ArgumentsRaw != record.ArgumentsRaw {
+	if err != nil || !response.Msg.ArgumentsAvailable || response.Msg.ArgumentsPending || response.Msg.Restricted || response.Msg.ArgumentsRaw != record.ArgumentsRaw {
 		t.Fatal("completed call did not become available", err)
 	}
 	if _, err := New(&llm.Engine{}, "test", "").GetToolHistoryEntry(ctx, request); connect.CodeOf(err) != connect.CodeUnavailable {
@@ -204,6 +231,27 @@ func TestToolHistoryResultInspectionIsPaged(t *testing.T) {
 	}
 	if pages < 2 || assembled.String() != large {
 		t.Fatalf("paged result did not reassemble exactly: pages=%d", pages)
+	}
+	// Restricted records also page cleanly while omitting redundant diagnostics after offset 0.
+	restrictedLarge := record
+	restrictedLarge.RefID = toolhistory.NewRef()
+	restrictedLarge.Restricted = true
+	restrictedLarge.Error = strings.Repeat("错", toolHistoryResultPageChars+50)
+	restrictedLarge.MCPResultRaw = strings.Repeat("原", toolHistoryResultPageChars+50)
+	restrictedLarge.ModelResultRaw = "安全审查拦截：外部工具结果已隔离"
+	if err := store.Save(ctx, restrictedLarge); err != nil {
+		t.Fatal(err)
+	}
+	firstPage, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: restrictedLarge.RefID, IncludeResult: true, ResultOffset: 0}))
+	if err != nil || !firstPage.Msg.ResultAvailable || !firstPage.Msg.ResultHasMore || !firstPage.Msg.Restricted {
+		t.Fatalf("restricted first page failed: %+v %v", firstPage, err)
+	}
+	if !strings.Contains(firstPage.Msg.ErrorRaw, "已截断") || !strings.Contains(firstPage.Msg.McpResultRaw, "已截断") || firstPage.Msg.ModelResultRaw != restrictedLarge.ModelResultRaw {
+		t.Fatalf("restricted first page diagnostics wrong: %+v", firstPage.Msg)
+	}
+	secondPage, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: restrictedLarge.RefID, IncludeResult: true, ResultOffset: firstPage.Msg.ResultNextOffset}))
+	if err != nil || secondPage.Msg.ErrorRaw != "" || secondPage.Msg.McpResultRaw != "" || secondPage.Msg.ModelResultRaw != "" {
+		t.Fatalf("subsequent page resent diagnostics: %+v %v", secondPage, err)
 	}
 	if _, err := service.GetToolHistoryEntry(ctx, connect.NewRequest(&v1.GetToolHistoryEntryRequest{RefId: record.RefID, IncludeResult: true, ResultOffset: total + 1})); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatal("out-of-range offset accepted", err)

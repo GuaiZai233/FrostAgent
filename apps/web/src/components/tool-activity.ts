@@ -36,6 +36,11 @@ export type ToolArgumentsLoader = (
   resultAvailable?: boolean;
   resultHasMore?: boolean;
   resultNextOffset?: number;
+  restricted?: boolean;
+  state?: string;
+  errorRaw?: string;
+  mcpResultRaw?: string;
+  modelResultRaw?: string;
 }>;
 
 const refPattern =
@@ -220,12 +225,15 @@ export function renderToolActivity(activity: ToolActivity): string {
               : `
           <details class="tool-activity-details" ${entry.refId ? `data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}"` : ''} data-arguments-state="${entry.arguments !== undefined ? 'loaded' : 'idle'}">
             <summary>详细参数</summary>
+            <p class="tool-activity-notice" hidden></p>
             <pre class="tool-activity-arguments">${escapeHtml(entry.arguments ?? '展开后加载参数')}</pre>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
           </details>
           ${entry.refId ? `<details class="tool-activity-details" data-tool-ref="${escapeHtml(entry.refId)}" data-tool-name="${escapeHtml(entry.tool)}" data-tool-field="result" data-result-state="idle">
             <summary>工具执行结果</summary>
+            <p class="tool-activity-notice" hidden></p>
             <pre class="tool-activity-result">展开后加载结果</pre>
+            <div class="tool-activity-diagnostics" hidden></div>
             <p class="tool-activity-status" hidden></p>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-more" hidden>加载更多</button>
             <button type="button" class="btn btn-ghost btn-sm tool-activity-retry" hidden>重试</button>
@@ -237,6 +245,35 @@ export function renderToolActivity(activity: ToolActivity): string {
       ${!activity.entries.length && activity.raw ? `<pre class="tool-activity-raw">${escapeHtml(activity.raw)}</pre>` : ''}
     </div>
   </details>`;
+}
+
+type ToolHistoryEntryPayload = Awaited<ReturnType<ToolArgumentsLoader>>;
+
+function formatToolNotice(result: ToolHistoryEntryPayload): string {
+  if (result.state === 'executed') {
+    return '已对模型屏蔽：调用在完成前被中断，以下为后台执行记录（仅管理面板可见）';
+  }
+  if (result.restricted) {
+    return '已对模型屏蔽：模型调用 read_tool_history 无法读取下列原始详情（仅管理面板可见）';
+  }
+  return '';
+}
+
+function diagnosticItems(
+  refId: string,
+  result: ToolHistoryEntryPayload,
+): Array<[string, string]> {
+  const items: Array<[string, string]> = [];
+  if (result.errorRaw) items.push(['执行错误', result.errorRaw]);
+  if (result.mcpResultRaw) items.push(['MCP 原始返回', result.mcpResultRaw]);
+  if (
+    result.modelResultRaw &&
+    result.modelResultRaw !== result.resultRaw &&
+    result.modelResultRaw !== `${result.resultRaw ?? ''}\n(ref_id: ${refId})`
+  ) {
+    items.push(['模型实际接收', result.modelResultRaw]);
+  }
+  return items;
 }
 
 export function bindToolArguments(
@@ -272,12 +309,44 @@ export function bindToolArguments(
     const more = details.querySelector<HTMLButtonElement>(
       '.tool-activity-more',
     );
+    const notice = details.querySelector<HTMLElement>('.tool-activity-notice');
+    const diagnostics = details.querySelector<HTMLElement>(
+      '.tool-activity-diagnostics',
+    );
     // Status text is kept out of <pre>, which holds only the raw result.
     const status = details.querySelector<HTMLElement>('.tool-activity-status');
     const setStatus = (message: string) => {
       if (!status) return;
       status.textContent = message;
       status.hidden = !message;
+    };
+    const setNotice = (message: string) => {
+      if (!notice) return;
+      notice.textContent = message;
+      notice.hidden = !message;
+    };
+    const setDiagnostics = (items: Array<[string, string]>) => {
+      if (!diagnostics) return false;
+      diagnostics.replaceChildren();
+      if (!items.length) {
+        diagnostics.hidden = true;
+        return false;
+      }
+      const doc = details.ownerDocument;
+      for (const [label, value] of items) {
+        const item = doc.createElement('div');
+        item.className = 'tool-activity-diagnostic-item';
+        const heading = doc.createElement('div');
+        heading.className = 'tool-activity-diagnostic-label';
+        heading.textContent = label;
+        const body = doc.createElement('div');
+        body.className = 'tool-activity-diagnostic-body';
+        body.textContent = value;
+        item.append(heading, body);
+        diagnostics.append(item);
+      }
+      diagnostics.hidden = false;
+      return true;
     };
     // Each (reference, mode, page) is requested once; arguments never carry
     // the result, and result pages are fetched only when they are asked for.
@@ -300,7 +369,11 @@ export function bindToolArguments(
       }
       details.dataset[stateKey] = 'loading';
       details.dataset.requestOffset = String(offset);
-      if (offset === 0) pre.textContent = copy.loading;
+      if (offset === 0) {
+        pre.textContent = copy.loading;
+        setNotice('');
+        setDiagnostics([]);
+      }
       setStatus('');
       retry.hidden = true;
       if (more) more.hidden = true;
@@ -324,7 +397,11 @@ export function bindToolArguments(
           if (!result.resultAvailable) {
             pre.textContent = copy.unavailable;
           } else if (offset === 0) {
-            pre.textContent = result.resultRaw || '（无返回内容）';
+            setNotice(formatToolNotice(result));
+            const hasDiagnostics = setDiagnostics(diagnosticItems(refId, result));
+            pre.textContent =
+              result.resultRaw ||
+              (hasDiagnostics ? '（无普通输出，详见下方原始详情）' : '（无返回内容）');
           } else {
             pre.textContent += result.resultRaw || '';
           }
@@ -335,9 +412,12 @@ export function bindToolArguments(
             );
           }
         } else {
-          pre.textContent = result.argumentsAvailable
-            ? result.argumentsRaw
-            : copy.unavailable;
+          if (!result.argumentsAvailable) {
+            pre.textContent = copy.unavailable;
+          } else {
+            setNotice(formatToolNotice(result));
+            pre.textContent = result.argumentsRaw;
+          }
         }
         details.dataset[stateKey] = 'loaded';
       } catch {
@@ -346,8 +426,13 @@ export function bindToolArguments(
         details.dataset[stateKey] = 'error';
         // Pages already shown stay intact; a failed later page is reported in
         // the status line, so a successful retry yields exactly the raw text.
-        if (offset === 0) pre.textContent = copy.failed;
-        else setStatus(copy.failed);
+        if (offset === 0) {
+          setNotice('');
+          setDiagnostics([]);
+          pre.textContent = copy.failed;
+        } else {
+          setStatus(copy.failed);
+        }
         retry.hidden = false;
       }
     };
