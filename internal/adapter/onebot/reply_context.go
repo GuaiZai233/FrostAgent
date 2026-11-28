@@ -621,6 +621,15 @@ func imageDataFromSegments(ctx context.Context, segments []content.MessageSegmen
 }
 
 func (r *resolvedReplyContext) addImageDescription(description string, scopes ...*runtimescope.Scope) {
+	r.addPromptDescription("image_description", "图片描述", description, scopes...)
+}
+
+// addMediaDescription records an audio/video transcription of the quoted message.
+func (r *resolvedReplyContext) addMediaDescription(description string, scopes ...*runtimescope.Scope) {
+	r.addPromptDescription("media_description", "音视频转述", description, scopes...)
+}
+
+func (r *resolvedReplyContext) addPromptDescription(key, label, description string, scopes ...*runtimescope.Scope) {
 	scope := runtimescope.First(scopes)
 	description = strings.TrimSpace(description)
 	if r == nil || r.Prompt == "" || description == "" {
@@ -632,11 +641,11 @@ func (r *resolvedReplyContext) addImageDescription(description string, scopes ..
 		scope.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("解析引用上下文失败: %v", err))
 		return
 	}
-	context["image_description"] = description
+	context[key] = description
 
 	prompt, err := json.Marshal(context)
 	if err != nil {
-		scope.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("更新引用图片描述失败: %v", err))
+		scope.Log().Warn(logs.WEBSOCKET, fmt.Sprintf("更新引用%s失败: %v", label, err))
 		return
 	}
 	r.Prompt = string(prompt)
