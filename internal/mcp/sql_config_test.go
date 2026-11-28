@@ -41,3 +41,34 @@ func TestSQLConfigStoreRoundTrip(t *testing.T) {
 		t.Fatalf("MCP replacement failed: %#v, %v", loaded, err)
 	}
 }
+
+func TestSQLConfigStoreResaveWithoutForeignKeyCascade(t *testing.T) {
+	db, err := storage.Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.SQL.Exec(`INSERT INTO instances(id, name, created_at) VALUES ('test-instance', 'Test', 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
+		t.Fatal(err)
+	}
+	store := NewSQLConfigStore(db, "test-instance")
+	cfg := &Config{Servers: []ServerConfig{{
+		ID: "server-a", Name: "Example", Enabled: true,
+		Transport: TransportConfig{Type: TransportStdio, Command: "program"},
+		Tools:     map[string]ToolPolicy{"tool-a": {Enabled: false}},
+	}}}
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Servers[0].Tools["tool-a"] = ToolPolicy{Enabled: true}
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("re-saving tool policy failed: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || !loaded.Servers[0].Tools["tool-a"].Enabled {
+		t.Fatalf("tool policy not updated: %#v, %v", loaded, err)
+	}
+}

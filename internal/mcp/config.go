@@ -252,6 +252,11 @@ func WriteImportedConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, inst
 }
 
 func writeConfigTx(ctx context.Context, db *storage.DB, tx *sql.Tx, instanceID string, cfg *Config) error {
+	// Delete policies explicitly instead of relying on ON DELETE CASCADE: the
+	// SQLite foreign_keys pragma is per-connection and may be off on a recycled one.
+	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM mcp_tool_policies WHERE instance_id = ?`), instanceID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, db.Bind(`DELETE FROM mcp_servers WHERE instance_id = ?`), instanceID); err != nil {
 		return err
 	}
