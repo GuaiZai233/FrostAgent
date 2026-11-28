@@ -31,6 +31,7 @@ type GroupCompactMessage struct {
 	SenderID         string `json:"sender_id,omitempty"`           // User ID or bot ID
 	Content          string `json:"content"`                       // Message body (opaque payload)
 	ImageDescription string `json:"image_description,omitempty"`   // Vision output kept separate from user text.
+	MediaDescription string `json:"media_description,omitempty"`   // Audio/video transcription kept separate from user text.
 	MessageID        string `json:"message_id,omitempty"`          // Message ID for deduplication
 	Time             string `json:"time,omitempty"`                // Local "2006-01-02 15:04:05"; legacy records may hold only "15:04:05"
 	// ImageKeys lists, per image placeholder in Content, the log-image key used for
@@ -47,6 +48,9 @@ func (m GroupCompactMessage) FormatDisplay() string {
 	body := m.Content
 	if m.ImageDescription != "" {
 		body += " 【图片识别结果】：" + m.ImageDescription
+	}
+	if m.MediaDescription != "" {
+		body += " 【音视频转述结果】：" + m.MediaDescription
 	}
 	if m.Role == "assistant" {
 		botName := m.Sender
@@ -1634,7 +1638,21 @@ func (g *StagedGroupCompactGuard) Sequence() uint64 {
 // SetImageDescription attaches adapter-produced vision output to this guard's
 // exact staged user slot. A dropped, promoted, or evicted slot cannot be revived.
 func (g *StagedGroupCompactGuard) SetImageDescription(description string) bool {
-	if g == nil || g.session == nil || g.Sequence() == 0 || description == "" {
+	return g.setStagedUserField(description, func(message *GroupCompactMessage) {
+		message.ImageDescription = description
+	})
+}
+
+// SetMediaDescription attaches adapter-produced audio/video transcription to
+// this guard's exact staged user slot, with the same revival rules as images.
+func (g *StagedGroupCompactGuard) SetMediaDescription(description string) bool {
+	return g.setStagedUserField(description, func(message *GroupCompactMessage) {
+		message.MediaDescription = description
+	})
+}
+
+func (g *StagedGroupCompactGuard) setStagedUserField(value string, apply func(*GroupCompactMessage)) bool {
+	if g == nil || g.session == nil || g.Sequence() == 0 || value == "" {
 		return false
 	}
 	g.session.mu.Lock()
@@ -1645,7 +1663,7 @@ func (g *StagedGroupCompactGuard) SetImageDescription(description string) bool {
 	for i := range g.session.groupCompactBuffer {
 		item := &g.session.groupCompactBuffer[i]
 		if item.sequence == g.Sequence() && item.staged && item.message.Role == "user" {
-			item.message.ImageDescription = description
+			apply(&item.message)
 			return true
 		}
 	}
@@ -2011,6 +2029,10 @@ func (s *SessionContext) recentPendingStructuredGroupMessagesLocked(limit int, m
 				remaining := max(0, maxChars-len([]rune(message.Content)))
 				if imageRunes := []rune(message.ImageDescription); len(imageRunes) > remaining {
 					message.ImageDescription = string(imageRunes[:remaining])
+				}
+				remaining = max(0, remaining-len([]rune(message.ImageDescription)))
+				if mediaRunes := []rune(message.MediaDescription); len(mediaRunes) > remaining {
+					message.MediaDescription = string(mediaRunes[:remaining])
 				}
 				message.raw = ""
 				selected = append(selected, message)

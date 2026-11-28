@@ -178,7 +178,17 @@ func (c *Client) Chat(ctx context.Context, req core.ChatRequest) (*core.ChatResp
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	logReq := compactHistoricalToolResultsForLogging(openAIReq)
+	logReq := openAIReq
+	if core.HasInlineMedia(req.Messages) {
+		// Audio and video are request-local: log placeholders, never the bytes.
+		redacted := core.WithoutInlineMedia(req.Messages)
+		logReq.Messages = make([]chatMessage, len(openAIReq.Messages))
+		copy(logReq.Messages, openAIReq.Messages)
+		for i := range logReq.Messages {
+			logReq.Messages[i].Content = redacted[i].Content
+		}
+	}
+	logReq = compactHistoricalToolResultsForLogging(logReq)
 	if logData, err := json.Marshal(logReq); err == nil {
 		c.log().LLMRequest(string(logData), req.TraceID)
 	} else {

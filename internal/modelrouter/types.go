@@ -1,7 +1,10 @@
 package modelrouter
 
 import (
+	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -11,6 +14,7 @@ const (
 	WorkloadDialogue      Workload = "dialogue"
 	WorkloadSubagent      Workload = "subagent"
 	WorkloadVision        Workload = "vision"
+	WorkloadMedia         Workload = "media"
 	WorkloadReflection    Workload = "reflection"
 	WorkloadMemoryExtract Workload = "memory_extract"
 	WorkloadGroupCompact  Workload = "group_compact"
@@ -21,6 +25,7 @@ var Workloads = []Workload{
 	WorkloadDialogue,
 	WorkloadSubagent,
 	WorkloadVision,
+	WorkloadMedia,
 	WorkloadReflection,
 	WorkloadMemoryExtract,
 	WorkloadGroupCompact,
@@ -87,6 +92,33 @@ type Configuration struct {
 	Models         []Model              `json:"models"`
 	GlobalBindings map[Workload]Binding `json:"global_bindings"`
 	GroupOverrides []GroupOverride      `json:"group_overrides"`
+}
+
+// MarshalJSON omits default bindings that older binaries cannot read, so file
+// stores and backup exports stay loadable after a rollback. Reading normalizes
+// a missing global binding back to its default.
+func (c Configuration) MarshalJSON() ([]byte, error) {
+	type plain Configuration
+	out := plain(c)
+	if binding, ok := c.GlobalBindings[WorkloadMedia]; ok && omitDefaultBinding(WorkloadMedia, binding) {
+		out.GlobalBindings = maps.Clone(c.GlobalBindings)
+		delete(out.GlobalBindings, WorkloadMedia)
+	}
+	// Group overrides of post-v1 workloads are never stored, because older
+	// binaries reject the unknown workload in every override.
+	cloned := false
+	for i, override := range c.GroupOverrides {
+		if _, ok := override.Bindings[WorkloadMedia]; !ok {
+			continue
+		}
+		if !cloned {
+			out.GroupOverrides = slices.Clone(c.GroupOverrides)
+			cloned = true
+		}
+		out.GroupOverrides[i].Bindings = maps.Clone(override.Bindings)
+		delete(out.GroupOverrides[i].Bindings, WorkloadMedia)
+	}
+	return json.Marshal(out)
 }
 
 type Scope struct {

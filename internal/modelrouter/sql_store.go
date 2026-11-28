@@ -143,6 +143,9 @@ func writeConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, insta
 		}
 	}
 	for workload, binding := range cfg.GlobalBindings {
+		if omitDefaultBinding(workload, binding) {
+			continue
+		}
 		if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_bindings
 			(instance_id, platform, group_id, workload, mode, model_id)
 			VALUES (?, '', '', ?, ?, ?)`), instanceID, workload, binding.Mode, binding.ModelID); err != nil {
@@ -151,6 +154,10 @@ func writeConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, insta
 	}
 	for _, override := range cfg.GroupOverrides {
 		for workload, binding := range override.Bindings {
+			if workload == WorkloadMedia {
+				// Older binaries reject the unknown workload; see Configuration.MarshalJSON.
+				continue
+			}
 			if _, err := tx.ExecContext(ctx, db.Bind(`INSERT INTO model_bindings
 				(instance_id, platform, group_id, workload, mode, model_id)
 				VALUES (?, ?, ?, ?, ?, ?)`), instanceID, override.Platform, override.GroupID,
@@ -164,4 +171,12 @@ func writeConfigurationTx(ctx context.Context, db *storage.DB, tx *sql.Tx, insta
 		return err
 	}
 	return nil
+}
+
+// omitDefaultBinding skips the default Disabled row of workloads added after
+// the v1 storage contract. A missing global row normalizes to Disabled, and
+// older binaries reject unknown workloads, so storing it would only break
+// rollback for instances that never configured the workload.
+func omitDefaultBinding(workload Workload, binding Binding) bool {
+	return workload == WorkloadMedia && binding.Mode == BindingDisabled && binding.ModelID == ""
 }

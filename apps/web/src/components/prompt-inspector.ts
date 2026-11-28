@@ -16,6 +16,10 @@ export interface GroupMessageItem {
   rawText: string;
   toolHistoryRunId?: string;
   imageHashes?: string[];
+  /** Vision model transcription of the images in this message. */
+  imageDescription?: string;
+  /** Media model transcription of audio/video in this message. */
+  mediaDescription?: string;
   toolActivity?: ToolActivity;
   isSummarized?: boolean;
   promptContexts?: Array<{ name: string; content: string }>;
@@ -42,6 +46,8 @@ export interface StructuredGroupMessage {
   time: string;
   toolHistoryRunId?: string;
   imageHashes?: string[];
+  imageDescription?: string;
+  mediaDescription?: string;
 }
 
 export interface PromptImage {
@@ -240,6 +246,8 @@ function parseStructuredMessageJSONLine(line: string): GroupMessageItem | null {
       content: record.content,
       rawText: line,
       toolHistoryRunId: typeof record.tool_history_run_id === 'string' ? record.tool_history_run_id : undefined,
+      imageDescription: typeof record.image_description === 'string' && record.image_description ? record.image_description : undefined,
+      mediaDescription: typeof record.media_description === 'string' && record.media_description ? record.media_description : undefined,
     };
   } catch {
     return null;
@@ -257,6 +265,8 @@ function groupMessageFromStructured(record: StructuredGroupMessage): GroupMessag
     rawText: JSON.stringify(record),
     toolHistoryRunId: record.toolHistoryRunId,
     imageHashes: record.imageHashes?.length ? record.imageHashes : undefined,
+    imageDescription: record.imageDescription || undefined,
+    mediaDescription: record.mediaDescription || undefined,
   };
 }
 
@@ -1283,6 +1293,7 @@ export function renderSingleMessageRow(
         ${msg.id ? `<span class="msg-id">#${escapeHtml(msg.id)}</span>` : ''}
       </div>
       <div class="msg-content select-text ${isAssistant ? 'text-foreground/95' : ''}">${renderMessageContent(msg.content, msg.imageHashes)}</div>
+      ${renderMessageTranscriptions(msg)}
       ${msg.promptContexts?.length ? `
         <details class="mt-2 text-xs">
           <summary class="cursor-pointer text-muted select-none">附加上下文</summary>
@@ -1294,6 +1305,20 @@ export function renderSingleMessageRow(
       ` : ''}
     </div>
   `;
+}
+
+/**
+ * Renders model transcriptions attached to a message: the vision model's image
+ * description and the media model's audio/video transcription. Both are only
+ * present when the content was routed through a transcription model.
+ */
+export function renderMessageTranscriptions(msg: Pick<GroupMessageItem, 'imageDescription' | 'mediaDescription'>): string {
+  const items = [
+    { label: '图片识别结果', text: msg.imageDescription },
+    { label: '音视频转述结果', text: msg.mediaDescription },
+  ].filter((item) => item.text?.trim());
+  return items.map((item) => `
+      <div class="msg-transcription select-text"><span class="msg-transcription-label">${item.label}</span>${escapeHtml(item.text!.trim())}</div>`).join('');
 }
 
 const messageImagePlaceholder = /\[图片\]|\[image(?: [^\]]*)?\]/g;

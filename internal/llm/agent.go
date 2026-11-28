@@ -142,7 +142,8 @@ type Engine struct {
 	ModelName              string           // 模型名称
 	ModelRouter            *modelrouter.Manager
 	VisionProvider         core.LLMProvider
-	SessionManager         *SessionManager // 会话上下文管理器
+	MediaProvider          core.LLMProvider // Audio/video transcription workload.
+	SessionManager         *SessionManager  // 会话上下文管理器
 	Dispatcher             core.MessageDispatcher
 	Awareness              *AwarenessService
 	StartedAt              time.Time // 引擎启动时间
@@ -706,6 +707,7 @@ func (e *Engine) extractPendingBatch(batch PendingExtractionBatch) {
 				Role:             string(item.Message.Role),
 				Content:          fmt.Sprintf("%v", item.Message.Content),
 				ImageDescription: item.ImageDescription,
+				MediaDescription: item.MediaDescription,
 			})
 		} else {
 			if item.Owner == "" {

@@ -662,6 +662,7 @@ func (c *GroupCompactor) distillGroupMemories(
 			Role:             m.Role,
 			Content:          m.Content,
 			ImageDescription: m.ImageDescription,
+			MediaDescription: m.MediaDescription,
 		}
 	}
 

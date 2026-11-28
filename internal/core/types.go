@@ -70,15 +70,30 @@ type ProviderState struct {
 	Fingerprint string          `json:"fingerprint"`
 }
 
-// ContentPart represents a piece of multimodal content (text/image).
+// ContentPart represents a piece of multimodal content (text/image/audio/video).
 type ContentPart struct {
-	Type     string    `json:"type"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *ImageURL `json:"image_url,omitempty"`
+	Type       string      `json:"type"`
+	Text       string      `json:"text,omitempty"`
+	ImageURL   *ImageURL   `json:"image_url,omitempty"`
+	InputAudio *InputAudio `json:"input_audio,omitempty"`
+	VideoURL   *VideoURL   `json:"video_url,omitempty"`
 }
 
 // ImageURL represents a URL or Base64 image source.
 type ImageURL struct {
+	URL string `json:"url"`
+}
+
+// InputAudio is inline audio in the OpenAI Chat Completions shape: raw
+// standard Base64 without a data URL prefix, plus a short format name such as
+// "mp3" or "wav".
+type InputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+// VideoURL carries a video as a Base64 data URL ("data:video/mp4;base64,...").
+type VideoURL struct {
 	URL string `json:"url"`
 }
 

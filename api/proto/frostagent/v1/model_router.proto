@@ -34,6 +34,8 @@ enum ModelWorkload {
   MODEL_WORKLOAD_MEMORY_EXTRACT = 5;
   MODEL_WORKLOAD_GROUP_COMPACT = 6;
   MODEL_WORKLOAD_EMBEDDING = 7;
+  // Audio, video and other non-image media transcription.
+  MODEL_WORKLOAD_MEDIA = 8;
 }
 
 enum ModelBindingMode {

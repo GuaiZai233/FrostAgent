@@ -517,6 +517,8 @@ func buildMergedEntry(
 	for _, source := range sources {
 		if source.SourceMedia == SourceMediaImage {
 			sourceMedia = SourceMediaImage
+		} else if source.SourceMedia == SourceMediaMedia && sourceMedia == "" {
+			sourceMedia = SourceMediaMedia
 		}
 		mergedFrom = append(mergedFrom, source.ID)
 		if source.AccessCount > accessCount {

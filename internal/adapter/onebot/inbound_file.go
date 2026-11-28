@@ -534,6 +534,11 @@ func (t *inboundFileTurn) authorized(limit int) []*inboundFile {
 			if explicit != (priority == 0) {
 				continue
 			}
+			// Audio and video are request-local: they reach models through
+			// transcription or native input, never the persistent sandbox.
+			if isInboundMediaFile(f) {
+				continue
+			}
 			if f.sessionID == sessionID && f.session == t.session && f.epoch == epoch && time.Since(f.seen) < inboundFileLifetime && ((f.senderID > 0 && f.senderID == t.event.UserID) || t.quotedIDs[f.messageID]) {
 				files = append(files, f)
 			}

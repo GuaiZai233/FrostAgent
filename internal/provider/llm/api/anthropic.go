@@ -19,6 +19,9 @@ func anthropicContent(content any) ([]any, error) {
 			blocks = append(blocks, map[string]any{"type": "text", "text": part.Text})
 			continue
 		}
+		if core.IsInlineMediaPart(part) {
+			return nil, fmt.Errorf("Anthropic Messages API 不支持音频/视频输入，请改用支持音视频的模型或 API 格式")
+		}
 		source := map[string]any{"type": "url", "url": part.ImageURL.URL}
 		if strings.HasPrefix(part.ImageURL.URL, "data:") {
 			mime, data, err := dataImage(part.ImageURL.URL)

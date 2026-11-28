@@ -314,8 +314,10 @@ func (sm *SessionManager) restoreCheckpoint(record sessionstate.Record) (*Sessio
 }
 
 // SetLastActualRequest preserves the latest provider-neutral request, including
-// inline media, independently of the bounded log archive. It never resumes work.
+// inline images, independently of the bounded log archive. It never resumes work.
+// Audio and video are request-local and replaced by placeholders.
 func (s *SessionContext) SetLastActualRequest(epoch uint64, model string, request core.ChatRequest) {
+	request.Messages = core.WithoutInlineMedia(request.Messages)
 	data, err := json.Marshal(struct {
 		Model   string           `json:"model"`
 		Request core.ChatRequest `json:"request"`

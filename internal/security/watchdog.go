@@ -57,6 +57,7 @@ const (
 	SourceToolResult   WatchdogSource = "TOOL_RESULT"
 	SourceModelOutput  WatchdogSource = "MODEL_OUTPUT"
 	SourceVisionResult WatchdogSource = "VISION_RESULT"
+	SourceMediaResult  WatchdogSource = "MEDIA_RESULT"
 	SourcePlatformMeta WatchdogSource = "PLATFORM_METADATA"
 
 	WatchdogPass   WatchdogAction = "PASS"

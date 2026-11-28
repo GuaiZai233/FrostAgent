@@ -31,3 +31,15 @@ assert.equal((partial.match(/class="msg-image-ref"/g) ?? []).length, 1);
 assert.equal(renderMessageContent('[图片]', [hashA, hashB]), '[图片]');
 assert.equal(renderMessageContent('[图片]'), '[图片]');
 assert.equal(renderMessageContent('[bad]', ['x']), '[bad]');
+
+// Transcriptions render under the message only when a transcription model ran.
+import { renderMessageTranscriptions, renderSingleMessageRow } from '../src/components/prompt-inspector';
+
+assert.equal(renderMessageTranscriptions({}), '');
+assert.equal(renderMessageTranscriptions({ imageDescription: '  ', mediaDescription: '' }), '');
+const transcribed = renderMessageTranscriptions({ imageDescription: '一张海报', mediaDescription: '说话内容：<明天见>' });
+assert.equal((transcribed.match(/class="msg-transcription /g) ?? []).length, 2);
+assert.ok(transcribed.includes('图片识别结果') && transcribed.includes('音视频转述结果'));
+assert.ok(transcribed.includes('说话内容：&lt;明天见&gt;'), 'transcription must stay escaped');
+const voiceRow = renderSingleMessageRow({ role: 'user', content: '[语音]', rawText: '[语音]', mediaDescription: '说话内容：明天见' }, false);
+assert.ok(voiceRow.includes('[语音]') && voiceRow.includes('说话内容：明天见'));

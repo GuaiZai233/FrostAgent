@@ -211,12 +211,20 @@ try {
   const globalVision = hintRoot.querySelector(`[data-global-workload="${ModelWorkload.VISION}"]`)!;
   assert.equal(globalVision.nextElementSibling?.textContent, visionHint);
   assert.ok(globalVision.nextElementSibling?.classList.contains('text-muted'));
+  const mediaHint = '仅用于转述音频、视频等多模态内容，如果配置，将默认使用该模型处理内容后，再传入主模型。';
+  const globalMedia = hintRoot.querySelector(`[data-global-workload="${ModelWorkload.MEDIA}"]`)!;
+  assert.equal(globalMedia.nextElementSibling?.textContent, mediaHint);
+  assert.equal(globalMedia.previousElementSibling?.querySelector('strong')?.textContent, '多模态（全链路）');
+  // The media workload sits right after the image workload.
+  assert.equal(globalVision.closest('.card')?.nextElementSibling, globalMedia.closest('.card'));
   click(hintRoot, '[data-router-tab="groups"]');
   click(hintRoot, '#add-group');
   const groupDialog = document.querySelector('dialog')!;
   const groupVision = groupDialog.querySelector(`[data-workload="${ModelWorkload.VISION}"]`)!;
   assert.equal(groupVision.nextElementSibling?.textContent, visionHint);
   assert.ok(groupVision.nextElementSibling?.classList.contains('text-muted'));
+  const groupMedia = groupDialog.querySelector(`[data-workload="${ModelWorkload.MEDIA}"]`)!;
+  assert.equal(groupMedia.nextElementSibling?.textContent, mediaHint);
   click(groupDialog, '.dialog-close-btn');
   stopHintRouter();
   hintRoot.remove();

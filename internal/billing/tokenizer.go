@@ -22,6 +22,8 @@ const (
 	PrimingOverheadTokens = 3 // <|im_start|>assistant<|im_sep|>
 	ToolOverheadTokens    = 10
 	DefaultImageTokens    = 1000 // Standard token estimate for image content
+	DefaultAudioTokens    = 1000 // Rough estimate for a short voice message (~30 s)
+	DefaultVideoTokens    = 5000 // Rough estimate for a short video clip
 )
 
 // EstimateTextTokens provides a local, fast token count estimation
@@ -102,6 +104,10 @@ func EstimateMessageTokens(msg core.ChatMessage) (int, error) {
 				total += EstimateTextTokens(part.Text)
 			case "image_url":
 				total += DefaultImageTokens
+			case string(core.ContentPartTypeAudio):
+				total += DefaultAudioTokens
+			case string(core.ContentPartTypeVideo):
+				total += DefaultVideoTokens
 			default:
 				total += EstimateTextTokens(part.Text)
 			}

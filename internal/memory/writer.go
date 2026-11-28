@@ -328,6 +328,7 @@ type GroupMessage struct {
 	Role             string `json:"role"`
 	Content          string `json:"content"`
 	ImageDescription string `json:"image_description,omitempty"` // Adapter-provided vision output, never user-authored text.
+	MediaDescription string `json:"media_description,omitempty"` // Adapter-provided audio/video transcription, never user-authored text.
 }
 
 type groupExtractedCandidate struct {
@@ -404,6 +405,9 @@ func (w *Writer) ExtractGroupMemories(
 		}
 		if m.ImageDescription != "" {
 			item["image_description"] = m.ImageDescription
+		}
+		if m.MediaDescription != "" {
+			item["media_description"] = m.MediaDescription
 		}
 		if m.SenderID != "" {
 			item["sender_id"] = m.SenderID
@@ -528,6 +532,12 @@ func (w *Writer) parseAndSaveGroupCandidates(
 			validEvidence, ok = ValidateEvidence(candidateMsg.ImageDescription, rawEvidence)
 			if ok {
 				sourceMedia = SourceMediaImage
+			}
+		}
+		if !ok {
+			validEvidence, ok = ValidateEvidence(candidateMsg.MediaDescription, rawEvidence)
+			if ok {
+				sourceMedia = SourceMediaMedia
 			}
 		}
 		if !ok {

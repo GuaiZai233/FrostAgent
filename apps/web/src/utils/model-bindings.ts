@@ -12,6 +12,7 @@ export const workloads = [
   { value: ModelWorkload.DIALOGUE, label: '主对话' },
   { value: ModelWorkload.SUBAGENT, label: '子 Agent' },
   { value: ModelWorkload.VISION, label: '多模态（图片）' },
+  { value: ModelWorkload.MEDIA, label: '多模态（全链路）' },
   { value: ModelWorkload.REFLECTION, label: '反思' },
   { value: ModelWorkload.MEMORY_EXTRACT, label: '记忆提取' },
   { value: ModelWorkload.GROUP_COMPACT, label: '上下文压缩' },

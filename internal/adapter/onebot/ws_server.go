@@ -29,6 +29,7 @@ import (
 	"github.com/GuaiZai233/FrostAgent/internal/model"
 	"github.com/GuaiZai233/FrostAgent/internal/modelrouter"
 	"github.com/GuaiZai233/FrostAgent/internal/proactive"
+	"github.com/GuaiZai233/FrostAgent/internal/provider/llm/api"
 	"github.com/GuaiZai233/FrostAgent/internal/security"
 
 	"github.com/gorilla/websocket"
@@ -313,7 +314,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				event.GroupID,
 				event.UserID,
 				senderDisplayName(event),
-				string(event.Message),
+				redactInlineMediaForLog(event.Message),
 			),
 		)
 		// 群聊被真实 @ 或名称/别名提及时触发对话（总开关；未设置视为启用）。
@@ -352,7 +353,7 @@ func processEvent(conn *wsConnection, event model.OneBotEvent, engine *llm.Engin
 				"收到用户 [%d/%s] 的私聊消息: %s",
 				event.UserID,
 				senderDisplayName(event),
-				string(event.Message),
+				redactInlineMediaForLog(event.Message),
 			),
 		)
 		replyContext := conn.lookupReplyContext(event)
@@ -459,6 +460,32 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	noVisionGuidance := (currentHasImage || replyHasImage) && !visionEnabled && !dialogueSupportsVision && !forceStickerSilence
 
+	// Audio and video follow the image routing: transcribe with the media
+	// workload when it is configured, otherwise send the media natively to a
+	// dialogue model that advertises the capability. Media bytes stay in this
+	// turn's memory only and are never persisted.
+	currentHasMedia := content.ContainsMedia(segments)
+	replyHasMedia := false
+	for _, quote := range quoteNodes {
+		if content.ContainsMedia(quote.Segments) {
+			replyHasMedia = true
+			break
+		}
+	}
+	mediaEnabled := engine != nil && engine.MediaProvider != nil && !forceStickerSilence
+	if mediaEnabled && routeSnapshot != nil {
+		mediaEnabled = !routeSnapshot.IsDisabled(modelrouter.WorkloadMedia, routeScope)
+	}
+	var directMediaKinds inboundMediaKinds
+	if !mediaEnabled && !forceStickerSilence {
+		directMediaKinds = dialogueModelMediaKinds(engine, routeSnapshot, routeScope)
+	}
+	mediaBudget := newInboundMediaBudget()
+	var mediaGuidance string
+	if (currentHasMedia || replyHasMedia) && !mediaEnabled && !directMediaKinds.any() && !forceStickerSilence {
+		mediaGuidance = parity.NoMediaGuidance
+	}
+
 	if engine != nil && engine.SessionManager != nil {
 		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
@@ -468,7 +495,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 
 	// Fast-fail once before downloading or processing either current or quoted images.
-	if visionEnabled && (currentHasImage || replyHasImage) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
+	if ((visionEnabled && (currentHasImage || replyHasImage)) || (mediaEnabled && (currentHasMedia || replyHasMedia))) && engine.BillingClient != nil && engine.BillingConfig.Enabled && !conn.mock && !wakeSignals.Proactive {
 		bCtx, bCancel := context.WithTimeout(runtimescope.WithContext(engine.Context(), engine.Scope), engine.BillingConfig.Timeout)
 		bal, err := engine.BillingClient.Balance(bCtx, "qq", strconv.FormatInt(event.UserID, 10))
 		bCancel()
@@ -553,6 +580,79 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 	}
 
+	var memoryMediaDescription string
+	mediaRoute := core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID}
+	vetMediaDescription := func(description, subject string) string {
+		if description == "" || engine == nil || engine.Security == nil {
+			return description
+		}
+		principal, pErr := security.NewPrincipal(securityPlatform, strconv.FormatInt(event.UserID, 10))
+		if pErr != nil {
+			return description
+		}
+		decision := evalCtx(principal, security.SourceMediaResult, description, security.AuditEvent{
+			Instance: engine.InstanceID,
+			Session:  conn.historyKey(event),
+		})
+		switch {
+		case decision.IsFailure:
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("%s音视频转述因安全审查服务异常被隔离剔除: %s", subject, decision.SafeSummary))
+			return ""
+		case decision.Action == security.WatchdogFilter || decision.Action == security.WatchdogBlock:
+			engine.Log().Warn(logs.SYSTEM, fmt.Sprintf("%s音视频转述包含风险内容，已被脱敏替换: category=%s eval_id=%s", subject, decision.Classification.Category, decision.EvaluationID))
+			return decision.SanitizedContent
+		case decision.Action == security.WatchdogWarn && notice == "":
+			notice = decision.WarningNotice
+		}
+		return description
+	}
+	transcribeMedia := func(mediaSegments []content.MessageSegment, subject string) (string, int) {
+		parts, failed := conn.loadInboundMedia(routeCtx, event, mediaSegments, inboundMediaKinds{audio: true, video: true}, mediaBudget)
+		if len(parts) == 0 {
+			return "", failed
+		}
+		description := vetMediaDescription(llm.CallMediaModel(routeCtx, engine.MediaProvider, mediaRoute, content.SegmentsText(mediaSegments), parts), subject)
+		if description == "" {
+			failed += len(parts)
+		}
+		return description, failed
+	}
+	if currentHasMedia && !forceStickerSilence {
+		failed := 0
+		if mediaEnabled {
+			var description string
+			description, failed = transcribeMedia(segments, fmt.Sprintf("用户 [%d] 当前", event.UserID))
+			if description != "" {
+				memoryMediaDescription = description
+				if turn != nil {
+					turn.StagedGuard().SetMediaDescription(description)
+				}
+				userText = userText + " " + llm.MediaResultLabel + description
+			}
+		} else if directMediaKinds.any() {
+			var parts []core.ContentPart
+			parts, failed = conn.loadInboundMedia(routeCtx, event, segments, directMediaKinds, mediaBudget)
+			directImageParts = append(directImageParts, parts...)
+		}
+		if failed > 0 {
+			mediaGuidance = parity.MediaUnavailableGuidance
+		}
+	}
+	if mediaEnabled {
+		for _, quote := range quoteNodes {
+			if !content.ContainsMedia(quote.Segments) {
+				continue
+			}
+			description, failed := transcribeMedia(quote.Segments, "引用消息")
+			if description != "" {
+				quote.addMediaDescription(description, engine.Scope)
+			}
+			if failed > 0 && mediaGuidance == "" {
+				mediaGuidance = parity.MediaUnavailableGuidance
+			}
+		}
+	}
+
 	if engine != nil && engine.SessionManager != nil {
 		if sessCore, ok := engine.SessionManager.Get(conn.historyKey(event)); ok {
 			if sess, isSess := sessCore.(*llm.SessionContext); isSess && sess.Epoch() != startEpoch {
@@ -584,6 +684,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 	}
 	if noVisionGuidance {
 		contextMap["interaction_guidance"] = parity.NoVisionGuidance
+	}
+	if mediaGuidance != "" {
+		contextMap["media_guidance"] = mediaGuidance
 	}
 	if event.MessageType != "" {
 		contextMap["message_type"] = event.MessageType
@@ -630,9 +733,9 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 		}
 		var mentionOnly bool
 		if len(toolSegs) > 0 {
-			mentionOnly = parity.IsMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage || replyHasImage || replyContext.Prompt != "", hasReply)
+			mentionOnly = parity.IsMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage || replyHasImage || currentHasMedia || replyHasMedia || replyContext.Prompt != "", hasReply)
 		} else {
-			mentionOnly = parity.IsMentionOnlyOneBot(event.MessageType == "group", event.SelfID, IsMentionedBot(event), userText, currentHasImage || replyHasImage || replyContext.Prompt != "", hasReply)
+			mentionOnly = parity.IsMentionOnlyOneBot(event.MessageType == "group", event.SelfID, IsMentionedBot(event), userText, currentHasImage || replyHasImage || currentHasMedia || replyHasMedia || replyContext.Prompt != "", hasReply)
 		}
 		replyToBotMentionOnly = parity.IsReplyToBotMentionOnlyOneBotSegments(event.MessageType == "group", event.SelfID, toolSegs, currentHasImage, replyContext.SenderID)
 		contextMap["mention_only"] = mentionOnly
@@ -825,6 +928,25 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			if directVision {
 				for _, quote := range quoteNodes {
 					directImageParts = append(directImageParts, content.ImageContentParts(routeCtx, quote.Segments)...)
+				}
+			}
+			// Raw quoted media bypasses the text vetting above, so it is only
+			// forwarded when the quote passed unchanged.
+			if directMediaKinds.any() && vettedReply == originalReply {
+				for _, quote := range quoteNodes {
+					if !content.ContainsMedia(quote.Segments) {
+						continue
+					}
+					parts, failed := conn.loadInboundMedia(routeCtx, event, quote.Segments, directMediaKinds, mediaBudget)
+					directImageParts = append(directImageParts, parts...)
+					if failed > 0 && mediaGuidance == "" {
+						// system_context was already rendered; refresh it in place.
+						mediaGuidance = parity.MediaUnavailableGuidance
+						contextMap["media_guidance"] = mediaGuidance
+						refreshed, _ := json.Marshal(contextMap)
+						requestPrompt = strings.Replace(requestPrompt, string(contextBytes), string(refreshed), 1)
+						contextBytes = refreshed
+					}
 				}
 			}
 		}
@@ -1070,6 +1192,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 								Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 								Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
 								ImageDescription: memoryImageDescription,
+								MediaDescription: memoryMediaDescription,
 								MessageID:        msgID,
 							},
 							{
@@ -1130,7 +1253,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 			Owner:       owner,
 			OwnerType:   ownerType,
 			ActorUserID: strconv.FormatInt(event.UserID, 10),
-			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription,
+			MemorySource: memory.GroupMessage{Content: memoryText, ImageDescription: memoryImageDescription, MediaDescription: memoryMediaDescription,
 				MessageID: memoryMessageID, SenderID: strconv.FormatInt(event.UserID, 10)},
 			ActorPlatform:      securityPlatform,
 			AdapterID:          "onebot",
@@ -1289,6 +1412,7 @@ func reply(action string, type1 string, id string, echo string, event model.OneB
 							Route:            core.RouteContext{Platform: routeScope.Platform, GroupID: routeScope.GroupID},
 							Message:          core.ChatMessage{Role: core.RoleUser, Content: memoryText},
 							ImageDescription: memoryImageDescription,
+							MediaDescription: memoryMediaDescription,
 							MessageID:        msgID,
 						},
 						{
@@ -1599,6 +1723,27 @@ func dialogueModelSupportsVision(engine *llm.Engine, snapshot *modelrouter.Snaps
 	}
 	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
 	return err == nil && target.HasCapability("vision")
+}
+
+// dialogueModelMediaKinds reports which media kinds the dialogue model accepts
+// natively according to its capability tags.
+func dialogueModelMediaKinds(engine *llm.Engine, snapshot *modelrouter.Snapshot, scope modelrouter.Scope) inboundMediaKinds {
+	if engine == nil || engine.ModelRouter == nil {
+		return inboundMediaKinds{}
+	}
+	if snapshot == nil {
+		snapshot = engine.ModelRouter.Snapshot()
+	}
+	target, err := snapshot.Resolve(modelrouter.WorkloadDialogue, scope)
+	if err != nil {
+		return inboundMediaKinds{}
+	}
+	// Capability tags are metadata; formats that cannot serialize audio/video
+	// must not be offered media they would reject.
+	if !api.Format(target.APIFormat).SupportsInlineMedia() {
+		return inboundMediaKinds{}
+	}
+	return inboundMediaKinds{audio: target.HasCapability("audio"), video: target.HasCapability("video")}
 }
 
 func promptContentWithImages(prompt string, images []core.ContentPart) any {

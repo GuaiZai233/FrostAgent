@@ -16,6 +16,12 @@ const MentionOnlyGuidance = "This is an explicit mention-only invitation to resp
 // the dedicated vision route nor the dialogue model can inspect it.
 const NoVisionGuidance = "你不具备多模态的能力，因此图片无法查看，需要管理员在 FrostAgent 后端配置或模型能力支持。"
 
+// NoMediaGuidance tells the model it cannot hear or watch the attached media.
+const NoMediaGuidance = "你不具备听语音或看视频的能力，因此语音、音频或视频内容无法读取，需要管理员在 FrostAgent 后端配置或模型能力支持。"
+
+// MediaUnavailableGuidance tells the model the attached media could not be read this turn.
+const MediaUnavailableGuidance = "本条消息中的部分语音、音频或视频内容未能读取（下载失败、格式不受支持或超出大小限制），不要假装已经听到或看到这些内容。"
+
 var mentionTokenRegex = regexp.MustCompile(`\[@\d+\]`)
 
 // StripBotSelfMentionTokens strips only the bot's own [@<selfID>] token from the text.

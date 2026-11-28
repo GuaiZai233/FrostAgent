@@ -1029,6 +1029,22 @@ dialog.session-history-dialog[open] {
   word-break: break-word;
 }
 
+.msg-transcription {
+  margin-top: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-inline-start: 2px solid var(--border);
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--muted-foreground, var(--muted));
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-transcription-label {
+  margin-inline-end: 0.375rem;
+  font-weight: 600;
+}
+
 /* Expandable current group compact card */
 .tool-activity {
   min-width: 0;

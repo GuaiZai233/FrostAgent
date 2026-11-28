@@ -111,6 +111,7 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 	routerManager.SetUsageStore(tokenUsage)
 	foregroundProvider := routerManager.Provider(modelrouter.WorkloadDialogue, false, 120*time.Second)
 	visionProvider := routerManager.Provider(modelrouter.WorkloadVision, false, 120*time.Second)
+	mediaProvider := routerManager.Provider(modelrouter.WorkloadMedia, false, 180*time.Second)
 	subagentProvider := routerManager.Provider(modelrouter.WorkloadSubagent, false, 120*time.Second)
 	memoryProvider := routerManager.Provider(modelrouter.WorkloadMemoryExtract, false, 120*time.Second)
 	memoryConfig := memory.DefaultConfig()
@@ -295,6 +296,7 @@ func buildRuntime(dir, prefix, wsListenAddr string, config, global *instanceconf
 		ToolRegistry:   executorMap,
 		Provider:       foregroundProvider,
 		VisionProvider: visionProvider,
+		MediaProvider:  mediaProvider,
 		TokenUsage:     tokenUsage,
 		StorageUsage:   storageusage.New(db, instanceID, filepath.Join(dir, "sticker"), filepath.Join(dir, "logs"), filepath.Join(dir, "session-checkpoints")),
 		ModelRouter:    routerManager,
