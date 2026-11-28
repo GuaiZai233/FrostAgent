@@ -72,7 +72,7 @@ try {
     const selects = Array.from(
       body.querySelectorAll<HTMLSelectElement>('.group-model-binding'),
     );
-    assert.equal(selects.length, 7);
+    assert.equal(selects.length, 8);
     assert.equal(selects[0].value, 'disabled', 'QQ platform aliases must restore the existing group binding');
     assert.equal(selects[1].value, 'inherit');
     assert.match(body.innerHTML, /Model &lt;name&gt; · Endpoint &lt;name&gt; · test-model/);
