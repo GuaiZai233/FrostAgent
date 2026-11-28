@@ -36,6 +36,12 @@ func (s sqlSessionImages) GetSessionImage(key string) (string, []byte, bool) {
 	return image.ContentType, image.Data, true
 }
 
+func (s sqlSessionImages) TouchSessionImage(key string) {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionImageIOTimeout)
+	defer cancel()
+	_ = s.db.TouchSessionImage(ctx, s.instanceID, key)
+}
+
 func (s sqlSessionImages) HasSessionImage(key string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), sessionImageIOTimeout)
 	defer cancel()

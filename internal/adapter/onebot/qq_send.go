@@ -43,14 +43,25 @@ func nativeQQFinal(messages []tools.Msg) bool {
 func qqDeliveredText(messages []tools.Msg) string {
 	var texts []string
 	for _, m := range messages {
+		if fragment, ok := qqDeliveredFragment(m); ok {
+			texts = append(texts, fragment)
+		}
+	}
+	return strings.TrimSpace(strings.Join(texts, " "))
+}
+
+// qqDeliveredFragment is the history text one delivered component contributes.
+func qqDeliveredFragment(m tools.Msg) (string, bool) {
+	{
 		switch m.Type {
 		case "plain":
-			texts = append(texts, m.Text)
+			return m.Text, true
 		case "quote", "mention_specific":
+			return "", false
 		case "mention_user":
-			texts = append(texts, "[@"+m.MentionUserID+"]")
+			return "[@" + m.MentionUserID + "]", true
 		case "mention_all":
-			texts = append(texts, "[@all]")
+			return "[@all]", true
 		default:
 			label := m.Type
 			if m.Data != nil {
@@ -67,10 +78,9 @@ func qqDeliveredText(messages []tools.Msg) string {
 			if m.Name != "" {
 				label += " " + m.Name
 			}
-			texts = append(texts, "["+label+"]")
+			return "[" + label + "]", true
 		}
 	}
-	return strings.TrimSpace(strings.Join(texts, " "))
 }
 
 type qqItemResult struct {
@@ -981,11 +991,22 @@ func qqDeliveredImageKeys(messages []tools.Msg) []string {
 	var keys []string
 	found := false
 	for _, m := range messages {
-		if m.Type != "image" {
+		fragment, ok := qqDeliveredFragment(m)
+		if !ok {
 			continue
 		}
-		keys = append(keys, m.ImageKey)
-		found = found || m.ImageKey != ""
+		// One entry per placeholder the fragment shows. Only a real image
+		// component owns its key; literal "[图片]" typed in plain text, or any
+		// other look-alike, gets "" so it can never borrow another image.
+		count := llm.CountImagePlaceholders(fragment)
+		if m.Type == "image" && count == 1 {
+			keys = append(keys, m.ImageKey)
+			found = found || m.ImageKey != ""
+			continue
+		}
+		for i := 0; i < count; i++ {
+			keys = append(keys, "")
+		}
 	}
 	if !found {
 		return nil

@@ -63,6 +63,7 @@ type Store struct {
 	sessionImages  sessionImageCache
 	sessionFetches sessionImageFetcher
 	sessionBackend SessionImageBackend
+	sessionPersist sessionPersister
 	name           string
 	id             string
 }

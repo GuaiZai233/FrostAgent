@@ -249,8 +249,13 @@ func (p *PublicReplyLog) commitFinalLocked(text string, interrupted bool) bool {
 }
 
 // imageKeysMatch reports whether the recorded keys pair with text's placeholders.
+// Beyond the placeholder count, the final text must be exactly the recorded
+// replies joined, so keys are never borrowed by a different text.
 func (p *PublicReplyLog) imageKeysMatch(text string) bool {
-	return len(p.imageKeys) > 0 && anyImageKey(p.imageKeys) && CountImagePlaceholders(text) == len(p.imageKeys)
+	if len(p.imageKeys) == 0 || !anyImageKey(p.imageKeys) || CountImagePlaceholders(text) != len(p.imageKeys) {
+		return false
+	}
+	return text == strings.Join(p.texts, "\n") || text == strings.Join(p.texts, "\n\n")
 }
 
 // The caller holds both the reply-log and session mutexes.

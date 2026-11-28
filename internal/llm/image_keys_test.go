@@ -75,10 +75,25 @@ func TestPublicReplyLogPairsKeysWithFinalPrivateHistory(t *testing.T) {
 }
 
 func TestAlignImageKeysPadsPlaceholdersWithoutKeys(t *testing.T) {
-	if got := alignImageKeys("[图片] and [image x.png]", []string{syntheticKeyA}); !reflect.DeepEqual(got, []string{syntheticKeyA, ""}) {
+	if got := alignImageKeys("[图片] and [image x.png]", []string{syntheticKeyA, ""}); !reflect.DeepEqual(got, []string{syntheticKeyA, ""}) {
+		t.Fatalf("got %#v", got)
+	}
+	// A count that disagrees with the text cannot say which placeholder owns the key.
+	if got := alignImageKeys("[图片] and [image x.png]", []string{syntheticKeyA}); !reflect.DeepEqual(got, []string{"", ""}) {
 		t.Fatalf("got %#v", got)
 	}
 	if got := alignImageKeys("no placeholders", []string{syntheticKeyA}); got != nil {
 		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestPublicReplyLogRejectsKeysForDifferentFinalText(t *testing.T) {
+	session := NewSessionManager().GetOrCreate("private:synthetic")
+	log := NewPublicReplyLog(session, session.Epoch())
+	log.RecordWithImages("[image a.png]", []string{syntheticKeyA}, nil)
+	// Same placeholder count, different text: must not borrow the recorded key.
+	log.CommitFinal("[图片] changed", false)
+	if got := session.Snapshot(); len(got) != 1 || len(got[0].ImageKeys) != 0 {
+		t.Fatalf("different text of equal placeholder count reused keys: %+v", got)
 	}
 }

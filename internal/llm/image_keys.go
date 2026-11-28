@@ -12,15 +12,19 @@ func CountImagePlaceholders(text string) int {
 	return len(imagePlaceholderPattern.FindAllStringIndex(text, -1))
 }
 
-// alignImageKeys returns exactly one key per placeholder in text, padding with
-// "" (no preview) or truncating so later concatenation stays aligned.
+// alignImageKeys returns exactly one key per placeholder in text. Callers must
+// supply keys built from the actual message components; a count that disagrees
+// with the text is unreliable, so every placeholder gets "" (no preview) rather
+// than guessing which one a key belongs to.
 func alignImageKeys(text string, keys []string) []string {
 	count := CountImagePlaceholders(text)
 	if count == 0 {
 		return nil
 	}
 	aligned := make([]string, count)
-	copy(aligned, keys)
+	if len(keys) == count {
+		copy(aligned, keys)
+	}
 	return aligned
 }
 

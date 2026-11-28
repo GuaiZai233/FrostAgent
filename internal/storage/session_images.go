@@ -82,6 +82,12 @@ func (d *DB) GetSessionImage(ctx context.Context, instanceID, key string) (Sessi
 	return image, true, nil
 }
 
+// TouchSessionImage refreshes an image's last-used time.
+func (d *DB) TouchSessionImage(ctx context.Context, instanceID, key string) error {
+	_, err := d.SQL.ExecContext(ctx, d.Bind(`UPDATE session_images SET last_used_at = ? WHERE instance_id = ? AND key = ?`), time.Now().UnixMilli(), instanceID, key)
+	return err
+}
+
 // HasSessionImage reports whether an image is stored without loading its bytes.
 func (d *DB) HasSessionImage(ctx context.Context, instanceID, key string) (bool, error) {
 	var one int

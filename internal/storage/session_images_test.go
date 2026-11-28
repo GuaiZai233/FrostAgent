@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestSessionImagesRoundTripQuotaAndCascade(t *testing.T) {
+func TestPostgresMigrationSessionImagesRoundTripQuotaAndCascade(t *testing.T) {
 	for _, backend := range []Backend{SQLite, Postgres} {
 		t.Run(string(backend), func(t *testing.T) {
 			_, _, db := compatibilityDatabase(t, backend)

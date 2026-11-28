@@ -94,7 +94,13 @@ type sessionImageFetcher struct {
 // it for previews. It returns immediately; false means the request was dropped
 // because too many downloads are pending. Failed downloads just leave no image.
 func (s *Store) FetchSessionImage(key string, fetch func(context.Context) ([]byte, error)) bool {
-	if key == "" || s.HasSessionImage(key) {
+	if key == "" {
+		return true
+	}
+	// Memory only: this runs on the message path and must never wait for the
+	// database. The background job checks durable storage before downloading.
+	if _, ok := s.sessionImages.get(key); ok {
+		s.retrySessionPersist(key)
 		return true
 	}
 	f := &s.sessionFetches
@@ -122,6 +128,9 @@ func (s *Store) FetchSessionImage(key string, fetch func(context.Context) ([]byt
 		}()
 		f.slots <- struct{}{}
 		defer func() { <-f.slots }()
+		if backend := s.sessionImageBackend(); backend != nil && backend.HasSessionImage(key) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), sessionImageFetchTimeout)
 		defer cancel()
 		if data, err := fetch(ctx); err == nil {
@@ -137,6 +146,8 @@ type SessionImageBackend interface {
 	PutSessionImage(key, contentType string, data []byte) error
 	GetSessionImage(key string) (contentType string, data []byte, ok bool)
 	HasSessionImage(key string) bool
+	// TouchSessionImage refreshes the image's position in the durable LRU.
+	TouchSessionImage(key string)
 }
 
 // SetSessionImageBackend attaches durable storage behind the in-memory cache.
@@ -156,6 +167,7 @@ func (s *Store) sessionImageBackend() SessionImageBackend {
 // durable storage and warming the cache.
 func (s *Store) loadSessionImage(key string) (sessionImage, bool) {
 	if image, ok := s.sessionImages.get(key); ok {
+		s.touchSessionImage(key)
 		return image, true
 	}
 	backend := s.sessionImageBackend()
@@ -189,9 +201,8 @@ func (s *Store) PutSessionImage(key string, data []byte) {
 	if !strings.HasPrefix(contentType, "image/") {
 		return
 	}
-	stored := append([]byte(nil), data...)
-	s.sessionImages.put(key, contentType, stored)
-	if backend := s.sessionImageBackend(); backend != nil {
-		_ = backend.PutSessionImage(key, contentType, stored)
+	s.sessionImages.put(key, contentType, append([]byte(nil), data...))
+	if s.sessionImageBackend() != nil {
+		s.scheduleSessionJob(persistJob{key: key})
 	}
 }
