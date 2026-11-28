@@ -62,6 +62,9 @@ func fixtureSecretInsert(db *DB) string {
 
 // Only used on fresh disposable test databases to reconstruct historical schemas.
 func prepareOldSchema(t *testing.T, db *DB, version int) {
+	if version < 20 {
+		restoreLegacyColumns(t, db)
+	}
 	if version < 19 {
 		if _, err := db.SQL.Exec(`DROP TABLE session_states`); err != nil {
 			t.Fatal(err)
@@ -131,6 +134,27 @@ func prepareOldSchema(t *testing.T, db *DB, version int) {
 	}
 	if _, err := db.SQL.Exec(db.Bind(`UPDATE schema_meta SET version = ?, min_compatible_version = ? WHERE id = 1`), version, version); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func restoreLegacyColumns(t *testing.T, db *DB) {
+	t.Helper()
+	compatibilityExec(t, db, `DROP TABLE IF EXISTS module_payloads`)
+	compatibilityExec(t, db, `DELETE FROM module_migrations WHERE id='opaque-instance-payloads/v1'`)
+	for table, names := range map[string][]string{"dialogues": {"scene", "relation"}, "memory_entries": {"visibility"}} {
+		columns, err := db.tableColumns(context.Background(), db.SQL, table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			found := false
+			for _, column := range columns {
+				found = found || column.name == name
+			}
+			if !found {
+				compatibilityExec(t, db, "ALTER TABLE "+table+" ADD COLUMN "+name+" TEXT NOT NULL DEFAULT ''")
+			}
+		}
 	}
 }
 

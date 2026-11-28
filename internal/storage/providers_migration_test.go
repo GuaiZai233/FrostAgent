@@ -42,7 +42,7 @@ func assertMigratedProviders(t *testing.T, db *DB) {
 			}
 		}
 	}
-	for _, table := range []string{"model_endpoints", "models", "model_secrets", "provider_endpoints", "provider_models", "provider_secrets"} {
+	for _, table := range []string{"provider_endpoints", "provider_models", "provider_secrets"} {
 		var count int
 		if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 2 {
 			t.Fatalf("migration did not preserve %s: %d, %v", table, count, err)

@@ -42,6 +42,11 @@ func TestDatabaseStartupClearsRecoveredDisabledError(t *testing.T) {
 	// Reproduce a failed startup on the other branch's v12. Startup must
 	// reconcile the columns and the old instance error, without enabling it.
 	for _, statement := range []string{
+		`DROP TABLE module_payloads`,
+		`DELETE FROM module_migrations WHERE id='opaque-instance-payloads/v1'`,
+		`ALTER TABLE dialogues ADD COLUMN scene TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE dialogues ADD COLUMN relation TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE memory_entries ADD COLUMN visibility TEXT NOT NULL DEFAULT ''`,
 		`DROP TABLE session_states`,
 		`DROP TABLE chat_history`,
 		`DROP TABLE tool_history`,

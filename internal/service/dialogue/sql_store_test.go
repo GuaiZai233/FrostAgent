@@ -21,10 +21,9 @@ func TestSQLDialogueExamplesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	examples := []llm.DialogueExample{{ID: "example-a", User: "hello", Preferred: "hi"}}
-	// Existing databases may still contain the retired metadata columns.
 	if _, err := db.SQL.Exec(`INSERT INTO dialogues
-		(instance_id, position, id, scene, relation, user_text, preferred)
-		VALUES ('test-instance', 0, 'example-a', 'meeting', 'friend', 'hello', 'hi')`); err != nil {
+		(instance_id, position, id, user_text, preferred)
+		VALUES ('test-instance', 0, 'example-a', 'hello', 'hi')`); err != nil {
 		t.Fatal(err)
 	}
 	legacy, err := LoadExamplesSQL(db, "test-instance")
@@ -37,13 +36,6 @@ func TestSQLDialogueExamplesRoundTrip(t *testing.T) {
 	loaded, err := LoadExamplesSQL(db, "test-instance")
 	if err != nil || !reflect.DeepEqual(loaded, examples) {
 		t.Fatalf("SQL dialogue not recovered: %#v, %v", loaded, err)
-	}
-	var scene, relation string
-	if err := db.SQL.QueryRow(`SELECT scene, relation FROM dialogues WHERE instance_id = 'test-instance'`).Scan(&scene, &relation); err != nil {
-		t.Fatal(err)
-	}
-	if scene != "" || relation != "" {
-		t.Fatalf("save retained retired metadata: scene=%q relation=%q", scene, relation)
 	}
 	prompt, err := LoadPromptSQL(db, "test-instance")
 	if err != nil || prompt != llm.DefaultDialogueInstruction+"\n\nUser: hello\nAssistant: hi" {

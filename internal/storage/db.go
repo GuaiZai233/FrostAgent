@@ -16,10 +16,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const SchemaVersion = 19
+const SchemaVersion = 20
 
 // SupportedSchemaVersion includes the additive layout understood by this build.
-const SupportedSchemaVersion = 19
+const SupportedSchemaVersion = 20
 
 type Backend string
 
@@ -36,7 +36,7 @@ type DB struct {
 	CatalogMutationMu sync.Mutex
 	// ModelRouterMu serializes shared catalog, credentials and route snapshots.
 	ModelRouterMu sync.RWMutex
-	SQL           *sql.DB
+	SQL           SQLConnection
 	Backend       Backend
 }
 

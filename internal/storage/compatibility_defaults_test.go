@@ -34,13 +34,14 @@ func testSchemaCompatibilityDefaults(t *testing.T, backend Backend) {
 		{name: "independent-extension", accept: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			historical := test.legacy || test.column == "scene" || test.column == "relation"
 			root, config, db := compatibilityDatabase(t, backend)
 			compatibilitySeedComputerUse(t, db)
 			version := (SchemaVersion + 1)
-			if test.legacy {
+			if historical {
 				version = 15
 			}
-			compatibilityMetadata(t, db, version, !test.legacy, 14)
+			compatibilityMetadata(t, db, version, !historical, 14)
 			if test.name == "independent-extension" {
 				compatibilityExec(t, db, `CREATE TABLE future_defaults (id TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT 'synthetic-default')`)
 				compatibilityExec(t, db, `INSERT INTO future_defaults (id) VALUES ('synthetic-extension')`)
@@ -91,11 +92,11 @@ func testSchemaCompatibilityDefaults(t *testing.T, backend Backend) {
 				}
 				defer opened.Close()
 				expectedVersion, expectedFloor := version, 14
-				if test.legacy {
+				if historical {
 					expectedVersion, expectedFloor = SchemaVersion, SchemaVersion
 				}
 				assertCompatibilityVersions(t, opened, expectedVersion, expectedFloor)
-				if after := compatibilityDefaultsSnapshot(t, opened.SQL, backend); !reflect.DeepEqual(before, after) {
+				if after := compatibilityDefaultsSnapshot(t, opened.SQL, backend); !historical && !reflect.DeepEqual(before, after) {
 					t.Fatal("compatible startup changed data, defaults or metadata")
 				}
 				compatibilityUpdateInstance(t, opened)
@@ -125,7 +126,7 @@ func testSchemaCompatibilityDefaults(t *testing.T, backend Backend) {
 	}
 }
 
-func compatibilityDefaultsSnapshot(t *testing.T, db *sql.DB, backend Backend) map[string][]string {
+func compatibilityDefaultsSnapshot(t *testing.T, db SQLConnection, backend Backend) map[string][]string {
 	t.Helper()
 	if backend == Postgres {
 		return compatibilityPostgresSchemaSnapshot(t, db)

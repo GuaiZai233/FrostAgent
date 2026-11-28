@@ -20,12 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Check out pinned v15 compatibility build
+      - name: Check out pinned v15 fixture producer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: 409e50b5262ea3324f092560ee0cdcf206f93a1f
           path: .compat-v15
-      - name: Check out pinned v16 compatibility build
+      - name: Check out pinned v16 fixture producer
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ef4789988b3ec06ce26f0a050443cb379204939f
@@ -38,11 +38,12 @@ jobs:
           go install github.com/bufbuild/buf/cmd/buf@v1.75.0
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install connectrpc.com/connect/cmd/protoc-gen-connect-go@v1.20.0
-      - name: Compile actual v15, v16 and current probes
+      - name: Compile legacy fixture producers and current probes
         run: |
           buf generate --template buf.gen.yaml
           go test -c -o "$RUNNER_TEMP/schema-current-roundtrip.test" ./internal/versioncompat
+          go test -c -o "$RUNNER_TEMP/future-module-roundtrip.test" ./internal/versioncompat/futuremodule
           (cd .compat-v16 && buf generate --template buf.gen.yaml && go test -c -o "$RUNNER_TEMP/schema16-roundtrip.test" ./internal/versioncompat)
           (cd .compat-v15 && buf generate --template buf.gen.yaml && go test -c -o "$RUNNER_TEMP/schema15-roundtrip.test" ./internal/versioncompat)
-      - name: Round-trip old edits and both ZIP formats
-        run: python3 scripts/test_schema_roundtrip.py --v15-binary "$RUNNER_TEMP/schema15-roundtrip.test" --v16-binary "$RUNNER_TEMP/schema16-roundtrip.test" --current-binary "$RUNNER_TEMP/schema-current-roundtrip.test"
+      - name: Upgrade legacy databases and restore legacy ZIPs with current
+        run: python3 scripts/test_schema_roundtrip.py --v15-binary "$RUNNER_TEMP/schema15-roundtrip.test" --v16-binary "$RUNNER_TEMP/schema16-roundtrip.test" --current-binary "$RUNNER_TEMP/schema-current-roundtrip.test" --future-module-binary "$RUNNER_TEMP/future-module-roundtrip.test"

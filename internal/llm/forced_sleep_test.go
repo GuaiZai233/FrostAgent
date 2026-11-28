@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -215,19 +216,23 @@ func TestForcedMentionSleepCanceledDuringReservationLeavesNoHistory(t *testing.T
 	defer cancel()
 
 	// Occupy SQLite's sole pooled connection to block the initial history Save.
-	conn, err := db.SQL.Conn(t.Context())
+	pool, ok := db.SQL.(*sql.DB)
+	if !ok {
+		t.Fatal("expected a live SQL connection pool")
+	}
+	conn, err := pool.Conn(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	waitCount := db.SQL.Stats().WaitCount
+	waitCount := pool.Stats().WaitCount
 	done := make(chan *AgentRunResult, 1)
 	go func() {
 		_, abort := e.runForcedMentionSleep(ctx)
 		done <- abort
 	}()
 	deadline := time.Now().Add(2 * time.Second)
-	for db.SQL.Stats().WaitCount == waitCount {
+	for pool.Stats().WaitCount == waitCount {
 		if time.Now().After(deadline) {
 			t.Fatal("history Save did not wait for the database connection")
 		}

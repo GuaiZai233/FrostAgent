@@ -259,7 +259,7 @@ func proveCompatibilityCrossSchemaEffect(t *testing.T, db *DB, parent, child, ac
 	}
 }
 
-func compatibilityPostgresSchemaSnapshot(t *testing.T, db *sql.DB) map[string][]string {
+func compatibilityPostgresSchemaSnapshot(t *testing.T, db SQLConnection) map[string][]string {
 	t.Helper()
 	snapshot := compatibilitySnapshot(t, db, Postgres)
 	rows, err := db.Query(`SELECT r.relname, c.conname, pg_catalog.pg_get_constraintdef(c.oid)

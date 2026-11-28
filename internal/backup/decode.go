@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/GuaiZai233/FrostAgent/internal/skills"
+	"github.com/GuaiZai233/FrostAgent/internal/storage"
 	"github.com/GuaiZai233/FrostAgent/internal/tokenusage"
 	"io"
 	"strings"
@@ -14,6 +15,7 @@ import (
 const MaxInstanceZIPBytes = 512 << 20
 
 type DecodedInstance struct {
+	Modules     []storage.ModulePayload
 	Sessions    *SessionStates
 	ToolHistory *ToolHistory
 	ChatHistory *ChatHistory
@@ -47,7 +49,7 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, fmt.Errorf("duplicate or invalid ZIP member %q", name)
 		}
 		if name != "manifest.json" && name != "setting.json" && name != "memory.json" &&
-			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" && name != "token_usage.json" && name != "computer_use.json" && name != "chat_history.json" && name != "session_states.json" && name != "tool_history.json" {
+			name != "group_summaries.json" && name != "sticker/metadata.json" && name != "skills.json" && name != "token_usage.json" && name != "computer_use.json" && name != "chat_history.json" && name != "modules.json" && name != "session_states.json" && name != "tool_history.json" {
 			if !strings.HasPrefix(name, "sticker/files/") || !validStickerFilename(strings.TrimPrefix(name, "sticker/files/")) {
 				return decoded, fmt.Errorf("unexpected ZIP member %q", name)
 			}
@@ -100,6 +102,24 @@ func DecodeInstanceZIP(archive []byte) (DecodedInstance, error) {
 			return decoded, err
 		}
 		decoded.Skills = validated
+	}
+	if data, ok := files["modules.json"]; ok {
+		var modules ModulePayloads
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&modules); err != nil {
+			return decoded, fmt.Errorf("decode modules.json: %w", err)
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return decoded, fmt.Errorf("modules.json contains trailing content")
+		}
+		if modules.ProtocolVersion != storage.ModulePayloadProtocol {
+			return decoded, fmt.Errorf("unsupported module payload protocol %d", modules.ProtocolVersion)
+		}
+		if err := storage.ValidateModulePayloads(modules.Records); err != nil {
+			return decoded, err
+		}
+		decoded.Modules = modules.Records
 	}
 	if data, ok := files["tool_history.json"]; ok {
 		decoded.ToolHistory = &ToolHistory{}

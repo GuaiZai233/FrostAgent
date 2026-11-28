@@ -1,4 +1,4 @@
-"""Exercise pinned v15/v16 round trips and current chat-archive upgrades."""
+"""Verify current upgrades from pinned legacy databases and restores legacy ZIPs."""
 import argparse
 import json
 import os
@@ -40,59 +40,85 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--v15-binary", required=True, type=Path)
     parser.add_argument("--v16-binary", required=True, type=Path)
-    parser.add_argument("--current-binary", type=Path)
+    parser.add_argument("--current-binary", required=True, type=Path)
+    parser.add_argument("--future-module-binary", required=True, type=Path)
     args = parser.parse_args()
     v15, v16 = args.v15_binary.resolve(), args.v16_binary.resolve()
-    current = args.current_binary.resolve() if args.current_binary else None
+    current = args.current_binary.resolve()
+    future = args.future_module_binary.resolve()
+
     with tempfile.TemporaryDirectory(prefix="frostagent-version-roundtrip-") as temporary:
         base = Path(temporary)
-        for origin in ["v16", "v15"]:
+        for origin, legacy, seed_operation in (
+            ("v15", v15, "seed-legacy"),
+            ("v16", v16, "seed"),
+        ):
+            # Each historical release creates its own database and ZIP. No old
+            # binary is asked to read, edit, or restore the other release's data.
             root = base / origin
-            run(v16 if origin == "v16" else v15, "seed" if origin == "v16" else "seed-legacy", root)
-            if origin == "v15":
-                run(v16, "upgrade", root)
-            run(v15, "edit-old", root)
-            run(v16, "verify", root)
-            run(v15, "verify", root)
-            archive = base / (origin + ".zip")
-            run(v15, "backup", root, archive=archive)
-            restored = base / (origin + "-restored")
-            result = base / (origin + "-restored-id.json")
-            run(v16, "init", restored)
-            run(v15, "restore", restored, archive=archive, result=result)
-            identifier = json.loads(result.read_text())
-            run(v16, "verify-restored", restored, instance=identifier)
-            run(v15, "verify-restored", restored, instance=identifier)
-            # A backup produced by v16 must also decode and restore in v15.
-            second_archive = base / (origin + "-v16.zip")
-            run(v16, "backup", restored, archive=second_archive, instance=identifier)
-            second = base / (origin + "-second")
-            run(v16, "init", second)
-            run(v15, "restore", second, archive=second_archive, result=result)
-            identifier = json.loads(result.read_text())
-            run(v16, "verify-restored", second, instance=identifier)
-            if current:
-                # Preserve the full historical test above, then migrate its
-                # actual v16 database using the current release binary.
-                run(current, "verify-restored", second, instance=identifier)
-                run(current, "seed-history", second, instance=identifier)
-                run(current, "verify-history", second, instance=identifier)
-                snapshot = database_snapshot(second)
-                for old in [v15, v16]:
-                    run(old, "init", second, rejection="requires compatible schema")
-                    if database_snapshot(second) != snapshot:
-                        raise RuntimeError("rejected old startup changed current database")
-                run(current, "verify-history", second, instance=identifier)
-                current_archive = base / (origin + "-current.zip")
-                run(current, "backup", second, archive=current_archive, instance=identifier)
-                target = base / (origin + "-current-restored")
+            run(legacy, seed_operation, root)
+            legacy_archive = base / f"{origin}.zip"
+            run(legacy, "backup", root, archive=legacy_archive)
+
+            # The PR's current binary must migrate each historical schema itself.
+            run(current, "init", root)
+            run(current, "verify", root)
+            snapshot = database_snapshot(root)
+
+            # Once upgraded, both historical binaries must fail closed and leave
+            # the Schema 20 database byte-for-byte logically unchanged.
+            for old in (v15, v16):
+                run(old, "init", root, rejection="requires compatible schema")
+                if database_snapshot(root) != snapshot:
+                    raise RuntimeError(f"{old.name} changed the upgraded {origin} database")
+            run(current, "verify", root)
+
+            # Import each old release's ZIP directly with the current restore path.
+            restored = base / f"{origin}-restored-current"
+            result = base / f"{origin}-restored-id.json"
+            run(current, "init", restored)
+            run(current, "restore", restored, archive=legacy_archive, result=result)
+            restored_id = json.loads(result.read_text())
+            run(current, "verify-restored", restored, instance=restored_id)
+
+            # Exercise current ZIPs and opaque future-module data once; repeating
+            # this for both legacy origins would duplicate the same current path.
+            if origin == "v16":
+                run(current, "seed-history", restored, instance=restored_id)
+                run(current, "verify-history", restored, instance=restored_id)
+
+                current_archive = base / "current.zip"
+                run(current, "backup", restored, archive=current_archive, instance=restored_id)
+                target = base / "current-restored"
                 run(current, "init", target)
                 run(current, "restore", target, archive=current_archive, result=result)
                 target_id = json.loads(result.read_text())
                 run(current, "verify-restored", target, instance=target_id)
                 run(current, "verify-history", target, instance=target_id)
-    print("PASS: both release directions, old edits, and full ZIP round trips", flush=True)
 
+                run(future, "seed-module", target, instance=target_id)
+                run(current, "edit-known", target, instance=target_id)
+                run(future, "verify-module", target, instance=target_id)
+
+                for generation in range(2):
+                    opaque_archive = base / f"opaque-{generation}.zip"
+                    run(current, "backup", target, archive=opaque_archive, instance=target_id)
+                    target = base / f"opaque-{generation}-restored"
+                    run(current, "init", target)
+                    run(current, "restore", target, archive=opaque_archive, result=result)
+                    target_id = json.loads(result.read_text())
+                    run(current, "edit-known", target, instance=target_id)
+                    run(current, "verify-history", target, instance=target_id)
+                    run(future, "verify-module-restored", target, instance=target_id)
+
+                run(current, "delete", target, instance=target_id)
+                run(future, "verify-deleted", target, instance=target_id)
+
+    print(
+        "PASS: current upgrades v15/v16 databases, restores both legacy ZIPs, "
+        "and preserves future module payloads",
+        flush=True,
+    )
 
 if __name__ == "__main__":
     main()
