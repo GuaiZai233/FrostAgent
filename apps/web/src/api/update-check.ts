@@ -3,8 +3,12 @@ import { controlPlaneFetch } from './control-auth';
 export interface UpdateChannel {
   value?: string;
   url?: string;
-  status: 'up-to-date' | 'different' | 'unknown' | 'unavailable' | 'no-release';
+  status: 'up-to-date' | 'different' | 'behind' | 'ahead' | 'diverged' | 'unknown' | 'unavailable' | 'no-release';
   error?: string;
+  /** Number of commits the installed build is behind the remote target. */
+  behind_by?: number;
+  /** Number of commits the installed build is ahead of the remote target. */
+  ahead_by?: number;
 }
 
 export interface BuildVersion {
